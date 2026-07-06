@@ -180,6 +180,24 @@ approaches finalize quality with the same model. Upgrade path if it still feels
 laggy: Voxtral Mini 4B Realtime (true streaming, <500 ms) or Qwen3-ASR-1.7B
 streaming. Interim text shown grey; finalize pass replaces the live transcript.
 
+*Phase 2 spike verdict (July 2026, `StreamingParakeet` vs re-decode window on
+real de meeting audio, M4 Max): the re-decode window is confirmed as the live
+default and parakeet-mlx's incremental streaming API (`transcribe_stream`,
+retained encoder/decoder state) is rejected. Measured — the incremental API at
+small right-context (the "cheap linear" setting, e.g. `(256,8)`) produces
+garbage (80–90% WER, code-switching into English); it is usable only at full
+right-context `(256,256)` and even then is fragile (drifts badly below ~3 s feed
+chunks) at ~13× RT / 13.7% WER-vs-ref over 300 s. The re-decode window over the
+reliable full `generate()` path (~110× RT at any window size) is both more
+accurate and simpler: re-decoding a **12–16 s trailing window** — uncommitted
+tail + ~4 s left context, prefix-committed so committed audio drops out (NOT the
+naive 60–120 s window, which would be ~27% duty) — every ~1–1.5 s costs only
+**~7–10% of one accelerator during speech, ~0% in silence with VAD gating**, at
+**finalize-grade accuracy (~10% WER, same `generate()` path as finalize)** and a
+1–1.5 s caption cadence. LocalAgreement-2 over consecutive window decodes commits
+the stable prefix; the last ~2–3 s stays grey. The incremental API and
+Voxtral/Qwen streaming remain documented fallbacks only.*
+
 **Diarization:** shipped baseline (July 2026): **sherpa-onnx** (pyannote
 segmentation-3.0 + 3D-Speaker eres2net embeddings, ONNX/CPU) — pip-installable on
 every platform, takes a known speaker count, and was planned for Linux/Windows
@@ -382,7 +400,15 @@ uv-based distribution works on all platforms:
 - **Crash policy:** periodic incremental finalization — every few minutes the
   finalize pipeline runs over the completed portion and checkpoints the *text* to
   disk. A crash loses at most the last few minutes of audio; audio itself is never
-  persisted (this replaces Meetily-style audio checkpoints).
+  persisted (this replaces Meetily-style audio checkpoints). *Revised for Phase 2
+  (Option B, July 2026): once the live pass runs, its LocalAgreement-committed
+  transcript is itself the checkpoint — flushed to `<meeting>.partial` as
+  zero-inference file I/O, no separate periodic finalize pipeline (which would
+  double GPU work to reproduce text the live pass already has). The heavy finalize
+  runs only on stop. A crash recovers the on-screen (live-quality) text; only the
+  finalize-grade refinement of the crashed tail is lost. `--no-live` falls back to
+  a tail-only finalize checkpoint (off the consume thread — fixes the O(n²)
+  whole-buffer re-finalize).*
 - **Repo & license:** public + MIT from day one.
 - **Distribution:** PyPI + uv only; no Developer ID; local web UI direction.
 - **Name: `stenograf`** — German spelling of stenographer, the verbatim
@@ -464,7 +490,15 @@ backpressure tuning), and acoustic first-segment LID for the live pass.*
 
 **Phase 2 — Live captions.**
 Streaming ASR pass with LocalAgreement commits, TUI live view; finalize pass replaces
-the live transcript on stop.
+the live transcript on stop. *Live-ASR mechanism locked by the Phase 2 spike
+(§2 Live ASR): a 12–16 s re-decode window over the full `generate()` path (~7–10%
+of one accelerator during speech, ~10% WER), VAD-gated, LocalAgreement-2 commit —
+not parakeet-mlx's incremental streaming API, which the spike measured as garbage
+at small right-context and fragile otherwise. Checkpointing revised to Option B:
+the committed live transcript is itself the crash checkpoint (flushed to
+`.partial` as zero-inference file I/O), superseding §3's periodic re-finalize;
+the heavy finalize runs only on stop, with a single-flight inference worker so
+live ASR and finalize never contend for the one accelerator.*
 
 **Phase 3 — Speaker polish + vocabulary + auto-detection.**
 Speaker re-ID with embedding profiles ("Daniel" across meetings), user glossary /
@@ -476,6 +510,84 @@ remote-count auto-detection ship earlier, in Phase 1).
 Local web UI (live captions, meeting archive, click-to-jump transcript), optional
 Ollama note-enhancement, Linux capture backend + ONNX/CTranslate2 inference
 backends.
+
+### Phase 2 build plan — live captions (start here)
+
+Mechanism and checkpointing are locked by the Phase 2 spike (§2 Live ASR, §3 crash
+policy): a **12–16 s re-decode window over the full `generate()` path**, VAD-gated,
+LocalAgreement-2 commit; **Option B** checkpointing (committed live text is the
+`.partial` checkpoint, heavy finalize only on stop); a **single-flight inference
+worker** so live ASR and finalize never contend for the one accelerator.
+
+**Live-pass evaluation — no hand-corrected ground truth needed.** The live pass is
+provisional text that finalize replaces on stop, so its reference is the finalize
+pass's own full-attention `generate()` output on the same audio, *not* a human
+transcript (we only have one, `de-1`, and are not extending it). Three label-free
+metrics, runnable on any raw `examples/*.mov` (hours of real de/en; use long
+continuous stretches to stress length-stability, the property that broke the
+incremental streaming API):
+1. **Agreement with finalize** — WER of the committed-live transcript vs
+   full-`generate()` on the same audio (the live-degradation number).
+2. **Commit monotonicity** — a committed (black) word must never be contradicted by
+   a later decode; any violation is a bug.
+3. **Commit latency** — audio-arrival → commit time.
+Correlated live/finalize errors are acceptable: if live matches finalize, the live
+view matches the authoritative transcript, which is the whole UX contract. Absolute
+accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
+
+**Task sequence** (independent, testable increments; interface names illustrative):
+1. **`LiveDecoder`** — re-decode window + LocalAgreement-2, *composing the existing*
+   `ASRBackend.transcribe`/`generate` (no new dependency, no `StreamingParakeet`).
+   `feed(samples, t_offset) -> StreamingUpdate(committed, interim)`; `flush()`
+   (force-commit tail at utterance end); `reset()` (drop window at long silence).
+   Window = uncommitted tail + ~4 s left context, capped ~12–16 s, VAD-anchored
+   (reuse `SileroVAD`); commit the LocalAgreement-2 stable prefix, keep the last
+   ~2–3 s grey. **Acceptance = the three label-free metrics above on two `examples/`
+   clips.** This is the starting point and de-risks the rest.
+   *Status (July 2026): shipped (`stenograf.live.LiveDecoder` +
+   `tests/test_live.py`, 13 tests). Re-decode window over the full `generate()`
+   path, LocalAgreement-2 with a grey-zone commit horizon, Silero VAD gating
+   (~0 decodes in silence) + endpoint-silence utterance finalize, append-only
+   monotonic commit guard, and an ordered overflow-flush that bounds the window
+   without ever dropping un-transcribed audio (the spike's window-cap "safety
+   valve" is unnecessary — parakeet commits steadily). Acceptance harness
+   `eval/live.py` (drives the decoder in simulated real time vs a full
+   `finalize_channel` reference). Measured on de-1 + en-1 (300 s each, feed
+   cadence 1 s): agreement WER 7.0% / 5.6% (better than the ~10% spike target),
+   0 monotonicity violations, commit latency median ~2.5 s / p90 ~3.5 s. Params:
+   `left_context=4 s`, `window_cap=15 s`, `grey_zone=2 s`, `endpoint_silence=0.6 s`.*
+2. **`SessionStore` thread-safety** — add `_offsets` + a lock; new
+   `view(channel, start_s, end_s)` returning O(window) float32 (the append-only
+   chunk list is prefix-immortal → snapshot `len(chunks)` under the lock, concat
+   outside it). Also kills the O(n²) whole-buffer re-finalize.
+3. **Orchestration refactor** (`session.py`) — `AudioBus` (per-channel watermark +
+   `Condition`, event-driven, no polling), `CaptureLoop` thread (never blocks on
+   inference, never drops audio), `LiveWorker` (the *single* inference thread →
+   single-flight; `inference_lock` as the belt-and-suspenders extension point).
+   Reconcile-to-watermark backpressure. Stop → join worker → authoritative
+   `finalize()`. Add real-time pacing to `FileCaptureProvider` so `--replay`
+   exercises the live pass at meeting cadence.
+4. **Checkpoint Option B** — replace the periodic re-finalize with a committed-text
+   `.partial` flush (pure I/O, coalesced ~10–20 s); `--no-live` falls back to a
+   tail-only finalize. Keep `_cleanup_checkpoints` on clean stop.
+5. **`LiveView` + `PlainLiveView`** — the event interface (`interim`, `commit`,
+   `status`, `language`, `finalizing`, `finalized`, `error`) + a non-TTY/`--plain`
+   impl streaming committed text via `click.echo`. **First shippable milestone:
+   live captions in plain stdout, no Textual dependency.**
+6. **Textual TUI** (`TextualLiveView`) — pinned header (REC/elapsed/language/
+   profile), append-only `RichLog` of committed captions, dim per-channel interim
+   tail (`You`/`Remote` — channel-coarse; real `Local-N`/`Remote-M` only after the
+   finalize swap), footer. Minimal-redraw discipline: one 1 Hz clock is the only
+   periodic repaint, animations off, `MAX_FPS≈15`; worker→UI via
+   `loop.call_soon_threadsafe`. **Ctrl-C is a captured key event under Textual (not
+   `KeyboardInterrupt`)** — the quit binding must cross to the worker via
+   `provider.stop()`; wire it deliberately.
+7. **Glue** — `steno start` gains `--live/--no-live`, `--plain`, `--flush-interval`
+   (alias `--checkpoint-interval`); doctor/README; a CPU-proxy regression test (zero
+   window decodes during silence; committed text never rewritten).
+
+CPU budget target (spike-measured): **~7–10% of one accelerator during speech, ~0%
+in silence**, live captions ~10% WER, ~1.5 s cadence.
 
 ---
 
