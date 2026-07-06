@@ -634,6 +634,23 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
    `status`, `language`, `finalizing`, `finalized`, `error`) + a non-TTY/`--plain`
    impl streaming committed text via `click.echo`. **First shippable milestone:
    live captions in plain stdout, no Textual dependency.**
+   *Status (July 2026): shipped (`stenograf.view`, `tests/test_view.py`, 15
+   tests). `LiveView` is a plain-class interface whose events all default to
+   no-ops (so it doubles as a null view) and which is a context manager
+   (`close()` tears down a display — the Textual view will need it). `update`
+   bridges a worker `StreamingUpdate` → `commit`/`interim`, matching the `OnUpdate`
+   signature so `on_update=view.update` wires straight through. `PlainLiveView`
+   streams committed words onto a per-channel line, channel-coarse `You`/`Remote`
+   (PLAN.md Task 6), breaking on a channel change or a >1.5 s pause so the log
+   reads in utterance paragraphs; it drops the interim grey tail (a non-TTY stream
+   has no cursor to erase it — committed text is the durable contract), an
+   out-of-band notice always closes the open caption line first, `error` → stderr,
+   and one lock keeps worker-thread commits from interleaving mid-line with
+   main-thread notices. Tested through an injected echo recorder that mirrors
+   `click.echo`'s message/nl/err semantics, and verified end-to-end through the
+   real `click.echo`. Deferred to Task 7 (still): the `--live`/`--plain` CLI
+   wiring, and having the orchestrator emit `finalizing`/`language`/`finalized`
+   as structured view events (today they arrive as `on_status` strings).*
 6. **Textual TUI** (`TextualLiveView`) — pinned header (REC/elapsed/language/
    profile), append-only `RichLog` of committed captions, dim per-channel interim
    tail (`You`/`Remote` — channel-coarse; real `Local-N`/`Remote-M` only after the
