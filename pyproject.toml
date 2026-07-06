@@ -20,6 +20,10 @@ dependencies = [
     "numpy>=1.26",
 ]
 
+[project.urls]
+Repository = "https://github.com/daniel-om-weber/stenograf"
+Issues = "https://github.com/daniel-om-weber/stenograf/issues"
+
 [project.scripts]
 stenograf = "stenograf.cli:main"
 steno = "stenograf.cli:main"
