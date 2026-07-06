@@ -1,0 +1,48 @@
+[project]
+name = "stenograf"
+version = "0.1.0"
+description = "Accuracy-first local meeting transcription for German and English. Audio never touches disk."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Daniel Weber", email = "danielusweber@gmail.com" }]
+keywords = ["transcription", "meetings", "speech-to-text", "diarization", "local", "privacy"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "click>=8.1",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+stenograf = "stenograf.cli:main"
+steno = "stenograf.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stenograf"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

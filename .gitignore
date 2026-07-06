@@ -1,0 +1,30 @@
+# Meeting recordings and other local-only material — NEVER commit (public repo, private audio)
+examples/
+legacy/
+*.mov
+*.m4a
+*.wav
+*.mp3
+*.mp4
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+
+# Native helper build artifacts
+native/.build/
