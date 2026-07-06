@@ -1,7 +1,10 @@
+import threading
+
 import numpy as np
 import pytest
 
 from stenograf.asr.base import ASRBackend, Segment, Word
+from stenograf.audio import to_float32
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 from stenograf.config import Language, MeetingProfile
 from stenograf.diarization.base import Diarizer, SpeakerTurn
@@ -62,6 +65,81 @@ class TestSessionStore:
         # 5 ms behind the tail (< 10 ms tolerance): appended contiguously, no raise.
         store.append(frame(Channel.MIC, 1.0 - 0.005, np.ones(100, dtype=np.int16)))
         assert store.duration(Channel.MIC) == (SAMPLE_RATE + 100) / SAMPLE_RATE
+
+    def test_view_extracts_an_interior_window(self):
+        store = SessionStore({Channel.MIC})
+        data = np.arange(1, SAMPLE_RATE + 1, dtype=np.int16)  # 1 s, value == index+1
+        store.append(frame(Channel.MIC, 0.0, data))
+        win = store.view(Channel.MIC, 0.25, 0.75)  # samples [4000, 12000)
+        assert np.array_equal(win, to_float32(data[4000:12000]))
+
+    def test_view_defaults_end_to_the_current_buffer(self):
+        store = SessionStore({Channel.MIC})
+        data = np.arange(1, SAMPLE_RATE + 1, dtype=np.int16)
+        store.append(frame(Channel.MIC, 0.0, data))
+        assert np.array_equal(store.view(Channel.MIC, 0.5), to_float32(data[8000:]))
+
+    def test_view_matches_full_buffer_slice_across_a_gap(self):
+        # A silence gap makes the buffer span three chunks (samples, pad, samples);
+        # view must agree with slicing the whole float32 buffer at any window.
+        store = SessionStore({Channel.MIC})
+        store.append(frame(Channel.MIC, 0.0, np.array([7, 8], dtype=np.int16)))
+        store.append(frame(Channel.MIC, 1.0, np.array([9, 10, 11], dtype=np.int16)))
+        full = store.samples(Channel.MIC)
+        assert len(full) == SAMPLE_RATE + 3
+        windows = [(0, None), (1, 5), (0, 2), (SAMPLE_RATE, None), (3, SAMPLE_RATE + 2)]
+        for start, end in windows:
+            end_s = None if end is None else end / SAMPLE_RATE
+            win = store.view(Channel.MIC, start / SAMPLE_RATE, end_s)
+            assert np.array_equal(win, full[start : len(full) if end is None else end])
+
+    def test_view_clamps_a_window_past_the_end(self):
+        store = SessionStore({Channel.MIC})
+        store.append(frame(Channel.MIC, 0.0, np.array([1, 2, 3], dtype=np.int16)))
+        # end far past the tail → clamped to the full buffer, not an error.
+        assert np.array_equal(store.view(Channel.MIC, 0.0, 100.0), store.samples(Channel.MIC))
+
+    def test_view_returns_empty_for_empty_or_out_of_range_windows(self):
+        store = SessionStore({Channel.MIC})
+        assert len(store.view(Channel.MIC, 0.0)) == 0  # nothing captured yet
+        store.append(frame(Channel.MIC, 0.0, np.array([1, 2, 3], dtype=np.int16)))
+        assert len(store.view(Channel.MIC, 10.0, 20.0)) == 0  # start past the tail
+        assert len(store.view(Channel.MIC, 0.5, 0.1)) == 0  # inverted range
+        assert len(store.view(Channel.MIC, 0.0, 0.0)) == 0  # zero-width
+
+    def test_view_and_samples_stay_consistent_under_concurrent_append(self):
+        # Single writer + reader. Each sample's value is a function of its global
+        # index, so any prefix a reader observes must match exactly — a torn read
+        # (chunks/length disagreeing) would corrupt it. Exercises the lock.
+        store = SessionStore({Channel.MIC})
+        n_frames, frame_len = 400, 500
+        all_samples = ((np.arange(n_frames * frame_len) % 20000) - 10000).astype(np.int16)
+        expected = to_float32(all_samples)
+
+        errors: list[Exception] = []
+        stop = threading.Event()
+
+        def reader() -> None:
+            try:
+                while not stop.is_set():
+                    v = store.view(Channel.MIC, 0.0)  # prefix-immortal → must match
+                    assert np.array_equal(v, expected[: len(v)])
+                    s = store.samples(Channel.MIC)
+                    assert np.array_equal(s, expected[: len(s)])
+            except Exception as exc:  # noqa: BLE001 — surface it on the main thread
+                errors.append(exc)
+
+        t = threading.Thread(target=reader)
+        t.start()
+        for k in range(n_frames):
+            chunk = all_samples[k * frame_len : (k + 1) * frame_len]
+            store.append(frame(Channel.MIC, k * frame_len / SAMPLE_RATE, chunk))
+        stop.set()
+        t.join(timeout=5)
+
+        assert not t.is_alive()
+        assert not errors, errors[0]
+        assert np.array_equal(store.samples(Channel.MIC), expected)
 
 
 class TestPlanChannels:
@@ -164,9 +242,7 @@ class ListProvider(CaptureProvider):
 class TestMeetingRecorder:
     def test_runs_both_channels_and_labels_local_and_remote(self):
         pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
-        provider = ListProvider(
-            [frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)]
-        )
+        provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
         diarizer = FakeDiarizer([SpeakerTurn("S0", 0.0, 2.0)])
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=2),
@@ -235,9 +311,7 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         checkpoints = []
-        recorder.run(
-            provider, on_checkpoint=lambda t: checkpoints.append(t), checkpoint_interval=0
-        )
+        recorder.run(provider, on_checkpoint=lambda t: checkpoints.append(t), checkpoint_interval=0)
         assert checkpoints == []
 
     def test_language_is_auto_detected_from_the_transcript(self):

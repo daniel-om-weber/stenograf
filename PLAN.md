@@ -560,6 +560,19 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
    `view(channel, start_s, end_s)` returning O(window) float32 (the append-only
    chunk list is prefix-immortal → snapshot `len(chunks)` under the lock, concat
    outside it). Also kills the O(n²) whole-buffer re-finalize.
+   *Status (July 2026): shipped (`stenograf.session.SessionStore`). `append`
+   publishes each frame's chunks in one short critical section so a reader never
+   sees `chunks`/`offsets`/`length` disagree; `view(channel, start_s, end_s=None)`
+   bisects the per-chunk `_offsets` to the covering chunks, snapshots those
+   references under the lock, and concatenates + slices outside it — O(window),
+   never O(buffer). `samples`/`duration` take the same lock. `end_s` defaults to
+   the current tail; out-of-range/inverted windows clamp to empty. Tests added to
+   `tests/test_session.py` (view correctness incl. across a silence gap, clamping,
+   and a single-writer/many-reader concurrency stress asserting every observed
+   prefix matches exactly). This is the primitive the Task 3 `LiveWorker` feeds
+   the `LiveDecoder` from; rewiring the checkpoint path to a tail-only finalize
+   (the actual O(n²) removal) lands with the Task 3–4 orchestration refactor —
+   `MeetingRecorder`'s current checkpoint path is untouched here.*
 3. **Orchestration refactor** (`session.py`) — `AudioBus` (per-channel watermark +
    `Condition`, event-driven, no polling), `CaptureLoop` thread (never blocks on
    inference, never drops audio), `LiveWorker` (the *single* inference thread →

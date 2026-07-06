@@ -23,6 +23,8 @@ when the macOS helper lands (PLAN.md §2 "Hybrid-mode caveats").
 
 from __future__ import annotations
 
+import threading
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -54,11 +56,22 @@ class SessionStore:
     gap between frames pads silence and both channels share one clock anchored
     at t=0. That shared clock is what lets the two channels' finalized entries
     interleave correctly. No audio is ever written to disk.
+
+    Thread-safe for a single-writer/many-reader pattern (Phase 2 live pass): the
+    capture thread :meth:`append`\\ s while the live worker :meth:`view`\\ s
+    trailing windows. Each channel's chunk list is append-only, so any chunk once
+    stored is immutable and never moves (prefix-immortal). Readers therefore only
+    hold ``_lock`` long enough to snapshot the chunk references covering their
+    window; the expensive concatenate runs outside the lock. ``_offsets`` mirrors
+    ``_chunks`` with each chunk's start sample, so :meth:`view` bisects straight
+    to the covering chunks — O(window), not O(whole buffer).
     """
 
     def __init__(self, channels: set[Channel]) -> None:
         self._chunks: dict[Channel, list[np.ndarray]] = {ch: [] for ch in channels}
+        self._offsets: dict[Channel, list[int]] = {ch: [] for ch in channels}
         self._lengths: dict[Channel, int] = dict.fromkeys(channels, 0)
+        self._lock = threading.Lock()
 
     def append(self, frame: AudioFrame) -> None:
         """Store a frame at its timestamp; frames must arrive in order per channel."""
@@ -66,7 +79,7 @@ class SessionStore:
         if chunks is None:
             return  # a channel we're not recording — ignore
         offset = round(frame.timestamp * SAMPLE_RATE)
-        length = self._lengths[frame.channel]
+        length = self._lengths[frame.channel]  # only append writes lengths, so this read is safe
         if offset < length - ORDER_TOLERANCE_SAMPLES:
             # A backward jump past jitter tolerance means the stream desynced;
             # appending here would silently misalign every later frame.
@@ -75,26 +88,63 @@ class SessionStore:
                 f"{(length - offset) / SAMPLE_RATE:.3f}s (timestamp {frame.timestamp:.3f}s "
                 f"< buffered {length / SAMPLE_RATE:.3f}s); frames must arrive in order"
             )
-        if offset > length:  # gap since the last frame → pad silence
-            chunks.append(np.zeros(offset - length, dtype=np.int16))
-            length = offset
-        # A minor overlap (within tolerance) just appends at the tail, keeping
-        # the buffer contiguous and the clock monotonic.
+        # Build the new chunks (silence pad for a gap, then the samples) outside
+        # the lock so allocation never stalls a reader; a minor overlap (within
+        # tolerance) just appends at the tail, keeping the clock monotonic.
+        pad = np.zeros(offset - length, dtype=np.int16) if offset > length else None
         samples = np.asarray(frame.samples, dtype=np.int16)
-        chunks.append(samples)
-        self._lengths[frame.channel] = length + len(samples)
+        offsets = self._offsets[frame.channel]
+        # One short critical section publishes the mutation atomically: chunks,
+        # offsets, and length always agree when a reader observes them. Only
+        # non-empty chunks are stored, so offsets stays strictly increasing.
+        with self._lock:
+            if pad is not None:
+                offsets.append(length)
+                chunks.append(pad)
+                length = offset
+            if len(samples):
+                offsets.append(length)
+                chunks.append(samples)
+            self._lengths[frame.channel] = length + len(samples)
 
     def channels(self) -> list[Channel]:
-        return list(self._chunks)
+        return list(self._chunks)  # keys are fixed at construction — no lock needed
 
     def samples(self, channel: Channel) -> np.ndarray:
         """The channel's full audio as mono 16 kHz float32 (empty if none)."""
-        chunks = self._chunks[channel]
-        pcm = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.int16)
+        with self._lock:
+            selected = list(self._chunks[channel])  # snapshot references, concat outside
+        pcm = np.concatenate(selected) if selected else np.zeros(0, dtype=np.int16)
         return to_float32(pcm)
 
+    def view(self, channel: Channel, start_s: float, end_s: float | None = None) -> np.ndarray:
+        """A trailing ``[start_s, end_s)`` window as mono 16 kHz float32.
+
+        ``end_s`` defaults to the current end of the buffer. Bounds are clamped
+        to what exists, so a window that runs past the tail simply returns what
+        is available (empty if the range is empty or already gone). Cost is
+        O(window), not O(buffer) — this is the live pass's re-decode feed and is
+        called every ~1–1.5 s, so it must never re-scan the whole session.
+        """
+        with self._lock:
+            chunks = self._chunks[channel]
+            offsets = self._offsets[channel]
+            length = self._lengths[channel]
+            start = max(0, min(round(start_s * SAMPLE_RATE), length))
+            end = length if end_s is None else round(end_s * SAMPLE_RATE)
+            end = max(start, min(end, length))
+            if start >= end:
+                return np.zeros(0, dtype=np.float32)
+            lo = bisect_right(offsets, start) - 1  # chunk containing `start`
+            hi = bisect_left(offsets, end)  # first chunk starting at/after `end`
+            selected = chunks[lo:hi]
+            base = offsets[lo]
+        pcm = np.concatenate(selected)
+        return to_float32(pcm[start - base : end - base])
+
     def duration(self, channel: Channel) -> float:
-        return self._lengths[channel] / SAMPLE_RATE
+        with self._lock:
+            return self._lengths[channel] / SAMPLE_RATE
 
 
 @dataclass(frozen=True)
