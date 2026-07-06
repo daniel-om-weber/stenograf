@@ -175,6 +175,48 @@ class TestLiveWorker:
         assert np.array_equal(np.concatenate(stub.received), store.samples(Channel.MIC))
         assert stub.flushed == 1
 
+    def test_flushes_committed_text_on_the_interval(self):
+        # 3 s of audio, all present before the worker looks → one reconciled feed,
+        # so the interval flush (Option B checkpoint) coalesces to a single call.
+        store = SessionStore({Channel.MIC})
+        pcm = np.ones(3 * SAMPLE_RATE, dtype=np.int16)
+        for f in _frames(Channel.MIC, pcm, SAMPLE_RATE):
+            store.append(f)
+        bus = AudioBus([Channel.MIC])
+        bus.advance(Channel.MIC, store.duration(Channel.MIC))
+        bus.close()
+
+        flushes: list[int] = []
+        worker = LiveWorker(
+            store,
+            bus,
+            {Channel.MIC: StubDecoder()},
+            threading.Lock(),
+            channels=[Channel.MIC],
+            on_flush=lambda: flushes.append(1),
+            flush_interval=1.0,
+        )
+        worker.start()
+        worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert worker.error is None
+        assert flushes  # committed text flushed at least once (reconciled → once here)
+
+    def test_no_flush_without_a_callback(self):
+        store = SessionStore({Channel.MIC})
+        for f in _frames(Channel.MIC, np.ones(2 * SAMPLE_RATE, dtype=np.int16), SAMPLE_RATE):
+            store.append(f)
+        bus = AudioBus([Channel.MIC])
+        bus.advance(Channel.MIC, store.duration(Channel.MIC))
+        bus.close()
+        worker = LiveWorker(
+            store, bus, {Channel.MIC: StubDecoder()}, threading.Lock(), channels=[Channel.MIC]
+        )
+        worker.start()
+        worker.join(timeout=5)
+        assert worker.error is None  # flush_interval defaults to 0 → no flushing path
+
 
 class TestMeetingRecorderLive:
     def _recorder(self) -> MeetingRecorder:
@@ -198,3 +240,20 @@ class TestMeetingRecorderLive:
         transcript = self._recorder().run(provider, live=True, max_seconds=3.0)
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
+
+    def test_live_run_checkpoints_are_coarse_and_the_finalize_wins(self):
+        provider = ListProvider(_one_second_frames(4))
+        checkpoints: list[object] = []
+        transcript = self._recorder().run(
+            provider,
+            live=True,
+            on_checkpoint=checkpoints.append,
+            checkpoint_interval=1.0,
+        )
+        # The on-stop finalize is still the authoritative, diarized transcript.
+        assert provider.stopped
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]
+        # Option B: any live checkpoint is channel-coarse and never empty (the
+        # empty-flush guard means a `.partial` only appears once text exists).
+        assert all(c.entries for c in checkpoints)
+        assert all(e.speaker == "Local" for c in checkpoints for e in c.entries)

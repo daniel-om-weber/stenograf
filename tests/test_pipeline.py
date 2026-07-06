@@ -3,7 +3,12 @@ import numpy as np
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE
 from stenograf.diarization.base import Diarizer, SpeakerTurn
-from stenograf.pipeline import finalize_channel, merge_words_turns, relabel_speakers
+from stenograf.pipeline import (
+    finalize_channel,
+    group_words,
+    merge_words_turns,
+    relabel_speakers,
+)
 
 
 def word(text: str, start: float, end: float) -> Word:
@@ -54,6 +59,25 @@ class TestMergeWordsTurns:
     def test_no_turns_falls_back_to_single_speaker(self):
         entries = merge_words_turns([word("solo", 0.0, 0.5)], [])
         assert entries[0].speaker == "S0"
+
+
+class TestGroupWords:
+    def test_groups_one_speaker_and_splits_on_a_long_gap(self):
+        words = [
+            word("guten", 0.0, 0.4),
+            word("morgen", 0.5, 0.9),  # small gap → same entry
+            word("hallo", 3.0, 3.4),  # gap > max_gap → new entry
+        ]
+        entries = group_words(words, "Local", max_gap=1.5)
+        assert [(e.speaker, e.text) for e in entries] == [
+            ("Local", "guten morgen"),
+            ("Local", "hallo"),
+        ]
+        assert (entries[0].start, entries[0].end) == (0.0, 0.9)
+        assert (entries[1].start, entries[1].end) == (3.0, 3.4)
+
+    def test_empty_words_yield_no_entries(self):
+        assert group_words([], "Remote") == []
 
 
 def test_relabel_speakers_by_first_appearance():

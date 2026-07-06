@@ -75,8 +75,8 @@ def main() -> None:
     type=click.FloatRange(0),
     default=180.0,
     metavar="SECONDS",
-    help="Re-finalize and save a <transcript>.partial checkpoint every N seconds "
-    "of capture (crash recovery); 0 disables it.",
+    help="Save a <transcript>.partial crash checkpoint every N seconds of capture "
+    "(only the newest tail is finalized, off the capture thread); 0 disables it.",
 )
 @click.option(
     "--max-seconds",

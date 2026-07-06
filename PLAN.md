@@ -605,6 +605,31 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
 4. **Checkpoint Option B** — replace the periodic re-finalize with a committed-text
    `.partial` flush (pure I/O, coalesced ~10–20 s); `--no-live` falls back to a
    tail-only finalize. Keep `_cleanup_checkpoints` on clean stop.
+   *Status (July 2026): shipped. Both modes checkpoint via the same
+   `on_checkpoint(Transcript)` callback the CLI already writes to `.partial`,
+   coalesced to `checkpoint_interval` seconds of capture, but never running any
+   inference the mode does not already do. **Live:** the `LiveWorker` flushes the
+   decoders' already-committed words as-is (`MeetingRecorder._live_checkpoint`,
+   `pipeline.group_words` → channel-coarse `Local`/`Remote` entries) — zero
+   inference, on the same thread that owns the decoders, empty flushes skipped so
+   a `.partial` only appears once there is text. **Batch (`--no-live`):** a new
+   `_TailCheckpointer` thread waits on the `AudioBus` and finalizes only the newest
+   tail each interval (`store.view` → `finalize_channel` with `diarizer=None`,
+   times shifted, coarse label), off the capture thread and each second exactly
+   once — killing the old O(n²) whole-buffer re-finalize. Both are superseded on
+   clean stop by the diarized full finalize, which also owns language locking.
+   Tests: `group_words` (`test_pipeline.py`); `_live_checkpoint`/`_tail_entries`,
+   `_TailCheckpointer` exactly-once (recording-ASR sum == total), batch checkpoints
+   accumulate + coarse (`test_session.py`); `LiveWorker` interval flush + no-flush
+   (`test_live_orchestration.py`). Verified end-to-end on de-1 with the **real
+   parakeet backend** (the unit tests use a fake ASR): batch tail finalize runs on
+   the `tail-checkpoint` thread with no MLX thread-stream error and cleans up its
+   `.partial` on clean stop; paced-replay live run flushes 3 coarse-labelled
+   `.partial`s whose committed text closely tracks the finalize output (the whole
+   Option-B premise), then the finalize swaps in `Local-1`. See
+   [[mlx-weights-thread-local-streams]]. Deferred to Task 7: `--live`/`--plain`
+   CLI wiring, the `--flush-interval` alias, and tuning the default interval down
+   from 180 s.*
 5. **`LiveView` + `PlainLiveView`** — the event interface (`interim`, `commit`,
    `status`, `language`, `finalizing`, `finalized`, `error`) + a non-TTY/`--plain`
    impl streaming committed text via `click.echo`. **First shippable milestone:

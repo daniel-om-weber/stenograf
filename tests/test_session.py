@@ -9,13 +9,15 @@ from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Cha
 from stenograf.config import Language, MeetingProfile
 from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.session import (
+    AudioBus,
     ChannelPlan,
     MeetingRecorder,
     SessionStore,
+    _TailCheckpointer,
     interleave,
     plan_channels,
 )
-from stenograf.transcript import TranscriptEntry
+from stenograf.transcript import Transcript, TranscriptEntry
 
 
 def frame(channel: Channel, timestamp: float, samples: np.ndarray) -> AudioFrame:
@@ -211,6 +213,36 @@ class GermanASR(ASRBackend):
         pass
 
 
+class RecordingASR(ASRBackend):
+    """Records the length of every buffer it transcribes (proves tail exactly-once)."""
+
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.lengths: list[int] = []
+
+    def load(self) -> None:
+        pass
+
+    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        self.lengths.append(len(samples))
+        return [Segment(text="w", start=0.0, end=0.1, words=(Word("w", 0.0, 0.1),))]
+
+    def unload(self) -> None:
+        pass
+
+
+class CommittedWords:
+    """A stand-in decoder exposing only the committed words a checkpoint reads."""
+
+    def __init__(self, words: list[Word]) -> None:
+        self._words = tuple(words)
+
+    @property
+    def committed_words(self) -> tuple[Word, ...]:
+        return self._words
+
+
 class FakeDiarizer(Diarizer):
     def __init__(self, turns: list[SpeakerTurn]):
         self.turns = turns
@@ -284,7 +316,7 @@ class TestMeetingRecorder:
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
 
-    def test_checkpoints_fire_on_the_interval(self):
+    def test_batch_checkpoints_accumulate_with_coarse_labels(self):
         one_second = np.ones(SAMPLE_RATE, dtype=np.int16)
         provider = ListProvider(
             [frame(Channel.MIC, float(t), one_second) for t in range(3)]  # 3 s of audio
@@ -292,16 +324,54 @@ class TestMeetingRecorder:
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
-        checkpoints: list[int] = []
+        checkpoints: list[Transcript] = []
         transcript = recorder.run(
-            provider,
-            on_checkpoint=lambda t: checkpoints.append(len(t.entries)),
-            checkpoint_interval=1.0,
+            provider, on_checkpoint=checkpoints.append, checkpoint_interval=1.0
         )
-        # Captured duration reaches 1 s, 2 s, 3 s → a checkpoint at each, non-empty.
-        assert len(checkpoints) == 3
-        assert all(n > 0 for n in checkpoints)
+        # The tail checkpoint runs off-thread and coalesces, so the *count* is
+        # timing-dependent — but at least one always fires for 3 s at interval 1.
+        assert checkpoints
+        # Checkpoints are channel-coarse (un-diarized); only the final transcript
+        # carries the diarized ``Local-1`` label.
+        assert all(e.speaker == "Local" for c in checkpoints for e in c.entries)
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
+        # Each checkpoint holds the full transcript-so-far: entries only ever grow.
+        counts = [len(c.entries) for c in checkpoints]
+        assert counts == sorted(counts)
+
+    def test_tail_entries_shift_onto_the_session_clock_with_a_coarse_label(self):
+        store = SessionStore({Channel.MIC})
+        for t in range(3):
+            store.append(frame(Channel.MIC, float(t), np.ones(SAMPLE_RATE, dtype=np.int16)))
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
+        )
+        plan = plan_channels(recorder.profile)[0]
+        entries = recorder._tail_entries(store, plan, 1.0, 2.0)
+        assert entries
+        assert all(e.speaker == "Local" for e in entries)  # coarse, not diarized Local-1
+        assert all(e.start >= 1.0 for e in entries)  # word times shifted into the tail
+
+    def test_live_checkpoint_groups_committed_words_by_channel(self):
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=1), asr=FakeASR()
+        )
+        decoders = {
+            Channel.MIC: CommittedWords([Word("hallo", 0.1, 0.5), Word("welt", 0.6, 0.9)]),
+            Channel.SYSTEM: CommittedWords([Word("guten", 0.2, 0.6)]),
+        }
+        transcript = recorder._live_checkpoint(decoders)
+        by_speaker = {e.speaker: e.text for e in transcript.entries}
+        assert by_speaker == {"Local": "hallo welt", "Remote": "guten"}
+        # Interleaved by start time across channels (mic 0.1 before system 0.2).
+        assert [e.speaker for e in transcript.entries] == ["Local", "Remote"]
+
+    def test_live_checkpoint_is_empty_before_anything_commits(self):
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
+        )
+        transcript = recorder._live_checkpoint({Channel.MIC: CommittedWords([])})
+        assert transcript.entries == []
 
     def test_checkpointing_disabled_by_default_interval_zero(self):
         provider = ListProvider(
@@ -330,3 +400,31 @@ class TestMeetingRecorder:
         )
         transcript = recorder.run(provider)
         assert transcript.language == Language.ENGLISH
+
+
+class TestTailCheckpointer:
+    """The batch (--no-live) crash checkpoint: tail-only finalize, off capture."""
+
+    def test_finalizes_each_second_of_audio_exactly_once(self):
+        store = SessionStore({Channel.MIC})
+        for t in range(3):  # 3 s of audio
+            store.append(frame(Channel.MIC, float(t), np.ones(SAMPLE_RATE, dtype=np.int16)))
+        bus = AudioBus([Channel.MIC])
+        asr = RecordingASR()
+        recorder = MeetingRecorder(MeetingProfile(local_speakers=1, remote_speakers=0), asr=asr)
+        plans = plan_channels(recorder.profile)
+        writes: list[Transcript] = []
+        checkpointer = _TailCheckpointer(recorder, store, plans, bus, writes.append, 1.0)
+        checkpointer.start()
+        bus.advance(Channel.MIC, store.duration(Channel.MIC))
+        bus.close()
+        checkpointer.join(timeout=5)
+
+        assert not checkpointer.is_alive()
+        assert checkpointer.error is None
+        # The old whole-buffer re-finalize would total 1+2+3 = 6 s of ASR; the
+        # tail-only path finalizes each second exactly once → 3 s, whatever the
+        # thread interleaving (one catch-up tail or three).
+        assert sum(asr.lengths) == 3 * SAMPLE_RATE
+        assert writes  # at least one checkpoint written
+        assert all(e.speaker == "Local" for t in writes for e in t.entries)
