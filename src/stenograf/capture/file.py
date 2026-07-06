@@ -1,0 +1,61 @@
+"""File-replay capture provider (dev/test).
+
+Replays one or two audio files as a live capture session — mic and/or system
+channel — so the meeting orchestrator runs end-to-end before the native
+capture helper exists. Frames from both channels are yielded in timestamp
+order, matching what a real provider delivers. Not a live source: it emits as
+fast as the consumer reads (no real-time pacing).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import numpy as np
+
+from stenograf.audio import load_audio
+from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+
+DEFAULT_FRAME_MS = 200
+"""Chunk size the real helper streams (~200 ms; PLAN.md §2)."""
+
+
+class FileCaptureProvider(CaptureProvider):
+    """Emits the given files as framed PCM on their channels."""
+
+    def __init__(self, sources: dict[Channel, Path | str], *, frame_ms: int = DEFAULT_FRAME_MS):
+        self._sources = {ch: Path(p) for ch, p in sources.items()}
+        self._frame = max(1, int(SAMPLE_RATE * frame_ms / 1000))
+        self._loaded: dict[Channel, np.ndarray] = {}
+        self._stopped = False
+
+    def start(self, channels: set[Channel]) -> None:
+        self._stopped = False
+        self._loaded = {
+            ch: _to_int16(load_audio(path))
+            for ch, path in self._sources.items()
+            if ch in channels
+        }
+
+    def frames(self) -> Iterator[AudioFrame]:
+        pending = []  # (timestamp, channel, samples), merged across channels
+        for channel, pcm in self._loaded.items():
+            for start in range(0, len(pcm), self._frame):
+                chunk = pcm[start : start + self._frame]
+                pending.append((start / SAMPLE_RATE, channel, chunk))
+        pending.sort(key=lambda f: (f[0], f[1]))
+        for timestamp, channel, chunk in pending:
+            if self._stopped:
+                return
+            yield AudioFrame(channel=channel, timestamp=timestamp, samples=chunk)
+
+    def stop(self) -> None:
+        self._stopped = True
+
+
+def _to_int16(samples: np.ndarray) -> np.ndarray:
+    """float32 [-1, 1] → int16 PCM (the capture wire format)."""
+    if samples.dtype == np.int16:
+        return samples
+    return np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int16)

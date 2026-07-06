@@ -12,6 +12,9 @@ from stenograf.config import Language, MeetingProfile
 from stenograf.doctor import run_checks
 from stenograf.transcript import Transcript
 
+# Sentinel for --record-audio given without a value (write next to the transcript).
+_RECORD_DEFAULT = "\0default"
+
 
 @click.group()
 @click.version_option(__version__, prog_name="stenograf")
@@ -40,8 +43,54 @@ def main() -> None:
     default=None,
     help="Number of remote speakers; 0 = in-room meeting without system audio.",
 )
-def start(lang: str | None, local_speakers: int | None, remote_speakers: int | None) -> None:
-    """Start transcribing a meeting."""
+@click.option(
+    "--replay",
+    "replay",
+    default=None,
+    metavar="MIC[,SYSTEM]",
+    help="Dev: replay audio file(s) as the mic (and optional system) channel "
+    "instead of live capture. Exercises the full finalize pipeline without the "
+    "native capture helper.",
+)
+@click.option(
+    "--out",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Output directory for the transcript [default: current directory].",
+)
+@click.option(
+    "--record-audio",
+    "record_audio",
+    is_flag=False,
+    flag_value=_RECORD_DEFAULT,
+    default=None,
+    metavar="[PATH]",
+    help="Also save the raw captured audio to a WAV (mic left, system right). "
+    "Off by default — audio otherwise never touches disk. Give a PATH or omit it "
+    "to write <transcript>.wav.",
+)
+@click.option(
+    "--checkpoint-interval",
+    type=click.FloatRange(0),
+    default=180.0,
+    metavar="SECONDS",
+    help="Re-finalize and save a <transcript>.partial checkpoint every N seconds "
+    "of capture (crash recovery); 0 disables it.",
+)
+@click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
+def start(
+    lang: str | None,
+    local_speakers: int | None,
+    remote_speakers: int | None,
+    replay: str | None,
+    out: Path | None,
+    record_audio: str | None,
+    checkpoint_interval: float,
+    print_markdown: bool,
+) -> None:
+    """Start transcribing a meeting (capture → finalize on stop)."""
+    from stenograf.session import MeetingRecorder, plan_channels
+
     profile = MeetingProfile(
         language=Language(lang) if lang else None,
         local_speakers=local_speakers,
@@ -49,7 +98,89 @@ def start(lang: str | None, local_speakers: int | None, remote_speakers: int | N
     )
     mode = profile.mode.value if profile.mode else "auto"
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
-    raise click.ClickException("the capture/transcription pipeline is not implemented yet")
+
+    plans = plan_channels(profile)
+    provider = _make_provider(replay, plans)
+    out_dir = out or Path.cwd()
+    stem = f"meeting-{time.strftime('%Y%m%d-%H%M%S')}"
+
+    started = time.monotonic()
+    asr, vad, diarizer = _load_backends(
+        need_diarizer=any(p.num_speakers != 1 for p in plans)
+    )
+    recorder = MeetingRecorder(
+        profile, asr=asr, vad=vad, diarizer=diarizer, language=profile.language
+    )
+
+    tee = _make_tee(record_audio, out_dir, stem, plans)
+
+    def on_checkpoint(transcript: Transcript) -> None:
+        md, _ = _write_transcript(transcript, out_dir, f"{stem}.partial")
+        click.echo(f"  checkpoint: {md} ({len(transcript.entries)} entries)")
+
+    channels = ", ".join(p.channel.value for p in plans)
+    click.echo(f"capturing: {channels} (press Ctrl-C to stop and transcribe)")
+    try:
+        transcript = recorder.run(
+            provider,
+            on_frame=tee.add if tee else None,
+            on_status=lambda msg: click.echo(f"  {msg}"),
+            on_checkpoint=on_checkpoint,
+            checkpoint_interval=checkpoint_interval,
+        )
+    finally:
+        if tee is not None:
+            tee.close()
+            click.echo(f"recorded audio: {tee.path}")
+
+    md_path, _ = _write_transcript(transcript, out_dir, stem)
+    _cleanup_checkpoints(out_dir, stem)  # the final transcript supersedes them
+    elapsed = time.monotonic() - started
+    found = len({e.speaker for e in transcript.entries})
+    click.echo(f"speakers: {found} found")
+    click.echo(f"wrote {md_path} and .json ({elapsed:.1f}s)")
+    if print_markdown:
+        click.echo()
+        click.echo(transcript.to_markdown(), nl=False)
+
+
+def _make_tee(record_audio: str | None, out_dir: Path, stem: str, plans):
+    """Create the audio tee if --record-audio was given, with a loud banner."""
+    if record_audio is None:
+        return None
+    from stenograf.recording import WavTee
+
+    path = out_dir / f"{stem}.wav" if record_audio == _RECORD_DEFAULT else Path(record_audio)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tee = WavTee(path, {p.channel for p in plans})
+    click.secho(
+        f"● RECORDING AUDIO to {path} — raw audio is being written to disk",
+        fg="red",
+        bold=True,
+    )
+    return tee
+
+
+def _make_provider(replay: str | None, plans):
+    """Build the capture provider for this platform, or the replay stand-in."""
+    from stenograf.capture.base import Channel
+
+    if replay is None:
+        raise click.ClickException(
+            "live capture needs the native capture helper, which is not built "
+            "yet (PLAN.md Phase 1). Use --replay <mic.wav>[,<system.wav>] to run "
+            "the finalize pipeline over recorded channels."
+        )
+    from stenograf.capture.file import FileCaptureProvider
+
+    paths = [p.strip() for p in replay.split(",") if p.strip()]
+    channel_order = [Channel.MIC, Channel.SYSTEM]
+    sources = dict(zip(channel_order, paths, strict=False))
+    planned = {p.channel for p in plans}
+    ignored = [ch.value for ch in sources if ch not in planned]
+    if ignored:
+        click.echo(f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}")
+    return FileCaptureProvider({ch: p for ch, p in sources.items() if ch in planned})
 
 
 @main.command()
@@ -87,12 +218,8 @@ def transcribe(
     input (or into --out). This is the same pipeline a live meeting runs
     on stop; use it for recorded meetings or re-transcription.
     """
-    from stenograf import models
-    from stenograf.asr.parakeet import ParakeetMLXBackend
     from stenograf.audio import SAMPLE_RATE, load_audio
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
     from stenograf.pipeline import finalize_channel, relabel_speakers
-    from stenograf.vad import SileroVAD
 
     started = time.monotonic()
     language = Language(lang) if lang else None
@@ -101,15 +228,7 @@ def transcribe(
     duration = len(samples) / SAMPLE_RATE
     click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)})")
 
-    def model_progress(name: str, done: int, total: int) -> None:
-        if total and done == 0:
-            click.echo(f"model: downloading {name} ({total >> 20} MB)")
-
-    asr = ParakeetMLXBackend()
-    click.echo(f"asr: loading {asr.model_id}")
-    asr.load()
-    vad = SileroVAD(models.fetch(models.SILERO_VAD, model_progress))
-    diarizer = None if speakers == 1 else SherpaOnnxDiarizer(progress=model_progress)
+    asr, vad, diarizer = _load_backends(need_diarizer=speakers != 1)
 
     def progress(stage: str, done: int, total: int) -> None:
         if stage == "asr" and done == 0:
@@ -132,13 +251,7 @@ def transcribe(
         language=language, profile=MeetingProfile(language=language), entries=entries
     )
 
-    out_dir = out or audio_file.parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    md_path = out_dir / f"{audio_file.stem}.transcript.md"
-    json_path = out_dir / f"{audio_file.stem}.transcript.json"
-    md_path.write_text(transcript.to_markdown())
-    json_path.write_text(transcript.to_json())
-
+    md_path, _ = _write_transcript(transcript, out or audio_file.parent, audio_file.stem)
     elapsed = time.monotonic() - started
     speed = duration / elapsed if elapsed else 0.0
     found = len({e.speaker for e in entries})
@@ -147,6 +260,46 @@ def transcribe(
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
+
+
+def _load_backends(*, need_diarizer: bool):
+    """Load the finalize backends (ASR, VAD, and optionally the diarizer).
+
+    Shared by ``start`` and ``transcribe`` so both use the same committed
+    defaults (parakeet-mlx, Silero VAD, sherpa-onnx diarization).
+    """
+    from stenograf import models
+    from stenograf.asr.parakeet import ParakeetMLXBackend
+    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.vad import SileroVAD
+
+    asr = ParakeetMLXBackend()
+    click.echo(f"asr: loading {asr.model_id}")
+    asr.load()
+    vad = SileroVAD(models.fetch(models.SILERO_VAD, _model_progress))
+    diarizer = SherpaOnnxDiarizer(progress=_model_progress) if need_diarizer else None
+    return asr, vad, diarizer
+
+
+def _write_transcript(transcript: Transcript, out_dir: Path, stem: str) -> tuple[Path, Path]:
+    """Write the Markdown + JSON transcript — the only files stenograf emits."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md_path = out_dir / f"{stem}.transcript.md"
+    json_path = out_dir / f"{stem}.transcript.json"
+    md_path.write_text(transcript.to_markdown())
+    json_path.write_text(transcript.to_json())
+    return md_path, json_path
+
+
+def _cleanup_checkpoints(out_dir: Path, stem: str) -> None:
+    """Remove the crash-recovery checkpoints once the final transcript is written."""
+    for suffix in (".partial.transcript.md", ".partial.transcript.json"):
+        (out_dir / f"{stem}{suffix}").unlink(missing_ok=True)
+
+
+def _model_progress(name: str, done: int, total: int) -> None:
+    if total and done == 0:
+        click.echo(f"model: downloading {name} ({total >> 20} MB)")
 
 
 def _fmt_duration(seconds: float) -> str:

@@ -440,9 +440,19 @@ transcriber.
 *Status (July 2026): capture spike verified (`native/spike/`). Finalize pipeline +
 `steno transcribe` shipped and validated on the Phase 0 eval audio (Silero VAD →
 parakeet-mlx → sherpa-onnx diarization → merged transcript, ~8–14× realtime
-end-to-end on M4 Max). Remaining: production Swift capture helper, meeting
-orchestrator (`steno start`, per-channel finalize + interleave), `--record-audio`
-tee, incremental text checkpointing.*
+end-to-end on M4 Max). Meeting orchestrator shipped (`steno start`): `SessionStore`
+(per-channel in-RAM PCM, timestamp-aligned, never disk) → per-channel finalize with
+each channel's known count → interleaved `Local-N`/`Remote-N` transcript, behind the
+swappable `CaptureProvider` interface. Also shipped: the opt-in `--record-audio` WAV
+tee (streaming, crash-safe, mic-left/system-right) and incremental text checkpointing
+(`--checkpoint-interval`, writes `<meeting>.partial` every N s of capture, cleaned up
+on clean stop). A `FileCaptureProvider` (`--replay mic[,system]`) drives the whole
+orchestrator over recorded files for dev/test until the native helper lands.
+**Remaining: the production Swift capture helper** — the streaming, framed dual-channel
+provider the orchestrator's interface is now waiting behind (spike proved the capture
+APIs; what's left is productionizing it into the wire protocol). Deferred with it: the
+hybrid-mode cross-channel dedup (needs the helper's AEC to matter) and moving checkpoint
+finalize off the consume thread (needs the helper's real-time backpressure).*
 
 **Phase 2 — Live captions.**
 Streaming ASR pass with LocalAgreement commits, TUI live view; finalize pass replaces
