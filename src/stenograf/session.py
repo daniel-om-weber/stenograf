@@ -92,14 +92,18 @@ class ChannelPlan:
 def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
     """Resolve which channels to record and each channel's speaker count.
 
-    The mic is always recorded (there is always a local user). The system tap
-    is recorded unless the meeting is in-room (``remote_speakers == 0``); an
-    unknown remote count (``None``) means record it and estimate the count.
-    A ``None`` local count defaults to 1 — a single local user — because
-    far-field local-count estimation is Phase 3 (PLAN.md §2).
+    The mic is recorded unless there is explicitly no local speaker
+    (``local_speakers == 0``, a listen-only session); an unknown local count
+    (``None``) defaults to 1 — a single local user — because far-field
+    local-count estimation is Phase 3 (PLAN.md §2). The system tap is recorded
+    unless the meeting is in-room (``remote_speakers == 0``); an unknown remote
+    count (``None``) means record it and estimate. ``MeetingProfile`` forbids
+    both counts being 0, so at least one channel is always planned.
     """
-    local = 1 if profile.local_speakers is None else profile.local_speakers
-    plans = [ChannelPlan(Channel.MIC, local, _CHANNEL_LABEL[Channel.MIC])]
+    plans = []
+    if profile.local_speakers != 0:
+        local = 1 if profile.local_speakers is None else profile.local_speakers
+        plans.append(ChannelPlan(Channel.MIC, local, _CHANNEL_LABEL[Channel.MIC]))
     if profile.remote_speakers != 0:
         plans.append(
             ChannelPlan(Channel.SYSTEM, profile.remote_speakers, _CHANNEL_LABEL[Channel.SYSTEM])
@@ -144,12 +148,14 @@ class MeetingRecorder:
         on_status: Callable[[str], None] | None = None,
         on_checkpoint: Callable[[Transcript], None] | None = None,
         checkpoint_interval: float = 180.0,
+        max_seconds: float | None = None,
     ) -> Transcript:
         """Capture until the provider stops (or Ctrl-C), then finalize.
 
         ``on_frame`` sees every stored frame (used by the audio tee); a
         ``KeyboardInterrupt`` ends capture gracefully rather than aborting, so
         an interrupted meeting still yields a transcript of what was captured.
+        ``max_seconds`` stops capture automatically after that much audio.
 
         If ``on_checkpoint`` is given, the completed audio is re-finalized every
         ``checkpoint_interval`` seconds of capture and the transcript handed to
@@ -167,16 +173,17 @@ class MeetingRecorder:
                 store.append(frame)
                 if on_frame is not None:
                     on_frame(frame)
-                if checkpointing:
-                    captured = max(store.duration(p.channel) for p in plans)
-                    if captured >= next_checkpoint:
-                        # Inline re-finalize of the whole captured-so-far. Fine for
-                        # the file/replay providers; when the real-time capture
-                        # helper lands this must move off the consume thread (its
-                        # backpressure design) and finalize only the new tail.
-                        on_checkpoint(self.finalize(store, plans))
-                        while captured >= next_checkpoint:
-                            next_checkpoint += checkpoint_interval
+                captured = max(store.duration(p.channel) for p in plans)
+                if checkpointing and captured >= next_checkpoint:
+                    # Inline re-finalize of the whole captured-so-far. Fine for
+                    # the file/replay providers; when the real-time capture
+                    # helper lands this must move off the consume thread (its
+                    # backpressure design) and finalize only the new tail.
+                    on_checkpoint(self.finalize(store, plans))
+                    while captured >= next_checkpoint:
+                        next_checkpoint += checkpoint_interval
+                if max_seconds is not None and captured >= max_seconds:
+                    break
         except KeyboardInterrupt:
             if on_status is not None:
                 on_status("interrupted — finalizing captured audio")

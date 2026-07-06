@@ -72,6 +72,12 @@ class TestPlanChannels:
         system = next(p for p in plans if p.channel is Channel.SYSTEM)
         assert system.num_speakers is None  # estimate
 
+    def test_no_local_speaker_records_only_the_system(self):
+        # Listen-only: --local 0 --remote 2. No mic; never a num_speakers=0 plan.
+        plans = plan_channels(MeetingProfile(local_speakers=0, remote_speakers=2))
+        assert [p.channel for p in plans] == [Channel.SYSTEM]
+        assert plans[0].num_speakers == 2
+
 
 def test_interleave_orders_channels_by_start():
     entries = [

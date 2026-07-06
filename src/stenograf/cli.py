@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -77,6 +78,13 @@ def main() -> None:
     help="Re-finalize and save a <transcript>.partial checkpoint every N seconds "
     "of capture (crash recovery); 0 disables it.",
 )
+@click.option(
+    "--max-seconds",
+    type=click.FloatRange(0, min_open=True),
+    default=None,
+    metavar="SECONDS",
+    help="Stop capture automatically after this many seconds [default: until Ctrl-C].",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def start(
     lang: str | None,
@@ -86,6 +94,7 @@ def start(
     out: Path | None,
     record_audio: str | None,
     checkpoint_interval: float,
+    max_seconds: float | None,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
@@ -119,7 +128,8 @@ def start(
         click.echo(f"  checkpoint: {md} ({len(transcript.entries)} entries)")
 
     channels = ", ".join(p.channel.value for p in plans)
-    click.echo(f"capturing: {channels} (press Ctrl-C to stop and transcribe)")
+    stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
+    click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
     try:
         transcript = recorder.run(
             provider,
@@ -127,6 +137,7 @@ def start(
             on_status=lambda msg: click.echo(f"  {msg}"),
             on_checkpoint=on_checkpoint,
             checkpoint_interval=checkpoint_interval,
+            max_seconds=max_seconds,
         )
     finally:
         if tee is not None:
@@ -162,25 +173,32 @@ def _make_tee(record_audio: str | None, out_dir: Path, stem: str, plans):
 
 
 def _make_provider(replay: str | None, plans):
-    """Build the capture provider for this platform, or the replay stand-in."""
+    """Build the capture provider: file replay if given, else the native helper."""
     from stenograf.capture.base import Channel
 
-    if replay is None:
-        raise click.ClickException(
-            "live capture needs the native capture helper, which is not built "
-            "yet (PLAN.md Phase 1). Use --replay <mic.wav>[,<system.wav>] to run "
-            "the finalize pipeline over recorded channels."
-        )
-    from stenograf.capture.file import FileCaptureProvider
+    if replay is not None:
+        from stenograf.capture.file import FileCaptureProvider
 
-    paths = [p.strip() for p in replay.split(",") if p.strip()]
-    channel_order = [Channel.MIC, Channel.SYSTEM]
-    sources = dict(zip(channel_order, paths, strict=False))
-    planned = {p.channel for p in plans}
-    ignored = [ch.value for ch in sources if ch not in planned]
-    if ignored:
-        click.echo(f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}")
-    return FileCaptureProvider({ch: p for ch, p in sources.items() if ch in planned})
+        paths = [p.strip() for p in replay.split(",") if p.strip()]
+        channel_order = [Channel.MIC, Channel.SYSTEM]
+        sources = dict(zip(channel_order, paths, strict=False))
+        planned = {p.channel for p in plans}
+        ignored = [ch.value for ch in sources if ch not in planned]
+        if ignored:
+            click.echo(f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}")
+        return FileCaptureProvider({ch: p for ch, p in sources.items() if ch in planned})
+
+    if sys.platform != "darwin":
+        raise click.ClickException(
+            "live capture is macOS-only for now; on other platforms transcribe a "
+            "recorded file with `steno transcribe`, or use `steno start --replay`."
+        )
+    from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
+
+    try:
+        return MacOSCaptureProvider()
+    except HelperNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @main.command()

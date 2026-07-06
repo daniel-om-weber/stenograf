@@ -446,13 +446,18 @@ each channel's known count → interleaved `Local-N`/`Remote-N` transcript, behi
 swappable `CaptureProvider` interface. Also shipped: the opt-in `--record-audio` WAV
 tee (streaming, crash-safe, mic-left/system-right) and incremental text checkpointing
 (`--checkpoint-interval`, writes `<meeting>.partial` every N s of capture, cleaned up
-on clean stop). A `FileCaptureProvider` (`--replay mic[,system]`) drives the whole
-orchestrator over recorded files for dev/test until the native helper lands.
-**Remaining: the production Swift capture helper** — the streaming, framed dual-channel
-provider the orchestrator's interface is now waiting behind (spike proved the capture
-APIs; what's left is productionizing it into the wire protocol). Deferred with it: the
-hybrid-mode cross-channel dedup (needs the helper's AEC to matter) and moving checkpoint
-finalize off the consume thread (needs the helper's real-time backpressure).*
+on clean stop). A `FileCaptureProvider` (`--replay mic[,system]`) also drives the whole
+orchestrator over recorded files for dev/test. The production Swift capture
+helper (`native/helper/`, **stenocap**) is shipped: Core Audio process tap
+(system) + AVAudioEngine (mic, optional `--aec`) → AVAudioConverter to mono
+16 kHz int16 → framed PCM on stdout, clean SIGINT/SIGTERM stop; consumed by
+`MacOSCaptureProvider` behind the same `CaptureProvider` interface. Verified
+end-to-end (July 2026): live mic capture is non-silent and real-time; German
+speech played to the system output is captured through the tap and transcribed
+accurately (`steno start --local 0 --remote 1`). **Phase 1 is complete** — a
+usable, legally-clean meeting transcriber. Deferred to later phases: hybrid-mode
+cross-channel dedup (needs the helper's AEC to matter in practice) and moving
+checkpoint finalize off the consume thread (needs real-time backpressure tuning).*
 
 **Phase 2 — Live captions.**
 Streaming ASR pass with LocalAgreement commits, TUI live view; finalize pass replaces

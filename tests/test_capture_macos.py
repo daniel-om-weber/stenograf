@@ -1,0 +1,96 @@
+import io
+import struct
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from stenograf.capture.base import Channel
+from stenograf.capture.macos import (
+    HelperNotFoundError,
+    MacOSCaptureProvider,
+    find_helper,
+    read_frame,
+)
+
+FAKE = [sys.executable, str(Path(__file__).parent / "fake_stenocap.py")]
+_HEADER = struct.Struct("<BdI")
+
+
+def make_frame(code: int, timestamp: float, samples: list[int]) -> bytes:
+    body = struct.pack(f"<{len(samples)}h", *samples)
+    return _HEADER.pack(code, timestamp, len(samples)) + body
+
+
+class TestReadFrame:
+    def test_parses_a_frame(self):
+        stream = io.BytesIO(make_frame(1, 1.5, [1, 2, 3]))
+        frame = read_frame(stream)
+        assert frame.channel is Channel.SYSTEM
+        assert frame.timestamp == 1.5
+        assert frame.samples.tolist() == [1, 2, 3]
+        assert frame.samples.dtype == np.int16
+
+    def test_returns_none_at_clean_eof(self):
+        assert read_frame(io.BytesIO(b"")) is None
+
+    def test_returns_none_on_truncated_payload(self):
+        # Header promises 3 samples but only 1 is present → treated as EOF.
+        truncated = _HEADER.pack(0, 0.0, 3) + struct.pack("<h", 9)
+        assert read_frame(io.BytesIO(truncated)) is None
+
+    def test_rejects_a_bad_channel_code(self):
+        with pytest.raises(ValueError):
+            read_frame(io.BytesIO(_HEADER.pack(7, 0.0, 0)))
+
+    def test_rejects_an_absurd_sample_count(self):
+        with pytest.raises(ValueError):
+            read_frame(io.BytesIO(_HEADER.pack(0, 0.0, 10_000_000)))
+
+
+class TestMacOSCaptureProvider:
+    def test_reads_both_channels_until_eof(self):
+        provider = MacOSCaptureProvider(command=FAKE)
+        provider.start({Channel.MIC, Channel.SYSTEM})
+        frames = list(provider.frames())
+        provider.stop()
+
+        assert {f.channel for f in frames} == {Channel.MIC, Channel.SYSTEM}
+        mic = [f for f in frames if f.channel is Channel.MIC]
+        assert len(mic) == 3
+        assert [f.timestamp for f in mic] == [0.0, 0.1, 0.2]
+
+    def test_only_requested_channel_is_started(self):
+        provider = MacOSCaptureProvider(command=FAKE)
+        provider.start({Channel.MIC})  # in-room: no system tap
+        channels = {f.channel for f in provider.frames()}
+        provider.stop()
+        assert channels == {Channel.MIC}
+
+    def test_stop_terminates_a_running_helper(self):
+        provider = MacOSCaptureProvider(command=[*FAKE, "--forever"])
+        provider.start({Channel.MIC})
+        first = next(provider.frames())
+        assert first.channel is Channel.MIC
+        provider.stop()
+        assert provider._proc is None  # torn down
+
+
+class TestFindHelper:
+    def test_env_override_wins(self, monkeypatch, tmp_path):
+        target = tmp_path / "stenocap"
+        target.write_text("")
+        monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(target))
+        assert find_helper() == target
+
+    def test_raises_when_absent(self, monkeypatch):
+        monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)
+        # Point the package-resource and dev-tree lookups at nothing by faking
+        # __file__ location is overkill; instead assert the error type when the
+        # binary is genuinely missing is exercised via a fresh temp env.
+        import stenograf.capture.macos as macos
+
+        monkeypatch.setattr(macos, "HELPER_NAME", "stenocap-does-not-exist")
+        with pytest.raises(HelperNotFoundError):
+            find_helper()
