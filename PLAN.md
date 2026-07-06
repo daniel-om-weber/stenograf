@@ -20,7 +20,7 @@ German WER on the multilingual Open ASR Leaderboard (FLEURS + MLS, read speech):
 | Model | German WER | Size | License | Apple Silicon path |
 |---|---|---|---|---|
 | Voxtral Small 24B (Mistral) | **3.01%** | 24B | Apache-2.0 | mlx-voxtral / LM Studio (~14 GB at 4-bit) |
-| NVIDIA Canary-1B-v2 | 4.10% | 1B | CC-BY-4.0 | MLX ports |
+| NVIDIA Canary-1B-v2 | 4.10% | 1B | CC-BY-4.0 | none with word timestamps (NeMo/MPS only — see §2) |
 | Qwen3-ASR-1.7B | 4.12% | 1.7B | Apache-2.0 | mlx-qwen3-asr |
 | NVIDIA Parakeet-TDT-0.6B-v3 | 4.20% | 0.6B | CC-BY-4.0 | parakeet-mlx (~24× RT), FluidAudio CoreML (~110× RT) |
 | Whisper large-v3 | 4.26% | 1.55B | MIT | mlx-whisper, whisper.cpp, WhisperKit |
@@ -143,19 +143,38 @@ chunks over a Unix socket. Model on AudioTee/AudioCap. Fallback for macOS < 14.4
 BlackHole, documented as degraded.
 
 **Finalize ASR (accuracy-critical):** pluggable backend interface. **Committed
-default: Canary-1B-v2 via MLX** — beats Whisper large-v3 on German, native word
-timestamps, no silence hallucination, fast, 2–4 GB RAM. **Opt-in max-accuracy:
-Voxtral Small 24B (mlx-voxtral, 4-bit, ~14 GB)** — best German WER (3.01%), slower;
-per-meeting toggle. Fallback: Whisper large-v3 (mlx-whisper) + WhisperX-style
-alignment. Phase 0 validates Canary-vs-Voxtral on real meeting audio and can flip
-the default. Language is forced per meeting (user setting, or auto-detect once on
+default: Parakeet-TDT-0.6B-v3 via parakeet-mlx** — native word timestamps, no
+silence hallucination, ~120× realtime, <1 GB RAM, same model as the live pass.
+*(Canary-1B-v2 was the original planned default but was dropped in Phase 0
+research, July 2026: no MLX/CoreML runtime emits its word timestamps — the
+PyPI `canary-mlx` package is an abandoned template, mlx-audio's Canary port
+returns placeholder timestamps, and onnx-asr supports timestamps only for
+TDT/CTC/RNNT decoders. The sole working path, NeMo on PyTorch-MPS, is too
+slow and heavy to ship; it remains an accuracy-ceiling reference in the eval
+harness.)* **Opt-in max-accuracy: Voxtral Small 24B (mlx-voxtral, 4-bit,
+~14 GB)** — best German WER (3.01%), slower, text only (no timestamps).
+Fallback: Whisper large-v3 (mlx-whisper) + WhisperX-style alignment.
+
+*Phase 0 result (July 2026, blind adjudication of 161 model-disagreement sites
+on real meeting audio, de+en):* **Parakeet confirmed as default** — it tied
+Whisper large-v3 exactly (42:42 head-to-head) while being ~10× faster and 5×
+smaller; Whisper stays as fallback. **Voxtral's read-speech advantage did not
+transfer** to meetings (lost 32:38 to Parakeet, 22:28 to Whisper) — demoted
+from "opt-in max accuracy" to not-worth-shipping pending new evidence. Canary
+was empirically the weakest (lost every pairing ~1:2) on top of having no
+viable runtime. Methodology note: full hand-corrected references proved slow
+and anchor-biased; the adjudication harness (eval/adjudicate.py) is the
+recommended evaluation path going forward. Language is forced per meeting (user setting, or auto-detect once on
 the first confident segment, then locked). `initial_prompt`/context seeded from a
 user glossary and attendee names where the backend supports it.
 
 **Live ASR (latency-critical, quality secondary):** **committed default:
-Parakeet-TDT-0.6B-v3 via parakeet-mlx**, run chunked (~10 s window) with a
-LocalAgreement commit policy — simple, hallucination-free, fast enough that chunked
-re-runs are cheap, same ecosystem as finalize. Upgrade path if chunking feels
+Parakeet-TDT-0.6B-v3 via parakeet-mlx**, run with a **growing re-decode window**
+(everything since the last long silence, capped at ~60–120 s, re-decoded every
+1–2 s) and a LocalAgreement commit policy. Parakeet's ~120× realtime makes this
+affordable (a 60 s window every 2 s needs only ~30× RT) and it largely removes
+the fixed-chunk boundary artifacts that a 10 s window would cause — live quality
+approaches finalize quality with the same model. Upgrade path if it still feels
 laggy: Voxtral Mini 4B Realtime (true streaming, <500 ms) or Qwen3-ASR-1.7B
 streaming. Interim text shown grey; finalize pass replaces the live transcript.
 
@@ -208,7 +227,9 @@ fatal: correct the value and re-run finalize in seconds.
 
 **Whisper-specific accuracy settings** (when a Whisper backend is used):
 `vad_filter=True` (Silero), batch only VAD segments (never raw sliding windows),
-`condition_on_previous_text=True` for finalize / `False` for live, default temperature
+`condition_on_previous_text=False` always (Phase 0 found the finalize-pass
+`True` setting lets decoder loops snowball across windows — up to 220 repeated
+words on overlap/silence; consistency isn't worth it), default temperature
 fallback ladder with `compression_ratio_threshold≈2.4`, `logprob_threshold≈-1.0`,
 `no_speech_threshold≈0.6`, `hallucination_silence_threshold≈2–8 s`, plus a post-filter
 blacklist for phantom phrases during silence.

@@ -2,9 +2,10 @@
 
 Backends wrap one model + runtime combination. Planned implementations:
 
-- ``canary_mlx`` — Canary-1B-v2 via MLX (default finalize pass, macOS)
+- ``parakeet_mlx`` — Parakeet-TDT-0.6B-v3 via parakeet-mlx (default for both
+  finalize and live pass on macOS; Canary-1B-v2 was dropped — no Apple Silicon
+  runtime with word timestamps, see PLAN.md)
 - ``voxtral_mlx`` — Voxtral Small 24B via mlx-voxtral (opt-in max accuracy)
-- ``parakeet_mlx`` — Parakeet-TDT-0.6B-v3 via parakeet-mlx (live pass)
 - ONNX/CTranslate2 equivalents for Linux/Windows
 
 Word-level timestamps are mandatory: speaker assignment intersects them with
