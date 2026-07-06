@@ -49,6 +49,8 @@ large-v3-turbo real-time even on M2).
   (poor MPS support), but native ports match its accuracy at absurd speed:
   - **speakrs** (Rust/CoreML, Apache-2.0): full community-1 pipeline, 7.1% DER on
     VoxConverse at **529× realtime** on M4 Pro. Mono 16 kHz f32 in → RTTM out.
+    *(Phase 1 correction: speakrs is a Rust library only — no CLI, no prebuilt
+    binaries. Using it means writing and building our own small Rust wrapper.)*
   - **FluidAudio** (Swift/CoreML, Apache-2.0): community-1 offline + LS-EEND streaming
     (up to 10 speakers) + Silero VAD + speaker embeddings + Parakeet ASR in one SDK.
 - **Passing the known speaker count is the single biggest accuracy win**
@@ -178,8 +180,44 @@ approaches finalize quality with the same model. Upgrade path if it still feels
 laggy: Voxtral Mini 4B Realtime (true streaming, <500 ms) or Qwen3-ASR-1.7B
 streaming. Interim text shown grey; finalize pass replaces the live transcript.
 
-**Diarization:** community-1 pipeline via **speakrs** (Rust CLI, RTTM out — easiest to
-integrate) or **FluidAudio** (if we later go Swift-native). Diarization is a
+**Diarization:** shipped baseline (July 2026): **sherpa-onnx** (pyannote
+segmentation-3.0 + 3D-Speaker eres2net embeddings, ONNX/CPU) — pip-installable on
+every platform, takes a known speaker count, and was planned for Linux/Windows
+anyway. Embedding-model caveat from validation: sherpa's CAM++ VoxCeleb export
+flips cluster identity between segmentation windows (one speaker shredded into
+many); eres2net and titanet-small agree with each other and with the audio —
+eres2net is the default. The community-1-accuracy upgrade on macOS needs a
+wrapper binary we build ourselves, since **speakrs and FluidAudio are both
+libraries, not CLIs**: either a small Rust CLI around speakrs or diarization in
+the Swift helper via FluidAudio (evaluate when live capture lands; same
+``Diarizer`` interface either way).
+
+**Cross-platform accuracy path (no Mac-native models) — documented for later
+(research July 2026):** the many-speaker weakness is sherpa's greedy
+`FastClustering`, not the models. pyannote's own 3.1→community-1 gain ("marked
+reductions in speaker confusion" at higher counts) was *only* a clustering swap
+(AHC→VBx) on the *same* segmentation — so community-1-class accuracy is three
+swappable ONNX pieces, and only the *runtime* is CoreML in the native ports:
+pyannote segmentation-3.0 (have it) + **WeSpeaker ResNet293-LM** embedding (ONNX
+in sherpa's zoo, VoxCeleb EER 0.447%, English — vs our current eres2net, the
+lower-EER *zh-cn* export) + a ported **VBx** clustering step (the one missing
+piece; BUT's `VBx` is the reference to lift). That reproduces speakrs/FluidAudio
+in Python/ONNX — CPU everywhere, no PyTorch/CUDA/CoreML — behind the same
+`Diarizer` interface. Staged: (a) cheap interim — swap the embedding to
+ResNet293-LM (~1 line, strictly better for de/en); (b) least-code way to reach
+the ceiling and measure the real gain — run `pyannote.audio` community-1 directly
+(PyTorch, CC-BY-4.0, heavy + slow-ish on Mac MPS, but diarization is a small
+slice of runtime); (c) the real target — the pure-ONNX VBx rebuild. **DiariZen**
+(WavLM+Conformer+VBx, CC-BY-4.0) tops the open leaderboard (~13.3% DER overall,
+7.1% at 5+ speakers) but is PyTorch/GPU-oriented with no ONNX export — skip
+unless chasing the very top with a GPU. Dead end for our 2–8-speaker case: every
+*end-to-end neural* diarizer is hard-capped (NVIDIA Sortformer at 4 speakers,
+FluidAudio's LS-EEND streaming at 10) — only the clustering pipelines scale.
+Lever order for many speakers: **known count** (done — biggest) > **VBx
+clustering** > **better embedding** > the 3-speaker-per-window segmentation cap
+(least important; it's a local per-window limit, not a global one).
+
+Diarization is a
 **per-channel** operation, configured by a meeting profile set at start
 (`--local N --remote M`), covering three configurations:
 
@@ -235,9 +273,23 @@ fallback ladder with `compression_ratio_threshold≈2.4`, `logprob_threshold≈-
 blacklist for phantom phrases during silence.
 
 **In-memory guarantee:** the default mode holds audio only in bounded ring buffers +
-the session PCM store in RAM; no code path writes audio to disk. An explicit opt-in
-"also record WAV" mode can exist as a clearly separate switch. (OS-level swap/crash
+the session PCM store in RAM; no code path writes audio to disk. (OS-level swap/crash
 dumps are outside app control — worth a note in docs, not an app concern.)
+
+**Opt-in audio recording (`--record-audio[=path]`, default off, Phase 1):** when
+explicitly enabled, the Python core additionally appends the incoming PCM to a WAV
+file as it arrives — mic on the left channel, system audio on the right (mono in
+in-room mode), preserving channel separation in a file any player opens. Recorded
+at the wire format (mono 16 kHz int16 per channel, ~230 MB/h for both channels):
+sufficient for speech playback and exactly what re-transcription needs; native-rate
+archival is out of scope (would require teeing in the helper before the resample).
+Append-as-you-go with the WAV header patched periodically — crash-safe like the
+incremental text checkpoints. Recording state must be loudly visible (CLI banner,
+later UI indicator); consent stakes are higher for retained audio than transcripts
+(docs note). Recorded files feed back in via a `steno transcribe <file>` batch
+entry point (re-run finalize with a better model / corrected settings, and a
+source of new eval data for the adjudication harness). Possible later nicety:
+FLAC (~50% smaller); not MVP.
 
 **Outputs:** speaker-labeled, timestamped Markdown + JSON (word-level timestamps
 retained); SRT/VTT export. Optional post-meeting summary via local LLM (Ollama) —
@@ -263,8 +315,11 @@ swappable without touching the core:
    On Linux/Windows the provider may run in-process behind the same interface.
 2. **Inference backends = Python ABCs.** ASR: MLX backends on Mac ↔
    CTranslate2/ONNX/CUDA backends on Linux/Windows (same models; Parakeet/Canary
-   have ONNX paths). Diarization: speakrs binary (CoreML) on Mac ↔ sherpa-onnx
-   elsewhere — both take mono 16 kHz PCM, return speaker segments. VAD (Silero) is
+   have ONNX paths). Diarization: sherpa-onnx (ONNX/CPU) everywhere today; a
+   macOS-native community-1 wrapper (speakrs or FluidAudio, CoreML) can slot in
+   behind the same interface later, and a pure-ONNX community-1 rebuild
+   (seg-3.0 + WeSpeaker ResNet293-LM + ported VBx) is the cross-platform accuracy
+   path — same interface, CPU everywhere (see §2 Diarization). VAD (Silero) is
    ONNX/CPU everywhere.
 
 The Python core (ring buffers, session PCM store, VAD, live pass, finalize pass,
@@ -295,8 +350,10 @@ uv-based distribution works on all platforms:
   signing (`codesign -s -`) is all the helper requires; permission prompts
   attribute to the responsible process (the terminal), so the user grants mic +
   system-audio to their terminal app once (how AudioTee ships via Homebrew) —
-  **verify in an early Phase 1 spike**, since unsigned binaries can silently fail
-  to prompt. Developer ID + notarization ($99/yr) is needed *only* to distribute a
+  **verified in the Phase 1 spike (July 2026, `native/spike/`)**: an ad-hoc-signed
+  CLI with usage strings embedded via an `__info_plist` section captured non-silent
+  system audio through a whole-system process tap (mono 48 kHz float32) and mic
+  audio via AVAudioEngine on macOS 26.5. Developer ID + notarization ($99/yr) is needed *only* to distribute a
   downloadable .app bundle to other people (Gatekeeper checks the browser-set
   quarantine flag; uv/pip installs and locally built apps never have it). Decision:
   stay CLI-launched; no Developer ID.
@@ -376,8 +433,16 @@ harness work de-risks the whole project.
 **Phase 1 — Batch MVP (the accuracy core).**
 Swift capture helper (tap + mic → socket) → Python core that buffers PCM in RAM and,
 on stop, runs the finalize pass: VAD → best ASR backend → diarization → merged
-speaker-labeled Markdown/JSON transcript. No live view yet. This alone is a usable,
-legally-clean meeting transcriber.
+speaker-labeled Markdown/JSON transcript. Includes the opt-in `--record-audio` WAV
+tee and the `steno transcribe <file>` batch entry point (also the finalize pass's
+dev/test harness). No live view yet. This alone is a usable, legally-clean meeting
+transcriber.
+*Status (July 2026): capture spike verified (`native/spike/`). Finalize pipeline +
+`steno transcribe` shipped and validated on the Phase 0 eval audio (Silero VAD →
+parakeet-mlx → sherpa-onnx diarization → merged transcript, ~8–14× realtime
+end-to-end on M4 Max). Remaining: production Swift capture helper, meeting
+orchestrator (`steno start`, per-channel finalize + interleave), `--record-audio`
+tee, incremental text checkpointing.*
 
 **Phase 2 — Live captions.**
 Streaming ASR pass with LocalAgreement commits, TUI live view; finalize pass replaces

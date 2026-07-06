@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>dev.stenograf.tap-spike</string>
+	<key>CFBundleName</key>
+	<string>tap-spike</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>stenograf capture spike: verifies that system audio can be captured via a Core Audio process tap.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>stenograf capture spike: verifies that microphone audio can be captured.</string>
+</dict>
+</plist>

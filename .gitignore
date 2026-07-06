@@ -36,3 +36,4 @@ build/
 
 # Native helper build artifacts
 native/.build/
+native/spike/tap-spike

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import shutil
 import sys
 from dataclasses import dataclass
 
@@ -43,14 +44,33 @@ def run_checks() -> list[Check]:
             )
         )
 
-    checks.append(
-        Check(
-            name="Models",
-            ok=False,
-            detail="model download not implemented yet (planned: Phase 0/1)",
-        )
-    )
+    checks.append(_ffmpeg_check())
+    checks.append(_models_check())
     return checks
+
+
+def _ffmpeg_check() -> Check:
+    path = shutil.which("ffmpeg")
+    return Check(
+        name="ffmpeg",
+        ok=path is not None,
+        detail=path or "not on PATH — needed to read anything but 16 kHz WAV "
+        "(brew install ffmpeg)",
+    )
+
+
+def _models_check() -> Check:
+    from stenograf import models
+
+    assets = (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING)
+    missing = [asset.name for asset in assets if models.cached_path(asset) is None]
+    if missing:
+        detail = f"{len(missing)}/{len(assets)} pending — downloaded on first use: " + ", ".join(
+            missing
+        )
+    else:
+        detail = f"VAD + diarization cached in {models.cache_dir()} (ASR weights via HuggingFace)"
+    return Check(name="Models", ok=not missing, detail=detail)
 
 
 def _macos_version_check() -> Check:

@@ -21,14 +21,15 @@ class TranscriptEntry:
 
 @dataclass
 class Transcript:
-    language: Language
+    language: Language | None
+    """``None`` when neither given nor (yet) auto-detected."""
     profile: MeetingProfile
     entries: list[TranscriptEntry] = field(default_factory=list)
 
     def to_json(self) -> str:
         return json.dumps(
             {
-                "language": self.language.value,
+                "language": self.language.value if self.language else None,
                 "profile": asdict(self.profile),
                 "entries": [asdict(e) for e in self.entries],
             },
