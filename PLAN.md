@@ -648,9 +648,8 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
    and one lock keeps worker-thread commits from interleaving mid-line with
    main-thread notices. Tested through an injected echo recorder that mirrors
    `click.echo`'s message/nl/err semantics, and verified end-to-end through the
-   real `click.echo`. Deferred to Task 7 (still): the `--live`/`--plain` CLI
-   wiring, and having the orchestrator emit `finalizing`/`language`/`finalized`
-   as structured view events (today they arrive as `on_status` strings).*
+   real `click.echo`. (The `--live`/`--plain` CLI wiring and the orchestrator's
+   structured `finalizing`/`language`/`finalized` events landed in Task 7.)*
 6. **Textual TUI** (`TextualLiveView`) — pinned header (REC/elapsed/language/
    profile), append-only `RichLog` of committed captions, dim per-channel interim
    tail (`You`/`Remote` — channel-coarse; real `Local-N`/`Remote-M` only after the
@@ -681,14 +680,32 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
    (fake ASR, paced provider) into the TUI under Textual's headless `run_test`: a
    channel-coarse `You` caption crossed from the real `LiveWorker` thread onto the
    UI, then the finalize pass swapped in `Local-1`, and the quit binding exited.
-   Deferred to Task 7: the `--live`/`--plain` CLI wiring that chooses this view vs
-   the plain one (TTY-detect), and the orchestrator emitting structured
-   `finalizing`/`language`/`finalized` events (today `finalized` is called by
-   `serve` after `run` returns; `finalizing`/`language` arrive as `on_status`/
-   `push_language` text).*
+   (Task 7 added the `--live`/`--plain` CLI wiring that chooses this view vs the
+   plain one by TTY-detect, and moved `finalizing`/`language`/`finalized` emission
+   into the orchestrator; `serve`/`_finish` now only backstop the finalize swap.)*
 7. **Glue** — `steno start` gains `--live/--no-live`, `--plain`, `--flush-interval`
    (alias `--checkpoint-interval`); doctor/README; a CPU-proxy regression test (zero
    window decodes during silence; committed text never rewritten).
+   *Status (July 2026): shipped (`stenograf.cli`, `tests/test_cli.py`). `steno
+   start` defaults to `--live`; it picks the view by terminal: the Textual TUI on a
+   real TTY, else the plain stream (`--plain` forces plain, `--no-live` skips the
+   live pass entirely and finalizes on stop as before). `--flush-interval` /
+   `--checkpoint-interval` are one option (Option-B crash checkpoint cadence).
+   `--replay` is paced to wall-clock only under `--live` so it demonstrates captions
+   at meeting cadence; batch dumps it. The orchestrator now drives a single
+   `LiveView` sink (`session._CallbackView` adapts the legacy `on_update`/`on_status`
+   callbacks) and emits the structured `status`/`language`/`finalizing`/`finalized`/
+   `error` events itself — so `finalized` is emitted by `run` before it returns
+   (the TUI's `serve`/`_finish` now only backstops it), resolving the Task 5/6
+   deferrals. Under the live views the `.partial` checkpoint is written silently
+   (the caption stream/TUI stays clean); batch narrates it as before. CPU-proxy
+   regression in `tests/test_live_orchestration.py::TestLivePassCpuProxy`: through
+   the wired `run(live=True)` path, zero ASR decodes while the VAD reports silence
+   (snapshotted at the finalize hand-off) and a strictly append-only committed
+   stream over speech. **Verified end-to-end** driving the real `parakeet-mlx`
+   backend through `steno start --replay` (live→plain): the streaming worker,
+   structured finalize swap, and transcript write all ran on the background thread
+   without the MLX thread-stream fault. Phase 2 complete.*
 
 CPU budget target (spike-measured): **~7–10% of one accelerator during speech, ~0%
 in silence**, live captions ~10% WER, ~1.5 s cadence.

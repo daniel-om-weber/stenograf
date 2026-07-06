@@ -299,10 +299,10 @@ class TextualLiveView(LiveView):
     """LiveView backed by :class:`LiveApp`, marshalling events onto its event loop.
 
     Construct with the meeting profile, then :meth:`serve` a ``meeting`` callable
-    (typically ``recorder.run(..., live=True, on_update=self.update, ...)``): the
-    app runs on the calling (main) thread while the meeting runs on a background
-    thread, and the interface events cross back to the UI thread. ``serve`` returns
-    the meeting's result (the authoritative transcript) once the app exits.
+    (typically ``recorder.run(..., live=True, view=self, ...)``): the app runs on
+    the calling (main) thread while the meeting runs on a background thread, and
+    the orchestrator's structured events cross back to the UI thread. ``serve``
+    returns the meeting's result (the authoritative transcript) once the app exits.
     """
 
     def __init__(
@@ -399,10 +399,20 @@ class TextualLiveView(LiveView):
         ).start()
 
     def _finish(self, result: dict[str, object]) -> None:
-        """On the UI thread: show the finalize result, then wait for the user to quit."""
+        """On the UI thread: ensure the finalize result is shown, then wait to quit.
+
+        The orchestrator emits ``finalized`` itself now (``run`` calls
+        ``view.finalized`` before returning), so on the normal path the swap has
+        already happened and the app is in the ``done`` phase — nothing to do but
+        keep the app up for the user to read and dismiss. The push here is a
+        fallback for a meeting that returns a transcript without emitting the
+        event (e.g. a test stand-in). A meeting that raised has nothing to show, so
+        the app exits.
+        """
         transcript = result.get("transcript")
         if isinstance(transcript, Transcript):
-            self._app.push_finalized(transcript)
+            if self._app._phase != "done":
+                self._app.push_finalized(transcript)
         else:  # the meeting raised — nothing to show, so just exit
             self._app.exit()
 

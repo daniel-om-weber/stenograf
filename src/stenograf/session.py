@@ -46,6 +46,7 @@ from stenograf.live import LiveDecoder, StreamingUpdate
 from stenograf.pipeline import finalize_channel, group_words, relabel_speakers
 from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD
+from stenograf.view import LiveView
 
 _CHANNEL_LABEL = {Channel.MIC: "Local-{n}", Channel.SYSTEM: "Remote-{n}"}
 # Channel-coarse labels for the crash checkpoints (live committed text or the
@@ -191,7 +192,44 @@ def interleave(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
 
 OnUpdate = Callable[[Channel, StreamingUpdate], None]
 """Live-pass callback: a channel's newest committed words plus its provisional
-grey tail. Task 5's ``LiveView`` implements it; until then only tests consume it."""
+grey tail. ``LiveView.update`` (view.py) has this signature, so a view wires
+straight to the worker; tests pass a plain callback."""
+
+
+class _CallbackView(LiveView):
+    """Adapt the raw ``on_update``/``on_status`` callbacks to a :class:`LiveView`.
+
+    The orchestrator drives a single sink internally (structured view events), so
+    a caller passing plain callbacks — the tests, and the batch CLI's status echo
+    — is wrapped in one of these. ``update``/``status`` forward to their callback;
+    ``language``/``error`` fold onto ``on_status`` as text so a callback-only
+    caller still sees them; ``finalizing``/``finalized`` have no string form and
+    are dropped (only a rendering view cares about the finalize swap).
+    """
+
+    def __init__(
+        self,
+        on_update: OnUpdate | None = None,
+        on_status: Callable[[str], None] | None = None,
+    ) -> None:
+        self._on_update = on_update
+        self._on_status = on_status
+
+    def update(self, channel: Channel, update: StreamingUpdate) -> None:
+        if self._on_update is not None:
+            self._on_update(channel, update)
+
+    def status(self, message: str) -> None:
+        if self._on_status is not None:
+            self._on_status(message)
+
+    def language(self, language: Language) -> None:
+        if self._on_status is not None:
+            self._on_status(f"detected language: {language.value}")
+
+    def error(self, message: str) -> None:
+        if self._on_status is not None:
+            self._on_status(message)
 
 
 class AudioBus:
@@ -474,6 +512,7 @@ class MeetingRecorder:
         max_seconds: float | None = None,
         live: bool = False,
         on_update: OnUpdate | None = None,
+        view: LiveView | None = None,
     ) -> Transcript:
         """Capture until the provider stops (or Ctrl-C), then finalize.
 
@@ -485,8 +524,15 @@ class MeetingRecorder:
         With ``live=True`` the meeting runs the streaming pass: capture on its own
         thread feeding a single :class:`LiveWorker` that drives a
         :class:`~stenograf.live.LiveDecoder` per channel and streams committed and
-        interim words to ``on_update``. The heavy finalize still runs once on stop
-        and replaces the whole live transcript.
+        interim words to the view. The heavy finalize still runs once on stop and
+        replaces the whole live transcript.
+
+        Events go to a single :class:`~stenograf.view.LiveView` sink: pass a
+        concrete ``view`` (the CLI's TUI / plain view), or the legacy
+        ``on_update``/``on_status`` callbacks, which are adapted to a view. The
+        orchestrator emits the structured lifecycle events on it — ``status`` /
+        ``language`` / ``finalizing`` / ``finalized`` / ``error`` — around the
+        capture and finalize passes.
 
         Both modes checkpoint for crash recovery (PLAN.md §3 Option B), if
         ``on_checkpoint`` is given, coalesced to ``checkpoint_interval`` seconds of
@@ -499,14 +545,14 @@ class MeetingRecorder:
         """
         plans = plan_channels(self.profile)
         store = SessionStore({p.channel for p in plans})
+        sink = view if view is not None else _CallbackView(on_update, on_status)
         if live:
             return self._run_live(
                 provider,
                 plans,
                 store,
                 on_frame=on_frame,
-                on_status=on_status,
-                on_update=on_update,
+                view=sink,
                 on_checkpoint=on_checkpoint,
                 checkpoint_interval=checkpoint_interval,
                 max_seconds=max_seconds,
@@ -516,7 +562,7 @@ class MeetingRecorder:
             plans,
             store,
             on_frame=on_frame,
-            on_status=on_status,
+            view=sink,
             on_checkpoint=on_checkpoint,
             checkpoint_interval=checkpoint_interval,
             max_seconds=max_seconds,
@@ -529,7 +575,7 @@ class MeetingRecorder:
         store: SessionStore,
         *,
         on_frame: Callable[[AudioFrame], None] | None,
-        on_status: Callable[[str], None] | None,
+        view: LiveView,
         on_checkpoint: Callable[[Transcript], None] | None,
         checkpoint_interval: float,
         max_seconds: float | None,
@@ -564,17 +610,19 @@ class MeetingRecorder:
                     if captured >= max_seconds:
                         break
         except KeyboardInterrupt:
-            if on_status is not None:
-                on_status("interrupted — finalizing captured audio")
+            view.status("interrupted — finalizing captured audio")
         finally:
             provider.stop()
             if bus is not None:
                 bus.close()  # wakes the checkpointer so it drains and exits
             if checkpointer is not None:
                 checkpointer.join()
-        if checkpointer is not None and checkpointer.error is not None and on_status is not None:
-            on_status(f"checkpoint stopped early: {checkpointer.error}")
-        return self.finalize(store, plans, on_status=on_status)
+        if checkpointer is not None and checkpointer.error is not None:
+            view.error(f"checkpoint stopped early: {checkpointer.error}")
+        view.finalizing()
+        transcript = self.finalize(store, plans, view=view)
+        view.finalized(transcript)
+        return transcript
 
     def _run_live(
         self,
@@ -583,8 +631,7 @@ class MeetingRecorder:
         store: SessionStore,
         *,
         on_frame: Callable[[AudioFrame], None] | None,
-        on_status: Callable[[str], None] | None,
-        on_update: OnUpdate | None,
+        view: LiveView,
         on_checkpoint: Callable[[Transcript], None] | None,
         checkpoint_interval: float,
         max_seconds: float | None,
@@ -622,7 +669,7 @@ class MeetingRecorder:
             decoders,
             inference_lock,
             channels=channels,
-            on_update=on_update,
+            on_update=view.update,
             on_flush=flush_checkpoint if checkpointing else None,
             flush_interval=checkpoint_interval,
         )
@@ -636,8 +683,7 @@ class MeetingRecorder:
         try:
             _join_until_done(capture)
         except KeyboardInterrupt:
-            if on_status is not None:
-                on_status("interrupted — finalizing captured audio")
+            view.status("interrupted — finalizing captured audio")
             provider.stop()
             capture.join()
         worker.join()
@@ -646,29 +692,32 @@ class MeetingRecorder:
             raise capture.error
         # The live pass is provisional; if a decode failed, surface it but still
         # finalize — the finalize pass is the authoritative transcript regardless.
-        if worker.error is not None and on_status is not None:
-            on_status(f"live pass stopped early: {worker.error}")
+        if worker.error is not None:
+            view.error(f"live pass stopped early: {worker.error}")
+        view.finalizing()
         # Single-flight: the worker is already joined, but taking the same lock it
         # held documents (and future-proofs) that finalize never runs alongside a
         # live decode.
         with inference_lock:
-            return self.finalize(store, plans, on_status=on_status)
+            transcript = self.finalize(store, plans, view=view)
+        view.finalized(transcript)
+        return transcript
 
     def finalize(
         self,
         store: SessionStore,
         plans: list[ChannelPlan] | None = None,
         *,
-        on_status: Callable[[str], None] | None = None,
+        view: LiveView | None = None,
     ) -> Transcript:
         """Run the finalize pass on every stored channel and interleave them."""
         plans = plans or plan_channels(self.profile)
+        view = view or _CallbackView()
         entries: list[TranscriptEntry] = []
         for plan in plans:
             if plan.channel not in store.channels():
                 continue
-            if on_status is not None:
-                on_status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)})")
+            view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)})")
             samples = store.samples(plan.channel)
             diarizer = None if plan.num_speakers == 1 else self.diarizer
             raw = finalize_channel(
@@ -681,7 +730,7 @@ class MeetingRecorder:
             )
             entries.extend(relabel_speakers(raw, plan.label_template))
         interleaved = interleave(entries)
-        language = self._resolve_language(interleaved, on_status=on_status)
+        language = self._resolve_language(interleaved, view=view)
         return Transcript(language=language, profile=self.profile, entries=interleaved)
 
     def _live_checkpoint(self, decoders: dict[Channel, LiveDecoder]) -> Transcript:
@@ -734,7 +783,7 @@ class MeetingRecorder:
         self,
         entries: list[TranscriptEntry],
         *,
-        on_status: Callable[[str], None] | None = None,
+        view: LiveView,
     ) -> Language | None:
         """Fill the meeting language by LID over the transcript, at most once.
 
@@ -747,8 +796,7 @@ class MeetingRecorder:
         detected = detect_language(" ".join(e.text for e in entries))
         if detected is not None:
             self.language = detected  # lock for the session
-            if on_status is not None:
-                on_status(f"detected language: {detected.value}")
+            view.language(detected)
         return detected
 
 

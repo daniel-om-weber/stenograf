@@ -24,6 +24,8 @@ from stenograf.session import (
     MeetingRecorder,
     SessionStore,
 )
+from stenograf.vad import SpeechSegment
+from stenograf.view import LiveView
 
 
 class StubDecoder:
@@ -257,3 +259,95 @@ class TestMeetingRecorderLive:
         # empty-flush guard means a `.partial` only appears once text exists).
         assert all(c.entries for c in checkpoints)
         assert all(e.speaker == "Local" for c in checkpoints for e in c.entries)
+
+
+class CountingASR(ASRBackend):
+    """Counts decodes (the CPU proxy) and returns one stable word per elapsed second.
+
+    The word list grows with the window length and each word keeps a fixed
+    relative position, so LocalAgreement confirms a stable, distinct prefix that
+    commits in order — a realistic committed stream to check for rewrites.
+    """
+
+    name = "counting"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def load(self) -> None:
+        pass
+
+    def unload(self) -> None:
+        pass
+
+    def transcribe(self, samples, language):
+        self.calls += 1
+        n = max(1, int(len(samples) / SAMPLE_RATE))
+        words = tuple(Word(f"w{i}", i + 0.1, i + 0.6) for i in range(n))
+        return [Segment(" ".join(x.text for x in words), words[0].start, words[-1].end, words)]
+
+
+class _SilentVAD:
+    """Never reports speech — the live pass's gate must then run zero ASR."""
+
+    def speech_segments(self, samples):
+        return []
+
+
+class _AlwaysSpeechVAD:
+    """Reports the whole window as speech, so the gate never suppresses a decode."""
+
+    def speech_segments(self, samples):
+        return [SpeechSegment(0.0, len(samples) / SAMPLE_RATE)]
+
+
+class _SpyView(LiveView):
+    """Records the live-pass decode count at the finalize hand-off and every commit."""
+
+    def __init__(self, asr: CountingASR) -> None:
+        self._asr = asr
+        self.decodes_at_finalizing: int | None = None
+        self.committed: list[Word] = []
+
+    def update(self, channel, update):
+        self.committed.extend(update.committed)
+
+    def finalizing(self):
+        self.decodes_at_finalizing = self._asr.calls
+
+
+class TestLivePassCpuProxy:
+    """PLAN.md Task 7: the CPU-proxy regression — a decode counter and monotonicity,
+    asserted through the wired ``MeetingRecorder.run(live=True)`` path (not just the
+    decoder in isolation), so a future orchestration change can't quietly re-decode
+    in silence or rewrite committed captions."""
+
+    def _recorder(self, asr, vad) -> MeetingRecorder:
+        return MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=asr, vad=vad
+        )
+
+    def test_zero_window_decodes_during_silence(self):
+        # The VAD reports no speech, so the whole live pass must run no ASR — the
+        # ~0% accelerator-in-silence budget (PLAN.md §5). We snapshot the decode
+        # count at the finalize hand-off, before the on-stop finalize decodes.
+        asr = CountingASR()
+        spy = _SpyView(asr)
+        provider = ListProvider(_one_second_frames(5))
+        self._recorder(asr, _SilentVAD()).run(provider, live=True, view=spy)
+        assert spy.decodes_at_finalizing == 0  # no window decode while silent
+        assert spy.committed == []  # and nothing was committed
+
+    def test_committed_captions_are_never_rewritten(self):
+        # With speech present the live pass decodes and commits; every committed
+        # word must be append-only — monotonic start times, each word emitted once,
+        # never contradicted by a later decode.
+        asr = CountingASR()
+        spy = _SpyView(asr)
+        provider = ListProvider(_one_second_frames(4))
+        self._recorder(asr, _AlwaysSpeechVAD()).run(provider, live=True, view=spy)
+        assert spy.committed, "speech should have produced committed captions"
+        starts = [w.start for w in spy.committed]
+        assert starts == sorted(starts)  # a committed word never moves back in time
+        texts = [w.text for w in spy.committed]
+        assert len(texts) == len(set(texts))  # each word committed exactly once

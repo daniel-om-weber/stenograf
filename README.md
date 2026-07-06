@@ -7,8 +7,11 @@ Accuracy-first, fully local meeting transcription for **German** and **English**
 Built for Apple Silicon (M-series) first; Linux and Windows support is designed
 in from the start.
 
-> **Status: pre-alpha.** The architecture is settled (see [PLAN.md](PLAN.md)),
-> the pipeline is under construction. Nothing transcribes yet.
+> **Status: pre-alpha.** The transcription pipeline works today — batch
+> transcription of recorded files (`steno transcribe`) and the two-pass live
+> captions (`steno start --replay`, driving the real streaming + finalize
+> passes). Native macOS system-audio capture still needs its Core Audio helper,
+> so live capture of a real meeting isn't wired up yet. See [PLAN.md](PLAN.md).
 
 ## Why another transcription tool?
 
@@ -22,14 +25,29 @@ in from the start.
   separate streams, so local and remote voices never get confused; diarization
   handles the rest (2–8 speakers).
 
-## Planned usage
+## Usage
 
 ```sh
 uv tool install stenograf
 
 steno doctor                                # first-run checks & model download
+steno start                                 # live captions, everything auto-detected
 steno start --lang de --local 3 --remote 2  # hybrid meeting, German
-steno start                                 # everything auto-detected
+steno transcribe recording.mov              # batch-transcribe an existing file
+```
+
+`steno start` streams **live captions** while the meeting runs — a full-screen
+TUI on a terminal, a plain line-by-line stream when piped — and replaces them
+with the high-accuracy, speaker-labelled transcript the moment you stop
+(Ctrl-C). The audio stays in RAM throughout; only the transcript is written.
+
+Useful flags:
+
+```sh
+steno start --plain                 # plain caption stream instead of the TUI
+steno start --no-live               # skip live captions; just finalize on stop
+steno start --flush-interval 60     # crash-checkpoint the captions every 60s
+steno start --replay mic.wav        # dev: drive the live pass from a file
 ```
 
 ## Development

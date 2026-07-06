@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import click
@@ -71,12 +72,15 @@ def main() -> None:
     "to write <transcript>.wav.",
 )
 @click.option(
+    "--flush-interval",
     "--checkpoint-interval",
+    "flush_interval",
     type=click.FloatRange(0),
     default=180.0,
     metavar="SECONDS",
-    help="Save a <transcript>.partial crash checkpoint every N seconds of capture "
-    "(only the newest tail is finalized, off the capture thread); 0 disables it.",
+    help="Flush a <transcript>.partial crash checkpoint every N seconds of capture "
+    "(live: the already-committed captions, zero extra inference; batch: only the "
+    "newest tail is finalized, off the capture thread); 0 disables it.",
 )
 @click.option(
     "--max-seconds",
@@ -84,6 +88,18 @@ def main() -> None:
     default=None,
     metavar="SECONDS",
     help="Stop capture automatically after this many seconds [default: until Ctrl-C].",
+)
+@click.option(
+    "--live/--no-live",
+    default=True,
+    help="Stream live captions while the meeting runs (the on-stop finalize still "
+    "replaces them). --no-live captures silently and only finalizes on stop.",
+)
+@click.option(
+    "--plain",
+    is_flag=True,
+    help="Force the plain line-by-line caption stream instead of the full-screen "
+    "TUI (also the automatic choice when stdout is not a terminal).",
 )
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def start(
@@ -93,8 +109,10 @@ def start(
     replay: str | None,
     out: Path | None,
     record_audio: str | None,
-    checkpoint_interval: float,
+    flush_interval: float,
     max_seconds: float | None,
+    live: bool,
+    plain: bool,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
@@ -109,34 +127,38 @@ def start(
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
 
     plans = plan_channels(profile)
-    provider = _make_provider(replay, plans)
+    # Pace file replay to wall-clock only when it feeds the live pass, so
+    # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
+    provider = _make_provider(replay, plans, paced=live)
     out_dir = out or Path.cwd()
     stem = f"meeting-{time.strftime('%Y%m%d-%H%M%S')}"
 
     started = time.monotonic()
-    asr, vad, diarizer = _load_backends(
-        need_diarizer=any(p.num_speakers != 1 for p in plans)
-    )
+    asr, vad, diarizer = _load_backends(need_diarizer=any(p.num_speakers != 1 for p in plans))
     recorder = MeetingRecorder(
         profile, asr=asr, vad=vad, diarizer=diarizer, language=profile.language
     )
 
     tee = _make_tee(record_audio, out_dir, stem, plans)
 
-    def on_checkpoint(transcript: Transcript) -> None:
-        md, _ = _write_transcript(transcript, out_dir, f"{stem}.partial")
-        click.echo(f"  checkpoint: {md} ({len(transcript.entries)} entries)")
-
+    # The full-screen TUI owns the terminal, so it can only run on a real TTY and
+    # unless the user forced the plain stream (or turned live off entirely).
+    use_tui = live and not plain and _stdout_is_tty()
     channels = ", ".join(p.channel.value for p in plans)
-    stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
-    click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
+    if not use_tui:  # the TUI header shows REC / elapsed instead of this hint
+        stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
+        click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
     try:
-        transcript = recorder.run(
+        transcript = _run_meeting(
+            recorder,
             provider,
+            live=live,
+            use_tui=use_tui,
+            profile=profile,
             on_frame=tee.add if tee else None,
-            on_status=lambda msg: click.echo(f"  {msg}"),
-            on_checkpoint=on_checkpoint,
-            checkpoint_interval=checkpoint_interval,
+            out_dir=out_dir,
+            stem=stem,
+            flush_interval=flush_interval,
             max_seconds=max_seconds,
         )
     finally:
@@ -153,6 +175,93 @@ def start(
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
+
+
+def _run_meeting(
+    recorder,
+    provider,
+    *,
+    live: bool,
+    use_tui: bool,
+    profile: MeetingProfile,
+    on_frame,
+    out_dir: Path,
+    stem: str,
+    flush_interval: float,
+    max_seconds: float | None,
+) -> Transcript:
+    """Run the capture session through the right live view and return the transcript.
+
+    Three shapes behind one call:
+
+    - **TUI** (live, on a TTY, not ``--plain``): the Textual view runs the app on
+      this thread while the meeting runs on a background thread; its quit binding
+      crosses to ``provider.stop`` to end capture. Checkpoints are written silently
+      (the TUI owns the screen).
+    - **Plain live** (live, no TTY or ``--plain``): the meeting runs on this thread
+      and streams committed captions to stdout; checkpoints written silently.
+    - **Batch** (``--no-live``): no live pass; status and checkpoint notices echo
+      as before.
+    """
+    if use_tui:
+        from stenograf.tui import TextualLiveView
+
+        view = TextualLiveView(profile, language=profile.language, stop=provider.stop)
+        return view.serve(
+            lambda: recorder.run(
+                provider,
+                live=True,
+                view=view,
+                on_frame=on_frame,
+                on_checkpoint=_checkpoint_writer(out_dir, stem),
+                checkpoint_interval=flush_interval,
+                max_seconds=max_seconds,
+            )
+        )
+    if live:
+        from stenograf.view import PlainLiveView
+
+        with PlainLiveView() as view:
+            return recorder.run(
+                provider,
+                live=True,
+                view=view,
+                on_frame=on_frame,
+                on_checkpoint=_checkpoint_writer(out_dir, stem),
+                checkpoint_interval=flush_interval,
+                max_seconds=max_seconds,
+            )
+    return recorder.run(
+        provider,
+        on_frame=on_frame,
+        on_status=lambda msg: click.echo(f"  {msg}"),
+        on_checkpoint=_checkpoint_writer(out_dir, stem, announce=lambda m: click.echo(f"  {m}")),
+        checkpoint_interval=flush_interval,
+        max_seconds=max_seconds,
+    )
+
+
+def _stdout_is_tty() -> bool:
+    """Whether stdout is an interactive terminal (a seam so the view choice is testable)."""
+    return sys.stdout.isatty()
+
+
+def _checkpoint_writer(
+    out_dir: Path, stem: str, announce: Callable[[str], None] | None = None
+) -> Callable[[Transcript], None]:
+    """Build the ``on_checkpoint`` sink that writes the ``.partial`` crash file.
+
+    Live views keep the caption stream clean (``announce=None`` → write silently);
+    the batch path narrates each write, as it always has. The final transcript
+    supersedes these files, which ``_cleanup_checkpoints`` then removes.
+    """
+
+    def on_checkpoint(transcript: Transcript) -> None:
+        md, _ = _write_transcript(transcript, out_dir, f"{stem}.partial")
+        if announce is not None:
+            announce(f"checkpoint: {md.name} ({len(transcript.entries)} entries)")
+
+    return on_checkpoint
 
 
 def _make_tee(record_audio: str | None, out_dir: Path, stem: str, plans):
@@ -172,7 +281,7 @@ def _make_tee(record_audio: str | None, out_dir: Path, stem: str, plans):
     return tee
 
 
-def _make_provider(replay: str | None, plans):
+def _make_provider(replay: str | None, plans, *, paced: bool = False):
     """Build the capture provider: file replay if given, else the native helper."""
     from stenograf.capture.base import Channel
 
@@ -186,7 +295,9 @@ def _make_provider(replay: str | None, plans):
         ignored = [ch.value for ch in sources if ch not in planned]
         if ignored:
             click.echo(f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}")
-        return FileCaptureProvider({ch: p for ch, p in sources.items() if ch in planned})
+        return FileCaptureProvider(
+            {ch: p for ch, p in sources.items() if ch in planned}, paced=paced
+        )
 
     if sys.platform != "darwin":
         raise click.ClickException(
