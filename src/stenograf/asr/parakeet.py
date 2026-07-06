@@ -26,9 +26,18 @@ class ParakeetMLXBackend(ASRBackend):
         self._model = None
 
     def load(self) -> None:
+        import mlx.core as mx
         from parakeet_mlx import from_pretrained
 
         self._model = from_pretrained(self.model_id)
+        # Materialize the weights on the load thread. MLX is lazy and its GPU
+        # streams are thread-local: left lazy, the freshly loaded weights carry a
+        # pending computation bound to *this* thread's Stream(gpu, 0), and the
+        # first decode on another thread — the live pass's LiveWorker — then dies
+        # with "There is no Stream(gpu, 0) in current thread". Forcing them
+        # concrete here makes the one loaded backend safe to call from the worker
+        # thread and the finalize thread alike (Phase 2, Task 3).
+        mx.eval(self._model.parameters())
 
     def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:
         # Parakeet v3 is multilingual with no language switch; ``language``

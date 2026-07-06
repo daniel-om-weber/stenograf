@@ -580,6 +580,28 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
    Reconcile-to-watermark backpressure. Stop → join worker → authoritative
    `finalize()`. Add real-time pacing to `FileCaptureProvider` so `--replay`
    exercises the live pass at meeting cadence.
+   *Status (July 2026): shipped. `AudioBus`/`CaptureLoop`/`LiveWorker` in
+   `session.py`; `MeetingRecorder.run(live=True, on_update=…)` runs capture on its
+   own thread feeding one worker that drives a `LiveDecoder` per channel off
+   `store.view` (O(window)) and streams `StreamingUpdate`s to `on_update`. The
+   worker reconciles to the latest watermark each wake — a backlog collapses into
+   one catch-up decode, and no audio is lost because it lives in the store; on
+   close it feeds the final window and flushes. Stop joins the worker, then the
+   single-flight `finalize()` (under `inference_lock`) replaces the live
+   transcript. `FileCaptureProvider(paced=True)` releases frames at wall-clock
+   time. The batch path (`--no-live`, periodic re-finalize checkpoint) is
+   unchanged; CLI `--live` wiring is Task 7, checkpoint Option B is Task 4.
+   **Bug found by end-to-end verification (not unit tests, which use a fake ASR):
+   MLX GPU streams are thread-local and its weights are lazy, so parakeet's first
+   decode on the worker thread died with "no Stream(gpu, 0) in current thread";
+   fixed by materializing the weights on the load thread — `mx.eval(model.
+   parameters())` in `ParakeetMLXBackend.load()`** (regression-guarded in
+   `tests/test_asr_parakeet.py`). Tests: `tests/test_live_orchestration.py`
+   (AudioBus semantics, backlog reconcile, capture+worker cover-all-audio,
+   `run(live=True)` streams commits + finalizes, max-seconds) and paced/unpaced
+   replay in `tests/test_capture_file.py`. Validated live on de-1 via paced replay
+   through the real parakeet worker: captions stream in real time, closely match
+   the finalize output, and German is auto-detected on stop.*
 4. **Checkpoint Option B** — replace the periodic re-finalize with a committed-text
    `.partial` flush (pure I/O, coalesced ~10–20 s); `--no-live` falls back to a
    tail-only finalize. Keep `_cleanup_checkpoints` on clean stop.
