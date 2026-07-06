@@ -659,6 +659,33 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
    `loop.call_soon_threadsafe`. **Ctrl-C is a captured key event under Textual (not
    `KeyboardInterrupt`)** — the quit binding must cross to the worker via
    `provider.stop()`; wire it deliberately.
+   *Status (July 2026): shipped (`stenograf.tui`, `tests/test_tui.py`, 13 tests).
+   `LiveApp(App)` renders the header/`RichLog`/live-line/`Footer`; `TextualLiveView`
+   is the `LiveView` adapter that marshals every event onto the app loop via
+   `App.call_from_thread` (Textual's `call_soon_threadsafe` wrapper), dropping
+   updates that arrive before mount or after stop (`ready` gate) — the UI is
+   best-effort, finalize is authoritative. Committed words stream onto a single
+   interleaved "bottom line" (channel-coarse `You`/`Remote`, bright) with its grey
+   provisional tail (`[dim]`); the line scrolls up into the append-only log on a
+   channel change or a >1.5 s pause, and `finalized` swaps the whole log for the
+   diarized `Local-N`/`Remote-M` transcript. Minimal redraw: `animation_level="none"`
+   and `TEXTUAL_FPS` pinned to 15 (re-pinned defensively — `MAX_FPS`/`UPDATE_PERIOD`
+   bake at import), a single 1 Hz interval as the only periodic repaint, everything
+   else event-driven. `action_stop` (bound to `ctrl+c`,`q`, `priority=True`) crosses
+   to `stop_callback` (→ `provider.stop`) and shows "finalizing" instead of
+   aborting; a second press force-exits, and once finalized `q` just exits.
+   `serve(meeting)` runs the app on the main thread while the meeting runs on a
+   background thread, returning the transcript on exit. Textual is imported lazily
+   here so the plain view (Task 5) stays dependency-free (regression-guarded).
+   **Verified end-to-end** by driving the real `MeetingRecorder.run(live=True)`
+   (fake ASR, paced provider) into the TUI under Textual's headless `run_test`: a
+   channel-coarse `You` caption crossed from the real `LiveWorker` thread onto the
+   UI, then the finalize pass swapped in `Local-1`, and the quit binding exited.
+   Deferred to Task 7: the `--live`/`--plain` CLI wiring that chooses this view vs
+   the plain one (TTY-detect), and the orchestrator emitting structured
+   `finalizing`/`language`/`finalized` events (today `finalized` is called by
+   `serve` after `run` returns; `finalizing`/`language` arrive as `on_status`/
+   `push_language` text).*
 7. **Glue** — `steno start` gains `--live/--no-live`, `--plain`, `--flush-interval`
    (alias `--checkpoint-interval`); doctor/README; a CPU-proxy regression test (zero
    window decodes during silence; committed text never rewritten).

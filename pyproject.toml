@@ -28,6 +28,9 @@ dependencies = [
     "sherpa-onnx-core>=1.12.40,<1.13",
     # Default ASR backend (PLAN.md Phase 0 verdict); MLX is Apple-Silicon-only.
     "parakeet-mlx>=0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Live-caption TUI (stenograf.tui). Imported lazily, only when the TUI runs —
+    # the plain stdout view (stenograf.view) stays textual-free.
+    "textual>=8.2.8",
 ]
 
 [project.urls]
