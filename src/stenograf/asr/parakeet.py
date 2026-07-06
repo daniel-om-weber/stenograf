@@ -30,9 +30,9 @@ class ParakeetMLXBackend(ASRBackend):
 
         self._model = from_pretrained(self.model_id)
 
-    def transcribe(self, samples: np.ndarray, language: Language) -> list[Segment]:
+    def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:
         # Parakeet v3 is multilingual with no language switch; ``language``
-        # is intentionally unused.
+        # is intentionally unused (may be None until LID runs over the text).
         if self._model is None:
             self.load()
         import mlx.core as mx

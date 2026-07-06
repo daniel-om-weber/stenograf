@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import platform
 import shutil
 import sys
@@ -28,13 +29,7 @@ def run_checks() -> list[Check]:
 
     if sys.platform == "darwin":
         checks.append(_macos_version_check())
-        checks.append(
-            Check(
-                name="Capture helper",
-                ok=False,
-                detail="native Swift helper not built yet (planned: Phase 1)",
-            )
-        )
+        checks.append(_capture_helper_check())
     else:
         checks.append(
             Check(
@@ -44,9 +39,51 @@ def run_checks() -> list[Check]:
             )
         )
 
+    checks.append(_asr_check())
     checks.append(_ffmpeg_check())
     checks.append(_models_check())
     return checks
+
+
+def _installed(module: str) -> bool:
+    """Whether ``module`` is importable, without importing it."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _capture_helper_check() -> Check:
+    from stenograf.capture.macos import HelperNotFoundError, find_helper
+
+    try:
+        path = find_helper()
+    except HelperNotFoundError as exc:
+        return Check(name="Capture helper", ok=False, detail=str(exc))
+    if not path.is_file():
+        return Check(name="Capture helper", ok=False, detail=f"{path} is set but missing")
+    return Check(
+        name="Capture helper",
+        ok=True,
+        detail=f"{path} — mic + system-audio permission is requested on first `steno start`",
+    )
+
+
+def _asr_check() -> Check:
+    from stenograf.asr.parakeet import MODEL_ID
+
+    if _installed("parakeet_mlx") and _installed("mlx"):
+        return Check(
+            name="ASR backend",
+            ok=True,
+            detail=f"parakeet-mlx ready ({MODEL_ID}; weights from HuggingFace on first use)",
+        )
+    return Check(
+        name="ASR backend",
+        ok=False,
+        detail="parakeet-mlx not installed — the default backend needs Apple Silicon + MLX "
+        "(ONNX/CTranslate2 backends for other platforms are planned)",
+    )
 
 
 def _ffmpeg_check() -> Check:

@@ -1,8 +1,9 @@
 import numpy as np
+import pytest
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
-from stenograf.config import MeetingProfile
+from stenograf.config import Language, MeetingProfile
 from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.session import (
     ChannelPlan,
@@ -48,6 +49,19 @@ class TestSessionStore:
         store = SessionStore({Channel.SYSTEM})
         assert len(store.samples(Channel.SYSTEM)) == 0
         assert store.duration(Channel.SYSTEM) == 0.0
+
+    def test_backward_frame_raises_instead_of_misaligning(self):
+        store = SessionStore({Channel.MIC})
+        store.append(frame(Channel.MIC, 1.0, np.ones(SAMPLE_RATE, dtype=np.int16)))
+        with pytest.raises(ValueError, match="backwards"):
+            store.append(frame(Channel.MIC, 0.0, np.ones(10, dtype=np.int16)))
+
+    def test_minor_overlap_within_tolerance_is_clamped(self):
+        store = SessionStore({Channel.MIC})
+        store.append(frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16)))
+        # 5 ms behind the tail (< 10 ms tolerance): appended contiguously, no raise.
+        store.append(frame(Channel.MIC, 1.0 - 0.005, np.ones(100, dtype=np.int16)))
+        assert store.duration(Channel.MIC) == (SAMPLE_RATE + 100) / SAMPLE_RATE
 
 
 class TestPlanChannels:
@@ -98,6 +112,22 @@ class FakeASR(ASRBackend):
 
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
         return [Segment(text="wort", start=0.1, end=0.5, words=(Word("wort", 0.1, 0.5),))]
+
+    def unload(self) -> None:
+        pass
+
+
+class GermanASR(ASRBackend):
+    """Transcribes to German text, for language-detection tests."""
+
+    name = "german"
+
+    def load(self) -> None:
+        pass
+
+    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        text = "und das ist wirklich eine gute idee für uns"
+        return [Segment(text=text, start=0.1, end=1.0, words=(Word(text, 0.1, 1.0),))]
 
     def unload(self) -> None:
         pass
@@ -209,3 +239,20 @@ class TestMeetingRecorder:
             provider, on_checkpoint=lambda t: checkpoints.append(t), checkpoint_interval=0
         )
         assert checkpoints == []
+
+    def test_language_is_auto_detected_from_the_transcript(self):
+        provider = ListProvider([frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=GermanASR()
+        )
+        transcript = recorder.run(provider)
+        assert transcript.language == Language.GERMAN
+
+    def test_explicit_language_is_never_overridden_by_detection(self):
+        provider = ListProvider([frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0, language=Language.ENGLISH),
+            asr=GermanASR(),  # German text, but the user forced English → English wins
+        )
+        transcript = recorder.run(provider)
+        assert transcript.language == Language.ENGLISH

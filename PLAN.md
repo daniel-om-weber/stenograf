@@ -257,7 +257,7 @@ fatal: correct the value and re-run finalize in seconds.
 
 | Parameter | Auto-detection mechanism | Reliability / phase |
 |---|---|---|
-| Language (de/en) | LID on first confident VAD segment (Canary/Whisper built-in), locked for the session; finalize re-verifies by majority vote over many segments | High for a de/en binary choice — Phase 1 |
+| Language (de/en) | **Shipped (Phase 1, `stenograf.lid`):** function-word + umlaut/ß vote over the finalized transcript, locked for the session. Acoustic first-segment LID (sherpa-onnx `SpokenLanguageIdentification`) is the live-pass upgrade — it can lock before any text exists and feed a language-*requiring* backend | High for a de/en binary choice |
 | Remote speaker count | community-1's speaker-count estimation on the system channel (run unconstrained, or with bounds 1–8) | Decent; explicit count still more accurate — Phase 1 (it's just "don't pass `num_speakers`") |
 | Local speaker count | Same, on the mic channel | Weaker (far-field audio) — Phase 3 |
 | Meeting mode (online/hybrid/in-room) | Meeting-app detection (running Zoom/Teams/browser-call process + audio activity on the tap) → remote component exists; multiple voices on mic → local component >1 | Phase 3–4; until then mode falls back to "online" if a meeting app is audible, else "in-room" |
@@ -454,10 +454,13 @@ helper (`native/helper/`, **stenocap**) is shipped: Core Audio process tap
 `MacOSCaptureProvider` behind the same `CaptureProvider` interface. Verified
 end-to-end (July 2026): live mic capture is non-silent and real-time; German
 speech played to the system output is captured through the tap and transcribed
-accurately (`steno start --local 0 --remote 1`). **Phase 1 is complete** — a
-usable, legally-clean meeting transcriber. Deferred to later phases: hybrid-mode
-cross-channel dedup (needs the helper's AEC to matter in practice) and moving
-checkpoint finalize off the consume thread (needs real-time backpressure tuning).*
+accurately (`steno start --local 0 --remote 1`). Automatic de/en language
+detection ships as a text vote over the finalized transcript (`stenograf.lid`),
+auto-filling the transcript language and locking it for the session. **Phase 1
+is complete** — a usable, legally-clean meeting transcriber. Deferred to later
+phases: hybrid-mode cross-channel dedup (needs the helper's AEC to matter in
+practice), moving checkpoint finalize off the consume thread (needs real-time
+backpressure tuning), and acoustic first-segment LID for the live pass.*
 
 **Phase 2 — Live captions.**
 Streaming ASR pass with LocalAgreement commits, TUI live view; finalize pass replaces

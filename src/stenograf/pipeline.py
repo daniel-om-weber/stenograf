@@ -57,6 +57,12 @@ def finalize_channel(
         on_progress("diarization", 0, 1)
     turns = diarizer.diarize(samples, num_speakers)
     words = [word for seg in segments for word in seg.words]
+    if not words:
+        # A backend that emits text but no word timestamps (a contract
+        # violation for diarized use — see ASRBackend) would otherwise drop the
+        # whole transcript here. Fall back to attributing each segment as a unit
+        # by its time span rather than losing the text.
+        words = [Word(text=seg.text, start=seg.start, end=seg.end) for seg in segments]
     return merge_words_turns(words, turns)
 
 

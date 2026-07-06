@@ -25,6 +25,12 @@ import numpy as np
 SAMPLE_RATE = 16_000
 """All frames carry mono int16 PCM at this rate; providers resample."""
 
+ORDER_TOLERANCE_SAMPLES = SAMPLE_RATE // 100  # 10 ms
+"""Backward timestamp jitter tolerated before a frame is treated as a
+stream-ordering error. Providers deliver frames monotonically per channel; a
+larger backward jump means the stream desynced, and appending the frame anyway
+would silently misalign everything after it (see SessionStore / WavTee)."""
+
 
 class Channel(StrEnum):
     MIC = "mic"  # local speaker(s)

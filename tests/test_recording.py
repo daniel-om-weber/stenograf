@@ -1,6 +1,7 @@
 import wave
 
 import numpy as np
+import pytest
 
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, Channel
 from stenograf.recording import WavTee
@@ -67,6 +68,14 @@ def test_gap_between_frames_pads_silence(tmp_path):
     assert data[0] == 7
     assert np.all(data[1:SAMPLE_RATE] == 0)
     assert data[SAMPLE_RATE] == 8
+
+
+def test_backward_frame_raises_instead_of_misaligning(tmp_path):
+    tee = WavTee(tmp_path / "rec.wav", {Channel.MIC})
+    tee.add(frame(Channel.MIC, 1.0, np.ones(SAMPLE_RATE, dtype=np.int16)))
+    with pytest.raises(ValueError, match="backwards"):
+        tee.add(frame(Channel.MIC, 0.0, np.ones(10, dtype=np.int16)))
+    tee.close()
 
 
 def test_file_is_playable_before_close(tmp_path):

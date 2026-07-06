@@ -21,7 +21,12 @@ from pathlib import Path
 
 import numpy as np
 
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, Channel
+from stenograf.capture.base import (
+    ORDER_TOLERANCE_SAMPLES,
+    SAMPLE_RATE,
+    AudioFrame,
+    Channel,
+)
 
 _BYTES_PER_SAMPLE = 2  # int16
 _BITS_PER_SAMPLE = 16
@@ -125,6 +130,13 @@ class _PendingChannel:
 
     def add(self, timestamp: float, samples: np.ndarray) -> None:
         offset = round(timestamp * SAMPLE_RATE)
+        if offset < self._received - ORDER_TOLERANCE_SAMPLES:
+            # Backward past jitter tolerance: appending here would misalign the
+            # recorded file from this frame on. Frames arrive in order per channel.
+            raise ValueError(
+                f"frame went backwards {(self._received - offset) / SAMPLE_RATE:.3f}s "
+                f"(timestamp {timestamp:.3f}s); frames must arrive in order"
+            )
         if offset > self._received:  # gap → pad silence to keep the clock honest
             gap = offset - self._received
             self._chunks.append(np.zeros(gap, dtype=np.int16))

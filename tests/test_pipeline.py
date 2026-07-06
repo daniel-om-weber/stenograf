@@ -88,6 +88,21 @@ class FakeASR(ASRBackend):
         pass
 
 
+class WordlessASR(ASRBackend):
+    """Emits segment text but no word timestamps (e.g. a Whisper/Voxtral path)."""
+
+    name = "wordless"
+
+    def load(self) -> None:
+        pass
+
+    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        return [Segment(text="ganzer satz", start=0.1, end=1.0, words=())]
+
+    def unload(self) -> None:
+        pass
+
+
 class FakeDiarizer(Diarizer):
     def __init__(self, turns):
         self.turns = turns
@@ -132,3 +147,16 @@ class TestFinalizeChannel:
             np.zeros(0, dtype=np.float32), asr=FakeASR(), language=None
         )
         assert entries == []
+
+    def test_diarized_backend_without_word_timestamps_keeps_text(self):
+        # A backend with no word timestamps must not silently drop the diarized
+        # transcript; segments fall back to whole-unit attribution.
+        asr = WordlessASR()
+        diarizer = FakeDiarizer([turn("S1", 0.0, 2.0)])
+        samples = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
+        entries = finalize_channel(
+            samples, asr=asr, language=None, diarizer=diarizer, num_speakers=2
+        )
+        assert len(entries) == 1
+        assert entries[0].text == "ganzer satz"
+        assert entries[0].speaker == "S1"

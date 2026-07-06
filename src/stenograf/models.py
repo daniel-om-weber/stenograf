@@ -99,8 +99,11 @@ def fetch(asset: ModelAsset, progress: ProgressHook | None = None) -> Path:
 
 def _extract_member(archive: Path, member: str, target: Path) -> None:
     with tarfile.open(archive) as tar:
-        src = tar.extractfile(member)
-        if src is None:
+        try:
+            src = tar.extractfile(member)  # KeyError if the name is absent
+        except KeyError:
+            src = None
+        if src is None:  # missing, or the name is a directory/link
             raise RuntimeError(f"{archive.name}: no member {member!r}")
         with src, open(target, "wb") as dst:
             while chunk := src.read(1 << 20):

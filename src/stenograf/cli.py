@@ -207,7 +207,8 @@ def _make_provider(replay: str | None, plans):
     "--lang",
     type=click.Choice([lang.value for lang in Language]),
     default=None,
-    help="Audio language (transcript metadata; the default ASR model is multilingual).",
+    help="Audio language (transcript metadata; the default ASR model is "
+    "multilingual). Omit to auto-detect from the transcript.",
 )
 @click.option(
     "--speakers",
@@ -265,6 +266,12 @@ def transcribe(
             on_progress=progress,
         )
     )
+    if language is None:
+        from stenograf.lid import detect_language
+
+        language = detect_language(" ".join(e.text for e in entries))
+        if language is not None:
+            click.echo(f"language: detected {language.value}")
     transcript = Transcript(
         language=language, profile=MeetingProfile(language=language), entries=entries
     )

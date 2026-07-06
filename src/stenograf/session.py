@@ -30,9 +30,16 @@ import numpy as np
 
 from stenograf.asr.base import ASRBackend
 from stenograf.audio import to_float32
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.capture.base import (
+    ORDER_TOLERANCE_SAMPLES,
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureProvider,
+    Channel,
+)
 from stenograf.config import Language, MeetingProfile
 from stenograf.diarization.base import Diarizer
+from stenograf.lid import detect_language
 from stenograf.pipeline import finalize_channel, relabel_speakers
 from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD
@@ -60,9 +67,19 @@ class SessionStore:
             return  # a channel we're not recording — ignore
         offset = round(frame.timestamp * SAMPLE_RATE)
         length = self._lengths[frame.channel]
+        if offset < length - ORDER_TOLERANCE_SAMPLES:
+            # A backward jump past jitter tolerance means the stream desynced;
+            # appending here would silently misalign every later frame.
+            raise ValueError(
+                f"{frame.channel} frame went backwards "
+                f"{(length - offset) / SAMPLE_RATE:.3f}s (timestamp {frame.timestamp:.3f}s "
+                f"< buffered {length / SAMPLE_RATE:.3f}s); frames must arrive in order"
+            )
         if offset > length:  # gap since the last frame → pad silence
             chunks.append(np.zeros(offset - length, dtype=np.int16))
             length = offset
+        # A minor overlap (within tolerance) just appends at the tail, keeping
+        # the buffer contiguous and the clock monotonic.
         samples = np.asarray(frame.samples, dtype=np.int16)
         chunks.append(samples)
         self._lengths[frame.channel] = length + len(samples)
@@ -217,9 +234,30 @@ class MeetingRecorder:
                 num_speakers=plan.num_speakers,
             )
             entries.extend(relabel_speakers(raw, plan.label_template))
-        return Transcript(
-            language=self.language, profile=self.profile, entries=interleave(entries)
-        )
+        interleaved = interleave(entries)
+        language = self._resolve_language(interleaved, on_status=on_status)
+        return Transcript(language=language, profile=self.profile, entries=interleaved)
+
+    def _resolve_language(
+        self,
+        entries: list[TranscriptEntry],
+        *,
+        on_status: Callable[[str], None] | None = None,
+    ) -> Language | None:
+        """Fill the meeting language by LID over the transcript, at most once.
+
+        An explicit user setting always wins. Otherwise detect from the
+        finalized text and lock the result on ``self.language`` so later
+        checkpoints stay consistent (PLAN.md §2 "auto-detect once … then lock").
+        """
+        if self.language is not None:
+            return self.language
+        detected = detect_language(" ".join(e.text for e in entries))
+        if detected is not None:
+            self.language = detected  # lock for the session
+            if on_status is not None:
+                on_status(f"detected language: {detected.value}")
+        return detected
 
 
 def _speaker_note(num_speakers: int | None) -> str:

@@ -48,9 +48,14 @@ class ASRBackend(ABC):
         """Load model weights (downloads to the local cache on first use)."""
 
     @abstractmethod
-    def transcribe(self, samples: np.ndarray, language: Language) -> list[Segment]:
-        """Transcribe a complete buffer; ``language`` is always known here —
-        detection happens upstream, backends never auto-detect per chunk."""
+    def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:
+        """Transcribe a complete buffer.
+
+        ``language`` is the resolved meeting language, or ``None`` when it is
+        not (yet) known: the default backend (Parakeet) is multilingual and
+        ignores it, and Phase-1 language detection runs over the finalized text
+        (see ``stenograf.lid``). A language-*requiring* backend must handle
+        ``None`` itself (detect once, then lock) rather than assume a value."""
 
     @abstractmethod
     def unload(self) -> None:
