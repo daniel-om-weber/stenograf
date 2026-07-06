@@ -1,6 +1,14 @@
 # Meeting recordings and other local-only material — NEVER commit (public repo, private audio)
 examples/
 legacy/
+# Eval harness working data: extracted audio, hypotheses, and reference
+# transcripts all contain private meeting content; the manifest leaks
+# recording filenames (dates, locations). manifest.example.json is the
+# committed template.
+eval/audio/
+eval/out/
+eval/refs/
+eval/manifest.json
 *.mov
 *.m4a
 *.wav

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "de-1",
+    "source": "my-meeting-recording.mov",
+    "start": 300,
+    "end": 600,
+    "language": "de",
+    "notes": "online meeting, German"
+  },
+  {
+    "id": "en-inroom",
+    "source": "voice-memo.m4a",
+    "start": 120,
+    "end": 420,
+    "language": "en",
+    "notes": "in-room far-field recording — hardest acoustic case"
+  }
+]

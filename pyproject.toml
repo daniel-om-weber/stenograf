@@ -33,6 +33,30 @@ dev = [
     "pytest>=8",
     "ruff>=0.4",
 ]
+# Phase 0 model-evaluation harness (eval/) — not shipped with the package.
+eval = [
+    "jiwer>=3.1",
+    "mlx-whisper>=0.4.3",
+    "parakeet-mlx>=0.5.2",
+    "mlx-voxtral>=0.0.4",
+    # mlx-lm 0.31 crashes on import against transformers 5.x
+    # (AutoTokenizer.register signature change); voxtral needs the 4.x line.
+    "transformers>=4.55.2,<5",
+]
+# Canary-1B-v2 accuracy-ceiling reference via NeMo-on-MPS (slow, never shipped).
+# Kept apart from `eval`: NeMo's pins don't coexist with the MLX stack.
+eval-canary = [
+    "nemo_toolkit[asr]>=2.4",
+]
+
+[tool.uv]
+conflicts = [[{ group = "eval" }, { group = "eval-canary" }]]
+# NeMo pulls packages (kaldialign) whose newest releases ship no macOS arm64
+# wheel; force resolution to versions installable on this machine.
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+# NeMo pins kaldialign<=0.9.1, which has no cp313/macOS wheel; 0.12 does and
+# the API (align/edit_distance) is unchanged.
+override-dependencies = ["kaldialign>=0.12"]
 
 [build-system]
 requires = ["hatchling"]
