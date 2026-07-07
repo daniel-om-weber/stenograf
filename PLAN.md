@@ -1220,6 +1220,28 @@ marks a hard prerequisite):
   + a `reconcile()` self-heal. `load_transcript(id)` reads through A1. Acceptance:
   add/list/get/remove round-trip, atomic save, reconcile drops vanished + adopts orphan
   dirs, id collision-suffixing. `[dep: A1]`
+  *Status (July 2026): shipped (`stenograf.archive`, `tests/test_archive.py`). Mirrors
+  `ProfileStore`: lives at `data_dir()/meetings/` (new `meetings_dir()`; honors
+  `$STENOGRAF_DATA`, distinct from the model cache), atomic temp+replace `index.json`
+  writes. `MeetingRecord` is a plain (unfrozen, value-eq, deliberately unhashable — the
+  `speakers` dict) dataclass with the full field set + `has_audio()` (the one predicate
+  gating B4 archived audio playback/re-diarize — true only when the referenced WAV
+  actually exists). `MeetingArchive`: id-keyed dict for O(1) `get`/`remove`; `add`/`remove`
+  persist immediately; `allocate_id(created_at)` mints `meeting-YYYYMMDD-HHMMSS` and
+  suffixes `-2/-3/…` past any collision in *both* the in-memory index and on-disk dirs;
+  `meeting_dir(id)` is the managed default output location (B2 wires `--out` default to
+  it); `load_transcript(id)` reads `<dir>/transcript.json` back through
+  `Transcript.from_json` (A1). `reconcile()` drops records whose `dir` vanished and adopts
+  orphan managed dirs — `_record_from_dir` rebuilds metadata from the transcript
+  (title/language/speakers from its resolved parameters, `duration_s` from the last entry
+  end, `formats` from the present `transcript.*` files, `created_at` recovered from the id,
+  audio from a present `audio.wav`), skipping dirs with no readable transcript. External
+  `--out` dirs are never scanned for adoption (only the managed root). Tests
+  (label-free, no backends): add/list/get/remove round-trip, atomic reload-equal (no `.part`
+  turds), missing-index-is-empty, collision-suffixing (in-index + on-disk), `load_transcript`
+  faithful A1 round-trip, reconcile drop-vanished / adopt-orphan-with-correct-metadata /
+  skip-transcript-less-dir, `has_audio` file-existence gating, `$STENOGRAF_DATA` default.
+  Unblocks B2 (CLI archive wiring), B3/B4 (reverse control), and the C5/C6 web archive/reader.
 - **B2 — wire CLI writes into the archive + a `meetings` group.** After `_write_transcript`
   in `start`/`transcribe`, build a `MeetingRecord` and `archive.add()`; **default `out_dir`
   → `meetings_dir()/<id>`** (managed-dir decision), `--out` an explicit registering
