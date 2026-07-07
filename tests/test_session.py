@@ -253,6 +253,17 @@ class FakeDiarizer(Diarizer):
         return self.turns
 
 
+class RaisingDiarizer(Diarizer):
+    """Throws on every diarize call — stands in for a mid-meeting backend fault."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def diarize(self, samples, num_speakers=None):
+        self.calls += 1
+        raise RuntimeError("diarizer exploded")
+
+
 class ListProvider(CaptureProvider):
     """Yields a preset list of frames — an in-process stand-in for a device."""
 
@@ -289,6 +300,26 @@ class TestMeetingRecorder:
         assert speakers == {"Local-1", "Remote-1"}
         # System channel was diarized with the known remote count; mic was not.
         assert diarizer.seen_num_speakers == 2
+
+    def test_channel_diarizer_failure_keeps_both_channels(self):
+        # One channel's diarizer throwing must not lose the other channel's
+        # transcript. The failing channel falls back to un-diarized text (kept),
+        # and the meeting still finalizes rather than crashing.
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = RaisingDiarizer()
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=2),
+            asr=FakeASR(),
+            diarizer=diarizer,
+        )
+        transcript = recorder.run(provider)  # must not raise
+
+        assert diarizer.calls == 1  # the system channel actually attempted to diarize
+        # Mic (Local-1, no diarization) and system (Remote-1, un-diarized fallback)
+        # both survive; neither channel's text is dropped.
+        assert {e.speaker for e in transcript.entries} == {"Local-1", "Remote-1"}
+        assert {e.text for e in transcript.entries} == {"wort"}
 
     def test_mic_single_speaker_skips_the_diarizer(self):
         provider = ListProvider([frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))])

@@ -720,7 +720,29 @@ class MeetingRecorder:
             view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)})")
             samples = store.samples(plan.channel)
             diarizer = None if plan.num_speakers == 1 else self.diarizer
-            raw = finalize_channel(
+            raw = self._finalize_channel_safe(samples, diarizer, plan, view)
+            entries.extend(relabel_speakers(raw, plan.label_template))
+        interleaved = interleave(entries)
+        language = self._resolve_language(interleaved, view=view)
+        return Transcript(language=language, profile=self.profile, entries=interleaved)
+
+    def _finalize_channel_safe(
+        self,
+        samples,
+        diarizer: Diarizer | None,
+        plan: ChannelPlan,
+        view: LiveView,
+    ) -> list[TranscriptEntry]:
+        """Finalize one channel, never letting its failure lose another channel.
+
+        Diarization is the fragile step (a real backend can raise on unexpected
+        audio, as the sherpa path is otherwise untested). On failure, retry
+        without diarization so the channel's *text* still survives — attributed
+        to a single speaker rather than dropped. If even the un-diarized pass
+        fails, skip this channel and keep the rest of the meeting.
+        """
+        try:
+            return finalize_channel(
                 samples,
                 asr=self.asr,
                 language=self.language,
@@ -728,10 +750,26 @@ class MeetingRecorder:
                 diarizer=diarizer,
                 num_speakers=plan.num_speakers,
             )
-            entries.extend(relabel_speakers(raw, plan.label_template))
-        interleaved = interleave(entries)
-        language = self._resolve_language(interleaved, view=view)
-        return Transcript(language=language, profile=self.profile, entries=interleaved)
+        except Exception as exc:  # noqa: BLE001 — resilience across channels is the point
+            if diarizer is None:
+                view.error(f"{plan.channel}: finalize failed ({exc}); skipping channel")
+                return []
+            view.error(
+                f"{plan.channel}: diarization failed ({exc}); "
+                "transcribing without speaker labels"
+            )
+            try:
+                return finalize_channel(
+                    samples,
+                    asr=self.asr,
+                    language=self.language,
+                    vad=self.vad,
+                    diarizer=None,
+                    num_speakers=1,
+                )
+            except Exception as exc2:  # noqa: BLE001
+                view.error(f"{plan.channel}: finalize failed ({exc2}); skipping channel")
+                return []
 
     def _live_checkpoint(self, decoders: dict[Channel, LiveDecoder]) -> Transcript:
         """A crash checkpoint from the live pass's already-committed words.

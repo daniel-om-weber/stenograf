@@ -127,6 +127,21 @@ class WordlessASR(ASRBackend):
         pass
 
 
+class SilentASR(ASRBackend):
+    """Finds no speech — returns no segments for any window."""
+
+    name = "silent"
+
+    def load(self) -> None:
+        pass
+
+    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        return []
+
+    def unload(self) -> None:
+        pass
+
+
 class FakeDiarizer(Diarizer):
     def __init__(self, turns):
         self.turns = turns
@@ -135,6 +150,17 @@ class FakeDiarizer(Diarizer):
     def diarize(self, samples, num_speakers=None):
         self.seen_num_speakers = num_speakers
         return self.turns
+
+
+class RaisingDiarizer(Diarizer):
+    """Fails on every call — stands in for a backend that throws on odd input."""
+
+    def __init__(self):
+        self.called = False
+
+    def diarize(self, samples, num_speakers=None):
+        self.called = True
+        raise RuntimeError("diarizer exploded")
 
 
 class TestFinalizeChannel:
@@ -171,6 +197,19 @@ class TestFinalizeChannel:
             np.zeros(0, dtype=np.float32), asr=FakeASR(), language=None
         )
         assert entries == []
+
+    def test_silent_channel_skips_diarization(self):
+        # No speech → no words. Diarizing an empty channel is wasted work and can
+        # throw (sherpa forced to num_clusters > 1 on near-silent input), which
+        # would otherwise sink the whole meeting's finalize. Skip it instead.
+        asr = SilentASR()
+        diarizer = RaisingDiarizer()
+        samples = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
+        entries = finalize_channel(
+            samples, asr=asr, language=None, diarizer=diarizer, num_speakers=2
+        )
+        assert entries == []
+        assert not diarizer.called
 
     def test_diarized_backend_without_word_timestamps_keeps_text(self):
         # A backend with no word timestamps must not silently drop the diarized

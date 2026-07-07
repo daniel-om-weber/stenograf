@@ -53,16 +53,24 @@ def finalize_channel(
             for seg in segments
         ]
 
-    if on_progress is not None:
-        on_progress("diarization", 0, 1)
-    turns = diarizer.diarize(samples, num_speakers)
     words = [word for seg in segments for word in seg.words]
-    if not words:
+    if not words and segments:
         # A backend that emits text but no word timestamps (a contract
         # violation for diarized use — see ASRBackend) would otherwise drop the
         # whole transcript here. Fall back to attributing each segment as a unit
         # by its time span rather than losing the text.
         words = [Word(text=seg.text, start=seg.start, end=seg.end) for seg in segments]
+    if not words:
+        # No speech on this channel: nothing to diarize, so skip it. Diarizing
+        # here is not just wasted work — sherpa can raise on empty/near-silent
+        # input forced to num_clusters > 1, and that exception would otherwise
+        # sink the whole meeting's finalize (a silent remote or a dead second
+        # mic is reachable in hybrid mode).
+        return []
+
+    if on_progress is not None:
+        on_progress("diarization", 0, 1)
+    turns = diarizer.diarize(samples, num_speakers)
     return merge_words_turns(words, turns)
 
 
