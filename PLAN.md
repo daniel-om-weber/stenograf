@@ -842,6 +842,33 @@ untouched (the channel-coarse → diarized swap in `finalize_channel` is the sea
   See [[phase3-verified-library-constraints]].*
 - **1c — enroll/name UX + CLI** (`steno profiles` list/enroll; name unmatched clusters
   post-meeting). Tune the ~0.5 threshold on the 0d data.
+  *Status (July 2026): shipped (`stenograf.cli`, `tests/test_cli.py`). The re-ID
+  seam built in 1b was fully wired but unreachable — nothing constructed a
+  `SpeakerReID` — so 1c is two halves: the `steno profiles` management CLI and the
+  wiring that finally makes enrolled voices relabel meetings. **`steno profiles`
+  group:** `list` (model-scoped, flags profiles from a different embedding model as
+  inactive), `enroll NAME AUDIO` (computes the voiceprint through the *same*
+  `SherpaOnnxDiarizer.diarize_with_embeddings` path the finalize pass matches
+  against — enrolment and match must agree — defaulting to a single-speaker clip;
+  `--speakers N`/`--speaker S<n>` name one cluster from a multi-speaker recording,
+  listing the clusters when the choice is ambiguous; `--reinforce` folds a sample
+  into an existing profile), `rename`, `remove`. **Wiring:** `steno start` and
+  `transcribe` gained `--reid/--no-reid` (default on) and `--reid-threshold`;
+  `_load_reid` builds a resolver from the default store only when it holds profiles
+  for the active embedding model, so the finalize pass is byte-for-byte unchanged
+  with no profiles (match-only, per 1b). A shared `_load_diarizer` seam backs both
+  enrolment and finalize. **Threshold stays at the 0.5 default, deliberately
+  un-tuned** — empirical tuning needs the 0d hand-labelled references, which are
+  not being produced (Daniel's call); `--reid-threshold` is the per-run override,
+  and the `DEFAULT_THRESHOLD` docstring records why. Tests: the profiles CLI + an
+  end-to-end enrol→transcribe→relabel with fakes, `--no-reid` restoring generic
+  labels. **Verified with the real backends** (the audit's flagged risk: re-ID
+  stacks a second sherpa path onto fakes-only surface) — enrolled cluster `S0` of a
+  real de-1 slice through the real eres2net extractor, then `steno transcribe
+  --speakers 2` relabelled that cluster to the profile name (self-match, real
+  parakeet+sherpa, no MLX thread-stream fault), and `--no-reid` fell back to
+  `Speaker 1`. See [[phase3-verified-library-constraints]]. **Stage 1 (speaker
+  re-ID) complete.**
 
 **Stage 2 — Export & vocabulary (largely independent).**
 - **2a — SRT/VTT export.** `to_srt`/`to_vtt` + `--format md,json,srt,vtt`; re-flow into

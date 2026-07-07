@@ -39,7 +39,9 @@ import numpy as np
 DEFAULT_THRESHOLD = 0.5
 """Cosine similarity at or above which a cluster is deemed the same speaker as a
 stored profile. ~0.5 is PLAN.md's starting point for the shipped eres2net
-embedding; Task 1c tunes it on the hand-labelled 0d data."""
+embedding. It stays at this default rather than being empirically tuned: tuning
+needs the hand-labelled 0d reference data, which is not being produced. Override
+per run with ``--reid-threshold`` (``steno start``/``transcribe``)."""
 
 _STORE_VERSION = 1
 

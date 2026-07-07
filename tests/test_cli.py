@@ -5,6 +5,7 @@ from click.testing import CliRunner
 
 from stenograf import cli
 from stenograf.asr.base import ASRBackend, Segment, Word
+from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.view import LiveView
 
 
@@ -29,6 +30,26 @@ class FakeASR(ASRBackend):
 
     def unload(self) -> None:
         pass
+
+
+class FakeDiarizer(Diarizer):
+    """Fixed clusters with fixed unit embeddings — no ONNX model, no real audio.
+
+    Lets the CLI re-ID/enrollment paths run offline: enrollment reads
+    ``diarize_with_embeddings`` and the finalize pass matches against the same
+    vectors, so a profile enrolled from this diarizer self-matches (cosine 1.0).
+    """
+
+    def __init__(self, embeddings, turns=None):
+        self._embeddings = {k: np.asarray(v, dtype=np.float32) for k, v in embeddings.items()}
+        # One long turn per cluster by default (covers every word's midpoint).
+        self._turns = turns or [SpeakerTurn(s, 0.0, 1e9) for s in embeddings]
+
+    def diarize(self, samples, num_speakers=None):
+        return list(self._turns)
+
+    def diarize_with_embeddings(self, samples, num_speakers=None):
+        return DiarizationResult(turns=list(self._turns), embeddings=dict(self._embeddings))
 
 
 def fake_load_backends(*, need_diarizer):
@@ -182,3 +203,121 @@ def test_doctor_runs_and_prints_checks():
     assert result.exit_code in (0, 1)
     assert "Python" in result.output
     assert "ASR backend" in result.output
+
+
+# ---- speaker profiles (Task 1c) -------------------------------------------
+
+
+def _isolate_store(tmp_path, monkeypatch):
+    """Point the profile store at a throwaway dir so tests never touch the real one."""
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+
+
+def _patch_diarizer(monkeypatch, diarizer):
+    monkeypatch.setattr(cli, "_load_diarizer", lambda *, need=True: diarizer)
+
+
+def test_profiles_list_empty(tmp_path, monkeypatch):
+    _isolate_store(tmp_path, monkeypatch)
+    result = CliRunner().invoke(cli.main, ["profiles", "list"])
+    assert result.exit_code == 0, result.output
+    assert "no speaker profiles yet" in result.output
+
+
+def test_profiles_enroll_then_list(tmp_path, monkeypatch):
+    _isolate_store(tmp_path, monkeypatch)
+    _patch_diarizer(monkeypatch, FakeDiarizer({"S0": [1.0, 0, 0]}))
+    audio = tmp_path / "daniel.wav"
+    write_wav(audio)
+
+    enroll = CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
+    assert enroll.exit_code == 0, enroll.output
+    assert "enrolled 'Daniel'" in enroll.output
+
+    listing = CliRunner().invoke(cli.main, ["profiles", "list"])
+    assert "Daniel" in listing.output
+    assert "(1 sample)" in listing.output
+
+
+def test_profiles_enroll_duplicate_then_reinforce(tmp_path, monkeypatch):
+    _isolate_store(tmp_path, monkeypatch)
+    _patch_diarizer(monkeypatch, FakeDiarizer({"S0": [1.0, 0, 0]}))
+    audio = tmp_path / "a.wav"
+    write_wav(audio)
+    CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
+
+    dup = CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
+    assert dup.exit_code != 0
+    assert "--reinforce" in dup.output  # points the user at the right flag
+
+    again = CliRunner().invoke(
+        cli.main, ["profiles", "enroll", "Daniel", str(audio), "--reinforce"]
+    )
+    assert again.exit_code == 0, again.output
+    assert "2 samples" in again.output
+
+
+def test_profiles_enroll_multispeaker_needs_speaker_choice(tmp_path, monkeypatch):
+    _isolate_store(tmp_path, monkeypatch)
+    diar = FakeDiarizer(
+        {"S0": [1.0, 0, 0], "S1": [0, 1.0, 0]},
+        turns=[SpeakerTurn("S0", 0.0, 2.0), SpeakerTurn("S1", 2.0, 3.0)],
+    )
+    _patch_diarizer(monkeypatch, diar)
+    audio = tmp_path / "m.wav"
+    write_wav(audio)
+
+    ambiguous = CliRunner().invoke(
+        cli.main, ["profiles", "enroll", "Anna", str(audio), "--speakers", "2"]
+    )
+    assert ambiguous.exit_code != 0
+    assert "S0" in ambiguous.output and "S1" in ambiguous.output  # lists the choices
+
+    chosen = CliRunner().invoke(
+        cli.main, ["profiles", "enroll", "Anna", str(audio), "--speakers", "2", "--speaker", "S1"]
+    )
+    assert chosen.exit_code == 0, chosen.output
+
+
+def test_profiles_rename_and_remove(tmp_path, monkeypatch):
+    _isolate_store(tmp_path, monkeypatch)
+    _patch_diarizer(monkeypatch, FakeDiarizer({"S0": [1.0, 0, 0]}))
+    audio = tmp_path / "a.wav"
+    write_wav(audio)
+    CliRunner().invoke(cli.main, ["profiles", "enroll", "Speaker 1", str(audio)])
+
+    renamed = CliRunner().invoke(cli.main, ["profiles", "rename", "Speaker 1", "Daniel"])
+    assert renamed.exit_code == 0, renamed.output
+    after = CliRunner().invoke(cli.main, ["profiles", "list"])
+    assert "Daniel" in after.output and "Speaker 1" not in after.output
+
+    removed = CliRunner().invoke(cli.main, ["profiles", "remove", "Daniel", "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert "no speaker profiles yet" in CliRunner().invoke(cli.main, ["profiles", "list"]).output
+
+
+def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
+    # End-to-end: enroll Daniel, then a diarized transcribe relabels his cluster
+    # to "Daniel" instead of the generic "Speaker 1"; --no-reid restores it.
+    _isolate_store(tmp_path, monkeypatch)
+    diar = FakeDiarizer({"S0": [1.0, 0, 0]})
+    _patch_diarizer(monkeypatch, diar)
+    audio = tmp_path / "m.wav"
+    write_wav(audio)
+    CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
+
+    monkeypatch.setattr(cli, "_load_backends", lambda *, need_diarizer: (FakeASR(), None, diar))
+    reid = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--speakers", "2", "--out", str(tmp_path)]
+    )
+    assert reid.exit_code == 0, reid.output
+    assert "re-ID: 1 profile(s) active" in reid.output
+    assert "Daniel" in (tmp_path / "m.transcript.md").read_text()
+
+    no_reid = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--speakers", "2", "--no-reid", "--out", str(tmp_path)]
+    )
+    assert no_reid.exit_code == 0, no_reid.output
+    assert "re-ID:" not in no_reid.output
+    md = (tmp_path / "m.transcript.md").read_text()
+    assert "Daniel" not in md and "Speaker 1" in md

@@ -101,6 +101,19 @@ def main() -> None:
     help="Force the plain line-by-line caption stream instead of the full-screen "
     "TUI (also the automatic choice when stdout is not a terminal).",
 )
+@click.option(
+    "--reid/--no-reid",
+    "use_reid",
+    default=True,
+    help="Relabel diarized speakers to saved profile names when their voice matches "
+    "(cross-meeting re-identification). No effect without enrolled profiles.",
+)
+@click.option(
+    "--reid-threshold",
+    type=click.FloatRange(0, 1),
+    default=None,
+    help="Cosine similarity required to match a saved profile [default: 0.5].",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def start(
     lang: str | None,
@@ -113,6 +126,8 @@ def start(
     max_seconds: float | None,
     live: bool,
     plain: bool,
+    use_reid: bool,
+    reid_threshold: float | None,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
@@ -135,8 +150,11 @@ def start(
 
     started = time.monotonic()
     asr, vad, diarizer = _load_backends(need_diarizer=any(p.num_speakers != 1 for p in plans))
+    reid = _load_reid(enabled=use_reid, threshold=reid_threshold) if diarizer is not None else None
+    if reid is not None:
+        click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
     recorder = MeetingRecorder(
-        profile, asr=asr, vad=vad, diarizer=diarizer, language=profile.language
+        profile, asr=asr, vad=vad, diarizer=diarizer, reid=reid, language=profile.language
     )
 
     tee = _make_tee(record_audio, out_dir, stem, plans)
@@ -342,12 +360,27 @@ def _make_provider(replay: str | None, plans, *, paced: bool = False):
     default=None,
     help="Output directory [default: next to the input file].",
 )
+@click.option(
+    "--reid/--no-reid",
+    "use_reid",
+    default=True,
+    help="Relabel diarized speakers to saved profile names when their voice matches "
+    "(cross-meeting re-identification). No effect without enrolled profiles.",
+)
+@click.option(
+    "--reid-threshold",
+    type=click.FloatRange(0, 1),
+    default=None,
+    help="Cosine similarity required to match a saved profile [default: 0.5].",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def transcribe(
     audio_file: Path,
     lang: str | None,
     speakers: int | None,
     out: Path | None,
+    use_reid: bool,
+    reid_threshold: float | None,
     print_markdown: bool,
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).
@@ -367,6 +400,9 @@ def transcribe(
     click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)})")
 
     asr, vad, diarizer = _load_backends(need_diarizer=speakers != 1)
+    reid = _load_reid(enabled=use_reid, threshold=reid_threshold) if diarizer is not None else None
+    if reid is not None:
+        click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
 
     def progress(stage: str, done: int, total: int) -> None:
         if stage == "asr" and done == 0:
@@ -382,6 +418,7 @@ def transcribe(
             vad=vad,
             diarizer=diarizer,
             num_speakers=speakers,
+            reid=reid,
             on_progress=progress,
         )
     )
@@ -414,15 +451,49 @@ def _load_backends(*, need_diarizer: bool):
     """
     from stenograf import models
     from stenograf.asr.parakeet import ParakeetMLXBackend
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
     from stenograf.vad import SileroVAD
 
     asr = ParakeetMLXBackend()
     click.echo(f"asr: loading {asr.model_id}")
     asr.load()
     vad = SileroVAD(models.fetch(models.SILERO_VAD, _model_progress))
-    diarizer = SherpaOnnxDiarizer(progress=_model_progress) if need_diarizer else None
+    diarizer = _load_diarizer(need=need_diarizer)
     return asr, vad, diarizer
+
+
+def _load_diarizer(*, need: bool = True):
+    """Build the sherpa-onnx diarizer (or ``None`` when a channel is single-speaker).
+
+    A seam of its own so ``steno profiles enroll`` computes its voiceprints with
+    the exact same embedding path the finalize pass uses at match time (the two
+    must agree for the cosine match to mean anything), and so tests can inject a
+    fake without a real ONNX model.
+    """
+    if not need:
+        return None
+    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+
+    return SherpaOnnxDiarizer(progress=_model_progress)
+
+
+def _load_reid(*, enabled: bool, threshold: float | None):
+    """Build the cross-meeting re-ID resolver from the saved profile store, or ``None``.
+
+    Returns ``None`` when re-ID is turned off or the store holds no profiles for
+    the active embedding model — so the finalize pass is byte-for-byte unchanged
+    without enrolled profiles (match-only, zero behaviour change; PLAN.md Phase 3
+    Task 1b/1c). ``threshold=None`` uses the store default (0.5).
+    """
+    if not enabled:
+        return None
+    from stenograf import models
+    from stenograf.profiles import ProfileStore, SpeakerReID
+
+    store = ProfileStore.load()
+    model = models.SPEAKER_EMBEDDING.name
+    if not store.for_model(model):
+        return None
+    return SpeakerReID(store, model, threshold=threshold)
 
 
 def _write_transcript(transcript: Transcript, out_dir: Path, stem: str) -> tuple[Path, Path]:
@@ -461,3 +532,165 @@ def doctor() -> None:
         click.echo(f" {symbol} {check.name}: {check.detail}")
     if not all(check.ok for check in checks):
         raise SystemExit(1)
+
+
+@main.group()
+def profiles() -> None:
+    """Manage saved speaker voiceprints for cross-meeting re-identification.
+
+    Enroll a voice once and every later meeting relabels that speaker
+    automatically (``steno start``/``transcribe`` unless ``--no-reid``).
+    """
+
+
+@profiles.command("list")
+def profiles_list() -> None:
+    """List enrolled speaker profiles."""
+    from stenograf import models
+    from stenograf.profiles import ProfileStore, default_store_path
+
+    store = ProfileStore.load()
+    all_profiles = store.profiles()
+    if not all_profiles:
+        click.echo(f"no speaker profiles yet ({default_store_path()})")
+        click.echo("enroll one with: steno profiles enroll NAME sample.wav")
+        return
+    active_model = models.SPEAKER_EMBEDDING.name
+    click.echo(f"speaker profiles ({default_store_path()}):")
+    for p in sorted(all_profiles, key=lambda p: (p.embedding_model, p.name.lower())):
+        noun = "sample" if p.samples == 1 else "samples"
+        # A profile made under a different embedding model can never match a
+        # cluster from the current one — flag it so the count is not misleading.
+        tag = "" if p.embedding_model == active_model else "  [inactive: other embedding model]"
+        click.echo(f"  {p.name}  ({p.samples} {noun}){tag}")
+
+
+@profiles.command("enroll")
+@click.argument("name")
+@click.argument("audio_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option(
+    "--speakers",
+    type=click.IntRange(1, 16),
+    default=1,
+    show_default=True,
+    help="How many speakers are in the clip; it is diarized into this many and one "
+    "cluster is enrolled.",
+)
+@click.option(
+    "--speaker",
+    "cluster",
+    default=None,
+    metavar="S<n>",
+    help="Which diarized cluster to enroll when the clip has several speakers "
+    "(re-run without it to see the choices). Ignored for a single-speaker clip.",
+)
+@click.option(
+    "--reinforce",
+    is_flag=True,
+    help="Fold this sample into an existing profile's voiceprint instead of creating a new one.",
+)
+def profiles_enroll(
+    name: str, audio_file: Path, speakers: int, cluster: str | None, reinforce: bool
+) -> None:
+    """Enroll speaker NAME from a voice sample in AUDIO_FILE.
+
+    Give a short clip in which NAME is the only speaker (the default), or a
+    multi-speaker recording (e.g. a meeting saved with ``--record-audio``) plus
+    ``--speakers N`` and ``--speaker S<n>`` to enroll one person from it. The
+    voiceprint is computed exactly the way meetings embed their clusters, so
+    future meetings relabel this speaker automatically.
+    """
+    from stenograf import models
+    from stenograf.audio import load_audio
+    from stenograf.profiles import ProfileStore
+
+    samples = load_audio(audio_file)
+    diarizer = _load_diarizer(need=True)
+    result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers)
+    if not result.embeddings:
+        raise click.ClickException(
+            f"no embeddable speech found in {audio_file.name}; is it silent or too short?"
+        )
+    embedding = _choose_cluster(result.embeddings, result.turns, cluster)
+
+    model = models.SPEAKER_EMBEDDING.name
+    store = ProfileStore.load()
+    existing = store.get(name, model)
+    if reinforce:
+        if existing is None:
+            raise click.ClickException(
+                f"no profile named {name!r} to reinforce; drop --reinforce to create it."
+            )
+        updated = store.reinforce(existing, embedding)
+        store.save()
+        click.echo(f"reinforced {name!r} ({updated.samples} samples)")
+        return
+    if existing is not None:
+        raise click.ClickException(
+            f"a profile named {name!r} already exists; use --reinforce to add this sample "
+            "to it, or remove it first with `steno profiles remove`."
+        )
+    store.enroll(name, embedding, model)
+    store.save()
+    click.echo(f"enrolled {name!r} from {audio_file.name}")
+
+
+def _choose_cluster(embeddings, turns, cluster: str | None):
+    """Pick one cluster's embedding, or raise a helpful error when it is ambiguous."""
+    if cluster is not None:
+        if cluster not in embeddings:
+            available = ", ".join(sorted(embeddings)) or "none"
+            raise click.ClickException(
+                f"no cluster {cluster!r} in the clip; available: {available}"
+            )
+        return embeddings[cluster]
+    if len(embeddings) == 1:
+        return next(iter(embeddings.values()))
+    durations: dict[str, float] = {}
+    for turn in turns:
+        durations[turn.speaker] = durations.get(turn.speaker, 0.0) + (turn.end - turn.start)
+    listing = "\n".join(
+        f"  {c}  ({durations.get(c, 0.0):.1f}s speech)" for c in sorted(embeddings)
+    )
+    raise click.ClickException(
+        "the clip has several speakers; re-run with --speaker to pick one:\n" + listing
+    )
+
+
+@profiles.command("rename")
+@click.argument("old")
+@click.argument("new")
+def profiles_rename(old: str, new: str) -> None:
+    """Rename speaker profile OLD to NEW."""
+    from stenograf import models
+    from stenograf.profiles import ProfileStore
+
+    store = ProfileStore.load()
+    profile = store.get(old, models.SPEAKER_EMBEDDING.name)
+    if profile is None:
+        raise click.ClickException(f"no profile named {old!r}")
+    try:
+        store.rename(profile, new)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    store.save()
+    click.echo(f"renamed {old!r} → {new!r}")
+
+
+@profiles.command("remove")
+@click.argument("name")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+def profiles_remove(name: str, yes: bool) -> None:
+    """Delete speaker profile NAME."""
+    from stenograf import models
+    from stenograf.profiles import ProfileStore
+
+    store = ProfileStore.load()
+    profile = store.get(name, models.SPEAKER_EMBEDDING.name)
+    if profile is None:
+        raise click.ClickException(f"no profile named {name!r}")
+    if not yes:
+        click.confirm(f"delete speaker profile {name!r}?", abort=True)
+    store.remove(profile)
+    store.save()
+    click.echo(f"removed {name!r}")

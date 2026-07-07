@@ -50,6 +50,31 @@ steno start --flush-interval 60     # crash-checkpoint the captions every 60s
 steno start --replay mic.wav        # dev: drive the live pass from a file
 ```
 
+### Naming speakers across meetings
+
+Enroll a voice once and every later meeting relabels that speaker automatically
+(cross-meeting re-identification):
+
+```sh
+steno profiles enroll Daniel daniel-sample.wav   # a short clip of one speaker
+steno profiles list                              # show enrolled voiceprints
+steno profiles rename Daniel "Daniel W."
+steno profiles remove Daniel
+```
+
+To name one person from a multi-speaker recording (e.g. a meeting saved with
+`--record-audio`), diarize it and pick their cluster:
+
+```sh
+steno profiles enroll Anna meeting.wav --speakers 4          # lists the clusters
+steno profiles enroll Anna meeting.wav --speakers 4 --speaker S2
+```
+
+Matching is on by default in `steno start`/`transcribe` and does nothing until
+you enroll someone; disable it with `--no-reid`, or adjust the match strictness
+with `--reid-threshold` (0–1, default 0.5). Voiceprints live in the platform data
+dir (not the model cache) and are never uploaded.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.
