@@ -510,10 +510,26 @@ Phase 3 build plan below, leading with a foundations/hardening stage before spea
 re-ID. Glossary lands as text post-correction (Parakeet has no decode-time prompt);
 overlap flagging deferred (sherpa's greedy clustering rarely emits overlapping turns).*
 
-**Phase 4 — Product layer + Linux.**
-Local web UI (live captions, meeting archive, click-to-jump transcript), optional
-Ollama note-enhancement, Linux capture backend + ONNX/CTranslate2 inference
-backends.
+**Phase 4 — Product layer + distribution (macOS).**
+Local web UI (live captions, meeting archive, click-to-jump transcript), a persistent
+meeting archive with a defined reverse-control channel (correct count/language →
+re-finalize; rename a speaker), optional local-LLM (Ollama) note-enhancement, and the
+macOS wheel/distribution path (bundle + ad-hoc-sign `stenocap`, publish to PyPI).
+*Re-scoped July 2026 (five-subagent design pass, decisions below): Linux moved to
+Phase 5 so Phase 4 ships a tangible Mac-native product first; `steno start` writes into
+a managed meeting archive by default; the in-RAM-only privacy guarantee is preserved
+(archive audio playback / archived re-diarize are opt-in, gated on `--record-audio`).
+Detailed build plan below.*
+
+**Phase 5 — Linux + cross-platform ASR.**
+Linux in-process capture (PipeWire/PulseAudio monitor via SoundCard/`pactl`, no helper)
++ a CPU/ONNX Parakeet-TDT-v3 ASR backend (the *same* model as the macOS MLX backend,
+real word timestamps) registered through the already-shipped `stenograf.asr` factory;
+diarization already runs ONNX/CPU cross-platform. *Designed in the Phase-4 pass (Track 2,
+deferred by an explicit scope decision — product layer first). Finalize-first is
+first-class; live captions are best-effort on CPU (Parakeet-int8 ≈ 5–36× realtime vs
+MLX's ~110×, so the 12–16 s re-decode window may miss cadence on slower boxes). Sub-plan
+summarized under "Deferred to Phase 5" in the Phase 4 build plan.*
 
 ### Phase 2 build plan — live captions (start here)
 
@@ -1104,6 +1120,223 @@ not even collect on Linux — so a focused pre-Phase-4 hardening pass is warrant
   README missing ``--format``/SRT-VTT and the whole glossary family; helper-stderr
   piping; atomic model extraction (tar path); meeting-mode auto-detect; hybrid
   cross-channel dedup.
+
+---
+
+### Phase 4 build plan — product layer + macOS distribution (Linux → Phase 5)
+
+Planned July 2026 by a **five-subagent design pass** (web UI · persistence/archive ·
+Linux backends · Ollama notes · distribution), each grounded in the shipped code seams
+and returning a staged sub-plan; synthesized here into one sequence. Full per-workstream
+sub-plans were captured in the design session.
+
+**Locked scope decisions (Daniel, July 2026):**
+- **Product layer first; Linux deferred to Phase 5.** Phase 4 = a tangible Mac-native
+  product (web UI + archive + notes) + the macOS shipping path. The whole Linux track
+  (ONNX ASR backend, `LinuxCaptureProvider`, Linux dep markers) is designed but moves to
+  Phase 5 — summarized under "Deferred to Phase 5" below so the work isn't lost.
+- **`steno start` writes into a managed archive dir by default** —
+  `data_dir()/meetings/<id>/transcript.*`; `--out PATH` overrides and still registers.
+  Makes the archive an authoritative library, not an index over scattered files.
+- **In-RAM-only privacy guarantee preserved.** Audio never touches disk unless
+  `--record-audio`. Text click-to-jump is *always* available (word timestamps live in the
+  JSON); archive audio **playback** and archived **re-diarize** are opt-in, gated on one
+  `record.has_audio()` predicate.
+
+**Adopted recommendations (defaults; overridable):** web server = **Starlette + uvicorn**
+(one localhost port for HTTP + WebSocket + static assets + reverse-control POSTs;
+in-process `TestClient` = the headless-test analogue of the TUI's `app.run_test()`); web
+front-end = **vanilla JS + server-rendered shell, no build step**, assets packaged via
+`importlib.resources`; web auth = **per-process bearer token + Host/Origin guard by
+default** (reverse-control can re-finalize / rename; DNS-rebinding defense); notes stored
+as **sibling `<stem>.notes.md`/`.notes.json`** (keep `Transcript` pure); notes default
+model = **`qwen3:8b`** (~5 GB, won't swap the 48 GB Mac); no `ollama` pip dep (**stdlib
+`urllib` HTTP** to `localhost:11434`); refinalize **keeps the locked language** unless
+overridden; transcript JSON gets an **index-only `version` stamp** (metadata lives in the
+archive index); macOS signing stays **ad-hoc only** (no Developer ID — verified in the
+Phase-1 spike); platform deps via **markers, not extras**; Windows **left installable**
+with an honest `doctor`.
+
+**The keystone.** `Transcript.from_json` (a loader `Transcript` lacks today) is a
+prerequisite for the archive, the web reader, and `steno notes` — three workstreams
+independently flagged it. Build it first; it unblocks the most.
+
+**Evaluation stays label-free** (Daniel's standing no-hand-labels call): round-trip /
+property tests, fakes + headless `TestClient`, real-backend end-to-end via `--replay`,
+and a real-Ollama-gated e2e mirroring the model-gated ASR tests. No accuracy scoring.
+
+Task sequence (independent, testable increments; interface names illustrative; ``[dep:…]``
+marks a hard prerequisite):
+
+**Stage A — Shared foundations (unblock everything).**
+- **A1 — `Transcript.from_json` + `SCHEMA_VERSION`.** A classmethod that faithfully
+  round-trips every field `to_json` writes (entries, `Word` timestamps, `MeetingProfile`,
+  `language`, `ResolvedParameters`), plus an additive `"version"` stamp. The only typing
+  snag is `ResolvedValue.value: object` — a single `_value_from_json` coerces `language`→
+  `Language`, speakers→`int`. Compat: missing `version` ⇒ legacy v1; a future major raises
+  `UnsupportedTranscriptVersion`; unknown keys ignored. Acceptance: `from_json(t.to_json())
+  == t` over a matrix (words present/absent, params None/populated, provisional, Path-valued
+  store, hour-scale timestamps); legacy + version-999 + extra-key cases; real e2e via
+  `steno transcribe` → reload. `[dep: none]`
+- **A2 — add `MeetingProfile.title`.** Small field used by the archive record and the notes
+  prompt (both siblings want it); `__post_init__` already normalizes the profile. `[dep: none]`
+
+**Stage B — Persistence: meeting archive + reverse-control channel.**
+- **B1 — `MeetingArchive` + `MeetingRecord` + index** (`stenograf/archive.py`, mirroring
+  `ProfileStore`). Atomic-JSON `data_dir()/meetings/index.json` + a managed
+  `meetings/<id>/` layout where the dir name *is* the stable id
+  (`meeting-YYYYMMDD-HHMMSS` + collision suffix). `MeetingRecord{id, title, created_at,
+  duration_s, language, speakers, formats, dir, audio_path}`. Maintained index (not scan)
+  + a `reconcile()` self-heal. `load_transcript(id)` reads through A1. Acceptance:
+  add/list/get/remove round-trip, atomic save, reconcile drops vanished + adopts orphan
+  dirs, id collision-suffixing. `[dep: A1]`
+- **B2 — wire CLI writes into the archive + a `meetings` group.** After `_write_transcript`
+  in `start`/`transcribe`, build a `MeetingRecord` and `archive.add()`; **default `out_dir`
+  → `meetings_dir()/<id>`** (managed-dir decision), `--out` an explicit registering
+  override; record the `--record-audio` WAV as `audio_path`. New `meetings list/show/rm`
+  group mirroring `profiles`. `--no-archive` escape hatch. Acceptance in `test_cli` via
+  `--replay`/fake-stenocap. `[dep: B1]`
+- **B3 — reverse-control interface: `MeetingSession` + `FinalizeRequest`** (`stenograf/
+  control.py`), replacing the informal `stop_callback` as the one defined reverse path.
+  `FinalizeRequest{local_speakers, remote_speakers, language, reid}` (all optional, None =
+  keep). `MeetingSession` holds the recorder + retained store + current transcript:
+  `refinalize(request)` overrides the profile via `dataclasses.replace`, re-runs
+  `recorder.finalize` (backends reused, not reloaded); `rename_speaker(old,new)` is a pure
+  entry relabel (`rename_entry_speaker`, timestamps untouched). Acceptance: fakes +
+  synthetic store; refinalize changes the plan/provenance; rename touches only that label;
+  ASR loaded once across finalize+refinalize. `[dep: A1; reuses session.finalize]`
+- **B4 — archived reverse control + audio policy** (`ArchivedMeeting`, store-is-gone case).
+  `rename_speaker` **always** works (relabel loaded transcript, rewrite managed formats,
+  re-add record). `refinalize` works **only when `record.has_audio()`** — rehydrate a store
+  from the WAV (the `transcribe`-over-WAV path), rewrite under the same id; else raise
+  `AudioUnavailable`. Same `has_audio()` predicate gates playback and re-diarize; audio-
+  synced seek is `word.start * SAMPLE_RATE` (the `WavTee` shares the t=0 clock). Recording
+  stays off by default. Acceptance: fakes + synthetic WAV; rename persists; refinalize on a
+  no-audio record raises; e2e via `--replay --record-audio` → reopen → refinalize. `[dep:
+  A1, B1–B3]`
+
+**Stage C — Web UI (`stenograf.web`).** The web view is "a new `LiveView` + a `serve()`
+twin, zero core changes" — confirmed against `view.py`/`tui.py`/`session.py`.
+- **C1 — wire protocol + `WebLiveView` (start here; no server).** Pure event→JSON encoders
+  in `web/protocol.py` (`encode_commit`/…/`encode_finalized` reusing the `Transcript.to_json`
+  shape); `web/live.py::WebLiveView(LiveView)` overriding each event, marshaling onto the
+  server loop via `loop.call_soon_threadsafe` (the `TextualLiveView._marshal` analogue) into
+  a `CaptionHub` (per-connection `asyncio.Queue`s + retained backlog for late joiners).
+  Acceptance: unit-test encoders; drive `WebLiveView` from a fake worker thread → subscriber
+  gets ordered frames; before-ready/after-close drops (marshal-gate parity). `[dep: none new]`
+- **C2 — server + `serve()` + `steno start --web`.** `starlette`+`uvicorn` deps;
+  `web/app.py::create_app(hub, controls, security)` (`GET /` live shell, `Mount(StaticFiles)`,
+  `WebSocketRoute("/ws")` — subscribe + inbound `{type:"stop"}` → `controls.stop()` on a bg
+  thread, the `tui._invoke_stop` discipline); `web/server.py::serve(...)` the `tui.serve`
+  twin (uvicorn on main thread, meeting on a bg thread, join before return); `web/static/`
+  `live.js`+`app.css`. CLI: `--web` as a 4th branch in `_run_meeting`, precedence
+  `--web > --plain > TTY→TUI > non-TTY→plain`. **Post-finalize: server stays up** and hands
+  off to the reader (adopted rec). Acceptance: headless `TestClient` WS end-to-end + real
+  `steno start --replay --web`. `[dep: C1]`
+- **C3 — security (token + Origin/Host guard).** `web/security.py::mint_token()`; ASGI
+  middleware / WS-accept hook enforcing the per-process token (header/query) + a
+  `Host`/`Origin` ∈ {127.0.0.1, localhost}:port check (DNS-rebinding defense; token-in-header
+  means classic CSRF doesn't apply). Bind `127.0.0.1` only; print the tokenized URL. Lands
+  **before** any reverse-control POST. Acceptance: `TestClient` rejects missing-token /
+  foreign-Origin, accepts token+loopback. `[dep: C2]`
+- **C4 — live-view resilience + polish.** Late-join backlog replay, reconnect-on-drop,
+  speaker colors, REC/elapsed header, animation-free finalize swap; **a browser disconnect
+  must NOT stop the meeting** (a tab is detachable, unlike the TUI). Acceptance: `TestClient`
+  drops+reopens the WS and converges; disconnect doesn't call `controls.stop`. `[dep: C2]`
+- **C5 — archive list view.** `GET /meetings` + `GET /api/meetings` over the B1 index;
+  `archive.js`. Acceptance: `TestClient` lists a seeded index. `[dep: C2, B1]`
+- **C6 — transcript reader + click-to-jump (text).** `GET /meetings/{id}` +
+  `GET /api/meetings/{id}` via A1; `reader.js` renders `<span data-start>` per word (click
+  highlights/scrolls); `GET …/audio` streams the WAV **only** when `has_audio()`. Text-jump
+  ships regardless of the audio decision. Acceptance: word spans carry timestamps; audio
+  endpoint 404s cleanly with no recording. `[dep: C5, A1]`
+- **C7 — reverse-control POSTs.** `POST …/refinalize` and `POST …/speakers/{label}/rename`
+  consuming the B3/B4 interface; Task-C3 token+Origin applied; the "Detected: German, 2
+  remote — [edit]" affordance. Acceptance: `TestClient` POST-with-token refinalizes a fake
+  session; without token → 403. `[dep: C3, B3, B4]`
+- **C8 — `steno serve` (archive-only) + asset packaging + docs.** A standalone server for
+  Views 2/3 without starting a meeting (the everyday "browse my meetings"); package
+  `web/static`+`web/templates` into the wheel; `steno doctor` web check. Acceptance: boots
+  headless, `TestClient` lists+reads a seeded archive from the *installed* package. `[dep:
+  C5–C7]`
+
+**Stage D — Ollama note-enhancement (`stenograf.notes`).** Opt-in, fully local, stdlib-only.
+Nearly independent — only `steno notes` needs A1.
+- **D1 — notes model + Ollama client.** `notes/model.py::MeetingNotes` (summary, decisions,
+  `ActionItem{task,owner,due,timestamp}`, `SpeakerHighlight`, open_questions + provenance
+  model/strategy/language) with `to_markdown`/`to_json`; `notes/ollama.py::OllamaClient`
+  over `urllib` (`is_available` via `/api/version`, `installed_models` via `/api/tags`,
+  `chat(..., format=schema, stream=False)`), typed `OllamaUnavailableError`/
+  `ModelNotFoundError`; `OLLAMA_HOST`/`--ollama-url`. Acceptance: monkeypatched `urlopen`
+  fakes the 3 endpoints; **zero non-stdlib imports**. `[dep: none]`
+- **D2 — prompt + chunking + generate.** `notes/prompt.py::build_messages` (system role,
+  respond-in-`transcript.language`, inject title/attendees/glossary, anti-hallucination:
+  cite speaker+timestamp, never invent), `chunk_entries` (whole-turn map-reduce for long
+  meetings, no entry dropped), `NOTES_SCHEMA`; `notes/generate.py::generate_notes(transcript,
+  client, model=…)` (resolve model arg>env>default, verify installed, single-shot vs
+  map-reduce, parse schema JSON, stamp provenance; never write a partial). Acceptance:
+  `FakeOllamaClient` canned JSON → populated notes; over-budget forces >1 chat; absent
+  Ollama → typed error, nothing written. `[dep: D1, A2]`
+- **D3 — `steno notes <transcript.json>` + `--notes` flag.** New command (load via A1 →
+  generate → `_write_notes` sibling `.notes.md`/`.json`); an opt-in `--notes` flag on
+  `transcribe`/`start` that runs after `_write_transcript`, **non-fatal on failure** (warn,
+  transcript stands, exit 0). Never contacts Ollama unless asked. Acceptance: `CliRunner` +
+  fake client; Ollama-down → clean message, no notes file. `[dep: D2, A1]`
+- **D4 — `doctor` Ollama check.** `_ollama_check` (reachable? model pulled?) + a
+  `Check.optional` field so an absent Ollama doesn't fail the overall `doctor` exit gate.
+  Acceptance: monkeypatched client; not-running → not-ok but exit 0. `[dep: D1]`
+
+**Stage E — macOS distribution (the shipping path).** Ships the current + Phase-4 Mac tool
+to colleagues via PyPI; the `stenocap` bundling is the one true shipping blocker.
+- **E1 — `hatch_build.py` build hook + `find_helper` hardening.** A hatchling custom build
+  hook that, **only on macOS-arm64**, shells `native/helper/build.sh` (reuses the one
+  `swiftc` + `codesign -s -` line), force-includes the binary at `stenograf/bin/stenocap`
+  (mode `0o755`), and stamps `build_data["pure_python"]=False` + `tag=
+  "py3-none-macosx_14_0_arm64"`; no-op elsewhere → pure `py3-none-any` wheel. `find_helper`
+  gains an `os.access(X_OK)` guard that `chmod +x`es its own binary. Acceptance: `uv build`
+  emits the arm64 wheel carrying `stenograf/bin/stenocap`; clean-venv install → `find_helper`
+  returns an executable site-packages path; the `any` wheel has no `bin/`. `[dep: none]`
+- **E2 — dep markers/matrix + atomic tar extract.** Confirm the wheel matrix
+  (arm64-with-helper + pure `any`); keep `parakeet-mlx` marker-gated; reserve a `[ollama]`
+  extra name only (no dep). Fold in the deferred **atomic model extraction (tar path)** fix
+  (`models._extract_member` → temp+`os.replace`). Acceptance: `uv sync` resolves on both OSes;
+  interrupted extraction leaves no truncated model. `[dep: none]`
+- **E3 — signing verified + `doctor`/`steno setup` permission UX.** Verify the ad-hoc
+  signature survives the zip round-trip (`codesign -v`, no `com.apple.quarantine`) and the
+  binary is launchable; extend `_capture_helper_check` (present + executable + signed) and
+  add a `steno setup` that deliberately triggers the one-time TCC mic+system-audio prompt.
+  Acceptance: `steno doctor` green on a clean install; honest limits documented (per-terminal
+  grant, no headless system-audio). `[dep: E1]`
+- **E4 — CI + release pipeline.** `.github/workflows/ci.yml` (matrix macos-14 + ubuntu-latest:
+  `ruff` + `pytest`, model-gated + real-audio tests self-skip — the Linux job keeps the suite
+  collecting, per the Tier-1 `scipy` fix) and `release.yml` (build the arm64 + `any` wheels +
+  sdist, clean-env `uv tool install ./dist/…` smoke → `steno doctor` green + `steno start
+  --replay` pipeline smoke on a synthetic WAV, publish to PyPI via Trusted Publishing/OIDC).
+  Acceptance: green both OSes; on a tag, a *different* clean Mac's `uv tool install stenograf`
+  captures. `[dep: E1, E2]`
+
+**Ordering.** A → (B ∥ C-live ∥ D) → C-consumers → E. Concretely: A1/A2 first; then the web
+live view (C1–C4), the archive/reverse-control (B1–B4), and notes (D) proceed in parallel;
+the web archive/reader/reverse views (C5–C7) gate on B; C8 packages the UI; E ships it. E1
+and E2 can start immediately in parallel (they don't touch runtime features).
+
+**Deferred to Phase 5 (Linux Track 2 — designed, not built).** A CPU/ONNX ASR backend
+`stenograf/asr/sherpa.py::SherpaOnnxASRBackend` (`name="parakeet-onnx"`) wrapping the *same*
+Parakeet-TDT-v3 int8 model with real per-token timestamps, registered through the existing
+`stenograf.asr` factory (`create_backend` already the seam — zero CLI change; only
+`default_backend_name()` goes platform-aware and two `doctor` strings change). **Open
+Decision A:** whether the pinned `sherpa-onnx<1.13` (pin exists because 1.13.x macOS wheels
+are broken) already yields Parakeet-v3 timestamps — if yes, **zero new dependency**; if it
+needs 1.13.x, use `onnx-asr` (small MIT dep, isolated runtime, leaves the diarization pin
+untouched) — probe first. A `LinuxCaptureProvider` (`stenograf/capture/linux.py`, in-process,
+no helper): monitor discovery via `pactl`, capture via **SoundCard** (`include_loopback`) or
+`parec`/`pw-record` subprocess (**Decision B** — prototype both; macOS is already
+subprocess-based), 16 kHz mono direct (PipeWire resamples → no resampler dep), idempotent
+thread-safe `stop()` like `MacOSCaptureProvider`. Diarization already runs ONNX/CPU (Task =
+verification). **Decision C** (settled): finalize-first is first-class, live captions
+best-effort with a CPU-RTF probe. Verification is label-free throughout (parakeet-onnx↔MLX
+parity + timestamp sanity, reusing the Phase-2 agreement harness). Distribution then gains
+the Linux pure-`any` wheel's dep markers and a Linux functional-transcription CI step.
 
 ---
 
