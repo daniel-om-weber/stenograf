@@ -46,7 +46,13 @@ per run with ``--reid-threshold`` (``steno start``/``transcribe``)."""
 _STORE_VERSION = 1
 
 
-@dataclass(frozen=True)
+# eq=False: the default field-wise __eq__/__hash__ a frozen dataclass generates
+# both break on the ``embedding`` ndarray field — ``==`` raises "truth value of an
+# array is ambiguous" and ``hash`` raises "unhashable type: ndarray". Identity
+# semantics are what the store actually uses (``remove``/``_replace`` match by
+# ``is``, names are unique per model), and they keep a profile safe to put in a set
+# or dict key — which a Phase-4 web UI will do (PLAN.md §5 Phase 3→4 audit).
+@dataclass(frozen=True, eq=False)
 class SpeakerProfile:
     """A named voice, identified by a unit-norm mean embedding under one model.
 

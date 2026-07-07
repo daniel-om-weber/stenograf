@@ -45,6 +45,11 @@ steno = "stenograf.cli:main"
 dev = [
     "pytest>=8",
     "ruff>=0.4",
+    # eval/der.py + tests/test_eval_der.py (both in the default test suite) import
+    # scipy. On macOS it resolves transitively via parakeet-mlx→librosa, but that
+    # chain is macOS-arm64-only, so declare it here or `pytest` fails to collect the
+    # DER scorer test on Linux/CI (Phase 3→4 readiness audit).
+    "scipy>=1.11",
 ]
 # Phase 0 model-evaluation harness (eval/) — not shipped with the package.
 eval = [
@@ -52,6 +57,7 @@ eval = [
     "mlx-whisper>=0.4.3",
     "parakeet-mlx>=0.5.2",
     "mlx-voxtral>=0.0.4",
+    "scipy>=1.11",
     # mlx-lm 0.31 crashes on import against transformers 5.x
     # (AutoTokenizer.register signature change); voxtral needs the 4.x line.
     "transformers>=4.55.2,<5",

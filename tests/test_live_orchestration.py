@@ -314,6 +314,20 @@ class TestMeetingRecorderLive:
         assert all(c.entries for c in checkpoints)
         assert all(e.speaker == "Local" for c in checkpoints for e in c.entries)
 
+    def test_live_capture_error_is_non_fatal_to_finalize(self):
+        # A stream desync (a backward frame) makes the capture thread's store.append
+        # raise mid-capture. Every frame that did arrive is already in the store, so
+        # the meeting must still finalize it — surfacing the error, not discarding
+        # the transcript (the audit's "finalize is authoritative" resilience).
+        good = AudioFrame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))
+        backward = AudioFrame(Channel.MIC, 0.0, np.ones(10, dtype=np.int16))  # goes backwards
+        provider = ListProvider([good, backward])
+        errors: list[str] = []
+        transcript = self._recorder().run(provider, live=True, on_status=errors.append)
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]  # the good second survived
+        assert provider.stopped
+        assert any("capture stopped early" in m for m in errors)
+
 
 class CountingASR(ASRBackend):
     """Counts decodes (the CPU proxy) and returns one stable word per elapsed second.

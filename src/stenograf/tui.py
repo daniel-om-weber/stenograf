@@ -283,16 +283,28 @@ class LiveApp(App[None]):
         ends, the meeting thread runs the finalize pass, and it exits the app when
         done. A second press (impatient, still finalizing) forces an exit. Once the
         transcript is shown, quit just exits.
+
+        ``stop_callback`` (``provider.stop``) *blocks* — up to ~5 s waiting on the
+        capture subprocess to flush and exit — so it runs on a background thread, not
+        the event loop: doing it inline would freeze the whole TUI for those seconds
+        and, worse, deaden this very binding so the impatient second Ctrl-C could not
+        force an exit. The teardown finishes on its own; the meeting thread then
+        finalizes and exits the app.
         """
         if self._phase == "capturing" and self.stop_callback is not None:
             self._phase = "finalizing"
             self._render_header()
-            try:
-                self.stop_callback()
-            except Exception as exc:  # never let a stop error wedge the UI
-                self.push_error(f"stop failed: {exc}")
+            threading.Thread(target=self._invoke_stop, name="tui-stop", daemon=True).start()
         else:
             self.exit()
+
+    def _invoke_stop(self) -> None:
+        """Run the blocking capture teardown off the event loop (see action_stop)."""
+        try:
+            self.stop_callback()  # type: ignore[misc]  # guarded by action_stop
+        except Exception as exc:  # never let a stop error wedge the UI
+            with contextlib.suppress(Exception):  # the app may already be gone
+                self.call_from_thread(self.push_error, f"stop failed: {exc}")
 
 
 class TextualLiveView(LiveView):

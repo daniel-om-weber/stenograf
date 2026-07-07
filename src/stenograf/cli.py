@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -26,6 +27,13 @@ _FORMATS: dict[str, str] = {
     "vtt": "to_vtt",
 }
 _DEFAULT_FORMATS = ("md", "json")
+
+# Settable speaker-count ranges, kept in sync with the --local/--remote and
+# --speakers IntRange bounds. The unconstrained diarizer can *detect* more (or, on
+# silence, zero) speakers than the user can set, so the "lock the detected count"
+# hint is clamped to these — never suggesting an out-of-range or nonsensical re-run.
+_MEETING_MAX_SPEAKERS = 8
+_FILE_MAX_SPEAKERS = 16
 
 
 def _parse_formats(spec: str) -> list[str]:
@@ -128,14 +136,14 @@ def main() -> None:
 @click.option(
     "--local",
     "local_speakers",
-    type=click.IntRange(0, 8),
+    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
     default=None,
     help="Number of speakers in the room; omit to auto-detect.",
 )
 @click.option(
     "--remote",
     "remote_speakers",
-    type=click.IntRange(0, 8),
+    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
     default=None,
     help="Number of remote speakers; 0 = in-room meeting without system audio.",
 )
@@ -245,14 +253,17 @@ def start(
     write_formats = _parse_formats(formats)
     glossary_terms, attendee_names = _collect_terms(glossary, glossary_file, attendee)
 
-    profile = MeetingProfile(
-        language=Language(lang) if lang else None,
-        local_speakers=local_speakers,
-        remote_speakers=remote_speakers,
-        glossary=glossary_terms,
-        attendee_names=attendee_names,
-        speaker_profile_store=profile_store,
-    )
+    try:
+        profile = MeetingProfile(
+            language=Language(lang) if lang else None,
+            local_speakers=local_speakers,
+            remote_speakers=remote_speakers,
+            glossary=glossary_terms,
+            attendee_names=attendee_names,
+            speaker_profile_store=profile_store,
+        )
+    except ValueError as exc:  # e.g. --local 0 --remote 0 — report cleanly, not a traceback
+        raise click.ClickException(str(exc)) from exc
     mode = profile.mode.value if profile.mode else "auto"
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
 
@@ -347,16 +358,39 @@ def _report_speaker_counts(counts) -> None:
         click.echo("speakers: none found")
         return
     parts, corrections = [], []
+    capped = False
     for count in counts:
         name, flag = _describe_channel(count.channel)
         if count.requested is None:
             parts.append(f"{count.detected} {name} (detected)")
-            corrections.append(f"{flag} {count.detected}")
+            hint = _lock_hint(count.detected, _MEETING_MAX_SPEAKERS)
+            if hint is not None:  # None → nothing to lock (a silent channel, 0 found)
+                value, was_capped = hint
+                corrections.append(f"{flag} {value}")
+                capped = capped or was_capped
         else:
             parts.append(f"{count.requested} {name} (given)")
     click.echo("speakers: " + ", ".join(parts))
     if corrections:
-        click.echo(f"  estimated — re-run with {' '.join(corrections)} to lock or correct")
+        note = f" (estimate exceeded the {_MEETING_MAX_SPEAKERS}-speaker max)" if capped else ""
+        click.echo(f"  estimated — re-run with {' '.join(corrections)} to lock or correct{note}")
+
+
+def _lock_hint(detected: int, max_settable: int) -> tuple[int, bool] | None:
+    """The value to suggest for locking an estimated count, clamped to the settable
+    range, or ``None`` when there is nothing sensible to lock.
+
+    Returns ``(value, capped)``: ``value`` is ``detected`` clamped into
+    ``[1, max_settable]`` and ``capped`` flags that the raw estimate exceeded that
+    range (an over-cluster artifact of unconstrained clustering — the displayed
+    count stays the raw estimate; only the suggested lock value is capped).
+    ``None`` when no speaker was found (``detected < 1``), so a silent channel never
+    produces a nonsensical ``--local 0`` hint (PLAN.md §5 Phase 3→4 audit)."""
+    if detected < 1:
+        return None
+    if detected > max_settable:
+        return max_settable, True
+    return detected, False
 
 
 def _run_meeting(
@@ -507,7 +541,7 @@ def _make_provider(replay: str | None, plans, *, paced: bool = False):
 )
 @click.option(
     "--speakers",
-    type=click.IntRange(1, 16),
+    type=click.IntRange(1, _FILE_MAX_SPEAKERS),
     default=None,
     help="Known speaker count (the biggest diarization accuracy lever); "
     "1 skips diarization, omit to estimate.",
@@ -638,7 +672,13 @@ def transcribe(
     if speakers is None:
         found = len({e.speaker for e in entries})
         click.echo(f"speakers: {found} detected")
-        click.echo(f"  estimated — re-run with --speakers {found} to lock or correct the count")
+        hint = _lock_hint(found, _FILE_MAX_SPEAKERS)
+        if hint is not None:  # None → no speech found, nothing to lock
+            value, over = hint
+            note = f" (estimate over the {_FILE_MAX_SPEAKERS}-speaker max)" if over else ""
+            click.echo(
+                f"  estimated — re-run with --speakers {value} to lock or correct the count{note}"
+            )
     else:
         click.echo(f"speakers: {speakers} given")
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s, {speed:.1f}x realtime)")
@@ -654,11 +694,11 @@ def _load_backends(*, need_diarizer: bool):
     defaults (parakeet-mlx, Silero VAD, sherpa-onnx diarization).
     """
     from stenograf import models
-    from stenograf.asr.parakeet import ParakeetMLXBackend
+    from stenograf.asr import create_backend
     from stenograf.vad import SileroVAD
 
-    asr = ParakeetMLXBackend()
-    click.echo(f"asr: loading {asr.model_id}")
+    asr = create_backend()  # the selection seam; a Linux backend registers alongside
+    click.echo(f"asr: loading {getattr(asr, 'model_id', None) or asr.name}")
     asr.load()
     vad = SileroVAD(models.fetch(models.SILERO_VAD, _model_progress))
     diarizer = _load_diarizer(need=need_diarizer)
@@ -717,9 +757,22 @@ def _write_transcript(
     paths = []
     for fmt in formats:
         path = out_dir / f"{stem}.transcript.{fmt}"
-        path.write_text(getattr(transcript, _FORMATS[fmt])())
+        _atomic_write_text(path, getattr(transcript, _FORMATS[fmt])())
         paths.append(path)
     return paths
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` via a temp file + ``os.replace`` (atomic on POSIX/Windows).
+
+    A plain ``write_text`` truncates in place, so a crash mid-write leaves a
+    corrupt file — and for the ``.partial`` crash-recovery checkpoint that also
+    destroys the previous good copy, defeating the artifact meant to survive the
+    crash. Writing a sibling temp then atomically renaming means a reader only ever
+    sees the whole old file or the whole new one (PLAN.md §5 Phase 3→4 audit)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _cleanup_checkpoints(out_dir: Path, stem: str) -> None:

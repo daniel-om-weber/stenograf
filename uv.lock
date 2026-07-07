@@ -4580,12 +4580,14 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "ruff" },
+    { name = "scipy" },
 ]
 eval = [
     { name = "jiwer", version = "4.0.0", source = { registry = "https://pypi.org/simple" } },
     { name = "mlx-voxtral" },
     { name = "mlx-whisper" },
     { name = "parakeet-mlx" },
+    { name = "scipy" },
     { name = "transformers" },
 ]
 eval-canary = [
@@ -4606,12 +4608,14 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.4" },
+    { name = "scipy", specifier = ">=1.11" },
 ]
 eval = [
     { name = "jiwer", specifier = ">=3.1" },
     { name = "mlx-voxtral", specifier = ">=0.0.4" },
     { name = "mlx-whisper", specifier = ">=0.4.3" },
     { name = "parakeet-mlx", specifier = ">=0.5.2" },
+    { name = "scipy", specifier = ">=1.11" },
     { name = "transformers", specifier = ">=4.55.2,<5" },
 ]
 eval-canary = [{ name = "nemo-toolkit", extras = ["asr"], specifier = ">=2.4" }]

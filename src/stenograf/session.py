@@ -700,6 +700,7 @@ class MeetingRecorder:
             )
             checkpointer.start()
         provider.start(set(channels))
+        capture_error: BaseException | None = None
         try:
             for frame in provider.frames():
                 store.append(frame)
@@ -713,12 +714,18 @@ class MeetingRecorder:
                         break
         except KeyboardInterrupt:
             view.status("interrupted — finalizing captured audio")
+        except Exception as exc:  # noqa: BLE001 — a desync etc. must not lose the transcript
+            # Every frame that arrived is already in the store, so finalize what was
+            # captured instead of aborting; surface the error but keep the transcript.
+            capture_error = exc
         finally:
             provider.stop()
             if bus is not None:
                 bus.close()  # wakes the checkpointer so it drains and exits
             if checkpointer is not None:
                 checkpointer.join()
+        if capture_error is not None:
+            view.error(f"capture stopped early: {capture_error}; finalizing captured audio")
         if checkpointer is not None and checkpointer.error is not None:
             view.error(f"checkpoint stopped early: {checkpointer.error}")
         view.finalizing()
@@ -797,8 +804,12 @@ class MeetingRecorder:
         with _shield_interrupt():
             worker.join()
             provider.stop()  # idempotent — releases the device if capture ended on its own
+            # A capture error (a stream desync, a device drop) is non-fatal to the
+            # finalize: every frame that did arrive is already in the store, so
+            # surface the error but still finalize what was captured rather than
+            # discarding the whole meeting's transcript.
             if capture.error is not None:
-                raise capture.error
+                view.error(f"capture stopped early: {capture.error}; finalizing captured audio")
             # The live pass is provisional; if a decode failed, surface it but still
             # finalize — the finalize pass is the authoritative transcript regardless.
             if worker.error is not None:

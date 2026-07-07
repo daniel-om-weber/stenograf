@@ -1004,6 +1004,107 @@ extraction, per-channel `WavTee` drain so a laggard channel cannot stall the tee
 piping helper stderr so it does not splatter the TUI) folds into Stage 0
 opportunistically.
 
+### Phase 3 → Phase 4 readiness audit (July 2026)
+
+Before starting Phase 4 (local web UI, Ollama note-enhancement, Linux capture +
+ONNX/CTranslate2 backends), Phase 3's shipped code was critically reviewed by a
+four-subagent audit (correctness of the new modules; lifecycle/concurrency/I-O
+edges; Phase-4 architectural readiness; tests/eval/docs/packaging).
+
+**Verdict: architecturally ready to *start* Phase 4 — no hard blocker to
+development.** The platform seams the plan promised are real: the
+``CaptureProvider`` ABC and the ``LiveView`` event interface are clean and
+terminal-free (a Linux provider and a websocket web-UI view each drop in as new
+implementations with zero core changes), diarization is already ONNX/CPU
+cross-platform, and MLX is lazy-imported so the package imports on Linux. The two
+Stage-0 lifecycle hardenings (0a silent-channel, 0b double-quit) are genuinely
+fixed and tested, the live concurrency spine is clean, and the Phase-3 shipping
+path (Parakeet, no re-ID) is correct. Full suite green (263 passed on macOS with
+models cached). But Phase 4 copies the two most fragile parts of the current code
+(the ``serve()`` teardown template, the single hardcoded ASR backend), and the
+green suite hides that the real diarizer has *zero* CI coverage and the suite does
+not even collect on Linux — so a focused pre-Phase-4 hardening pass is warranted.
+
+**Tier 1 — fix before Phase 4 (small, high-leverage; Phase 4 builds on these).**
+*Implemented in the pre-Phase-4 hardening pass (July 2026) — see per-item status.*
+1. **Lock down the capture-teardown / ``serve()`` template.** The plan calls
+   ``serve()`` "the template the Phase 4 web UI will copy", but ``provider.stop()``
+   blocks (up to 5 s ``proc.wait``) *on the Textual event loop* (freezing the UI and
+   deadening the second-Ctrl-C escape), a capture-thread error re-raised *past*
+   finalize discarded a fully-finalizable buffer (contradicting "finalize is
+   authoritative"), and ``MacOSCaptureProvider.stop()`` was called from 2–3 threads
+   with no lock.
+   *Status (July 2026): shipped.* ``MacOSCaptureProvider.stop()`` is now
+   idempotent + thread-safe (captures and nulls ``_proc`` under a lock, so
+   concurrent/repeat calls are no-ops); the TUI's ``action_stop`` runs the blocking
+   teardown on a background thread so the UI stays responsive and a second Ctrl-C
+   still force-exits; and capture-thread errors in both ``_run_live`` and
+   ``_run_batch`` are surfaced via ``view.error`` but no longer abort the finalize —
+   a desync/late error still yields a transcript of the captured audio.
+2. **ASR backend-selection factory.** ``_load_backends`` hardcoded
+   ``ParakeetMLXBackend()`` and ``doctor`` hardcoded the same; there is no second
+   backend yet (no Whisper, no ONNX/CTranslate2). Add the factory/registry *before*
+   writing the Linux backend so it is a drop-in, not a ``_load_backends`` rewrite.
+   *Status (July 2026): shipped.* ``stenograf.asr`` gains a lazy registry
+   (``create_backend`` / ``default_backend_name`` / ``get_spec`` /
+   ``available_backends``); ``cli._load_backends`` and ``doctor._asr_check`` route
+   through it. Registration is the single seam a Linux ONNX/CTranslate2 backend
+   plugs into; imports stay lazy so choosing a backend never imports another's deps.
+3. **Unbreak Linux CI + give the real diarizer a regression net.** ``scipy`` (used
+   by ``eval/der.py`` + ``test_eval_der.py``, both in the default suite) was declared
+   in no dependency group — it only resolved transitively via the macOS-only
+   ``parakeet-mlx``, so ``pytest`` failed to *collect* on Linux. And
+   ``diarization/sherpa.py`` executed zero test lines on any fresh checkout (its
+   embedding aggregation is reachable only through the model-gated real-backend test).
+   *Status (July 2026): shipped.* ``scipy`` declared in ``dev`` + ``eval``;
+   ``tests/test_diarization_sherpa_unit.py`` drives ``diarize_with_embeddings`` +
+   ``_l2_normalize`` through a fake ``SpeakerEmbeddingExtractor`` (unit-norm output,
+   duration weighting, empty-cluster omission, short-turn fallback, zero-vector
+   guard) — no models, runs everywhere.
+4. **Atomic writes for the crash-recovery artifacts.** ``_write_transcript`` used
+   ``write_text`` (truncate-in-place), so a crash mid-checkpoint corrupts *and*
+   destroys the previous good ``.partial`` — the artifact does not survive the crash
+   it exists for.
+   *Status (July 2026): shipped.* ``_write_transcript`` writes via a temp file +
+   ``os.replace`` (the same atomic pattern ``ProfileStore.save`` already uses),
+   covering both the final transcript and every ``.partial`` checkpoint.
+5. **Fix small correctness landmines a form-driven web UI will trip.**
+   ``SpeakerProfile`` (frozen dataclass with an ndarray field) had a
+   ``__hash__``/``__eq__`` that *raise*; ``--local 0 --remote 0`` raised an uncaught
+   ``ValueError`` (traceback, not a clean error); and the detected-count correction
+   hint was unclamped (a silent channel → nonsensical "re-run with ``--local 0``";
+   an over-cluster estimate → an uncorrectable out-of-range hint).
+   *Status (July 2026): shipped.* ``SpeakerProfile`` is ``eq=False`` (identity
+   equality, hashable by id); ``start`` maps the profile ``ValueError`` to a
+   ``ClickException``; the lock-count hint is suppressed when nothing was found and
+   clamped to the settable range (with a note) when the estimate exceeds it.
+
+**Tier 2 — design up front as Phase 4 opens (its own scope, but decide early).**
+- ``Transcript.from_json`` loader + a meeting archive/index with stable IDs (the
+  "meeting archive" view needs to reload persisted transcripts; today ``Transcript``
+  serializes four formats but cannot read one back).
+- A structured reverse-control channel (correct the count/language and re-run
+  finalize; rename a speaker). ``MeetingRecorder.finalize`` is already re-runnable
+  over the retained store, so the seam exists — it needs a defined interface, not a
+  web-UI afterthought. The informal ``stop_callback`` is the only reverse channel today.
+- Resolve the in-RAM-audio ↔ click-to-jump tension: text-jump works (word timestamps
+  are in the JSON), but archive audio playback contradicts the in-memory-only
+  guarantee unless ``--record-audio`` was on. Decide the UX before building it.
+
+**Known deferrals (acknowledged, not surprises).**
+- **Wheel build hook + CI to bundle/sign ``stenocap``** — the one true *distribution*
+  blocker (today only ``uv run`` in-repo captures audio; ``uv tool install`` / ``uvx``
+  → ``HelperNotFoundError``). Blocks *shipping* Phase 4, not *building* it; already
+  flagged above as a Phase-4 distribution blocker.
+- **0d hand-labelled RTTM references** — the DER/word-attribution scorer is built and
+  tested, but no references exist, so diarization/re-ID quality and any Phase-4
+  backend swap stay unmeasurable (Daniel's call not to hand-label).
+- **Lower-priority, independent:** greedy re-ID → optimal (Hungarian) assignment;
+  SRT/VTT dropping text not covered by ``words`` (latent — Parakeet emits full-or-none);
+  README missing ``--format``/SRT-VTT and the whole glossary family; helper-stderr
+  piping; atomic model extraction (tar path); meeting-mode auto-detect; hybrid
+  cross-channel dedup.
+
 ---
 
 ## 6. Key sources

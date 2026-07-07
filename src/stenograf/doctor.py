@@ -70,18 +70,19 @@ def _capture_helper_check() -> Check:
 
 
 def _asr_check() -> Check:
-    from stenograf.asr.parakeet import MODEL_ID
+    from stenograf.asr import backend_model_id, get_spec
 
-    if _installed("parakeet_mlx") and _installed("mlx"):
-        return Check(
-            name="ASR backend",
-            ok=True,
-            detail=f"parakeet-mlx ready ({MODEL_ID}; weights from HuggingFace on first use)",
-        )
+    spec = get_spec()  # the default backend (STENOGRAF_ASR_BACKEND override applies)
+    if all(_installed(module) for module in spec.requires):
+        model = backend_model_id(spec)
+        detail = f"{spec.label} ready"
+        if model:
+            detail += f" ({model}; weights from HuggingFace on first use)"
+        return Check(name="ASR backend", ok=True, detail=detail)
     return Check(
         name="ASR backend",
         ok=False,
-        detail="parakeet-mlx not installed — the default backend needs Apple Silicon + MLX "
+        detail=f"{spec.label} not installed — the default backend needs Apple Silicon + MLX "
         "(ONNX/CTranslate2 backends for other platforms are planned)",
     )
 

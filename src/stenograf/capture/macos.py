@@ -23,6 +23,7 @@ import os
 import signal
 import struct
 import subprocess
+import threading
 from collections.abc import Iterator
 from importlib import resources
 from pathlib import Path
@@ -83,6 +84,9 @@ class MacOSCaptureProvider(CaptureProvider):
             self._prefix = [str(command)]
         self._aec = aec
         self._proc: subprocess.Popen[bytes] | None = None
+        # stop() is called from several threads (the capture loop on max_seconds,
+        # the meeting thread on close, and the TUI's quit binding), so serialize it.
+        self._stop_lock = threading.Lock()
 
     def start(self, channels: set[Channel]) -> None:
         argv = list(self._prefix)
@@ -104,7 +108,12 @@ class MacOSCaptureProvider(CaptureProvider):
             yield frame
 
     def stop(self) -> None:
-        proc = self._proc
+        # Idempotent + thread-safe: claim the process under the lock and null it so
+        # a concurrent or repeat stop() (max_seconds, meeting-thread close, TUI quit)
+        # is a no-op and only one caller ever signals/reaps it. The blocking wait
+        # runs outside the lock so a second caller returns immediately.
+        with self._stop_lock:
+            proc, self._proc = self._proc, None
         if proc is None:
             return
         if proc.poll() is None:
@@ -116,7 +125,6 @@ class MacOSCaptureProvider(CaptureProvider):
                 proc.wait()
         if proc.stdout is not None:
             proc.stdout.close()
-        self._proc = None
 
 
 def _read_exact(stream, n: int) -> bytes | None:

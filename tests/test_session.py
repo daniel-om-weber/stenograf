@@ -510,6 +510,25 @@ class TestMeetingRecorder:
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
 
+    def test_capture_error_still_finalizes(self):
+        # A stream desync (a backward frame) makes store.append raise mid-capture;
+        # the batch meeting must still finalize the audio that did arrive instead of
+        # letting the error escape past finalize and lose the transcript.
+        def desyncing():
+            yield frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))
+            yield frame(Channel.MIC, 0.0, np.ones(10, dtype=np.int16))  # backwards → ValueError
+
+        provider = ListProvider([])
+        provider.frames = desyncing  # type: ignore[method-assign]
+        errors: list[str] = []
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
+        )
+        transcript = recorder.run(provider, on_status=errors.append)
+        assert provider.stopped
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]  # first frame finalized
+        assert any("capture stopped early" in m for m in errors)
+
     def test_batch_checkpoints_accumulate_with_coarse_labels(self):
         one_second = np.ones(SAMPLE_RATE, dtype=np.int16)
         provider = ListProvider(

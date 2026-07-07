@@ -148,9 +148,16 @@ class TestQuitBinding:
     def test_ctrl_c_while_capturing_stops_but_does_not_exit(self):
         async def body():
             calls = []
-            app = _app(stop=lambda: calls.append(1))
+            stopped = threading.Event()
+
+            def stop():  # provider.stop stand-in; runs off the event loop now
+                calls.append(1)
+                stopped.set()
+
+            app = _app(stop=stop)
             async with app.run_test() as pilot:
                 await pilot.press("ctrl+c")
+                assert stopped.wait(timeout=5)  # stop is dispatched to a worker thread
                 await pilot.pause()
                 assert calls == [1]  # crossed to the capture side
                 assert app._phase == "finalizing"

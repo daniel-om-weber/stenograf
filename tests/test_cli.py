@@ -457,3 +457,52 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     assert "re-ID:" not in no_reid.output
     md = (tmp_path / "m.transcript.md").read_text()
     assert "Daniel" not in md and "Speaker 1" in md
+
+
+class TestSpeakerCountHints:
+    """The 'lock the detected count' hint must stay actionable (Phase 3→4 audit).
+
+    An unconstrained diarizer can detect more (or, on silence, zero) speakers than
+    the user can set, so the hint is clamped to the settable range and suppressed
+    when there is nothing to lock — a form-driven web UI inherits these paths.
+    """
+
+    def test_lock_hint_clamps_and_guards(self):
+        assert cli._lock_hint(0, 8) is None  # no speech found → nothing to lock
+        assert cli._lock_hint(1, 8) == (1, False)
+        assert cli._lock_hint(3, 8) == (3, False)
+        assert cli._lock_hint(13, 8) == (8, True)  # over-cluster → clamp to the max
+
+    def test_silent_channel_gives_no_bogus_zero_hint(self, capsys):
+        from stenograf.capture.base import Channel
+        from stenograf.session import SpeakerCount
+
+        cli._report_speaker_counts([SpeakerCount(Channel.MIC, None, 0)])
+        out = capsys.readouterr().out
+        assert "0 local (detected)" in out
+        assert "re-run with" not in out  # never suggests the nonsensical `--local 0`
+
+    def test_over_range_estimate_is_clamped_in_the_hint(self, capsys):
+        from stenograf.capture.base import Channel
+        from stenograf.session import SpeakerCount
+
+        cli._report_speaker_counts([SpeakerCount(Channel.MIC, None, 13)])
+        out = capsys.readouterr().out
+        assert "13 local (detected)" in out  # the raw estimate is still shown
+        assert "re-run with --local 8" in out  # clamped to the settable max
+        assert "exceeded the 8-speaker max" in out
+
+
+def test_start_with_no_speakers_errors_cleanly(tmp_path, monkeypatch):
+    # --local 0 --remote 0 violates MeetingProfile; the CLI must report it as a
+    # clean error, not leak the ValueError traceback (a web UI feeds form values in).
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+    result = CliRunner().invoke(
+        cli.main,
+        ["start", "--local", "0", "--remote", "0", "--replay", str(mic), "--out", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "at least one speaker" in result.output
+    assert not isinstance(result.exception, ValueError)  # handled as a ClickException
