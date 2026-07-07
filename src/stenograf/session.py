@@ -23,9 +23,11 @@ when the macOS helper lands (PLAN.md §2 "Hybrid-mode caveats").
 
 from __future__ import annotations
 
+import contextlib
+import signal
 import threading
 from bisect import bisect_left, bisect_right
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -188,6 +190,28 @@ def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
 def interleave(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
     """Merge per-channel entries into one timeline, ordered by start time."""
     return sorted(entries, key=lambda e: (e.start, e.end))
+
+
+@contextlib.contextmanager
+def _shield_interrupt() -> Iterator[None]:
+    """Ignore SIGINT for the duration so an on-stop finalize runs to completion.
+
+    Once capture has stopped, the finalize pass *is* the authoritative transcript
+    and must not be lost to an impatient second Ctrl-C. Shielding SIGINT makes the
+    finalize uninterruptible — it is bounded (seconds), and audio is already safe in
+    RAM. Only the main thread can install signal handlers; off it (the TUI runs the
+    meeting on a background thread, where Textual captures Ctrl-C anyway) this is a
+    harmless no-op.
+    """
+    try:
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (ValueError, OSError):  # not on the main thread — cannot set a handler
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 OnUpdate = Callable[[Channel, StreamingUpdate], None]
@@ -620,7 +644,10 @@ class MeetingRecorder:
         if checkpointer is not None and checkpointer.error is not None:
             view.error(f"checkpoint stopped early: {checkpointer.error}")
         view.finalizing()
-        transcript = self.finalize(store, plans, view=view)
+        # Capture has stopped; the finalize is authoritative. Shield it from a
+        # second Ctrl-C so an impatient interrupt cannot discard the transcript.
+        with _shield_interrupt():
+            transcript = self.finalize(store, plans, view=view)
         view.finalized(transcript)
         return transcript
 
@@ -686,20 +713,24 @@ class MeetingRecorder:
             view.status("interrupted — finalizing captured audio")
             provider.stop()
             capture.join()
-        worker.join()
-        provider.stop()  # idempotent — releases the device if capture ended on its own
-        if capture.error is not None:
-            raise capture.error
-        # The live pass is provisional; if a decode failed, surface it but still
-        # finalize — the finalize pass is the authoritative transcript regardless.
-        if worker.error is not None:
-            view.error(f"live pass stopped early: {worker.error}")
-        view.finalizing()
-        # Single-flight: the worker is already joined, but taking the same lock it
-        # held documents (and future-proofs) that finalize never runs alongside a
-        # live decode.
-        with inference_lock:
-            transcript = self.finalize(store, plans, view=view)
+        # Capture has stopped; from here the finalize is authoritative and must not
+        # be lost to a second Ctrl-C. Shield SIGINT across the worker join and the
+        # finalize (a no-op off the main thread, e.g. under the TUI).
+        with _shield_interrupt():
+            worker.join()
+            provider.stop()  # idempotent — releases the device if capture ended on its own
+            if capture.error is not None:
+                raise capture.error
+            # The live pass is provisional; if a decode failed, surface it but still
+            # finalize — the finalize pass is the authoritative transcript regardless.
+            if worker.error is not None:
+                view.error(f"live pass stopped early: {worker.error}")
+            view.finalizing()
+            # Single-flight: the worker is already joined, but taking the same lock it
+            # held documents (and future-proofs) that finalize never runs alongside a
+            # live decode.
+            with inference_lock:
+                transcript = self.finalize(store, plans, view=view)
         view.finalized(transcript)
         return transcript
 

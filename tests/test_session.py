@@ -1,3 +1,4 @@
+import signal
 import threading
 
 import numpy as np
@@ -13,6 +14,7 @@ from stenograf.session import (
     ChannelPlan,
     MeetingRecorder,
     SessionStore,
+    _shield_interrupt,
     _TailCheckpointer,
     interleave,
     plan_channels,
@@ -459,3 +461,38 @@ class TestTailCheckpointer:
         assert sum(asr.lengths) == 3 * SAMPLE_RATE
         assert writes  # at least one checkpoint written
         assert all(e.speaker == "Local" for t in writes for e in t.entries)
+
+
+class TestShieldInterrupt:
+    """The on-stop finalize must not be lost to a second Ctrl-C (0b)."""
+
+    def test_ignores_sigint_within_the_block_then_restores(self):
+        original = signal.getsignal(signal.SIGINT)
+        try:
+            with _shield_interrupt():
+                assert signal.getsignal(signal.SIGINT) is signal.SIG_IGN
+                signal.raise_signal(signal.SIGINT)  # swallowed, must not raise
+            # A finalize wrapped in the shield runs to completion, then the
+            # previous handler is restored so normal Ctrl-C works again.
+            assert signal.getsignal(signal.SIGINT) is original
+        finally:
+            signal.signal(signal.SIGINT, original)
+
+    def test_is_a_noop_off_the_main_thread(self):
+        # Only the main thread can set signal handlers; off it the shield must be
+        # a silent no-op (the TUI runs the meeting on a background thread).
+        errors: list[BaseException] = []
+        ran = threading.Event()
+
+        def worker() -> None:
+            try:
+                with _shield_interrupt():
+                    ran.set()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join(timeout=5)
+        assert ran.is_set()
+        assert errors == []

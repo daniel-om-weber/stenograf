@@ -253,6 +253,41 @@ class TestServeIntegration:
 
         _run(body)
 
+    def test_force_quit_during_finalize_still_captures_the_transcript(self):
+        # 0b: a second Ctrl-C during the on-stop finalize force-exits the UI before
+        # the meeting thread produced a transcript. serve() joins that thread before
+        # reading the result, so the finalize is never lost to the early UI exit.
+        async def body():
+            view = TextualLiveView(
+                MeetingProfile(local_speakers=1, remote_speakers=1), stop=lambda: None
+            )
+            transcript = Transcript(
+                language=Language.GERMAN,
+                profile=view.app._profile,
+                entries=[TranscriptEntry("Local-1", "hallo", 0.0, 0.4)],
+            )
+            release = threading.Event()
+
+            def meeting() -> Transcript:
+                release.wait(timeout=5)  # stand-in for a slow on-stop finalize
+                return transcript
+
+            result: dict[str, object] = {}
+            view._arm_meeting(meeting, result)  # the same wiring serve() uses
+            async with view.app.run_test() as pilot:
+                await pilot.press("ctrl+c")  # → finalizing
+                await pilot.press("ctrl+c")  # impatient → force-exit while finalizing
+                await pilot.pause()
+                assert not view.app.is_running  # UI exited early...
+                assert "transcript" not in result  # ...before the finalize produced one
+
+            # serve()'s join-then-read: let the finalize complete and collect it.
+            release.set()
+            view._meeting_thread.join(timeout=5)
+            assert result["transcript"] is transcript
+
+        _run(body)
+
 
 def app_has(view: TextualLiveView, line: str) -> bool:
     return line in view.app.committed_lines

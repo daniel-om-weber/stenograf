@@ -313,6 +313,7 @@ class TextualLiveView(LiveView):
         stop: Callable[[], None] | None = None,
     ) -> None:
         self._app = LiveApp(profile=profile, language=language, stop=stop)
+        self._meeting_thread: threading.Thread | None = None
 
     @property
     def app(self) -> LiveApp:
@@ -372,6 +373,13 @@ class TextualLiveView(LiveView):
         self._arm_meeting(meeting, result)
         self._app.run()
 
+        # The UI has exited, but the meeting thread may still be running the on-stop
+        # finalize (e.g. the user force-quit the TUI while it was finalizing). Join it
+        # so the authoritative transcript is always collected — the finalize, once
+        # started, is never dropped just because the UI closed early.
+        if self._meeting_thread is not None:
+            self._meeting_thread.join()
+
         if "error" in result:
             raise result["error"]  # type: ignore[misc]
         return result.get("transcript")  # type: ignore[return-value]
@@ -381,7 +389,9 @@ class TextualLiveView(LiveView):
 
         Split out of :meth:`serve` so the meeting → finalize → exit flow is
         exercisable under Textual's ``run_test`` harness (which drives the loop
-        itself instead of calling :meth:`serve`'s blocking ``run``).
+        itself instead of calling :meth:`serve`'s blocking ``run``). The thread is
+        held on ``self._meeting_thread`` so :meth:`serve` can join it before reading
+        the result.
         """
 
         def run_meeting() -> None:
@@ -390,13 +400,20 @@ class TextualLiveView(LiveView):
             except BaseException as exc:  # noqa: BLE001 — surfaced to the caller in serve
                 result["error"] = exc
             finally:
-                self._app.ready.wait(timeout=5)  # don't finish before the app mounts
-                with contextlib.suppress(Exception):  # app already gone
-                    self._app.call_from_thread(self._finish, result)
+                # Show the result only while the app is still up; if it already
+                # exited (force-quit), skip the UI hop and the wait for it.
+                if self._app.is_running:
+                    self._app.ready.wait(timeout=5)  # don't finish before the app mounts
+                    with contextlib.suppress(Exception):  # app already gone
+                        self._app.call_from_thread(self._finish, result)
 
-        self._app._on_ready = lambda: threading.Thread(
-            target=run_meeting, name="tui-meeting", daemon=True
-        ).start()
+        def start_meeting() -> None:
+            self._meeting_thread = threading.Thread(
+                target=run_meeting, name="tui-meeting", daemon=True
+            )
+            self._meeting_thread.start()
+
+        self._app._on_ready = start_meeting
 
     def _finish(self, result: dict[str, object]) -> None:
         """On the UI thread: ensure the finalize result is shown, then wait to quit.

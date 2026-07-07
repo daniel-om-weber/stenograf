@@ -166,6 +166,14 @@ def start(
             tee.close()
             click.echo(f"recorded audio: {tee.path}")
 
+    if transcript is None:
+        # Defensive: a live view exited without producing a transcript. There is
+        # nothing authoritative to write; leave any .partial checkpoint in place
+        # for recovery rather than deleting it or crashing on None.
+        raise click.ClickException(
+            "meeting ended before a transcript was produced; any .partial checkpoint is kept"
+        )
+
     md_path, _ = _write_transcript(transcript, out_dir, stem)
     _cleanup_checkpoints(out_dir, stem)  # the final transcript supersedes them
     elapsed = time.monotonic() - started
