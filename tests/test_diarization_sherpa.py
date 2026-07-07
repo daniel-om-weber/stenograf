@@ -80,11 +80,14 @@ def diarized() -> SimpleNamespace:
     estimated = diarizer.diarize(pcm, num_speakers=None)
     nclu_estimate = diarizer._num_clusters
 
+    embedded = diarizer.diarize_with_embeddings(pcm, num_speakers=2)
+
     return SimpleNamespace(
         duration=len(pcm) / 16000,
         known2=known2,
         known3=known3,
         estimated=estimated,
+        embedded=embedded,
         pipeline_after_2=pipeline_after_2,
         pipeline_after_3=pipeline_after_3,
         nclu_after_2=nclu_after_2,
@@ -121,3 +124,25 @@ def test_count_change_reuses_pipeline_via_set_config(diarized):
     assert diarized.pipeline_after_2 is diarized.pipeline_after_3
     assert diarized.nclu_after_2 == 2
     assert diarized.nclu_after_3 == 3
+
+
+def test_embeddings_are_per_cluster_and_normalized(diarized):
+    # Stage 1a: diarize_with_embeddings returns the same turns plus one
+    # L2-normalized mean voice embedding per cluster that had embeddable audio.
+    result = diarized.embedded
+    assert [t.speaker for t in result.turns] == [t.speaker for t in diarized.known2]
+    assert result.embeddings, "real speech should yield at least one cluster embedding"
+    clusters = {t.speaker for t in result.turns}
+    for speaker, vector in result.embeddings.items():
+        assert speaker in clusters  # keyed by the run's cluster labels
+        assert vector.shape == (192,)  # eres2net embedding dim
+        assert np.linalg.norm(vector) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_distinct_clusters_have_distinct_embeddings(diarized):
+    # If two clusters were embedded they must not be near-identical vectors —
+    # a guard against every cluster collapsing to the same embedding.
+    vectors = list(diarized.embedded.embeddings.values())
+    if len(vectors) < 2:
+        pytest.skip("only one cluster embedded in this clip")
+    assert float(vectors[0] @ vectors[1]) < 0.99

@@ -14,8 +14,12 @@ from pathlib import Path
 import numpy as np
 
 from stenograf import models
-from stenograf.audio import to_float32
-from stenograf.diarization.base import Diarizer, SpeakerTurn
+from stenograf.audio import SAMPLE_RATE, to_float32
+from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+
+MIN_EMBED_SECONDS = 0.5
+"""Turns shorter than this are too brief for a reliable voice embedding; they are
+skipped when a cluster has any longer turn, and used only as a last resort."""
 
 
 class SherpaOnnxDiarizer(Diarizer):
@@ -33,6 +37,7 @@ class SherpaOnnxDiarizer(Diarizer):
         self._progress = progress
         self._pipeline = None
         self._num_clusters = -1
+        self._extractor = None  # lazy SpeakerEmbeddingExtractor for re-ID
 
     def _build(self, num_clusters: int) -> None:
         import sherpa_onnx
@@ -71,3 +76,67 @@ class SherpaOnnxDiarizer(Diarizer):
             SpeakerTurn(speaker=f"S{seg.speaker}", start=seg.start, end=seg.end)
             for seg in result.sort_by_start_time()
         ]
+
+    def diarize_with_embeddings(
+        self, samples: np.ndarray, num_speakers: int | None = None
+    ) -> DiarizationResult:
+        """Diarize, then a duration-weighted mean voice embedding per cluster.
+
+        sherpa's ``OfflineSpeakerDiarization`` result carries no embeddings
+        (verified against the installed package), so a separate
+        ``SpeakerEmbeddingExtractor`` — the same ``models.SPEAKER_EMBEDDING`` file
+        the clustering uses — embeds each cluster's turn slices. Slices shorter
+        than :data:`MIN_EMBED_SECONDS` are skipped unless they are all a cluster
+        has; each embedding is L2-normalized, duration-weighted, and averaged, and
+        the mean re-normalized. A cluster with no embeddable audio is omitted."""
+        turns = self.diarize(samples, num_speakers)
+        audio = to_float32(samples)
+        by_cluster: dict[str, list[SpeakerTurn]] = {}
+        for turn in turns:
+            by_cluster.setdefault(turn.speaker, []).append(turn)
+
+        embeddings: dict[str, np.ndarray] = {}
+        for speaker, cluster_turns in by_cluster.items():
+            long = [t for t in cluster_turns if t.end - t.start >= MIN_EMBED_SECONDS]
+            selected = long or cluster_turns  # fall back to short turns if that's all there is
+            vectors, weights = [], []
+            for turn in selected:
+                slice_ = audio[int(turn.start * SAMPLE_RATE) : int(turn.end * SAMPLE_RATE)]
+                vector = self._embed(slice_)
+                if vector is not None:
+                    vectors.append(vector)
+                    weights.append(turn.end - turn.start)
+            if vectors:
+                mean = np.average(vectors, axis=0, weights=weights)
+                embeddings[speaker] = _l2_normalize(mean)
+        return DiarizationResult(turns=turns, embeddings=embeddings)
+
+    def _embed(self, audio: np.ndarray) -> np.ndarray | None:
+        """L2-normalized voice embedding of a mono 16 kHz float32 slice, or None
+        when the slice is empty or the extractor cannot form an embedding."""
+        if len(audio) == 0:
+            return None
+        extractor = self._embedder()
+        stream = extractor.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, np.ascontiguousarray(audio, dtype=np.float32))
+        stream.input_finished()
+        if not extractor.is_ready(stream):
+            return None
+        return _l2_normalize(np.asarray(extractor.compute(stream), dtype=np.float32))
+
+    def _embedder(self):
+        if self._extractor is None:
+            import sherpa_onnx
+
+            embedding = self._embedding_model or models.fetch(
+                models.SPEAKER_EMBEDDING, self._progress
+            )
+            self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+                sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding))
+            )
+        return self._extractor
+
+
+def _l2_normalize(vector: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 0 else vector

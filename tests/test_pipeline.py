@@ -185,6 +185,17 @@ class RaisingDiarizer(Diarizer):
         raise RuntimeError("diarizer exploded")
 
 
+def test_diarizer_default_embeddings_are_empty():
+    # The ABC default runs diarize() and returns no embeddings, so backends that
+    # cannot embed (and every FakeDiarizer) keep working — re-ID treats a missing
+    # embedding as "no match" rather than crashing.
+    diarizer = FakeDiarizer([turn("S0", 0.0, 1.0)])
+    result = diarizer.diarize_with_embeddings(np.zeros(SAMPLE_RATE, np.float32), num_speakers=1)
+    assert [t.speaker for t in result.turns] == ["S0"]
+    assert result.embeddings == {}
+    assert diarizer.seen_num_speakers == 1  # the default forwards the count
+
+
 class TestFinalizeChannel:
     def test_without_vad_or_diarizer_single_window_single_speaker(self):
         asr = FakeASR()
