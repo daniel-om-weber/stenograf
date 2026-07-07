@@ -49,7 +49,13 @@ def finalize_channel(
 
     if diarizer is None or num_speakers == 1:
         return [
-            TranscriptEntry(speaker="S0", text=seg.text, start=seg.start, end=seg.end)
+            TranscriptEntry(
+                speaker="S0",
+                text=seg.text,
+                start=seg.start,
+                end=seg.end,
+                words=seg.words,
+            )
             for seg in segments
         ]
 
@@ -113,6 +119,7 @@ def merge_words_turns(
                     start=run[0].start,
                     end=run[-1].end,
                     provisional=run_provisional,
+                    words=tuple(run),
                 )
             )
         run = []
@@ -153,6 +160,7 @@ def group_words(
                     text=" ".join(w.text for w in run),
                     start=run[0].start,
                     end=run[-1].end,
+                    words=tuple(run),
                 )
             )
         run = []
@@ -195,6 +203,7 @@ def relabel_speakers(
                 start=entry.start,
                 end=entry.end,
                 provisional=entry.provisional,
+                words=entry.words,
             )
         )
     return result

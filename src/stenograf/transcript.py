@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 
+from stenograf.asr.base import Word
 from stenograf.config import Language, MeetingProfile
 
 
@@ -17,6 +18,13 @@ class TranscriptEntry:
     end: float
     provisional: bool = False
     """True for overlapping-speech regions where attribution is unreliable."""
+    words: tuple[Word, ...] = ()
+    """The entry's word-level timestamps, on the session clock, in order.
+
+    Retained so the JSON output honours §Outputs' word-level-timestamp promise
+    and so subtitle export (SRT/VTT) can re-flow long speaker turns into short,
+    time-accurate cues. Empty only when the ASR backend emits no word timestamps
+    (e.g. a Whisper/Voxtral path) — ``text`` is always the source of truth."""
 
 
 @dataclass

@@ -60,6 +60,13 @@ class TestMergeWordsTurns:
         entries = merge_words_turns([word("solo", 0.0, 0.5)], [])
         assert entries[0].speaker == "S0"
 
+    def test_retains_word_timestamps_per_entry(self):
+        words = [word("guten", 0.0, 0.4), word("morgen", 0.5, 0.9), word("hi", 5.0, 5.4)]
+        entries = merge_words_turns(words, [turn("S0", 0.0, 6.0)])
+        # Split on the long gap; each entry keeps exactly its own words.
+        assert [w.text for w in entries[0].words] == ["guten", "morgen"]
+        assert [(w.start, w.end) for w in entries[1].words] == [(5.0, 5.4)]
+
 
 class TestGroupWords:
     def test_groups_one_speaker_and_splits_on_a_long_gap(self):
@@ -79,12 +86,27 @@ class TestGroupWords:
     def test_empty_words_yield_no_entries(self):
         assert group_words([], "Remote") == []
 
+    def test_retains_word_timestamps(self):
+        words = [word("guten", 0.0, 0.4), word("morgen", 0.5, 0.9)]
+        entries = group_words(words, "Local")
+        assert tuple((w.text, w.start, w.end) for w in entries[0].words) == (
+            ("guten", 0.0, 0.4),
+            ("morgen", 0.5, 0.9),
+        )
+
 
 def test_relabel_speakers_by_first_appearance():
     words = [word("b", 0.0, 0.1), word("a", 1.0, 1.1), word("b2", 2.0, 2.1)]
     turns = [turn("S7", 0.0, 0.5), turn("S2", 0.9, 1.5), turn("S7", 1.9, 2.5)]
     entries = relabel_speakers(merge_words_turns(words, turns))
     assert [e.speaker for e in entries] == ["Speaker 1", "Speaker 2", "Speaker 1"]
+
+
+def test_relabel_speakers_preserves_words():
+    words = [word("b", 0.0, 0.1), word("a", 1.0, 1.1)]
+    turns = [turn("S7", 0.0, 0.5), turn("S2", 0.9, 1.5)]
+    entries = relabel_speakers(merge_words_turns(words, turns))
+    assert [w.text for e in entries for w in e.words] == ["b", "a"]
 
 
 class FakeASR(ASRBackend):
@@ -210,6 +232,12 @@ class TestFinalizeChannel:
         )
         assert entries == []
         assert not diarizer.called
+
+    def test_single_speaker_entries_retain_words(self):
+        asr = FakeASR()
+        samples = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
+        entries = finalize_channel(samples, asr=asr, language=None)
+        assert [w.text for w in entries[0].words] == ["wort"]
 
     def test_diarized_backend_without_word_timestamps_keeps_text(self):
         # A backend with no word timestamps must not silently drop the diarized

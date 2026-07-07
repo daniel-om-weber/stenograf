@@ -32,7 +32,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from stenograf.asr.base import ASRBackend
+from stenograf.asr.base import ASRBackend, Word
 from stenograf.audio import to_float32
 from stenograf.capture.base import (
     ORDER_TOLERANCE_SAMPLES,
@@ -835,7 +835,17 @@ class MeetingRecorder:
         )
         label = _CHANNEL_COARSE[plan.channel]
         return [
-            TranscriptEntry(label, e.text, e.start + start_s, e.end + start_s, e.provisional)
+            TranscriptEntry(
+                label,
+                e.text,
+                e.start + start_s,
+                e.end + start_s,
+                e.provisional,
+                words=tuple(
+                    Word(w.text, w.start + start_s, w.end + start_s, w.confidence)
+                    for w in e.words
+                ),
+            )
             for e in raw
         ]
 
