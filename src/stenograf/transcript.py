@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass, field
 
 from stenograf.asr.base import Word
-from stenograf.config import Language, MeetingProfile
+from stenograf.config import Language, MeetingProfile, ResolvedParameters
 
 
 @dataclass(frozen=True)
@@ -33,12 +33,18 @@ class Transcript:
     """``None`` when neither given nor (yet) auto-detected."""
     profile: MeetingProfile
     entries: list[TranscriptEntry] = field(default_factory=list)
+    parameters: ResolvedParameters | None = None
+    """How each meeting parameter was resolved (explicit/detected/default),
+    written back so the persisted transcript records provenance, not just the
+    collapsed value (PLAN.md §5 Task 3b). ``None`` on crash checkpoints, which
+    predate the authoritative finalize that resolves the parameters."""
 
     def to_json(self) -> str:
         return json.dumps(
             {
                 "language": self.language.value if self.language else None,
                 "profile": asdict(self.profile),
+                "parameters": asdict(self.parameters) if self.parameters is not None else None,
                 "entries": [asdict(e) for e in self.entries],
             },
             ensure_ascii=False,

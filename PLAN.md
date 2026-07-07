@@ -969,6 +969,31 @@ untouched (the channel-coarse → diarized swap in `finalize_channel` is the sea
   transcript/profile (today only `None`=auto, which collapses once filled, and detected
   values are not recorded back). Meeting-mode (online/hybrid/in-room) detection needs
   capture-side signals (meeting-app process + tap activity) → late Phase 3 / Phase 4.
+  *Status (July 2026): shipped. `stenograf.config` gained a `Provenance` enum
+  (`explicit`/`detected`/`default`), a `ResolvedValue{value, provenance}`, a pure
+  `resolve_value(explicit, detected)` (explicit wins → detected → default; `None`,
+  not falsiness, marks "absent" so an explicit `0` listen-only channel is kept), and a
+  `ResolvedParameters{language, speakers: dict[channel→ResolvedValue]}`. `Transcript`
+  gained an optional `parameters` field serialized under a `"parameters"` JSON key
+  (`null` on crash checkpoints, which predate the resolving finalize). The **meeting
+  path** (`MeetingRecorder.finalize`) builds it via `session.resolve_parameters(profile,
+  language=…, speaker_counts=…)` — both `mic`/`system` channels always recorded so an
+  explicit `0` ("channel off") is captured. The **file transcribe path** records language
+  + a single `"audio"` channel count (no local/remote model for one un-split stream), and
+  its profile now keeps the *user's* language (`None`=auto) rather than back-writing the
+  detected value — so `transcript.language`=resolved while `profile.language`=input,
+  matching `start` and giving `parameters.language` the sole provenance record. **Mode
+  provenance is intentionally out** (the plan's `explicit|detected|default` triad; mode
+  auto-detection is the deferred capture-side-signals work). Tests: `resolve_value`
+  triad + zero-is-a-value (`test_config.py`), `resolve_parameters` explicit/detected/
+  default + finalize-attaches-parameters (`test_session.py`), JSON `parameters` shape +
+  `null`-when-absent (`test_transcript.py`), CLI transcribe auto→detected /
+  explicit→explicit JSON (`test_cli.py`). **Verified end-to-end with the real
+  parakeet+sherpa backends** (unit tests use fakes): `transcribe` auto → language/audio
+  both `detected`, `--lang de --speakers 2` → both `explicit`; `start --remote 0` in-room
+  replay → language `detected`, mic `detected 1`, system `explicit 0`, with top-level
+  `language: de` but `profile.language: null`. **Stage 3 (auto-detection polish)
+  complete** — remaining meeting-mode detection is deferred to late Phase 3 / Phase 4.
 
 **Deferred (noted, not built in Phase 3):** overlap flagging is structurally
 near-silent with sherpa's greedy clustering (rarely emits overlapping turns) — real

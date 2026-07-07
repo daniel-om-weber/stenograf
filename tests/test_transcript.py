@@ -1,7 +1,13 @@
 import json
 
 from stenograf.asr.base import Word
-from stenograf.config import Language, MeetingProfile
+from stenograf.config import (
+    Language,
+    MeetingProfile,
+    Provenance,
+    ResolvedParameters,
+    ResolvedValue,
+)
 from stenograf.transcript import Transcript, TranscriptEntry
 
 
@@ -55,6 +61,30 @@ def test_entry_without_words_serializes_empty_list():
     # A wordless backend (Whisper/Voxtral) still produces a valid entry.
     data = json.loads(make_transcript().to_json())
     assert data["entries"][0]["words"] == []
+
+
+def test_json_serializes_parameter_provenance():
+    transcript = Transcript(
+        language=Language.GERMAN,
+        profile=MeetingProfile(remote_speakers=2),
+        parameters=ResolvedParameters(
+            language=ResolvedValue(Language.GERMAN, Provenance.DETECTED),
+            speakers={
+                "mic": ResolvedValue(3, Provenance.DETECTED),
+                "system": ResolvedValue(2, Provenance.EXPLICIT),
+            },
+        ),
+    )
+    params = json.loads(transcript.to_json())["parameters"]
+    assert params["language"] == {"value": "de", "provenance": "detected"}
+    assert params["speakers"]["mic"] == {"value": 3, "provenance": "detected"}
+    assert params["speakers"]["system"] == {"value": 2, "provenance": "explicit"}
+
+
+def test_parameters_absent_serialize_to_null():
+    # A crash checkpoint (built before the resolving finalize) carries no parameters.
+    data = json.loads(make_transcript().to_json())
+    assert data["parameters"] is None
 
 
 def test_json_handles_a_path_valued_profile_field():

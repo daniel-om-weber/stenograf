@@ -7,7 +7,7 @@ import pytest
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
-from stenograf.config import Language, MeetingProfile
+from stenograf.config import Language, MeetingProfile, Provenance, ResolvedValue
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.profiles import ProfileStore, SpeakerProfile, SpeakerReID
 from stenograf.session import (
@@ -20,6 +20,7 @@ from stenograf.session import (
     _TailCheckpointer,
     interleave,
     plan_channels,
+    resolve_parameters,
 )
 from stenograf.transcript import Transcript, TranscriptEntry
 
@@ -185,6 +186,40 @@ class TestPlanChannels:
         plans = plan_channels(MeetingProfile(local_speakers=0, remote_speakers=2))
         assert [p.channel for p in plans] == [Channel.SYSTEM]
         assert plans[0].num_speakers == 2
+
+
+class TestResolveParameters:
+    def test_tags_explicit_detected_and_default(self):
+        # Local unspecified but detected (mic count), remote given explicitly,
+        # language auto-detected. Provenance must distinguish all three.
+        profile = MeetingProfile(local_speakers=None, remote_speakers=2)
+        counts = [
+            SpeakerCount(Channel.MIC, None, 3),
+            SpeakerCount(Channel.SYSTEM, 2, 2),
+        ]
+        params = resolve_parameters(profile, language=Language.GERMAN, speaker_counts=counts)
+        assert params.language == ResolvedValue(Language.GERMAN, Provenance.DETECTED)
+        assert params.speakers["mic"] == ResolvedValue(3, Provenance.DETECTED)
+        assert params.speakers["system"] == ResolvedValue(2, Provenance.EXPLICIT)
+
+    def test_explicit_language_and_listen_only_channel(self):
+        # --lang de and --local 0 (listen-only): explicit throughout; the absent
+        # mic channel has no detected count, so its explicit 0 is what's recorded.
+        profile = MeetingProfile(language=Language.GERMAN, local_speakers=0, remote_speakers=2)
+        counts = [SpeakerCount(Channel.SYSTEM, 2, 2)]
+        params = resolve_parameters(profile, language=Language.GERMAN, speaker_counts=counts)
+        assert params.language == ResolvedValue(Language.GERMAN, Provenance.EXPLICIT)
+        assert params.speakers["mic"] == ResolvedValue(0, Provenance.EXPLICIT)
+        assert params.speakers["system"] == ResolvedValue(2, Provenance.EXPLICIT)
+
+    def test_undetected_language_and_missing_channel_are_default(self):
+        # Nothing given, nothing detected (LID failed, a channel captured nothing):
+        # both fall to the default provenance with a None value.
+        profile = MeetingProfile(local_speakers=None, remote_speakers=None)
+        params = resolve_parameters(profile, language=None, speaker_counts=[])
+        assert params.language == ResolvedValue(None, Provenance.DEFAULT)
+        assert params.speakers["mic"] == ResolvedValue(None, Provenance.DEFAULT)
+        assert params.speakers["system"] == ResolvedValue(None, Provenance.DEFAULT)
 
 
 def test_interleave_orders_channels_by_start():
@@ -408,6 +443,26 @@ class TestMeetingRecorder:
         by_channel = {c.channel: c for c in recorder.speaker_counts}
         assert by_channel[Channel.MIC] == SpeakerCount(Channel.MIC, None, 2)
         assert by_channel[Channel.SYSTEM] == SpeakerCount(Channel.SYSTEM, 2, 2)
+
+    def test_finalize_writes_parameter_provenance_onto_the_transcript(self):
+        # The resolved parameters ride on the returned transcript so the persisted
+        # artifact records provenance, not just the collapsed value (PLAN.md §5 3b):
+        # explicit language, estimated local count, given remote count.
+        pcm = np.ones(2 * SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = FakeDiarizer([SpeakerTurn("S0", 0.0, 1.0), SpeakerTurn("S1", 1.0, 2.0)])
+        recorder = MeetingRecorder(
+            MeetingProfile(language=Language.GERMAN, remote_speakers=2),
+            asr=TwoSpeakerASR(),
+            diarizer=diarizer,
+        )
+        transcript = recorder.run(provider)
+
+        params = transcript.parameters
+        assert params is not None
+        assert params.language == ResolvedValue(Language.GERMAN, Provenance.EXPLICIT)
+        assert params.speakers["mic"] == ResolvedValue(2, Provenance.DETECTED)
+        assert params.speakers["system"] == ResolvedValue(2, Provenance.EXPLICIT)
 
     def test_channel_diarizer_failure_keeps_both_channels(self):
         # One channel's diarizer throwing must not lose the other channel's

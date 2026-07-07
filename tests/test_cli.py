@@ -1,3 +1,4 @@
+import json
 import wave
 
 import numpy as np
@@ -76,6 +77,37 @@ def test_transcribe_writes_outputs_and_detects_language(tmp_path, monkeypatch):
     assert (tmp_path / "meeting.transcript.md").exists()
     assert (tmp_path / "meeting.transcript.json").exists()
     assert "language: detected de" in result.output  # LID ran over the German text
+
+
+def test_transcribe_records_parameter_provenance_in_json(tmp_path, monkeypatch):
+    # No --lang and no --speakers: both are auto, so the JSON must record them as
+    # detected (language via LID, count via the finalize), not as user-set (3b).
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    params = json.loads((tmp_path / "meeting.transcript.json").read_text())["parameters"]
+    assert params["language"] == {"value": "de", "provenance": "detected"}
+    assert params["speakers"]["audio"]["provenance"] == "detected"
+
+
+def test_transcribe_explicit_language_is_recorded_as_explicit(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["transcribe", str(audio), "--out", str(tmp_path), "--lang", "de", "--speakers", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    params = json.loads((tmp_path / "meeting.transcript.json").read_text())["parameters"]
+    assert params["language"] == {"value": "de", "provenance": "explicit"}
+    assert params["speakers"]["audio"] == {"value": 1, "provenance": "explicit"}
 
 
 def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch):
@@ -198,8 +230,18 @@ def test_start_reports_given_counts_without_a_correction_hint(tmp_path, monkeypa
 
     result = CliRunner().invoke(
         cli.main,
-        ["start", "--local", "1", "--remote", "0", "--replay", str(mic), "--no-live",
-         "--out", str(tmp_path)],
+        [
+            "start",
+            "--local",
+            "1",
+            "--remote",
+            "0",
+            "--replay",
+            str(mic),
+            "--no-live",
+            "--out",
+            str(tmp_path),
+        ],
     )
 
     assert result.exit_code == 0, result.output

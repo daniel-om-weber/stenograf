@@ -17,6 +17,59 @@ class Language(StrEnum):
     ENGLISH = "en"
 
 
+class Provenance(StrEnum):
+    """Where a resolved meeting parameter's value came from.
+
+    Mirrors the resolution order (explicit user setting > auto-detected value >
+    safe default): once a parameter is filled, its value alone no longer says
+    whether the user set it, the finalize pass detected it, or it fell to a
+    default. Recording the provenance next to the value keeps that distinction
+    on the persisted transcript (PLAN.md §5 Task 3b)."""
+
+    EXPLICIT = "explicit"  # the user set it
+    DETECTED = "detected"  # the finalize pass auto-detected/estimated it
+    DEFAULT = "default"  # neither given nor detected — left at a safe default
+
+
+@dataclass(frozen=True)
+class ResolvedValue:
+    """A resolved parameter value paired with how it was arrived at."""
+
+    value: object | None
+    provenance: Provenance
+
+
+def resolve_value(explicit: object | None, detected: object | None) -> ResolvedValue:
+    """Resolve one parameter by the standard order and tag its provenance.
+
+    ``explicit`` is the user-supplied value (``None`` = unspecified); ``detected``
+    is what the finalize pass found (``None`` = nothing detected). An explicit
+    value always wins; else a detected value; else the parameter is unresolved and
+    left at a default. ``0`` is a real explicit/detected value (e.g. a listen-only
+    channel with 0 local speakers), so ``None`` — not falsiness — marks "absent".
+    """
+    if explicit is not None:
+        return ResolvedValue(explicit, Provenance.EXPLICIT)
+    if detected is not None:
+        return ResolvedValue(detected, Provenance.DETECTED)
+    return ResolvedValue(None, Provenance.DEFAULT)
+
+
+@dataclass(frozen=True)
+class ResolvedParameters:
+    """The meeting parameters as finally resolved, each tagged with provenance.
+
+    Written back onto the finalized :class:`~stenograf.transcript.Transcript` so a
+    reader (or a re-run) can tell a user-set value from a detected one — the plan's
+    "Detected: German, 2 remote speakers" editability made durable. ``speakers`` is
+    keyed by channel (``mic``/``system`` for a meeting, ``audio`` for a file
+    transcribe); meeting-mode provenance is deferred with mode auto-detection
+    (PLAN.md §5 Task 3b)."""
+
+    language: ResolvedValue
+    speakers: dict[str, ResolvedValue] = field(default_factory=dict)
+
+
 class MeetingMode(StrEnum):
     ONLINE = "online"  # 1 local speaker, N remote
     HYBRID = "hybrid"  # N local speakers, M remote

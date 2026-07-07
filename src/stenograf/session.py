@@ -41,7 +41,12 @@ from stenograf.capture.base import (
     CaptureProvider,
     Channel,
 )
-from stenograf.config import Language, MeetingProfile
+from stenograf.config import (
+    Language,
+    MeetingProfile,
+    ResolvedParameters,
+    resolve_value,
+)
 from stenograf.diarization.base import Diarizer
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
@@ -195,14 +200,40 @@ def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
     """
     plans = []
     if profile.local_speakers != 0:
-        plans.append(
-            ChannelPlan(Channel.MIC, profile.local_speakers, _CHANNEL_LABEL[Channel.MIC])
-        )
+        plans.append(ChannelPlan(Channel.MIC, profile.local_speakers, _CHANNEL_LABEL[Channel.MIC]))
     if profile.remote_speakers != 0:
         plans.append(
             ChannelPlan(Channel.SYSTEM, profile.remote_speakers, _CHANNEL_LABEL[Channel.SYSTEM])
         )
     return plans
+
+
+def resolve_parameters(
+    profile: MeetingProfile,
+    *,
+    language: Language | None,
+    speaker_counts: list[SpeakerCount],
+) -> ResolvedParameters:
+    """Record how each meeting parameter was resolved for the finalized transcript.
+
+    ``language`` is the finalize pass's resolved language (the explicit setting if
+    given, else the LID result, else ``None``); ``speaker_counts`` are the
+    per-channel requested-vs-detected counts. Explicit profile values are tagged
+    ``explicit``, otherwise a detected value is ``detected``, otherwise the
+    parameter is left at a ``default`` — see :func:`~stenograf.config.resolve_value`
+    (PLAN.md §5 Task 3b). Both channels are always recorded so an explicit ``0``
+    ("this channel is off") is captured too.
+    """
+    detected = {c.channel: c.detected for c in speaker_counts}
+    return ResolvedParameters(
+        language=resolve_value(profile.language, language),
+        speakers={
+            Channel.MIC.value: resolve_value(profile.local_speakers, detected.get(Channel.MIC)),
+            Channel.SYSTEM.value: resolve_value(
+                profile.remote_speakers, detected.get(Channel.SYSTEM)
+            ),
+        },
+    )
 
 
 def interleave(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
@@ -817,7 +848,13 @@ class MeetingRecorder:
             threshold=self.glossary_threshold,
         )
         language = self._resolve_language(interleaved, view=view)
-        return Transcript(language=language, profile=self.profile, entries=interleaved)
+        parameters = resolve_parameters(self.profile, language=language, speaker_counts=counts)
+        return Transcript(
+            language=language,
+            profile=self.profile,
+            entries=interleaved,
+            parameters=parameters,
+        )
 
     def _finalize_channel_safe(
         self,

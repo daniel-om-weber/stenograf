@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from stenograf.config import Language, MeetingMode, MeetingProfile
+from stenograf.config import (
+    Language,
+    MeetingMode,
+    MeetingProfile,
+    Provenance,
+    ResolvedValue,
+    resolve_value,
+)
 
 
 def test_online_mode():
@@ -59,3 +66,23 @@ def test_vocab_fields_are_coerced_and_hashable():
     assert profile.attendee_names == ("Daniel",)
     assert profile.speaker_profile_store == Path("/tmp/store.json")
     hash(profile)  # must not raise
+
+
+def test_resolve_value_explicit_wins_over_detected():
+    assert resolve_value(Language.GERMAN, Language.ENGLISH) == ResolvedValue(
+        Language.GERMAN, Provenance.EXPLICIT
+    )
+
+
+def test_resolve_value_falls_back_to_detected():
+    assert resolve_value(None, 3) == ResolvedValue(3, Provenance.DETECTED)
+
+
+def test_resolve_value_default_when_neither():
+    assert resolve_value(None, None) == ResolvedValue(None, Provenance.DEFAULT)
+
+
+def test_resolve_value_zero_is_a_real_value_not_absent():
+    # A listen-only channel (0 local speakers) is an explicit 0, not "unspecified".
+    assert resolve_value(0, None) == ResolvedValue(0, Provenance.EXPLICIT)
+    assert resolve_value(None, 0) == ResolvedValue(0, Provenance.DETECTED)

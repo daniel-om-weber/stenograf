@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 
 from stenograf import __version__
-from stenograf.config import Language, MeetingProfile
+from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
 from stenograf.doctor import run_checks
 from stenograf.transcript import Transcript
 
@@ -570,7 +570,8 @@ def transcribe(
     started = time.monotonic()
     write_formats = _parse_formats(formats)
     glossary_terms, attendee_names = _collect_terms(glossary, glossary_file, attendee)
-    language = Language(lang) if lang else None
+    given_language = Language(lang) if lang else None
+    language = given_language
 
     samples = load_audio(audio_file)
     duration = len(samples) / SAMPLE_RATE
@@ -616,12 +617,20 @@ def transcribe(
         if language is not None:
             click.echo(f"language: detected {language.value}")
     profile = MeetingProfile(
-        language=language,
+        language=given_language,
         glossary=glossary_terms,
         attendee_names=attendee_names,
         speaker_profile_store=profile_store,
     )
-    transcript = Transcript(language=language, profile=profile, entries=entries)
+    # A file transcribe is one un-split stream (no local/remote model), so its
+    # speaker provenance is recorded under a single "audio" channel (PLAN.md §5 3b).
+    parameters = ResolvedParameters(
+        language=resolve_value(given_language, language),
+        speakers={"audio": resolve_value(speakers, len({e.speaker for e in entries}))},
+    )
+    transcript = Transcript(
+        language=language, profile=profile, entries=entries, parameters=parameters
+    )
 
     paths = _write_transcript(transcript, out or audio_file.parent, audio_file.stem, write_formats)
     elapsed = time.monotonic() - started
