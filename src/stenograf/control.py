@@ -24,12 +24,18 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
+import numpy as np
+
+from stenograf.capture.base import AudioFrame, Channel
 from stenograf.pipeline import rename_entry_speaker
+from stenograf.recording import read_channels
+from stenograf.session import SessionStore, plan_channels
 
 if TYPE_CHECKING:
+    from stenograf.archive import MeetingArchive, MeetingRecord
     from stenograf.config import Language
     from stenograf.pipeline import SpeakerResolver
-    from stenograf.session import MeetingRecorder, SessionStore
+    from stenograf.session import MeetingRecorder
     from stenograf.transcript import Transcript
 
 
@@ -133,3 +139,99 @@ class MeetingSession:
         renamed = rename_entry_speaker(self.transcript.entries, old, new)
         self.transcript = replace(self.transcript, entries=renamed)
         return self.transcript
+
+
+class AudioUnavailable(Exception):
+    """Re-finalizing an archived meeting needs its audio, which was not retained.
+
+    stenograf keeps audio in RAM only; a meeting recorded without ``--record-audio``
+    has no WAV to re-run the finalize pass over once its process is gone. The text
+    is still fully editable — :meth:`ArchivedMeeting.rename_speaker` always works —
+    but re-diarize / re-transcribe cannot (PLAN.md §5 Stage B4)."""
+
+    def __init__(self, meeting_id: str) -> None:
+        super().__init__(
+            f"meeting {meeting_id!r} has no retained audio to re-finalize "
+            "(record with --record-audio to enable archived re-finalize)"
+        )
+        self.meeting_id = meeting_id
+
+
+class ArchivedMeeting:
+    """Reverse control over a meeting whose live process is gone (Stage B4).
+
+    The archived twin of :class:`MeetingSession`: it loads a meeting's transcript
+    from the archive and applies the same two corrections, persisting each to disk
+    under the meeting's stable id (:meth:`MeetingArchive.rewrite`).
+
+    - :meth:`rename_speaker` **always** works — it is a pure relabel of the loaded
+      transcript, needing no audio.
+    - :meth:`refinalize` works **only when** :meth:`MeetingRecord.has_audio` — the
+      one predicate gating everything that contradicts the in-RAM-only guarantee.
+      It rehydrates a :class:`~stenograf.session.SessionStore` from the recorded
+      WAV and re-runs the finalize pass; without a recording it raises
+      :class:`AudioUnavailable`. Targets a live-captured ``--record-audio`` meeting
+      (mic/system WAV); an imported non-recording source is not re-finalizable here.
+    """
+
+    def __init__(
+        self,
+        archive: MeetingArchive,
+        record: MeetingRecord,
+        *,
+        transcript: Transcript | None = None,
+    ) -> None:
+        self.archive = archive
+        self.record = record
+        self.transcript = (
+            transcript if transcript is not None else archive.load_transcript(record.id)
+        )
+
+    def rename_speaker(self, old: str, new: str) -> Transcript:
+        """Relabel a speaker across the transcript and persist it under the same id.
+
+        Always available (no audio needed): relabel the loaded transcript, rewrite
+        the managed transcript files, and refresh the index record. Updates and
+        returns :attr:`transcript`.
+        """
+        self.transcript = replace(
+            self.transcript, entries=rename_entry_speaker(self.transcript.entries, old, new)
+        )
+        self.record = self.archive.rewrite(self.record, self.transcript)
+        return self.transcript
+
+    def refinalize(self, request: FinalizeRequest, *, recorder: MeetingRecorder) -> Transcript:
+        """Re-run the finalize pass over the recorded audio with ``request`` applied.
+
+        Requires :meth:`MeetingRecord.has_audio` — else :class:`AudioUnavailable`.
+        Rehydrates the per-channel store from the recorded WAV (the meeting's own
+        captured channels), anchors the freshly-loaded ``recorder`` to this
+        meeting's archived profile and language, then delegates to a
+        :class:`MeetingSession` so the exact same override/provenance rules as the
+        live path apply. The result is written back under the same id.
+
+        ``recorder`` carries the (re)loaded backends and, for a re-ID toggle, the
+        resolver; its profile/language are overwritten from the archive, so the
+        caller need not reconstruct them.
+        """
+        if not self.record.has_audio():
+            raise AudioUnavailable(self.record.id)
+        assert self.record.audio_path is not None  # guaranteed by has_audio()
+        recorder.profile = self.transcript.profile
+        recorder.language = self.transcript.language
+        channels = [plan.channel for plan in plan_channels(self.transcript.profile)]
+        store = _store_from_channels(read_channels(self.record.audio_path, channels))
+        session = MeetingSession(recorder, store, transcript=self.transcript)
+        self.transcript = session.refinalize(request)
+        self.record = self.archive.rewrite(self.record, self.transcript)
+        return self.transcript
+
+
+def _store_from_channels(channels: dict[Channel, np.ndarray]) -> SessionStore:
+    """Build a :class:`~stenograf.session.SessionStore` from per-channel int16 PCM,
+    each channel anchored at ``t=0`` (the recording's shared clock)."""
+    store = SessionStore(set(channels))
+    for channel, samples in channels.items():
+        if len(samples):
+            store.append(AudioFrame(channel=channel, timestamp=0.0, samples=samples))
+    return store

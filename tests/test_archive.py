@@ -178,3 +178,41 @@ def test_has_audio_requires_the_file_to_exist(tmp_path):
 def test_meetings_dir_uses_data_env(tmp_path, monkeypatch):
     monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
     assert meetings_dir() == tmp_path / "meetings"
+
+
+def test_rewrite_rerenders_formats_and_refreshes_metadata(tmp_path):
+    # The B4 persistence half: rewrite a record's managed files from a new
+    # transcript and refresh its index metadata under the same id.
+    _write_meeting_dir(tmp_path, "meeting-20260707-193000", formats=("json", "md"))
+    archive = MeetingArchive(root=tmp_path)
+    record = _record(
+        "meeting-20260707-193000", tmp_path, formats=("md", "json"), title="Weekly sync"
+    )
+    archive.add(record)
+
+    corrected = _transcript(title="Renamed sync")  # e.g. a re-finalize result
+    updated = archive.rewrite(record, corrected)
+
+    # Metadata refreshed, id/dir/formats/created_at preserved.
+    assert updated.id == record.id
+    assert updated.title == "Renamed sync"
+    assert updated.duration_s == 8.25  # last entry end
+    assert updated.created_at == record.created_at
+    assert updated.dir == record.dir
+    # Files re-rendered on disk and re-loadable through A1.
+    on_disk = MeetingArchive.load(tmp_path).load_transcript(record.id)
+    assert on_disk.profile.title == "Renamed sync"
+    md = (record.dir / f"{TRANSCRIPT_STEM}.md").read_text(encoding="utf-8")
+    assert md.startswith("**Local-1")
+    # Index persisted with the refreshed record.
+    assert MeetingArchive.load(tmp_path).get(record.id).title == "Renamed sync"
+
+
+def test_rewrite_leaves_no_temp_files(tmp_path):
+    _write_meeting_dir(tmp_path, "meeting-20260707-193000", formats=("json", "md"))
+    archive = MeetingArchive(root=tmp_path)
+    record = _record("meeting-20260707-193000", tmp_path, formats=("md", "json"))
+    archive.add(record)
+
+    archive.rewrite(record, _transcript())
+    assert not list(record.dir.glob("*.tmp"))

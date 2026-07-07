@@ -48,6 +48,9 @@ TRANSCRIPT_STEM = "transcript"
 TRANSCRIPT_FORMATS = ("md", "json", "srt", "vtt")
 """Transcript file extensions the archive recognizes when summarizing a dir."""
 
+_FORMAT_METHODS = {"md": "to_markdown", "json": "to_json", "srt": "to_srt", "vtt": "to_vtt"}
+"""Transcript extension → the :class:`Transcript` method that renders it."""
+
 AUDIO_NAME = "audio.wav"
 """Managed name of the opt-in ``--record-audio`` WAV inside a meeting dir."""
 
@@ -208,6 +211,38 @@ class MeetingArchive:
         self._records[record.id] = record
         self.save()
 
+    def rewrite(self, record: MeetingRecord, transcript: Transcript) -> MeetingRecord:
+        """Rewrite a meeting's managed transcript files from ``transcript`` and
+        refresh its index metadata under the same id.
+
+        The persistence half of the reverse-control channel (PLAN.md §5 Stage B4):
+        after a rename or re-finalize produces a new transcript, re-render each of
+        the record's formats into ``<dir>/transcript.{fmt}`` (atomic temp+replace,
+        so a reader never sees a half-written file) and re-derive the metadata that
+        can have changed — title, language, per-channel speaker counts, duration —
+        while keeping the id, created_at, dir, formats, and audio reference. The
+        updated record is re-added (persisting the index) and returned."""
+        record.dir.mkdir(parents=True, exist_ok=True)
+        for fmt in record.formats:
+            method = _FORMAT_METHODS.get(fmt)
+            if method is None:
+                continue  # an unknown extension in the record — nothing to render
+            path = record.dir / f"{TRANSCRIPT_STEM}.{fmt}"
+            _atomic_write_text(path, getattr(transcript, method)())
+        updated = MeetingRecord(
+            id=record.id,
+            title=transcript.profile.title,
+            created_at=record.created_at,
+            duration_s=max((e.end for e in transcript.entries), default=0.0),
+            language=transcript.language,
+            speakers=_speakers_from_transcript(transcript),
+            formats=record.formats,
+            dir=record.dir,
+            audio_path=record.audio_path,
+        )
+        self.add(updated)
+        return updated
+
     def remove(self, meeting_id: str) -> bool:
         """Drop a record from the index (leaves its files alone). Persists if changed."""
         if self._records.pop(meeting_id, None) is None:
@@ -245,9 +280,6 @@ def _record_from_dir(directory: Path) -> MeetingRecord | None:
         transcript = Transcript.from_json(transcript_json.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnsupportedTranscriptVersion, KeyError):
         return None
-    speakers: dict[str, int | None] = {}
-    if transcript.parameters is not None:
-        speakers = {ch: rv.value for ch, rv in transcript.parameters.speakers.items()}  # type: ignore[misc]
     audio = directory / AUDIO_NAME
     formats = tuple(
         ext for ext in TRANSCRIPT_FORMATS if (directory / f"{TRANSCRIPT_STEM}.{ext}").exists()
@@ -258,11 +290,27 @@ def _record_from_dir(directory: Path) -> MeetingRecord | None:
         created_at=_created_at_from_id(directory.name),
         duration_s=max((e.end for e in transcript.entries), default=0.0),
         language=transcript.language,
-        speakers=speakers,
+        speakers=_speakers_from_transcript(transcript),
         formats=formats,
         dir=directory,
         audio_path=audio if audio.exists() else None,
     )
+
+
+def _speakers_from_transcript(transcript: Transcript) -> dict[str, int | None]:
+    """Per-channel resolved speaker counts off a transcript's parameters (empty
+    when it has none — e.g. a crash checkpoint predating the finalize)."""
+    if transcript.parameters is None:
+        return {}
+    return {ch: rv.value for ch, rv in transcript.parameters.speakers.items()}  # type: ignore[misc]
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write ``text`` via a temp file + replace, so a reader never sees a partial
+    file (the same discipline :meth:`MeetingArchive.save` uses for the index)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def _created_at_from_id(meeting_id: str) -> str:

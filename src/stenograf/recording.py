@@ -16,6 +16,7 @@ leaves a playable file missing only the last, not-yet-aligned tail.
 from __future__ import annotations
 
 import struct
+import wave
 from collections import deque
 from pathlib import Path
 
@@ -34,6 +35,41 @@ _PCM = 1  # WAV format tag
 
 # Stereo layout is fixed so recordings are always mic-left / system-right.
 _CHANNEL_ORDER = (Channel.MIC, Channel.SYSTEM)
+
+
+def read_channels(path: Path | str, channels: list[Channel]) -> dict[Channel, np.ndarray]:
+    """Read a :class:`WavTee` recording back into its per-channel int16 streams.
+
+    The exact inverse of the tee's fixed layout (mic left, system right; mono when
+    a single channel was recorded), used to rehydrate a :class:`~stenograf.session.
+    SessionStore` from a ``--record-audio`` WAV for archived re-finalize (PLAN.md §5
+    Stage B4). ``channels`` is the ordered channel list the recording holds — the
+    meeting's captured channels (``mic`` before ``system``, matching the tee) — and
+    disambiguates a mono file, which the WAV header alone cannot (a mono recording
+    is mic-only *or* system-only depending on the meeting mode). Its length must
+    equal the file's channel count.
+
+    Raises ``ValueError`` if the file is not the 16 kHz 16-bit PCM WAV the tee
+    writes, or if its channel count does not match ``channels`` — so it targets a
+    recorded meeting, not an arbitrary imported source file.
+    """
+    with wave.open(str(path), "rb") as w:
+        if w.getsampwidth() != _BYTES_PER_SAMPLE or w.getframerate() != SAMPLE_RATE:
+            raise ValueError(
+                f"{Path(path).name} is not a 16 kHz 16-bit PCM WAV; "
+                "re-finalize needs a stenograf --record-audio recording"
+            )
+        nchannels = w.getnchannels()
+        frames = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    if nchannels != len(channels):
+        raise ValueError(
+            f"recording has {nchannels} channel(s) but the meeting expects "
+            f"{len(channels)} ({', '.join(c.value for c in channels)})"
+        )
+    if nchannels == 1:
+        return {channels[0]: frames}
+    columns = frames.reshape(-1, nchannels)
+    return {ch: np.ascontiguousarray(columns[:, i]) for i, ch in enumerate(channels)}
 
 
 class WavTee:

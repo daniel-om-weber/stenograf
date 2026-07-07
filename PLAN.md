@@ -1315,6 +1315,32 @@ marks a hard prerequisite):
   stays off by default. Acceptance: fakes + synthetic WAV; rename persists; refinalize on a
   no-audio record raises; e2e via `--replay --record-audio` → reopen → refinalize. `[dep:
   A1, B1–B3]`
+  *Status (July 2026): shipped (`stenograf.control.ArchivedMeeting` + `AudioUnavailable`,
+  `recording.read_channels`, `MeetingArchive.rewrite`; `tests/test_control.py`,
+  `test_recording.py`, `test_archive.py`). `ArchivedMeeting(archive, record, *, transcript=None)`
+  loads the meeting's transcript through A1 and applies the same two corrections as
+  `MeetingSession`, persisting each under the stable id. `rename_speaker(old,new)` **always**
+  works — pure `rename_entry_speaker` relabel, then `archive.rewrite`. `refinalize(request, *,
+  recorder)` is gated on `record.has_audio()` (else `AudioUnavailable`): it rehydrates a
+  per-channel `SessionStore` from the recorded WAV (`read_channels` — the exact inverse of
+  `WavTee`'s mic-left/system-right layout, an int16 16 kHz PCM reader that takes the meeting's
+  captured channel list to disambiguate a mono file; anchored at the shared t=0 clock), anchors
+  the freshly-loaded `recorder` to the archived profile+language, then **delegates to a
+  `MeetingSession`** so the B3 override/provenance rules apply verbatim, and writes back under
+  the same id. New `MeetingArchive.rewrite(record, transcript)` is the shared persistence half:
+  re-render each of the record's formats into `<dir>/transcript.{fmt}` (atomic temp+replace) and
+  refresh the index metadata (title/language/speakers/duration; id/created_at/dir/formats/audio
+  kept) — factored `_speakers_from_transcript` + `_atomic_write_text`, reused by `_record_from_dir`.
+  The `has_audio()` predicate is the single gate for archived re-finalize (and, later, C6
+  playback / re-diarize); recording stays off by default, so the in-RAM-only guarantee holds.
+  9 label-free tests (fakes + real synthetic WAV): rename persists across a reload without audio;
+  record→reopen→refinalize rewrites under the same id with the rehydrated per-channel count and
+  DETECTED→EXPLICIT provenance, recording untouched; no-audio refinalize raises; `read_channels`
+  stereo/mono round-trip + channel-count mismatch; `rewrite` re-render + no-temp-turds. **Scope:**
+  targets the live-captured `--record-audio` WAV (mic/system); re-finalizing an imported non-
+  recording source (a file-`transcribe` record's external source) is not wired through
+  `ArchivedMeeting` — that record still supports rename + playback. Unblocks C7 (web reverse-
+  control POSTs consume `MeetingSession`/`ArchivedMeeting`).*
 
 **Stage C — Web UI (`stenograf.web`).** The web view is "a new `LiveView` + a `serve()`
 twin, zero core changes" — confirmed against `view.py`/`tui.py`/`session.py`.

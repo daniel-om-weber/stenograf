@@ -3,14 +3,18 @@
 Label-free — synthetic in-RAM store, fake ASR/diarizer/resolver, no backends.
 """
 
+from datetime import datetime
+
 import numpy as np
 import pytest
 
+from stenograf.archive import AUDIO_NAME, TRANSCRIPT_STEM, MeetingArchive, MeetingRecord
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, Channel
 from stenograf.config import Language, MeetingProfile, Provenance
-from stenograf.control import FinalizeRequest, MeetingSession
+from stenograf.control import ArchivedMeeting, AudioUnavailable, FinalizeRequest, MeetingSession
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+from stenograf.recording import WavTee
 from stenograf.session import MeetingRecorder, SessionStore
 
 GERMAN = "und das ist wirklich eine gute idee für uns"
@@ -242,3 +246,92 @@ class TestStop:
 
     def test_stop_without_a_hook_is_a_noop(self):
         MeetingSession(_bare_recorder(), _store(Channel.MIC)).stop()  # must not raise
+
+
+def _two_channel_recorder() -> MeetingRecorder:
+    return MeetingRecorder(
+        MeetingProfile(local_speakers=1, remote_speakers=2),
+        asr=ProbeASR(_two_speaker_segments()),
+        diarizer=FakeDiarizer([SpeakerTurn("S0", 0.0, 1.0), SpeakerTurn("S1", 1.0, 2.0)]),
+    )
+
+
+def _archive_meeting(root, *, record_audio: bool) -> tuple[MeetingArchive, MeetingRecord]:
+    """A real managed archive on disk: transcript.{json,md} + optional audio.wav."""
+    transcript = _two_channel_recorder().finalize(_store(Channel.MIC, Channel.SYSTEM))
+    archive = MeetingArchive(root=root)
+    created = datetime(2026, 7, 7, 9, 0, 0)
+    meeting_id = archive.allocate_id(created)
+    meeting_dir = archive.meeting_dir(meeting_id)
+    meeting_dir.mkdir(parents=True)
+    (meeting_dir / f"{TRANSCRIPT_STEM}.json").write_text(transcript.to_json(), encoding="utf-8")
+    (meeting_dir / f"{TRANSCRIPT_STEM}.md").write_text(transcript.to_markdown(), encoding="utf-8")
+    audio_path = None
+    if record_audio:
+        audio_path = meeting_dir / AUDIO_NAME
+        tee = WavTee(audio_path, {Channel.MIC, Channel.SYSTEM})
+        pcm = np.ones(2 * SAMPLE_RATE, dtype=np.int16)
+        tee.add(AudioFrame(channel=Channel.MIC, timestamp=0.0, samples=pcm))
+        tee.add(AudioFrame(channel=Channel.SYSTEM, timestamp=0.0, samples=pcm))
+        tee.close()
+    record = MeetingRecord(
+        id=meeting_id,
+        title=None,
+        created_at=created.isoformat(timespec="seconds"),
+        duration_s=max((e.end for e in transcript.entries), default=0.0),
+        language=transcript.language,
+        speakers={ch: rv.value for ch, rv in transcript.parameters.speakers.items()},
+        formats=("md", "json"),
+        dir=meeting_dir,
+        audio_path=audio_path,
+    )
+    archive.add(record)
+    return archive, record
+
+
+class TestArchivedMeeting:
+    def test_rename_persists_without_audio(self, tmp_path):
+        archive, record = _archive_meeting(tmp_path, record_audio=False)
+        archived = ArchivedMeeting(archive, record)
+        assert {e.speaker for e in archived.transcript.entries} == {
+            "Local-1",
+            "Remote-1",
+            "Remote-2",
+        }
+
+        archived.rename_speaker("Remote-2", "Bob")
+
+        # Persisted to disk (transcript files rewritten) and re-loadable through A1.
+        reloaded = MeetingArchive.load(tmp_path)
+        on_disk = reloaded.load_transcript(record.id)
+        assert {e.speaker for e in on_disk.entries} == {"Local-1", "Remote-1", "Bob"}
+        assert reloaded.get(record.id) is not None  # still registered under the same id
+
+    def test_refinalize_rewrites_under_the_same_id(self, tmp_path):
+        archive, record = _archive_meeting(tmp_path, record_audio=True)
+        archived = ArchivedMeeting(archive, record)
+        # A fresh recorder stands in for reloaded backends (the process is gone).
+        diarizer = FakeDiarizer([SpeakerTurn("S0", 0.0, 1.0), SpeakerTurn("S1", 1.0, 2.0)])
+        fresh = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=2),
+            asr=ProbeASR(_two_speaker_segments()),
+            diarizer=diarizer,
+        )
+
+        result = archived.refinalize(FinalizeRequest(remote_speakers=3), recorder=fresh)
+
+        # The rehydrated store fed the recorder the requested count (per channel).
+        assert diarizer.seen_num_speakers == 3
+        system = result.parameters.speakers["system"]
+        assert (system.value, system.provenance) == (3, Provenance.EXPLICIT)
+        # Written back under the same id: index + on-disk transcript both updated.
+        reloaded = MeetingArchive.load(tmp_path)
+        assert reloaded.get(record.id).speakers["system"] == 3
+        assert reloaded.load_transcript(record.id).parameters.speakers["system"].value == 3
+        assert (record.dir / AUDIO_NAME).exists()  # recording untouched
+
+    def test_refinalize_without_audio_raises(self, tmp_path):
+        archive, record = _archive_meeting(tmp_path, record_audio=False)
+        archived = ArchivedMeeting(archive, record)
+        with pytest.raises(AudioUnavailable, match="no retained audio"):
+            archived.refinalize(FinalizeRequest(), recorder=_two_channel_recorder())
