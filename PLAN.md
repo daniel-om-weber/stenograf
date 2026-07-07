@@ -756,20 +756,50 @@ largely-independent export/vocabulary and auto-detection work.
   `set_config` count-change rebuild), gated behind a model-availability marker. This is
   the surface re-ID extends; the MLX thread-stream bug is precedent for "real backend
   breaks what fakes pass."
+  *Status (July 2026): shipped (`tests/test_diarization_sherpa.py`). Drives the
+  real sherpa pipeline on a real eval clip — known-count (well-formed, sorted,
+  in-bounds turns; FastClustering caps the speaker set), `num_speakers=None`
+  estimation (`num_clusters=-1`), and the `set_config` count-change rebuild (same
+  pipeline instance reused). Gated on sherpa-onnx + cached models + a real clip
+  (all opt-in/gitignored) so CI/fresh checkouts skip; assertions structural.*
 - **0d — speaker-labeled reference data + DER/attribution scorer (gating
   prerequisite).** Hand-label per-channel speaker turns for `de-1`/`de-2`/`en-1`
   (RTTM), add a DER + word-attribution scorer to `eval/`. Start this *first* — it is the
   long pole, and everything speaker-centric (re-ID threshold tuning, diarization
   upgrades) is unmeasurable without it.
+  *Status (July 2026): scorer + tooling shipped; hand-labeling still owed (the
+  long pole, Daniel's to do). `eval/rttm.py` (pure NIST RTTM I/O), `eval/der.py`
+  (pure numpy+scipy frame-based DER — optimal Hungarian speaker mapping, 0.25 s
+  collar, native overlap, missed/false-alarm/confusion split — plus a
+  word-attribution scorer under the best label mapping), `eval/diarize.py` (drives
+  the real backends to emit hyp RTTM + word JSON; `--bootstrap` seeds
+  `refs/<id>.draft.rttm`), unit tests (`tests/test_eval_der.py`, hand-computed
+  cases), README workflow. Verified end-to-end on de-1. **Remaining: hand-correct
+  the de-1/de-2/en-1 references** (drafts bootstrapped locally; unconstrained
+  estimation over-clusters — de-1 → 13 speakers — which the scorer now quantifies).*
 - **0e — retain word timestamps on `TranscriptEntry`.** Merge/group already hold the
   word list before collapsing it to a string; add an optional `words` field to the
   entry and serialize it, honoring §Outputs' word-level-JSON promise and unblocking
   subtitle-grade SRT/VTT.
+  *Status (July 2026): shipped. `TranscriptEntry.words` (optional `Word` tuple on
+  the session clock) flows through `merge_words_turns`, `group_words`,
+  `finalize_channel`'s single-speaker path, `relabel_speakers`, and the shifted
+  tail-checkpoint entries; `asdict` serializes it into the JSON. Empty only when
+  the ASR backend emits no word timestamps. Tests in `test_pipeline.py` /
+  `test_transcript.py`.*
 - **0f — load-shedding in `LiveWorker`.** The reconcile "catch-up" currently feeds the
   whole backlog into one ever-larger decode (positive feedback if inference falls below
   realtime). Add a "backlog > `window_cap` → skip the window forward" branch so live
   degrades to a caption *gap*, not a spiral — before Phase 3 puts per-frame speaker work
   on the same single worker.
+  *Status (July 2026): shipped. When a channel's backlog exceeds
+  `decoder.window_cap`, `LiveWorker` abandons the decoder's window (new
+  `LiveDecoder.drop_window` — clears the buffer + its origin, keeps committed
+  text, no silence padded across the skip) and restarts at the recent edge,
+  feeding only the last `window_cap` seconds; the skipped span is a caption gap
+  the finalize pass fills. `shed_seconds` tracked. Tests: worker sheds an
+  over-long backlog / leaves a normal one, and the decoder stays monotonic across
+  the gap (`test_live_orchestration.py`, `test_live.py`).*
 
 **Stage 1 — Speaker re-ID (headline).** Additive interface; live/orchestration
 untouched (the channel-coarse → diarized swap in `finalize_channel` is the seam).
@@ -778,6 +808,13 @@ untouched (the channel-coarse → diarized swap in `finalize_channel` is the sea
   `SpeakerEmbeddingExtractor` (same `models.SPEAKER_EMBEDDING` file), embeds each
   cluster's segment slices, L2-normalizes + means per cluster; duration-weight or drop
   sub-~0.5 s segments. `SpeakerTurn` unchanged (embeddings are per-cluster).
+  *Status (July 2026): shipped. `DiarizationResult` + the non-abstract default in
+  `diarization/base.py`; `SherpaOnnxDiarizer.diarize_with_embeddings` builds a lazy
+  `SpeakerEmbeddingExtractor`, embeds each cluster's ≥0.5 s turn slices (short-turn
+  fallback), duration-weighted-averages the unit vectors, re-normalizes, omits
+  clusters with no embeddable audio. 192-dim eres2net. Real-backend tests assert
+  per-cluster unit-norm embeddings, distinct clusters distinct. The profile
+  store/relabel that consumes these is 1b (next).*
 - **1b — profile store + cosine relabel.** New `profiles` module: a local store keyed by
   the embedding-model id (profiles are model-bound — record which model produced each),
   cosine-match ~0.5. Post-diarization relabel step maps clusters → named profiles or
