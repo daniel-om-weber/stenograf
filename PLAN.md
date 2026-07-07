@@ -1248,6 +1248,31 @@ marks a hard prerequisite):
   override; record the `--record-audio` WAV as `audio_path`. New `meetings list/show/rm`
   group mirroring `profiles`. `--no-archive` escape hatch. Acceptance in `test_cli` via
   `--replay`/fake-stenocap. `[dep: B1]`
+  *Status (July 2026): shipped (`cli.py`, `tests/test_cli.py`). A new shared
+  `_prepare_output(no_archive, out, created_at, legacy_dir, legacy_stem)` resolves, for
+  both `start` and `transcribe`, `(archive, meeting_id, out_dir, basename, audio_default)`.
+  Archive-on (the default): a managed per-meeting dir (`archive.meeting_dir(id)`, or `--out`
+  used as that meeting's own dir) holding **plainly named** `transcript.{fmt}` + `audio.wav`
+  — the exact layout B1's `load_transcript`/`reconcile` read back — and a `MeetingArchive`
+  to register into after the write. To make that naming possible, `_write_transcript`'s 3rd
+  arg became a full `basename` (`transcript` managed, `<stem>.transcript` legacy) instead of
+  a stem it appended `.transcript.` to; `_checkpoint_writer`/`_cleanup_checkpoints`/`_make_tee`
+  thread the same basename/`audio_default`. `--no-archive` restores the pre-Phase-4 flat,
+  timestamp-named output (`<stem>.transcript.{fmt}` into `--out`/cwd/input-parent) with no
+  registration. `--title` (A2) flows into the `MeetingProfile` → transcript JSON → record;
+  `transcribe` references the **source file** as the meeting's audio (already on disk, so
+  archived playback/re-diarize work at no cost to the live-capture in-RAM guarantee).
+  `_meeting_record` denormalizes the same fields `_record_from_dir` recovers (created_at
+  stamped `isoformat(timespec="seconds")` to match reconcile's format). `meetings list`
+  (reconciles first when the root exists, then lists newest-first), `show <id>`, and
+  `rm <id>` (`--yes`, `--keep-files`; only ever `rmtree`s a dir that is the archive root's
+  own child — an external `--out` dir is just unregistered) mirror the `profiles` group.
+  Tests: an autouse `$STENOGRAF_DATA` fixture isolates the archive for every CLI test; new
+  cases cover default-managed-dir + index + A1 round-trip, `--out` registering at the
+  override, `transcribe` archiving + source-audio reference, `--no-archive` flat+unregistered,
+  `--record-audio` → managed `audio.wav` gated by `has_audio()`, and the full
+  `list`/`show`/`rm`(+`--keep-files`) lifecycle. Unblocks B3/B4 (reverse control over these
+  records) and C5/C6 (web archive list + reader).*
 - **B3 — reverse-control interface: `MeetingSession` + `FinalizeRequest`** (`stenograf/
   control.py`), replacing the informal `stop_callback` as the one defined reverse path.
   `FinalizeRequest{local_speakers, remote_speakers, language, reid}` (all optional, None =

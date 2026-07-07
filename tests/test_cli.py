@@ -2,12 +2,24 @@ import json
 import wave
 
 import numpy as np
+import pytest
 from click.testing import CliRunner
 
 from stenograf import cli
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.view import LiveView
+
+
+@pytest.fixture(autouse=True)
+def _isolate_data_dir(tmp_path, monkeypatch):
+    """Point the data dir (meeting archive + profile store) at a throwaway location.
+
+    ``steno start``/``transcribe`` now file every run in the managed archive by
+    default; isolating ``$STENOGRAF_DATA`` keeps that off the real
+    ~/.local/share/stenograf library for every CLI test (``_isolate_store`` still
+    overrides it where a test wants the profile store elsewhere)."""
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "steno-data"))
 
 
 class FakeASR(ASRBackend):
@@ -74,8 +86,8 @@ def test_transcribe_writes_outputs_and_detects_language(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "meeting.transcript.md").exists()
-    assert (tmp_path / "meeting.transcript.json").exists()
+    assert (tmp_path / "transcript.md").exists()
+    assert (tmp_path / "transcript.json").exists()
     assert "language: detected de" in result.output  # LID ran over the German text
 
 
@@ -89,7 +101,7 @@ def test_transcribe_records_parameter_provenance_in_json(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    params = json.loads((tmp_path / "meeting.transcript.json").read_text())["parameters"]
+    params = json.loads((tmp_path / "transcript.json").read_text())["parameters"]
     assert params["language"] == {"value": "de", "provenance": "detected"}
     assert params["speakers"]["audio"]["provenance"] == "detected"
 
@@ -105,7 +117,7 @@ def test_transcribe_explicit_language_is_recorded_as_explicit(tmp_path, monkeypa
     )
 
     assert result.exit_code == 0, result.output
-    params = json.loads((tmp_path / "meeting.transcript.json").read_text())["parameters"]
+    params = json.loads((tmp_path / "transcript.json").read_text())["parameters"]
     assert params["language"] == {"value": "de", "provenance": "explicit"}
     assert params["speakers"]["audio"] == {"value": 1, "provenance": "explicit"}
 
@@ -120,13 +132,13 @@ def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch
     )
 
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "meeting.transcript.srt").exists()
-    assert (tmp_path / "meeting.transcript.vtt").exists()
+    assert (tmp_path / "transcript.srt").exists()
+    assert (tmp_path / "transcript.vtt").exists()
     # Only the requested formats — md/json are not written when --format overrides them.
-    assert not (tmp_path / "meeting.transcript.md").exists()
-    assert not (tmp_path / "meeting.transcript.json").exists()
-    assert (tmp_path / "meeting.transcript.vtt").read_text().startswith("WEBVTT")
-    assert "meeting.transcript.srt" in result.output
+    assert not (tmp_path / "transcript.md").exists()
+    assert not (tmp_path / "transcript.json").exists()
+    assert (tmp_path / "transcript.vtt").read_text().startswith("WEBVTT")
+    assert "transcript.srt" in result.output
 
 
 def test_transcribe_rejects_unknown_format(tmp_path, monkeypatch):
@@ -155,7 +167,7 @@ def test_transcribe_glossary_corrects_the_transcript(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "glossary: 1 term(s), 0 name(s)" in result.output
-    md = (tmp_path / "meeting.transcript.md").read_text()
+    md = (tmp_path / "transcript.md").read_text()
     assert "gute Idee für" in md
 
 
@@ -172,8 +184,7 @@ def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    transcripts = list(tmp_path.glob("meeting-*.transcript.md"))
-    assert len(transcripts) == 1
+    assert (tmp_path / "transcript.md").exists()  # --out is this meeting's managed dir
     assert "You:" in result.output  # a live caption streamed
     assert "language: de" in result.output  # structured language event, plain-rendered
     assert "finalized:" in result.output  # the on-stop finalize swap was announced
@@ -201,7 +212,7 @@ def test_start_no_live_uses_the_batch_path(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert len(list(tmp_path.glob("meeting-*.transcript.md"))) == 1
+    assert (tmp_path / "transcript.md").exists()
     assert "detected language: de" in result.output  # legacy status-string wording
     assert "You:" not in result.output  # no live captions in batch mode
 
@@ -448,14 +459,14 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     )
     assert reid.exit_code == 0, reid.output
     assert "re-ID: 1 profile(s) active" in reid.output
-    assert "Daniel" in (tmp_path / "m.transcript.md").read_text()
+    assert "Daniel" in (tmp_path / "transcript.md").read_text()
 
     no_reid = CliRunner().invoke(
         cli.main, ["transcribe", str(audio), "--speakers", "2", "--no-reid", "--out", str(tmp_path)]
     )
     assert no_reid.exit_code == 0, no_reid.output
     assert "re-ID:" not in no_reid.output
-    md = (tmp_path / "m.transcript.md").read_text()
+    md = (tmp_path / "transcript.md").read_text()
     assert "Daniel" not in md and "Speaker 1" in md
 
 
@@ -506,3 +517,129 @@ def test_start_with_no_speakers_errors_cleanly(tmp_path, monkeypatch):
     assert result.exit_code != 0
     assert "at least one speaker" in result.output
     assert not isinstance(result.exception, ValueError)  # handled as a ClickException
+
+
+# ---- meeting archive (Task B2) --------------------------------------------
+
+
+def _start_batch(tmp_path, monkeypatch, *extra):
+    """Run a minimal, deterministic ``steno start`` (batch replay) and return the result."""
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+    return CliRunner().invoke(
+        cli.main,
+        ["start", "--local", "1", "--remote", "0", "--replay", str(mic), "--no-live", *extra],
+    )
+
+
+def test_start_archives_to_managed_dir_by_default(tmp_path, monkeypatch):
+    # No --out: the meeting is filed in the managed archive dir and registered, so
+    # `steno meetings` (and the web UI) can find it and read it back via A1.
+    from stenograf.archive import MeetingArchive
+
+    result = _start_batch(tmp_path, monkeypatch, "--title", "Weekly sync")
+    assert result.exit_code == 0, result.output
+    assert "archived as meeting-" in result.output
+
+    archive = MeetingArchive.load()
+    (record,) = archive.records()
+    assert record.title == "Weekly sync"
+    assert record.id.startswith("meeting-")
+    assert record.dir.parent == archive.root  # under the managed root
+    assert (record.dir / "transcript.json").exists()  # plainly named, B1-readable
+    assert archive.load_transcript(record.id).profile.title == "Weekly sync"
+
+
+def test_start_out_registers_pointing_at_the_override(tmp_path, monkeypatch):
+    from stenograf.archive import MeetingArchive
+
+    out = tmp_path / "custom"
+    result = _start_batch(tmp_path, monkeypatch, "--out", str(out))
+    assert result.exit_code == 0, result.output
+    assert (out / "transcript.json").exists()
+
+    (record,) = MeetingArchive.load().records()
+    assert record.dir == out  # registered, pointing at the explicit dir
+
+
+def test_transcribe_archives_by_default_and_references_the_source_audio(tmp_path, monkeypatch):
+    from stenograf.archive import MeetingArchive
+
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--title", "Retro"])
+    assert result.exit_code == 0, result.output
+
+    (record,) = MeetingArchive.load().records()
+    assert record.title == "Retro"
+    assert (record.dir / "transcript.json").exists()
+    # The input file is already on disk, so it becomes the meeting's audio.
+    assert record.audio_path == audio
+    assert record.has_audio()
+
+
+def test_no_archive_writes_flat_files_and_skips_registration(tmp_path, monkeypatch):
+    from stenograf.archive import MeetingArchive
+
+    result = _start_batch(tmp_path, monkeypatch, "--no-archive", "--out", str(tmp_path))
+    assert result.exit_code == 0, result.output
+    # Legacy flat, timestamp-named output; no managed transcript.json; nothing filed.
+    assert len(list(tmp_path.glob("meeting-*.transcript.md"))) == 1
+    assert not (tmp_path / "transcript.json").exists()
+    assert "archived as" not in result.output
+    assert MeetingArchive.load().records() == []
+
+
+def test_record_audio_lands_in_the_managed_dir(tmp_path, monkeypatch):
+    from stenograf.archive import AUDIO_NAME, MeetingArchive
+
+    result = _start_batch(tmp_path, monkeypatch, "--record-audio")
+    assert result.exit_code == 0, result.output
+
+    (record,) = MeetingArchive.load().records()
+    assert record.audio_path == record.dir / AUDIO_NAME
+    assert record.has_audio()  # the WAV was actually written and is gated on
+
+
+def test_meetings_list_show_and_rm(tmp_path, monkeypatch):
+    from stenograf.archive import MeetingArchive
+
+    assert _start_batch(tmp_path, monkeypatch, "--title", "Weekly sync").exit_code == 0
+    (record,) = MeetingArchive.load().records()
+    meeting_id, meeting_dir = record.id, record.dir
+
+    listed = CliRunner().invoke(cli.main, ["meetings", "list"])
+    assert listed.exit_code == 0, listed.output
+    assert meeting_id in listed.output and "Weekly sync" in listed.output
+
+    shown = CliRunner().invoke(cli.main, ["meetings", "show", meeting_id])
+    assert shown.exit_code == 0, shown.output
+    assert meeting_id in shown.output and "Weekly sync" in shown.output
+
+    removed = CliRunner().invoke(cli.main, ["meetings", "rm", meeting_id, "--yes"])
+    assert removed.exit_code == 0, removed.output
+    assert not meeting_dir.exists()  # managed files deleted
+    assert MeetingArchive.load().records() == []
+    assert "no meetings archived yet" in CliRunner().invoke(cli.main, ["meetings", "list"]).output
+
+
+def test_meetings_show_unknown_id_errors(tmp_path, monkeypatch):
+    result = CliRunner().invoke(cli.main, ["meetings", "show", "meeting-19990101-000000"])
+    assert result.exit_code != 0
+    assert "no meeting" in result.output
+
+
+def test_meetings_rm_keep_files_only_unregisters(tmp_path, monkeypatch):
+    from stenograf.archive import MeetingArchive
+
+    assert _start_batch(tmp_path, monkeypatch).exit_code == 0
+    (record,) = MeetingArchive.load().records()
+
+    removed = CliRunner().invoke(cli.main, ["meetings", "rm", record.id, "--yes", "--keep-files"])
+    assert removed.exit_code == 0, removed.output
+    assert record.dir.exists()  # files left in place
+    assert (record.dir / "transcript.json").exists()
+    assert MeetingArchive.load().records() == []  # but unregistered

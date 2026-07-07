@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -160,7 +161,21 @@ def main() -> None:
     "--out",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Output directory for the transcript [default: current directory].",
+    help="Write this meeting's transcript here instead of the managed archive dir "
+    "(the meeting is still registered in the archive unless --no-archive).",
+)
+@click.option(
+    "--title",
+    default=None,
+    metavar="TEXT",
+    help="A human-readable title for this meeting (shown in `steno meetings`).",
+)
+@click.option(
+    "--no-archive",
+    "no_archive",
+    is_flag=True,
+    help="Don't file this meeting in the managed archive; write flat, timestamp-named "
+    "transcript files to --out (or the current directory), as before Phase 4.",
 )
 @click.option(
     "--record-audio",
@@ -232,6 +247,8 @@ def start(
     remote_speakers: int | None,
     replay: str | None,
     out: Path | None,
+    title: str | None,
+    no_archive: bool,
     record_audio: str | None,
     flush_interval: float,
     max_seconds: float | None,
@@ -261,6 +278,7 @@ def start(
             glossary=glossary_terms,
             attendee_names=attendee_names,
             speaker_profile_store=profile_store,
+            title=title,
         )
     except ValueError as exc:  # e.g. --local 0 --remote 0 — report cleanly, not a traceback
         raise click.ClickException(str(exc)) from exc
@@ -271,8 +289,18 @@ def start(
     # Pace file replay to wall-clock only when it feeds the live pass, so
     # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
     provider = _make_provider(replay, plans, paced=live)
-    out_dir = out or Path.cwd()
-    stem = f"meeting-{time.strftime('%Y%m%d-%H%M%S')}"
+
+    # By default a meeting is filed in the managed archive: its own dir under the
+    # data dir (or --out), holding transcript.{md,json,…} + optional audio.wav, plus
+    # an index record. --no-archive restores the flat, timestamp-named output.
+    created_at = datetime.now()
+    archive, meeting_id, out_dir, basename, audio_default = _prepare_output(
+        no_archive,
+        out,
+        created_at,
+        legacy_dir=Path.cwd(),
+        legacy_stem=f"meeting-{created_at:%Y%m%d-%H%M%S}",
+    )
 
     started = time.monotonic()
     asr, vad, diarizer = _load_backends(need_diarizer=any(p.num_speakers != 1 for p in plans))
@@ -295,7 +323,7 @@ def start(
         glossary_threshold=glossary_threshold,
     )
 
-    tee = _make_tee(record_audio, out_dir, stem, plans)
+    tee = _make_tee(record_audio, audio_default, plans)
 
     # The full-screen TUI owns the terminal, so it can only run on a real TTY and
     # unless the user forced the plain stream (or turned live off entirely).
@@ -313,7 +341,7 @@ def start(
             profile=profile,
             on_frame=tee.add if tee else None,
             out_dir=out_dir,
-            stem=stem,
+            basename=basename,
             flush_interval=flush_interval,
             max_seconds=max_seconds,
         )
@@ -330,11 +358,23 @@ def start(
             "meeting ended before a transcript was produced; any .partial checkpoint is kept"
         )
 
-    paths = _write_transcript(transcript, out_dir, stem, write_formats)
-    _cleanup_checkpoints(out_dir, stem)  # the final transcript supersedes them
+    paths = _write_transcript(transcript, out_dir, basename, write_formats)
+    _cleanup_checkpoints(out_dir, basename)  # the final transcript supersedes them
     elapsed = time.monotonic() - started
     _report_speaker_counts(recorder.speaker_counts)
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s)")
+    if archive is not None:
+        archive.add(
+            _meeting_record(
+                meeting_id,
+                created_at,
+                transcript,
+                write_formats,
+                out_dir,
+                audio_path=tee.path if tee is not None else None,
+            )
+        )
+        click.echo(f"archived as {meeting_id} — see `steno meetings show {meeting_id}`")
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
@@ -402,7 +442,7 @@ def _run_meeting(
     profile: MeetingProfile,
     on_frame,
     out_dir: Path,
-    stem: str,
+    basename: str,
     flush_interval: float,
     max_seconds: float | None,
 ) -> Transcript:
@@ -429,7 +469,7 @@ def _run_meeting(
                 live=True,
                 view=view,
                 on_frame=on_frame,
-                on_checkpoint=_checkpoint_writer(out_dir, stem),
+                on_checkpoint=_checkpoint_writer(out_dir, basename),
                 checkpoint_interval=flush_interval,
                 max_seconds=max_seconds,
             )
@@ -443,7 +483,7 @@ def _run_meeting(
                 live=True,
                 view=view,
                 on_frame=on_frame,
-                on_checkpoint=_checkpoint_writer(out_dir, stem),
+                on_checkpoint=_checkpoint_writer(out_dir, basename),
                 checkpoint_interval=flush_interval,
                 max_seconds=max_seconds,
             )
@@ -451,7 +491,9 @@ def _run_meeting(
         provider,
         on_frame=on_frame,
         on_status=lambda msg: click.echo(f"  {msg}"),
-        on_checkpoint=_checkpoint_writer(out_dir, stem, announce=lambda m: click.echo(f"  {m}")),
+        on_checkpoint=_checkpoint_writer(
+            out_dir, basename, announce=lambda m: click.echo(f"  {m}")
+        ),
         checkpoint_interval=flush_interval,
         max_seconds=max_seconds,
     )
@@ -463,7 +505,7 @@ def _stdout_is_tty() -> bool:
 
 
 def _checkpoint_writer(
-    out_dir: Path, stem: str, announce: Callable[[str], None] | None = None
+    out_dir: Path, basename: str, announce: Callable[[str], None] | None = None
 ) -> Callable[[Transcript], None]:
     """Build the ``on_checkpoint`` sink that writes the ``.partial`` crash file.
 
@@ -475,20 +517,25 @@ def _checkpoint_writer(
     def on_checkpoint(transcript: Transcript) -> None:
         # Checkpoints are crash recovery, always plain md+json — subtitles of a
         # partial transcript are pointless and the final write supersedes these.
-        md = _write_transcript(transcript, out_dir, f"{stem}.partial")[0]
+        md = _write_transcript(transcript, out_dir, f"{basename}.partial")[0]
         if announce is not None:
             announce(f"checkpoint: {md.name} ({len(transcript.entries)} entries)")
 
     return on_checkpoint
 
 
-def _make_tee(record_audio: str | None, out_dir: Path, stem: str, plans):
-    """Create the audio tee if --record-audio was given, with a loud banner."""
+def _make_tee(record_audio: str | None, default_path: Path, plans):
+    """Create the audio tee if --record-audio was given, with a loud banner.
+
+    ``default_path`` is where a bare ``--record-audio`` (no value) writes — the
+    managed ``audio.wav`` when archiving, else ``<stem>.wav``; an explicit
+    ``--record-audio PATH`` overrides it.
+    """
     if record_audio is None:
         return None
     from stenograf.recording import WavTee
 
-    path = out_dir / f"{stem}.wav" if record_audio == _RECORD_DEFAULT else Path(record_audio)
+    path = default_path if record_audio == _RECORD_DEFAULT else Path(record_audio)
     path.parent.mkdir(parents=True, exist_ok=True)
     tee = WavTee(path, {p.channel for p in plans})
     click.secho(
@@ -550,7 +597,21 @@ def _make_provider(replay: str | None, plans, *, paced: bool = False):
     "--out",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Output directory [default: next to the input file].",
+    help="Write this transcript here instead of the managed archive dir (the "
+    "transcription is still registered in the archive unless --no-archive).",
+)
+@click.option(
+    "--title",
+    default=None,
+    metavar="TEXT",
+    help="A human-readable title for this transcription (shown in `steno meetings`).",
+)
+@click.option(
+    "--no-archive",
+    "no_archive",
+    is_flag=True,
+    help="Don't file this transcription in the managed archive; write flat "
+    "<name>.transcript.{md,json,…} files next to the input (or --out), as before.",
 )
 @click.option(
     "--reid/--no-reid",
@@ -580,6 +641,8 @@ def transcribe(
     lang: str | None,
     speakers: int | None,
     out: Path | None,
+    title: str | None,
+    no_archive: bool,
     use_reid: bool,
     reid_threshold: float | None,
     formats: str,
@@ -592,10 +655,11 @@ def transcribe(
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).
 
-    Writes <name>.transcript.md and <name>.transcript.json next to the
-    input (or into --out); --format also emits srt/vtt subtitles. This is
-    the same pipeline a live meeting runs on stop; use it for recorded
-    meetings or re-transcription.
+    Files the transcript in the managed archive by default (browse it with
+    `steno meetings`), the same pipeline a live meeting runs on stop. Use
+    --out to write elsewhere, or --no-archive to drop flat
+    <name>.transcript.{md,json,…} files next to the input as before; --format
+    also emits srt/vtt subtitles.
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
     from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
@@ -655,6 +719,7 @@ def transcribe(
         glossary=glossary_terms,
         attendee_names=attendee_names,
         speaker_profile_store=profile_store,
+        title=title,
     )
     # A file transcribe is one un-split stream (no local/remote model), so its
     # speaker provenance is recorded under a single "audio" channel (PLAN.md §5 3b).
@@ -666,7 +731,20 @@ def transcribe(
         language=language, profile=profile, entries=entries, parameters=parameters
     )
 
-    paths = _write_transcript(transcript, out or audio_file.parent, audio_file.stem, write_formats)
+    created_at = datetime.now()
+    archive, meeting_id, out_dir, basename, _ = _prepare_output(
+        no_archive, out, created_at, legacy_dir=audio_file.parent, legacy_stem=audio_file.stem
+    )
+    paths = _write_transcript(transcript, out_dir, basename, write_formats)
+    if archive is not None:
+        # The source file is already on disk, so reference it as this meeting's
+        # audio — that enables archived playback / re-diarize (B4) at no extra cost
+        # to the in-memory-only guarantee (which is about live capture).
+        archive.add(
+            _meeting_record(
+                meeting_id, created_at, transcript, write_formats, out_dir, audio_path=audio_file
+            )
+        )
     elapsed = time.monotonic() - started
     speed = duration / elapsed if elapsed else 0.0
     if speakers is None:
@@ -682,6 +760,8 @@ def transcribe(
     else:
         click.echo(f"speakers: {speakers} given")
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s, {speed:.1f}x realtime)")
+    if archive is not None:
+        click.echo(f"archived as {meeting_id} — see `steno meetings show {meeting_id}`")
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
@@ -742,21 +822,86 @@ def _load_reid(*, enabled: bool, threshold: float | None, store_path: Path | Non
     return SpeakerReID(store, model, threshold=threshold)
 
 
+def _prepare_output(
+    no_archive: bool,
+    out: Path | None,
+    created_at: datetime,
+    *,
+    legacy_dir: Path,
+    legacy_stem: str,
+):
+    """Resolve where a finalized transcript is written and whether it is archived.
+
+    Returns ``(archive, meeting_id, out_dir, basename, audio_default)``.
+
+    - **Archive-on (the default):** a managed per-meeting dir under the archive
+      (``meetings/<id>/``) — or ``--out`` used as that meeting's dir — holding
+      plainly named ``transcript.{fmt}`` + ``audio.wav`` files (the layout the
+      B1 archive reads back), plus a live :class:`MeetingArchive` to register into.
+    - **``--no-archive``:** the pre-Phase-4 flat layout — ``<stem>.transcript.{fmt}``
+      into ``--out`` (or ``legacy_dir``), audio at ``<stem>.wav``, no archive.
+    """
+    if no_archive:
+        out_dir = out or legacy_dir
+        return None, None, out_dir, f"{legacy_stem}.transcript", out_dir / f"{legacy_stem}.wav"
+    from stenograf.archive import AUDIO_NAME, TRANSCRIPT_STEM, MeetingArchive
+
+    archive = MeetingArchive.load()
+    meeting_id = archive.allocate_id(created_at)
+    out_dir = out or archive.meeting_dir(meeting_id)
+    return archive, meeting_id, out_dir, TRANSCRIPT_STEM, out_dir / AUDIO_NAME
+
+
+def _meeting_record(
+    meeting_id: str,
+    created_at: datetime,
+    transcript: Transcript,
+    formats: tuple[str, ...] | list[str],
+    out_dir: Path,
+    *,
+    audio_path: Path | None,
+):
+    """Build the archive index record for a just-written transcript.
+
+    Denormalizes the same fields ``archive._record_from_dir`` recovers on
+    reconcile (title, language, per-channel speaker counts, duration, formats),
+    so a live-registered record and a re-adopted one describe the meeting alike.
+    """
+    from stenograf.archive import MeetingRecord
+
+    speakers: dict[str, int | None] = {}
+    if transcript.parameters is not None:
+        speakers = {ch: rv.value for ch, rv in transcript.parameters.speakers.items()}  # type: ignore[misc]
+    return MeetingRecord(
+        id=meeting_id,
+        title=transcript.profile.title,
+        created_at=created_at.isoformat(timespec="seconds"),
+        duration_s=max((e.end for e in transcript.entries), default=0.0),
+        language=transcript.language,
+        speakers=speakers,
+        formats=tuple(formats),
+        dir=out_dir,
+        audio_path=audio_path,
+    )
+
+
 def _write_transcript(
     transcript: Transcript,
     out_dir: Path,
-    stem: str,
+    basename: str,
     formats: tuple[str, ...] | list[str] = _DEFAULT_FORMATS,
 ) -> list[Path]:
     """Write the transcript in each requested format; returns the written paths.
 
-    Markdown + JSON are the default (the only files stenograf emits unless the
-    user asks for subtitles); SRT/VTT are opt-in via ``--format``.
+    ``basename`` is the full file stem (extension excluded): ``transcript`` in the
+    managed archive dir, or ``<name>.transcript`` for the flat ``--no-archive``
+    layout. Markdown + JSON are the default (the only files stenograf emits unless
+    the user asks for subtitles); SRT/VTT are opt-in via ``--format``.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
     for fmt in formats:
-        path = out_dir / f"{stem}.transcript.{fmt}"
+        path = out_dir / f"{basename}.{fmt}"
         _atomic_write_text(path, getattr(transcript, _FORMATS[fmt])())
         paths.append(path)
     return paths
@@ -775,10 +920,10 @@ def _atomic_write_text(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def _cleanup_checkpoints(out_dir: Path, stem: str) -> None:
+def _cleanup_checkpoints(out_dir: Path, basename: str) -> None:
     """Remove the crash-recovery checkpoints once the final transcript is written."""
-    for suffix in (".partial.transcript.md", ".partial.transcript.json"):
-        (out_dir / f"{stem}{suffix}").unlink(missing_ok=True)
+    for fmt in ("md", "json"):
+        (out_dir / f"{basename}.partial.{fmt}").unlink(missing_ok=True)
 
 
 def _model_progress(name: str, done: int, total: int) -> None:
@@ -961,3 +1106,101 @@ def profiles_remove(name: str, yes: bool) -> None:
     store.remove(profile)
     store.save()
     click.echo(f"removed {name!r}")
+
+
+@main.group()
+def meetings() -> None:
+    """Browse the meeting archive.
+
+    steno start and steno transcribe file each finalized transcript here by
+    default — a managed library under the data dir — unless --no-archive.
+    """
+
+
+@meetings.command("list")
+def meetings_list() -> None:
+    """List archived meetings, most recent first."""
+    from stenograf.archive import MeetingArchive, meetings_dir
+
+    archive = MeetingArchive.load()
+    if archive.root.exists():
+        # Self-heal against the directory tree before listing (drop vanished
+        # meetings, adopt any written while the index was unavailable). Skip the
+        # save-on-read when nothing is there yet — an empty listing writes nothing.
+        archive.reconcile()
+    records = archive.records()
+    if not records:
+        click.echo(f"no meetings archived yet ({meetings_dir()})")
+        click.echo("run `steno start` (or `steno transcribe FILE`) to record one.")
+        return
+    click.echo(f"meetings ({meetings_dir()}):")
+    for record in sorted(records, key=lambda r: r.created_at, reverse=True):
+        title = record.title or "(untitled)"
+        lang = record.language.value if record.language else "?"
+        when = record.created_at.replace("T", " ") if record.created_at else "unknown"
+        audio = " ●rec" if record.has_audio() else ""
+        click.echo(
+            f"  {record.id}  {when}  [{lang}]  {_fmt_duration(record.duration_s)}  {title}{audio}"
+        )
+
+
+@meetings.command("show")
+@click.argument("meeting_id")
+def meetings_show(meeting_id: str) -> None:
+    """Show the archive record for one meeting."""
+    from stenograf.archive import MeetingArchive
+
+    archive = MeetingArchive.load()
+    record = archive.get(meeting_id)
+    if record is None:
+        raise click.ClickException(f"no meeting {meeting_id!r} in the archive")
+    click.echo(f"{record.id}  {record.title or '(untitled)'}")
+    click.echo(f"  created:  {record.created_at or 'unknown'}")
+    click.echo(f"  language: {record.language.value if record.language else 'unknown'}")
+    click.echo(f"  duration: {_fmt_duration(record.duration_s)}")
+    if record.speakers:
+        parts = ", ".join(
+            f"{ch}={n if n is not None else '?'}" for ch, n in record.speakers.items()
+        )
+        click.echo(f"  speakers: {parts}")
+    click.echo(f"  formats:  {', '.join(record.formats) or 'none'}")
+    click.echo(f"  dir:      {record.dir}")
+    click.echo(f"  audio:    {record.audio_path if record.has_audio() else 'none (in-memory)'}")
+
+
+@meetings.command("rm")
+@click.argument("meeting_id")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+@click.option(
+    "--keep-files",
+    is_flag=True,
+    help="Only unregister the meeting; leave its transcript files on disk.",
+)
+def meetings_rm(meeting_id: str, yes: bool, keep_files: bool) -> None:
+    """Remove a meeting from the archive (and delete its managed files)."""
+    import shutil
+
+    from stenograf.archive import MeetingArchive
+
+    archive = MeetingArchive.load()
+    record = archive.get(meeting_id)
+    if record is None:
+        raise click.ClickException(f"no meeting {meeting_id!r} in the archive")
+    # Only ever delete files stenograf manages — a dir that is the archive root's
+    # own child. An explicit --out dir may hold unrelated files, so it is only
+    # unregistered, never removed.
+    managed = record.dir.parent == archive.root
+    delete_files = managed and not keep_files
+    if not yes:
+        prompt = (
+            f"remove meeting {meeting_id!r} and delete its files?"
+            if delete_files
+            else f"remove meeting {meeting_id!r} from the archive (files kept)?"
+        )
+        click.confirm(prompt, abort=True)
+    archive.remove(meeting_id)
+    if delete_files:
+        shutil.rmtree(record.dir, ignore_errors=True)
+        click.echo(f"removed {meeting_id} and its files")
+    else:
+        click.echo(f"unregistered {meeting_id} (files at {record.dir})")
