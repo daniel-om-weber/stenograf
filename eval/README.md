@@ -61,6 +61,42 @@ uv run --group eval eval/score.py     # → eval/out/report.md
 Target coverage: ~10 min hand-corrected reference per language (German +
 English), including one in-room far-field sample, per PLAN.md Phase 0.
 
+## Diarization scoring (Phase 3, Task 0d)
+
+Measures the *diarizer*, not the ASR: **DER** (Diarization Error Rate) and
+**word attribution** (of the finalized words, the fraction placed on the right
+speaker). Nothing speaker-centric — re-ID threshold tuning, clustering/embedding
+upgrades — is measurable without this, so it is the gating prerequisite.
+
+References are **hand-labelled** speaker turns in NIST RTTM. The audio is a mono
+downmix of every speaker (`extract.py`'s `-ac 1`), so one RTTM per segment labels
+all distinct voices in it.
+
+```sh
+# 1. Seed a draft from the current diarizer to correct while listening (much
+#    faster than labelling boundaries from scratch). Pass the real speaker count
+#    you remember — unconstrained estimation over-clusters badly (de-1 → 13
+#    speakers), which is exactly the problem this measures.
+uv run eval/diarize.py --bootstrap --segments de-1,de-2,en-1 --num-speakers 3
+#    → eval/refs/<id>.draft.rttm  (each line: SPEAKER <id> 1 <onset> <dur> <NA> <NA> <spk> <NA> <NA>)
+
+# 2. Fix boundaries + merge/rename speakers against the audio, then rename to
+#    the scored name (only <id>.rttm is scored; never score a .draft — it
+#    flatters the model that produced it):
+mv eval/refs/de-1.draft.rttm eval/refs/de-1.rttm   # after correcting
+
+# 3. Produce hypotheses (raw diarizer turns + finalized word labels):
+uv run eval/diarize.py --segments de-1,de-2,en-1   # → eval/out/diar/<id>.{rttm,words.json}
+
+# 4. Score (DER + word attribution, optimal speaker mapping, 0.25 s collar):
+uv run eval/der.py                                 # → eval/out/diar-report.md
+```
+
+`der.py`/`rttm.py` are pure (numpy + scipy) and unit-tested in
+`tests/test_eval_der.py` against hand-computed cases; `diarize.py` drives the
+real stenograf backends. Everything under `eval/refs/` and `eval/out/` stays
+gitignored (private content).
+
 ## Side quests
 
 - ~~Canary-1B-v2 runtime~~ — resolved, see above: no accelerated runtime with
