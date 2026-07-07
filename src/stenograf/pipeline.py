@@ -244,3 +244,16 @@ def relabel_speakers(
             label = mapping[label]
         result.append(replace(entry, speaker=label))
     return result
+
+
+def rename_entry_speaker(
+    entries: list[TranscriptEntry], old: str, new: str
+) -> list[TranscriptEntry]:
+    """Relabel every entry spoken by ``old`` to ``new``, leaving all else untouched.
+
+    A pure display rename for the reverse-control channel (``Local-1`` → "Alice"):
+    only the matching entries' ``speaker`` changes; text, timestamps, words, and
+    every other entry pass through by identity. Entries retain their timeline
+    position, so this never re-orders or re-flows the transcript (PLAN.md §5 B3/B4).
+    """
+    return [replace(e, speaker=new) if e.speaker == old else e for e in entries]

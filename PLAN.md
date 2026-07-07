@@ -1282,6 +1282,30 @@ marks a hard prerequisite):
   entry relabel (`rename_entry_speaker`, timestamps untouched). Acceptance: fakes +
   synthetic store; refinalize changes the plan/provenance; rename touches only that label;
   ASR loaded once across finalize+refinalize. `[dep: A1; reuses session.finalize]`
+  *Status (July 2026): shipped (`stenograf.control`, `tests/test_control.py`). `FinalizeRequest`
+  is a frozen dataclass of four optionals (`local_speakers`, `remote_speakers`, `language`,
+  `reid`), all defaulting `None` = "keep whatever the session already resolved" — so an empty
+  request re-finalizes unchanged and a one-field request corrects just that parameter.
+  `MeetingSession(recorder, store, *, transcript=None, stop=None)` holds the warm recorder, the
+  in-RAM store, and the current transcript. `refinalize(request)` applies the set fields **in
+  place and sticky** — speaker counts / language via `dataclasses.replace(recorder.profile, …)`,
+  and an explicit language *also* sets `recorder.language` directly (the profile alone can't
+  override a locked auto-detection), then re-runs `recorder.finalize(store)` on the **same**
+  backend objects (never reloads a model). So a changed count flips the plan's requested count
+  and the transcript's provenance DETECTED→EXPLICIT; a language override beats the German lock
+  (reaches the ASR) while "keep" preserves a DETECTED lock without re-detecting. `reid` is a
+  sticky toggle over a resolver reference captured at construction (`True` re-enables, a no-op
+  with no resolver; `False` disables; `None` keeps). `rename_speaker(old,new)` is a pure
+  `rename_entry_speaker` relabel (new `pipeline.rename_entry_speaker`: `replace(e, speaker=new)`
+  only where `e.speaker == old`, text/timestamps/words/order untouched; absent label = no-op),
+  requiring a finalized transcript. `stop()` is the formalized capture-stop hook that replaces
+  the informal `stop_callback` (a no-op once finalized). Both mutators update **and** return
+  `session.transcript`. 12 label-free tests (fakes + synthetic store): empty-request reuse (same
+  `asr` object, 0 loads), remote-count plan+provenance change, language override vs kept lock,
+  sticky re-ID toggle + resolver-less no-op, invalid-override raise, rename-only-target /
+  absent-noop / before-finalize raise, stop delegate. Unblocks B4 (archived twin) and C7 (web
+  reverse-control POSTs). TUI/CLI still use `stop_callback`; folding them onto `MeetingSession`
+  is a later integration, not B3.*
 - **B4 — archived reverse control + audio policy** (`ArchivedMeeting`, store-is-gone case).
   `rename_speaker` **always** works (relabel loaded transcript, rewrite managed formats,
   re-add record). `refinalize` works **only when `record.has_audio()`** — rehydrate a store
