@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from stenograf.config import Language, MeetingMode, MeetingProfile
@@ -36,3 +38,24 @@ def test_speaker_count_bounds():
         MeetingProfile(local_speakers=9)
     with pytest.raises(ValueError):
         MeetingProfile(local_speakers=0, remote_speakers=0)
+
+
+def test_vocab_fields_default_empty():
+    profile = MeetingProfile()
+    assert profile.glossary == ()
+    assert profile.attendee_names == ()
+    assert profile.speaker_profile_store is None
+
+
+def test_vocab_fields_are_coerced_and_hashable():
+    # Lists are coerced to tuples (so the frozen profile stays hashable) and a
+    # str store path becomes a Path.
+    profile = MeetingProfile(
+        glossary=["Kubernetes", "Greifswald"],
+        attendee_names=["Daniel"],
+        speaker_profile_store="/tmp/store.json",
+    )
+    assert profile.glossary == ("Kubernetes", "Greifswald")
+    assert profile.attendee_names == ("Daniel",)
+    assert profile.speaker_profile_store == Path("/tmp/store.json")
+    hash(profile)  # must not raise

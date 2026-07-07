@@ -43,6 +43,7 @@ class Transcript:
             },
             ensure_ascii=False,
             indent=2,
+            default=str,  # the profile's speaker_profile_store may be a Path
         )
 
     def to_markdown(self) -> str:

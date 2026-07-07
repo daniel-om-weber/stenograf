@@ -43,6 +43,7 @@ from stenograf.capture.base import (
 )
 from stenograf.config import Language, MeetingProfile
 from stenograf.diarization.base import Diarizer
+from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
 from stenograf.live import LiveDecoder, StreamingUpdate
 from stenograf.pipeline import SpeakerResolver, finalize_channel, group_words, relabel_speakers
@@ -539,6 +540,7 @@ class MeetingRecorder:
         diarizer: Diarizer | None = None,
         reid: SpeakerResolver | None = None,
         language: Language | None = None,
+        glossary_threshold: float | None = None,
     ) -> None:
         self.profile = profile
         self.asr = asr
@@ -546,6 +548,9 @@ class MeetingRecorder:
         self.diarizer = diarizer
         self.reid = reid
         self.language = language or profile.language
+        self.glossary_threshold = (
+            DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
+        )
 
     def run(
         self,
@@ -776,6 +781,14 @@ class MeetingRecorder:
             raw = self._finalize_channel_safe(samples, diarizer, plan, view)
             entries.extend(relabel_speakers(raw, plan.label_template))
         interleaved = interleave(entries)
+        # Snap domain vocabulary / attendee names to canonical spelling on the
+        # authoritative transcript only (checkpoints stay raw — PLAN.md §5 Task 2b).
+        interleaved = apply_glossary(
+            interleaved,
+            glossary=self.profile.glossary,
+            attendee_names=self.profile.attendee_names,
+            threshold=self.glossary_threshold,
+        )
         language = self._resolve_language(interleaved, view=view)
         return Transcript(language=language, profile=self.profile, entries=interleaved)
 

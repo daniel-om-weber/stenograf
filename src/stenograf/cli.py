@@ -46,6 +46,72 @@ def _parse_formats(spec: str) -> list[str]:
     return formats
 
 
+def _vocab_options(func: Callable) -> Callable:
+    """Shared glossary/attendee/re-ID-store options for ``start`` and ``transcribe``.
+
+    The finalize pass has no decode-time biasing (Parakeet), so these drive the
+    deterministic text post-correction in ``stenograf.glossary`` (PLAN.md Task 2b).
+    """
+    for option in reversed(
+        (
+            click.option(
+                "--glossary",
+                multiple=True,
+                metavar="TERMS",
+                help="Domain term(s) to snap the transcript to; repeatable and comma-separated.",
+            ),
+            click.option(
+                "--glossary-file",
+                type=click.Path(exists=True, dir_okay=False, path_type=Path),
+                default=None,
+                help="File of glossary terms, one per line (# comments and blank lines ignored).",
+            ),
+            click.option(
+                "--attendee",
+                multiple=True,
+                metavar="NAMES",
+                help="Attendee name(s) to correct (also token-by-token); repeatable + comma-list.",
+            ),
+            click.option(
+                "--glossary-threshold",
+                type=click.FloatRange(0, 1),
+                default=None,
+                help="Similarity 0–1 required to correct a term [default: 0.82].",
+            ),
+            click.option(
+                "--profile-store",
+                type=click.Path(dir_okay=False, path_type=Path),
+                default=None,
+                help="Use this re-ID profile store instead of the default location.",
+            ),
+        )
+    ):
+        func = option(func)
+    return func
+
+
+def _collect_terms(
+    glossary: tuple[str, ...], glossary_file: Path | None, attendee: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Gather glossary terms (inline + file) and attendee names from the options.
+
+    Inline ``--glossary``/``--attendee`` values may each be comma-separated; the
+    file is one term per line. Both are de-duplicated preserving first-seen order.
+    """
+    terms: list[str] = []
+    for value in glossary:
+        terms.extend(part.strip() for part in value.split(",") if part.strip())
+    if glossary_file is not None:
+        for raw in glossary_file.read_text(encoding="utf-8").splitlines():
+            line = raw.split("#", 1)[0].strip()
+            if line:
+                terms.append(line)
+    names: list[str] = []
+    for value in attendee:
+        names.extend(part.strip() for part in value.split(",") if part.strip())
+    return tuple(dict.fromkeys(terms)), tuple(dict.fromkeys(names))
+
+
 @click.group()
 @click.version_option(__version__, prog_name="stenograf")
 def main() -> None:
@@ -150,6 +216,7 @@ def main() -> None:
     help="Comma-separated transcript formats to write: md, json, srt, vtt "
     "[default: md,json]. srt/vtt re-flow speaker turns into subtitle cues.",
 )
+@_vocab_options
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def start(
     lang: str | None,
@@ -165,17 +232,26 @@ def start(
     use_reid: bool,
     reid_threshold: float | None,
     formats: str,
+    glossary: tuple[str, ...],
+    glossary_file: Path | None,
+    attendee: tuple[str, ...],
+    glossary_threshold: float | None,
+    profile_store: Path | None,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
     from stenograf.session import MeetingRecorder, plan_channels
 
     write_formats = _parse_formats(formats)
+    glossary_terms, attendee_names = _collect_terms(glossary, glossary_file, attendee)
 
     profile = MeetingProfile(
         language=Language(lang) if lang else None,
         local_speakers=local_speakers,
         remote_speakers=remote_speakers,
+        glossary=glossary_terms,
+        attendee_names=attendee_names,
+        speaker_profile_store=profile_store,
     )
     mode = profile.mode.value if profile.mode else "auto"
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
@@ -189,11 +265,23 @@ def start(
 
     started = time.monotonic()
     asr, vad, diarizer = _load_backends(need_diarizer=any(p.num_speakers != 1 for p in plans))
-    reid = _load_reid(enabled=use_reid, threshold=reid_threshold) if diarizer is not None else None
+    reid = (
+        _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=profile_store)
+        if diarizer is not None
+        else None
+    )
     if reid is not None:
         click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
+    if glossary_terms or attendee_names:
+        click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
     recorder = MeetingRecorder(
-        profile, asr=asr, vad=vad, diarizer=diarizer, reid=reid, language=profile.language
+        profile,
+        asr=asr,
+        vad=vad,
+        diarizer=diarizer,
+        reid=reid,
+        language=profile.language,
+        glossary_threshold=glossary_threshold,
     )
 
     tee = _make_tee(record_audio, out_dir, stem, plans)
@@ -422,6 +510,7 @@ def _make_provider(replay: str | None, plans, *, paced: bool = False):
     help="Comma-separated transcript formats to write: md, json, srt, vtt "
     "[default: md,json]. srt/vtt re-flow speaker turns into subtitle cues.",
 )
+@_vocab_options
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def transcribe(
     audio_file: Path,
@@ -431,6 +520,11 @@ def transcribe(
     use_reid: bool,
     reid_threshold: float | None,
     formats: str,
+    glossary: tuple[str, ...],
+    glossary_file: Path | None,
+    attendee: tuple[str, ...],
+    glossary_threshold: float | None,
+    profile_store: Path | None,
     print_markdown: bool,
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).
@@ -441,10 +535,12 @@ def transcribe(
     meetings or re-transcription.
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
+    from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
     from stenograf.pipeline import finalize_channel, relabel_speakers
 
     started = time.monotonic()
     write_formats = _parse_formats(formats)
+    glossary_terms, attendee_names = _collect_terms(glossary, glossary_file, attendee)
     language = Language(lang) if lang else None
 
     samples = load_audio(audio_file)
@@ -452,9 +548,15 @@ def transcribe(
     click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)})")
 
     asr, vad, diarizer = _load_backends(need_diarizer=speakers != 1)
-    reid = _load_reid(enabled=use_reid, threshold=reid_threshold) if diarizer is not None else None
+    reid = (
+        _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=profile_store)
+        if diarizer is not None
+        else None
+    )
     if reid is not None:
         click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
+    if glossary_terms or attendee_names:
+        click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
 
     def progress(stage: str, done: int, total: int) -> None:
         if stage == "asr" and done == 0:
@@ -474,15 +576,23 @@ def transcribe(
             on_progress=progress,
         )
     )
+    threshold = DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
+    entries = apply_glossary(
+        entries, glossary=glossary_terms, attendee_names=attendee_names, threshold=threshold
+    )
     if language is None:
         from stenograf.lid import detect_language
 
         language = detect_language(" ".join(e.text for e in entries))
         if language is not None:
             click.echo(f"language: detected {language.value}")
-    transcript = Transcript(
-        language=language, profile=MeetingProfile(language=language), entries=entries
+    profile = MeetingProfile(
+        language=language,
+        glossary=glossary_terms,
+        attendee_names=attendee_names,
+        speaker_profile_store=profile_store,
     )
+    transcript = Transcript(language=language, profile=profile, entries=entries)
 
     paths = _write_transcript(transcript, out or audio_file.parent, audio_file.stem, write_formats)
     elapsed = time.monotonic() - started
@@ -528,20 +638,22 @@ def _load_diarizer(*, need: bool = True):
     return SherpaOnnxDiarizer(progress=_model_progress)
 
 
-def _load_reid(*, enabled: bool, threshold: float | None):
+def _load_reid(*, enabled: bool, threshold: float | None, store_path: Path | None = None):
     """Build the cross-meeting re-ID resolver from the saved profile store, or ``None``.
 
     Returns ``None`` when re-ID is turned off or the store holds no profiles for
     the active embedding model — so the finalize pass is byte-for-byte unchanged
     without enrolled profiles (match-only, zero behaviour change; PLAN.md Phase 3
-    Task 1b/1c). ``threshold=None`` uses the store default (0.5).
+    Task 1b/1c). ``threshold=None`` uses the store default (0.5). ``store_path``
+    (``--profile-store`` / ``MeetingProfile.speaker_profile_store``) overrides the
+    default store location.
     """
     if not enabled:
         return None
     from stenograf import models
     from stenograf.profiles import ProfileStore, SpeakerReID
 
-    store = ProfileStore.load()
+    store = ProfileStore.load(store_path)
     model = models.SPEAKER_EMBEDDING.name
     if not store.for_model(model):
         return None

@@ -901,6 +901,40 @@ untouched (the channel-coarse → diarized swap in `finalize_channel` is the sea
   fields + `json.dumps(default=str)` Path-safety. An optional `prompt` param on
   `ASRBackend.transcribe` (Whisper-only effect, no-op on Parakeet) is a cheap add if
   wanted, documented as such.
+  *Status (July 2026): shipped (`stenograf.glossary`, `tests/test_glossary.py`).
+  Deterministic post-correction over stdlib `difflib` (no ML, no new dependency):
+  `apply_glossary` snaps transcript word tokens to canonical glossary/attendee
+  spellings when their normalized similarity clears a threshold (default 0.82,
+  tunable). Matching is casefold + NFKD accent/umlaut-folded so German ä/ö/ü/ß
+  spellings match their ASCII-ish transcriptions, and operates on whole word
+  windows — an n-word window snaps to the term's n canonical tokens, **preserving
+  each word's timing and attached punctuation**, so the retained word timestamps
+  (0e) and the SRT/VTT cues (2a) stay in sync. `words` and `text` are corrected
+  independently with the same terms (never rebuilding one from the other) so a
+  backend whose words don't fully cover its text can't truncate. Guardrails against
+  over-correction: high threshold, a 4-char minimum term length, and greedy
+  longest-window-wins non-overlapping matching. Attendee names are registered whole
+  **and** per token (first/last correct individually). Known limit: term and
+  transcription must share a token count (no split/merge across word boundaries).
+  `MeetingProfile` gained `glossary`/`attendee_names` (tuple-coerced) +
+  `speaker_profile_store` (Path); `Transcript.to_json` uses `default=str` for the
+  Path. CLI: `steno start`/`transcribe` gained `--glossary` (repeatable, comma-list)
+  / `--glossary-file` / `--attendee` / `--glossary-threshold` / `--profile-store`
+  (a shared `_vocab_options`, gathered by `_collect_terms`); correction runs in
+  `MeetingRecorder.finalize` (authoritative transcript only — checkpoints stay raw)
+  and in the `transcribe` finalize; `--profile-store` threads into `_load_reid`.
+  **The optional `prompt` param on `ASRBackend.transcribe` was deliberately NOT
+  added** — Parakeet ignores it and Whisper is a demoted fallback, so the payoff
+  didn't justify touching the ASR ABC + every backend (the plan scoped it "if
+  wanted"). Tests: word/text correction, timing + punctuation preservation,
+  partial-word-coverage no-truncation, multi-word window, threshold gate,
+  over-correction guard, `build_terms` dedup/expand/min-length, config coercion,
+  Path-safe JSON, CLI correction path. **Verified end-to-end with the real parakeet
+  backend** (unit tests use fakes): `steno transcribe eval/audio/de-1.wav --glossary
+  "Bierkliniken, Schmieder"` snapped the real ASR tokens "Bierklinik"→"Bierkliniken"
+  and both "Schmiederer"→"Schmieder" with word timings preserved into the JSON,
+  while correctly leaving the compound "Argus-Bierklinik" untouched (below
+  threshold), at 65× realtime.*
 
 **Stage 3 — Auto-detection polish.**
 - **3a — local-speaker-count estimation.** Mechanism is one line (`plan_channels` passes

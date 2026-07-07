@@ -110,6 +110,23 @@ def test_transcribe_rejects_unknown_format(tmp_path, monkeypatch):
     assert "unknown format" in result.output
 
 
+def test_transcribe_glossary_corrects_the_transcript(tmp_path, monkeypatch):
+    # FakeASR emits "...eine gute idee für uns alle"; the glossary snaps "idee"
+    # to its canonical spelling in the written transcript.
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--glossary", "Idee"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "glossary: 1 term(s), 0 name(s)" in result.output
+    md = (tmp_path / "meeting.transcript.md").read_text()
+    assert "gute Idee für" in md
+
+
 def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
     # Default is live: a non-TTY runner gets the plain caption stream, then the
     # on-stop finalize swap. The whole live path runs through the real orchestrator.

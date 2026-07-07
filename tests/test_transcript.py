@@ -57,6 +57,24 @@ def test_entry_without_words_serializes_empty_list():
     assert data["entries"][0]["words"] == []
 
 
+def test_json_handles_a_path_valued_profile_field():
+    # MeetingProfile.speaker_profile_store is a Path; to_json must not choke on it.
+    from pathlib import Path
+
+    transcript = Transcript(
+        language=Language.GERMAN,
+        profile=MeetingProfile(
+            language=Language.GERMAN,
+            glossary=("Kubernetes",),
+            speaker_profile_store=Path("/tmp/store.json"),
+        ),
+        entries=[],
+    )
+    data = json.loads(transcript.to_json())
+    assert data["profile"]["glossary"] == ["Kubernetes"]
+    assert data["profile"]["speaker_profile_store"] == "/tmp/store.json"
+
+
 def _long_turn(speaker: str, n: int, *, step: float = 0.6, dur: float = 0.5, t0: float = 0.0):
     words = tuple(Word(f"wort{i}", start=t0 + i * step, end=t0 + i * step + dur) for i in range(n))
     return TranscriptEntry(

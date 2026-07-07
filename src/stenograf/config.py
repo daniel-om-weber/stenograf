@@ -7,8 +7,9 @@ automatically".
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 
 class Language(StrEnum):
@@ -29,6 +30,14 @@ class MeetingProfile:
     language: Language | None = None
     local_speakers: int | None = None
     remote_speakers: int | None = None
+    glossary: tuple[str, ...] = ()
+    """Domain terms to snap the finalized transcript to (Parakeet has no
+    decode-time biasing, so vocabulary is a text post-correction — see
+    ``stenograf.glossary`` and PLAN.md §5 Task 2b)."""
+    attendee_names: tuple[str, ...] = ()
+    """Participant names, corrected like the glossary (also token-by-token)."""
+    speaker_profile_store: Path | None = field(default=None)
+    """Override for the cross-meeting re-ID profile store; ``None`` = default store."""
 
     def __post_init__(self) -> None:
         for name in ("local_speakers", "remote_speakers"):
@@ -37,6 +46,12 @@ class MeetingProfile:
                 raise ValueError(f"{name} must be between 0 and 8, got {count}")
         if self.local_speakers == 0 and self.remote_speakers == 0:
             raise ValueError("a meeting needs at least one speaker")
+        # Normalize the free-form fields so the profile stays hashable/serializable
+        # regardless of what the caller passed (a list of terms, a str path).
+        object.__setattr__(self, "glossary", tuple(self.glossary))
+        object.__setattr__(self, "attendee_names", tuple(self.attendee_names))
+        if self.speaker_profile_store is not None:
+            object.__setattr__(self, "speaker_profile_store", Path(self.speaker_profile_store))
 
     @property
     def mode(self) -> MeetingMode | None:
