@@ -68,6 +68,16 @@ def test_vocab_fields_are_coerced_and_hashable():
     hash(profile)  # must not raise
 
 
+def test_title_defaults_to_none():
+    assert MeetingProfile().title is None
+
+
+def test_title_is_stripped_and_blank_collapses_to_none():
+    assert MeetingProfile(title="  Weekly sync  ").title == "Weekly sync"
+    assert MeetingProfile(title="   ").title is None
+    assert MeetingProfile(title="").title is None
+
+
 def test_resolve_value_explicit_wins_over_detected():
     assert resolve_value(Language.GERMAN, Language.ENGLISH) == ResolvedValue(
         Language.GERMAN, Provenance.EXPLICIT

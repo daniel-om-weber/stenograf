@@ -1200,6 +1200,16 @@ marks a hard prerequisite):
   web reader (C6), and `steno notes` (D3) build on.
 - **A2 — add `MeetingProfile.title`.** Small field used by the archive record and the notes
   prompt (both siblings want it); `__post_init__` already normalizes the profile. `[dep: none]`
+  *Status (July 2026): shipped (`stenograf.config`, `tests/test_config.py`). Optional
+  `title: str | None = None` on `MeetingProfile`; `__post_init__` strips it and collapses a
+  blank/whitespace-only title to `None` (so `""` and `None` aren't two states), alongside
+  the existing glossary/store normalization. It serializes through `asdict` into the
+  transcript JSON's `profile` and reloads via the A1 `Transcript.from_json` (added to
+  `_profile_from_json`; a legacy transcript with no `title` key reads back as `None`, no
+  version bump — additive field). Tests: default-None + strip/blank-collapse
+  normalization, and a `titled_profile` case in the `from_json` round-trip matrix. The
+  CLI `--title` entry point and the archive record's `title` land with the archive wiring
+  (B1/B2) and the notes prompt (D2), which read `profile.title`.
 
 **Stage B — Persistence: meeting archive + reverse-control channel.**
 - **B1 — `MeetingArchive` + `MeetingRecord` + index** (`stenograf/archive.py`, mirroring

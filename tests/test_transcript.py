@@ -266,6 +266,13 @@ _ROUNDTRIP_CASES = {
         ),
         entries=[],
     ),
+    "titled_profile": lambda: Transcript(
+        language=Language.GERMAN,
+        profile=MeetingProfile(
+            language=Language.GERMAN, local_speakers=1, remote_speakers=2, title="Weekly sync"
+        ),
+        entries=[TranscriptEntry(speaker="Local-1", text="hallo", start=0.0, end=0.5)],
+    ),
     "hour_scale_timestamps": lambda: Transcript(
         language=Language.ENGLISH,
         profile=MeetingProfile(language=Language.ENGLISH, local_speakers=1),
@@ -322,6 +329,7 @@ def test_from_json_rejects_a_newer_schema_version():
 def test_from_json_ignores_unknown_keys():
     # An additive future field must not break a current reader.
     obj = json.loads(make_transcript().to_json())
-    obj["title"] = "Weekly sync"
+    obj["future_field"] = {"anything": 1}
     obj["entries"][0]["sentiment"] = "neutral"
+    obj["profile"]["future_profile_field"] = "x"
     assert Transcript.from_json(json.dumps(obj)) == make_transcript()

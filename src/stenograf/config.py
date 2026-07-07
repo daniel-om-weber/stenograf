@@ -91,6 +91,9 @@ class MeetingProfile:
     """Participant names, corrected like the glossary (also token-by-token)."""
     speaker_profile_store: Path | None = field(default=None)
     """Override for the cross-meeting re-ID profile store; ``None`` = default store."""
+    title: str | None = None
+    """Human-readable meeting title. Surfaced by the meeting archive record and fed
+    to the notes-enhancement prompt (PLAN.md §5 Stage A2); ``None`` = untitled."""
 
     def __post_init__(self) -> None:
         for name in ("local_speakers", "remote_speakers"):
@@ -105,6 +108,10 @@ class MeetingProfile:
         object.__setattr__(self, "attendee_names", tuple(self.attendee_names))
         if self.speaker_profile_store is not None:
             object.__setattr__(self, "speaker_profile_store", Path(self.speaker_profile_store))
+        if self.title is not None:
+            # Collapse a blank/whitespace-only title to the single "untitled" form
+            # so an empty string and ``None`` don't read as two different states.
+            object.__setattr__(self, "title", self.title.strip() or None)
 
     @property
     def mode(self) -> MeetingMode | None:
