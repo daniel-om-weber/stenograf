@@ -17,6 +17,34 @@ from stenograf.transcript import Transcript
 # Sentinel for --record-audio given without a value (write next to the transcript).
 _RECORD_DEFAULT = "\0default"
 
+# The transcript formats stenograf can emit, and how each Transcript renders it.
+# SRT/VTT re-flow the retained word timestamps into short subtitle cues.
+_FORMATS: dict[str, str] = {
+    "md": "to_markdown",
+    "json": "to_json",
+    "srt": "to_srt",
+    "vtt": "to_vtt",
+}
+_DEFAULT_FORMATS = ("md", "json")
+
+
+def _parse_formats(spec: str) -> list[str]:
+    """Parse a ``--format`` value (comma-separated) into an ordered, de-duped list."""
+    formats: list[str] = []
+    for name in spec.split(","):
+        name = name.strip().lower()
+        if not name or name in formats:
+            continue
+        if name not in _FORMATS:
+            raise click.BadParameter(
+                f"unknown format {name!r}; choose from {', '.join(_FORMATS)}",
+                param_hint="--format",
+            )
+        formats.append(name)
+    if not formats:
+        raise click.BadParameter("no formats given", param_hint="--format")
+    return formats
+
 
 @click.group()
 @click.version_option(__version__, prog_name="stenograf")
@@ -114,6 +142,14 @@ def main() -> None:
     default=None,
     help="Cosine similarity required to match a saved profile [default: 0.5].",
 )
+@click.option(
+    "--format",
+    "formats",
+    default=",".join(_DEFAULT_FORMATS),
+    metavar="LIST",
+    help="Comma-separated transcript formats to write: md, json, srt, vtt "
+    "[default: md,json]. srt/vtt re-flow speaker turns into subtitle cues.",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def start(
     lang: str | None,
@@ -128,10 +164,13 @@ def start(
     plain: bool,
     use_reid: bool,
     reid_threshold: float | None,
+    formats: str,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
     from stenograf.session import MeetingRecorder, plan_channels
+
+    write_formats = _parse_formats(formats)
 
     profile = MeetingProfile(
         language=Language(lang) if lang else None,
@@ -192,12 +231,12 @@ def start(
             "meeting ended before a transcript was produced; any .partial checkpoint is kept"
         )
 
-    md_path, _ = _write_transcript(transcript, out_dir, stem)
+    paths = _write_transcript(transcript, out_dir, stem, write_formats)
     _cleanup_checkpoints(out_dir, stem)  # the final transcript supersedes them
     elapsed = time.monotonic() - started
     found = len({e.speaker for e in transcript.entries})
     click.echo(f"speakers: {found} found")
-    click.echo(f"wrote {md_path} and .json ({elapsed:.1f}s)")
+    click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s)")
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
@@ -283,7 +322,9 @@ def _checkpoint_writer(
     """
 
     def on_checkpoint(transcript: Transcript) -> None:
-        md, _ = _write_transcript(transcript, out_dir, f"{stem}.partial")
+        # Checkpoints are crash recovery, always plain md+json — subtitles of a
+        # partial transcript are pointless and the final write supersedes these.
+        md = _write_transcript(transcript, out_dir, f"{stem}.partial")[0]
         if announce is not None:
             announce(f"checkpoint: {md.name} ({len(transcript.entries)} entries)")
 
@@ -373,6 +414,14 @@ def _make_provider(replay: str | None, plans, *, paced: bool = False):
     default=None,
     help="Cosine similarity required to match a saved profile [default: 0.5].",
 )
+@click.option(
+    "--format",
+    "formats",
+    default=",".join(_DEFAULT_FORMATS),
+    metavar="LIST",
+    help="Comma-separated transcript formats to write: md, json, srt, vtt "
+    "[default: md,json]. srt/vtt re-flow speaker turns into subtitle cues.",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def transcribe(
     audio_file: Path,
@@ -381,18 +430,21 @@ def transcribe(
     out: Path | None,
     use_reid: bool,
     reid_threshold: float | None,
+    formats: str,
     print_markdown: bool,
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).
 
     Writes <name>.transcript.md and <name>.transcript.json next to the
-    input (or into --out). This is the same pipeline a live meeting runs
-    on stop; use it for recorded meetings or re-transcription.
+    input (or into --out); --format also emits srt/vtt subtitles. This is
+    the same pipeline a live meeting runs on stop; use it for recorded
+    meetings or re-transcription.
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
     from stenograf.pipeline import finalize_channel, relabel_speakers
 
     started = time.monotonic()
+    write_formats = _parse_formats(formats)
     language = Language(lang) if lang else None
 
     samples = load_audio(audio_file)
@@ -432,12 +484,12 @@ def transcribe(
         language=language, profile=MeetingProfile(language=language), entries=entries
     )
 
-    md_path, _ = _write_transcript(transcript, out or audio_file.parent, audio_file.stem)
+    paths = _write_transcript(transcript, out or audio_file.parent, audio_file.stem, write_formats)
     elapsed = time.monotonic() - started
     speed = duration / elapsed if elapsed else 0.0
     found = len({e.speaker for e in entries})
     click.echo(f"speakers: {found} found" if speakers is None else f"speakers: {speakers} given")
-    click.echo(f"wrote {md_path} and .json ({elapsed:.1f}s, {speed:.1f}x realtime)")
+    click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s, {speed:.1f}x realtime)")
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
@@ -496,14 +548,24 @@ def _load_reid(*, enabled: bool, threshold: float | None):
     return SpeakerReID(store, model, threshold=threshold)
 
 
-def _write_transcript(transcript: Transcript, out_dir: Path, stem: str) -> tuple[Path, Path]:
-    """Write the Markdown + JSON transcript — the only files stenograf emits."""
+def _write_transcript(
+    transcript: Transcript,
+    out_dir: Path,
+    stem: str,
+    formats: tuple[str, ...] | list[str] = _DEFAULT_FORMATS,
+) -> list[Path]:
+    """Write the transcript in each requested format; returns the written paths.
+
+    Markdown + JSON are the default (the only files stenograf emits unless the
+    user asks for subtitles); SRT/VTT are opt-in via ``--format``.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    md_path = out_dir / f"{stem}.transcript.md"
-    json_path = out_dir / f"{stem}.transcript.json"
-    md_path.write_text(transcript.to_markdown())
-    json_path.write_text(transcript.to_json())
-    return md_path, json_path
+    paths = []
+    for fmt in formats:
+        path = out_dir / f"{stem}.transcript.{fmt}"
+        path.write_text(getattr(transcript, _FORMATS[fmt])())
+        paths.append(path)
+    return paths
 
 
 def _cleanup_checkpoints(out_dir: Path, stem: str) -> None:
@@ -649,9 +711,7 @@ def _choose_cluster(embeddings, turns, cluster: str | None):
     durations: dict[str, float] = {}
     for turn in turns:
         durations[turn.speaker] = durations.get(turn.speaker, 0.0) + (turn.end - turn.start)
-    listing = "\n".join(
-        f"  {c}  ({durations.get(c, 0.0):.1f}s speech)" for c in sorted(embeddings)
-    )
+    listing = "\n".join(f"  {c}  ({durations.get(c, 0.0):.1f}s speech)" for c in sorted(embeddings))
     raise click.ClickException(
         "the clip has several speakers; re-run with --speaker to pick one:\n" + listing
     )

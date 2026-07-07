@@ -875,6 +875,25 @@ untouched (the channel-coarse → diarized swap in `finalize_channel` is the sea
   short cues using the 0e word times (entries are gap-split speaker turns, too long as
   raw cues). Time-overlapping Local/Remote cues are legal in both formats — pick the
   policy explicitly.
+  *Status (July 2026): shipped (`stenograf.transcript`, `tests/test_transcript.py`).
+  `to_srt`/`to_vtt` re-flow each entry's retained word timestamps (0e) into short
+  cues bounded by three budgets — 84 chars of spoken text, 6 s, and a 1 s internal
+  pause — falling back to one whole-turn cue when a wordless backend (Whisper/Voxtral)
+  leaves nothing to re-flow. Cue text is greedily wrapped at 42 chars; each cue carries
+  its speaker label (SRT `Name: ` prefix, VTT `<v Name>…</v>` voice span with `&<>`
+  escaped). **Overlap policy: every speaker's cues are emitted independently and sorted
+  by start time — time-overlapping Local/Remote cues are allowed to coexist (both
+  formats permit it) and the per-cue label disambiguates them, rather than merging or
+  splitting overlaps.** SRT uses `HH:MM:SS,mmm`, VTT `HH:MM:SS.mmm` (integer-ms rounding,
+  no float drift). CLI: `steno start`/`transcribe` gained `--format` (comma list,
+  default `md,json`; `_parse_formats` validates + de-dupes); `_write_transcript` writes
+  each requested format and returns the paths; the `.partial` crash checkpoint stays
+  md+json (subtitles of a partial are pointless). Tests cover re-flow, timestamp forms,
+  voice-tag escaping, wordless fallback, cross-speaker start-ordering, and the CLI
+  format-select/reject paths. **Verified end-to-end with the real parakeet backend**
+  (unit tests use fakes): `steno transcribe eval/audio/de-1.wav --format md,json,srt,vtt`
+  produced 102 well-formed cues from real word timestamps (each within budget, valid
+  `WEBVTT`/SRT structure) at 56× realtime.*
 - **2b — glossary/attendees via post-correction.** Fuzzy/phonetic match of a short
   glossary + attendee names against the finalized transcript (model-agnostic,
   deterministic, testable) — the honest lever, since Parakeet has no decode-time

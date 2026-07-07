@@ -78,6 +78,38 @@ def test_transcribe_writes_outputs_and_detects_language(tmp_path, monkeypatch):
     assert "language: detected de" in result.output  # LID ran over the German text
 
 
+def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--format", "srt,vtt"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "meeting.transcript.srt").exists()
+    assert (tmp_path / "meeting.transcript.vtt").exists()
+    # Only the requested formats — md/json are not written when --format overrides them.
+    assert not (tmp_path / "meeting.transcript.md").exists()
+    assert not (tmp_path / "meeting.transcript.json").exists()
+    assert (tmp_path / "meeting.transcript.vtt").read_text().startswith("WEBVTT")
+    assert "meeting.transcript.srt" in result.output
+
+
+def test_transcribe_rejects_unknown_format(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--format", "docx"]
+    )
+
+    assert result.exit_code != 0
+    assert "unknown format" in result.output
+
+
 def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
     # Default is live: a non-TTY runner gets the plain caption stream, then the
     # on-stop finalize swap. The whole live path runs through the real orchestrator.
