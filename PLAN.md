@@ -505,6 +505,10 @@ Speaker re-ID with embedding profiles ("Daniel" across meetings), user glossary 
 attendee-name prompting, overlap flagging, export formats, config for per-app taps,
 local-speaker-count estimation and meeting-mode auto-detection (language and
 remote-count auto-detection ship earlier, in Phase 1).
+*Status (July 2026): Phase 2 critically reviewed (four-subagent audit); detailed
+Phase 3 build plan below, leading with a foundations/hardening stage before speaker
+re-ID. Glossary lands as text post-correction (Parakeet has no decode-time prompt);
+overlap flagging deferred (sherpa's greedy clustering rarely emits overlapping turns).*
 
 **Phase 4 — Product layer + Linux.**
 Local web UI (live captions, meeting archive, click-to-jump transcript), optional
@@ -709,6 +713,109 @@ accuracy is finalize's concern, characterized once (`de-1`, 10.3% WER).
 
 CPU budget target (spike-measured): **~7–10% of one accelerator during speech, ~0%
 in silence**, live captions ~10% WER, ~1.5 s cadence.
+
+### Phase 3 build plan — speaker polish + vocabulary + auto-detection
+
+Phase 2's shipped code was critically reviewed before starting Phase 3 (July 2026,
+four-subagent audit: live/orchestration, accuracy core, I/O edges, tests/eval).
+Verdict: the live concurrency spine (`SessionStore.view`, `AudioBus` wakeups,
+single-flight `LiveWorker`, LocalAgreement-2 monotonicity) is sound and preserved
+as-is; the real risks are at the *edges* and in *measurability*. Three findings shape
+the sequencing: (a) every test runs on fakes — the real `SherpaOnnxDiarizer`/parakeet
+paths are verified only by manual runs, and re-ID stacks a second sherpa path onto that
+untested surface; (b) no speaker-labeled ground truth exists anywhere (refs are
+label-free plain text; no RTTM, no DER scorer), so diarization/re-ID changes are
+currently unmeasurable; (c) two lifecycle bugs lose the finalized transcript on a
+double quit/interrupt during finalize. Two library facts were verified against the
+*installed* packages and lock two design decisions: sherpa's
+`OfflineSpeakerDiarization` result carries **no embeddings** (re-ID needs a separate
+`SpeakerEmbeddingExtractor`), and parakeet-mlx `generate()` has **no prompt/hotword
+parameter** (a glossary lever is text post-correction, not `initial_prompt`).
+
+So Phase 3 leads with a foundations/hardening stage that makes the headline feature
+(speaker re-ID) both *safe to build on* and *measurable*, then builds re-ID, then the
+largely-independent export/vocabulary and auto-detection work.
+
+**Stage 0 — Foundations & hardening (first; small, unblocks the rest).**
+- **0a — finalize crash on silent channels (HIGH).** `finalize_channel` runs
+  `diarizer.diarize` unconditionally even when VAD found no words, and
+  `MeetingRecorder.finalize` has no per-channel guard, so a sherpa failure on a
+  fully-silent channel (silent remote, dead second mic) can lose *both* channels'
+  transcripts. Compute words first, skip diarization + return `[]` when there are none;
+  isolate per-channel finalize failures.
+- **0b — transcript-loss on double quit/interrupt (HIGH).** A second `q`/Ctrl-C during
+  the on-stop finalize makes `serve()` return `None` (the background meeting thread has
+  not assigned `result["transcript"]` yet) → CLI crashes on `None.to_markdown()`,
+  finalized transcript lost. Capture the authoritative transcript into `result` before
+  emitting `finalized`/exiting; join the meeting thread before reading; guard
+  `_write_transcript` against `None`; wrap the on-stop `finalize()` so a second
+  interrupt cannot drop it. This `serve` pattern is the template the Phase 4 web UI will
+  copy — lock it down now.
+- **0c — first real-backend `SherpaOnnxDiarizer` test.** All diarization tests use
+  `FakeDiarizer`. Add a real-library test (known-count, `num_speakers=None` estimation,
+  `set_config` count-change rebuild), gated behind a model-availability marker. This is
+  the surface re-ID extends; the MLX thread-stream bug is precedent for "real backend
+  breaks what fakes pass."
+- **0d — speaker-labeled reference data + DER/attribution scorer (gating
+  prerequisite).** Hand-label per-channel speaker turns for `de-1`/`de-2`/`en-1`
+  (RTTM), add a DER + word-attribution scorer to `eval/`. Start this *first* — it is the
+  long pole, and everything speaker-centric (re-ID threshold tuning, diarization
+  upgrades) is unmeasurable without it.
+- **0e — retain word timestamps on `TranscriptEntry`.** Merge/group already hold the
+  word list before collapsing it to a string; add an optional `words` field to the
+  entry and serialize it, honoring §Outputs' word-level-JSON promise and unblocking
+  subtitle-grade SRT/VTT.
+- **0f — load-shedding in `LiveWorker`.** The reconcile "catch-up" currently feeds the
+  whole backlog into one ever-larger decode (positive feedback if inference falls below
+  realtime). Add a "backlog > `window_cap` → skip the window forward" branch so live
+  degrades to a caption *gap*, not a spiral — before Phase 3 puts per-frame speaker work
+  on the same single worker.
+
+**Stage 1 — Speaker re-ID (headline).** Additive interface; live/orchestration
+untouched (the channel-coarse → diarized swap in `finalize_channel` is the seam).
+- **1a — `DiarizationResult{turns, embeddings}` + `Diarizer.diarize_with_embeddings()`**
+  (non-abstract, default `= (diarize(...), {})`). `SherpaOnnxDiarizer` holds one lazy
+  `SpeakerEmbeddingExtractor` (same `models.SPEAKER_EMBEDDING` file), embeds each
+  cluster's segment slices, L2-normalizes + means per cluster; duration-weight or drop
+  sub-~0.5 s segments. `SpeakerTurn` unchanged (embeddings are per-cluster).
+- **1b — profile store + cosine relabel.** New `profiles` module: a local store keyed by
+  the embedding-model id (profiles are model-bound — record which model produced each),
+  cosine-match ~0.5. Post-diarization relabel step maps clusters → named profiles or
+  enrolls unmatched ones.
+- **1c — enroll/name UX + CLI** (`steno profiles` list/enroll; name unmatched clusters
+  post-meeting). Tune the ~0.5 threshold on the 0d data.
+
+**Stage 2 — Export & vocabulary (largely independent).**
+- **2a — SRT/VTT export.** `to_srt`/`to_vtt` + `--format md,json,srt,vtt`; re-flow into
+  short cues using the 0e word times (entries are gap-split speaker turns, too long as
+  raw cues). Time-overlapping Local/Remote cues are legal in both formats — pick the
+  policy explicitly.
+- **2b — glossary/attendees via post-correction.** Fuzzy/phonetic match of a short
+  glossary + attendee names against the finalized transcript (model-agnostic,
+  deterministic, testable) — the honest lever, since Parakeet has no decode-time
+  biasing. `MeetingProfile` gains `glossary`/`attendee_names`/`speaker_profile_store`
+  fields + `json.dumps(default=str)` Path-safety. An optional `prompt` param on
+  `ASRBackend.transcribe` (Whisper-only effect, no-op on Parakeet) is a cheap add if
+  wanted, documented as such.
+
+**Stage 3 — Auto-detection polish.**
+- **3a — local-speaker-count estimation.** Mechanism is one line (`plan_channels` passes
+  `None` on the mic channel; remote-count estimation already ships); the real work is
+  far-field estimation *quality*, surfacing "Detected: N" as editable, and the cheap
+  re-run (already supported over the retained store).
+- **3b — parameter provenance** (`explicit | detected | default`) written back to the
+  transcript/profile (today only `None`=auto, which collapses once filled, and detected
+  values are not recorded back). Meeting-mode (online/hybrid/in-room) detection needs
+  capture-side signals (meeting-app process + tap activity) → late Phase 3 / Phase 4.
+
+**Deferred (noted, not built in Phase 3):** overlap flagging is structurally
+near-silent with sherpa's greedy clustering (rarely emits overlapping turns) — real
+overlap needs the community-1/VBx upgrade, so keep the merge code but do not
+over-invest; the wheel build hook that bundles/signs `stenocap` (no non-repo install
+works without it) is a Phase 4 distribution blocker; smaller hardening (atomic model
+extraction, per-channel `WavTee` drain so a laggard channel cannot stall the tee,
+piping helper stderr so it does not splatter the TUI) folds into Stage 0
+opportunistically.
 
 ---
 
