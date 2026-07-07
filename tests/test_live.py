@@ -206,6 +206,32 @@ class TestFlushAndReset:
         assert dec.committed_words == ()
         assert dec.interim == ""
 
+    def test_drop_window_skips_forward_without_padding_silence(self):
+        # Load-shed (Task 0f): after committing an early utterance, drop the window
+        # and resume far ahead. The skipped span must be a caption *gap* — no silence
+        # is padded across it, and the committed stream stays monotonic.
+        asr = ScriptedASR([
+            [w("a", 0.1, 0.4), w("b", 0.6, 0.9)],
+            [w("a", 0.1, 0.4), w("b", 0.6, 0.9)],  # commit a, b near t=0
+            [w("c", 0.1, 0.4), w("d", 0.6, 0.9)],
+            [w("c", 0.1, 0.4), w("d", 0.6, 0.9)],  # commit c, d near t=30
+        ])
+        dec = LiveDecoder(asr, grey_zone=0.0)
+        dec.feed(pcm(1.0), 0.0)
+        dec.feed(pcm(1.0), 1.0)
+        assert dec.committed_text == "a b"
+
+        dec.drop_window()
+        dec.feed(pcm(1.0), 30.0)  # a 29 s jump forward — no silence padded
+        dec.feed(pcm(1.0), 31.0)
+
+        starts = [x.start for x in dec.committed_words]
+        assert [x.text for x in dec.committed_words] == ["a", "b", "c", "d"]
+        assert starts == sorted(starts)  # append-only across the gap
+        # "c" lands at its new offset (~30 s), proving the buffer origin was cleared
+        # rather than the gap being padded (which would have kept it near ~1 s).
+        assert 30.0 <= dec.committed_words[2].start < 31.0
+
 
 class TestVadGating:
     def test_no_decode_in_silence(self):

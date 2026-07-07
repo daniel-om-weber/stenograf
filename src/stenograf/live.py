@@ -163,6 +163,20 @@ class LiveDecoder:
         self._buffer = []
         self._reset_buf()
 
+    def drop_window(self) -> None:
+        """Abandon the retained window and pending tail without committing them.
+
+        A live-pass **load-shed**. Unlike :meth:`reset`, this keeps no pre-roll and
+        clears the buffer origin, so the next :meth:`feed` restarts clean at its own
+        ``t_offset`` — no silence is padded across the skipped span. Committed
+        history is left intact and still monotonic; the abandoned audio becomes a
+        caption gap the finalize pass fills on stop. The worker calls this when
+        inference has fallen so far behind that feeding the whole backlog would
+        spiral (PLAN.md §5, Task 0f)."""
+        self._buf = np.zeros(0, dtype=np.float32)
+        self._buf_start = None
+        self._buffer = []
+
     @property
     def committed_words(self) -> tuple[Word, ...]:
         return tuple(self._committed)

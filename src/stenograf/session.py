@@ -393,6 +393,7 @@ class LiveWorker(threading.Thread):
         self._on_flush = on_flush
         self._flush_interval = flush_interval
         self.error: BaseException | None = None
+        self.shed_seconds = 0.0  # audio skipped by load-shedding (observability + tests)
 
     def run(self) -> None:
         seen: dict[Channel, float] = {ch: 0.0 for ch in self._channels}
@@ -403,9 +404,10 @@ class LiveWorker(threading.Thread):
                 marks, closed = self._bus.wait(seen)
                 for ch in self._channels:
                     if marks[ch] > seen[ch]:
-                        chunk = self._store.view(ch, seen[ch], marks[ch])
+                        start = self._shed_if_behind(ch, seen[ch], marks[ch])
+                        chunk = self._store.view(ch, start, marks[ch])
                         with self._inference_lock:
-                            update = self._decoders[ch].feed(chunk, seen[ch])
+                            update = self._decoders[ch].feed(chunk, start)
                         seen[ch] = marks[ch]
                         self._emit(ch, update)
                 if flushing:
@@ -421,6 +423,24 @@ class LiveWorker(threading.Thread):
                     return
         except Exception as exc:  # surfaced on join, like the capture thread
             self.error = exc
+
+    def _shed_if_behind(self, channel: Channel, start: float, mark: float) -> float:
+        """Drop the middle of an over-long backlog so a slow decode can't spiral.
+
+        Normally the worker feeds every second of audio since it last looked. But
+        if inference has fallen so far behind that the unprocessed backlog exceeds a
+        full decode window, feeding it all at once would make that decode even
+        larger — positive feedback that spirals below real time. Instead abandon the
+        decoder's window and restart at the recent edge, feeding only the last
+        ``window_cap`` seconds: the skipped span becomes a caption *gap* (the
+        finalize pass fills it on stop), not an ever-growing decode. Returns the
+        (possibly advanced) start second to feed from (PLAN.md §5, Task 0f)."""
+        cap = self._decoders[channel].window_cap
+        if mark - start <= cap:
+            return start
+        self.shed_seconds += (mark - cap) - start
+        self._decoders[channel].drop_window()
+        return mark - cap
 
     def _emit(self, channel: Channel, update: StreamingUpdate) -> None:
         if self._on_update is not None and (update.committed or update.interim):

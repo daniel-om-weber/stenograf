@@ -29,12 +29,18 @@ from stenograf.view import LiveView
 
 
 class StubDecoder:
-    """Records what it was fed so tests can assert coverage; emits nothing."""
+    """Records what it was fed so tests can assert coverage; emits nothing.
 
-    def __init__(self) -> None:
+    ``window_cap`` defaults to infinity so the worker's load-shedding branch never
+    fires unless a test opts into it — the coverage tests feed tiny buffers and must
+    tile exactly. ``drop_window`` records each load-shed abandon."""
+
+    def __init__(self, window_cap: float = float("inf")) -> None:
         self.received: list[np.ndarray] = []
         self.offsets: list[float] = []
         self.flushed = 0
+        self.dropped = 0
+        self.window_cap = window_cap
 
     def feed(self, samples: np.ndarray, t_offset: float) -> StreamingUpdate:
         self.received.append(np.asarray(samples).copy())
@@ -44,6 +50,9 @@ class StubDecoder:
     def flush(self) -> StreamingUpdate:
         self.flushed += 1
         return StreamingUpdate((), "")
+
+    def drop_window(self) -> None:
+        self.dropped += 1
 
 
 class FakeASR(ASRBackend):
@@ -204,6 +213,51 @@ class TestLiveWorker:
         assert not worker.is_alive()
         assert worker.error is None
         assert flushes  # committed text flushed at least once (reconciled → once here)
+
+    def test_load_sheds_an_over_long_backlog(self):
+        # Inference fell far behind: 40 s of audio are already present and the bus
+        # is closed before the worker looks. Feeding all 40 s into one decode would
+        # spiral, so the worker abandons the window and feeds only the last
+        # window_cap (15) seconds — the 0–25 s span is a caption gap the finalize
+        # pass fills on stop.
+        store = SessionStore({Channel.MIC})
+        for f in _frames(Channel.MIC, np.ones(40 * SAMPLE_RATE, dtype=np.int16), SAMPLE_RATE):
+            store.append(f)
+        bus = AudioBus([Channel.MIC])
+        bus.advance(Channel.MIC, store.duration(Channel.MIC))
+        bus.close()
+
+        stub = StubDecoder(window_cap=15.0)
+        worker = LiveWorker(
+            store, bus, {Channel.MIC: stub}, threading.Lock(), channels=[Channel.MIC]
+        )
+        worker.start()
+        worker.join(timeout=5)
+
+        assert not worker.is_alive() and worker.error is None
+        assert stub.dropped == 1  # the window was abandoned, not grown
+        assert stub.offsets == [25.0]  # restarted at mark - window_cap
+        assert len(stub.received[0]) == 15 * SAMPLE_RATE  # only a full window fed
+        assert worker.shed_seconds == 25.0  # 0–25 s skipped
+
+    def test_normal_backlog_is_not_shed(self):
+        # A backlog within window_cap feeds whole — no gap, no drop.
+        store = SessionStore({Channel.MIC})
+        for f in _frames(Channel.MIC, np.ones(5 * SAMPLE_RATE, dtype=np.int16), SAMPLE_RATE):
+            store.append(f)
+        bus = AudioBus([Channel.MIC])
+        bus.advance(Channel.MIC, store.duration(Channel.MIC))
+        bus.close()
+
+        stub = StubDecoder(window_cap=15.0)
+        worker = LiveWorker(
+            store, bus, {Channel.MIC: stub}, threading.Lock(), channels=[Channel.MIC]
+        )
+        worker.start()
+        worker.join(timeout=5)
+
+        assert stub.dropped == 0 and worker.shed_seconds == 0.0
+        assert stub.offsets == [0.0]
 
     def test_no_flush_without_a_callback(self):
         store = SessionStore({Channel.MIC})
