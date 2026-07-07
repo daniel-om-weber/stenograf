@@ -2,13 +2,14 @@ import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE
-from stenograf.diarization.base import Diarizer, SpeakerTurn
+from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.pipeline import (
     finalize_channel,
     group_words,
     merge_words_turns,
     relabel_speakers,
 )
+from stenograf.transcript import TranscriptEntry
 
 
 def word(text: str, start: float, end: float) -> Word:
@@ -100,6 +101,19 @@ def test_relabel_speakers_by_first_appearance():
     turns = [turn("S7", 0.0, 0.5), turn("S2", 0.9, 1.5), turn("S7", 1.9, 2.5)]
     entries = relabel_speakers(merge_words_turns(words, turns))
     assert [e.speaker for e in entries] == ["Speaker 1", "Speaker 2", "Speaker 1"]
+
+
+def test_relabel_speakers_preserves_reid_profile_names():
+    # A re-ID'd cluster carries a profile name, not an S<n> label: it must pass
+    # through unchanged, while the remaining raw clusters are still templated —
+    # and the template numbering counts only the raw clusters.
+    entries = [
+        TranscriptEntry("Daniel", "a", 0.0, 0.5),
+        TranscriptEntry("S3", "b", 1.0, 1.5),
+        TranscriptEntry("Daniel", "c", 2.0, 2.5),
+    ]
+    relabeled = relabel_speakers(entries, "Local-{n}")
+    assert [e.speaker for e in relabeled] == ["Daniel", "Local-1", "Daniel"]
 
 
 def test_relabel_speakers_preserves_words():
@@ -226,9 +240,7 @@ class TestFinalizeChannel:
         assert entries[0].speaker == "S0"
 
     def test_empty_audio_yields_no_entries(self):
-        entries = finalize_channel(
-            np.zeros(0, dtype=np.float32), asr=FakeASR(), language=None
-        )
+        entries = finalize_channel(np.zeros(0, dtype=np.float32), asr=FakeASR(), language=None)
         assert entries == []
 
     def test_silent_channel_skips_diarization(self):
@@ -262,3 +274,101 @@ class TestFinalizeChannel:
         assert len(entries) == 1
         assert entries[0].text == "ganzer satz"
         assert entries[0].speaker == "S1"
+
+
+class EmbeddingDiarizer(Diarizer):
+    """A diarizer that carries per-cluster embeddings (the re-ID surface)."""
+
+    def __init__(self, turns, embeddings):
+        self.turns = turns
+        self.embeddings = embeddings
+        self.diarize_calls = 0
+        self.embed_calls = 0
+
+    def diarize(self, samples, num_speakers=None):
+        self.diarize_calls += 1
+        return self.turns
+
+    def diarize_with_embeddings(self, samples, num_speakers=None):
+        self.embed_calls += 1
+        return DiarizationResult(turns=self.turns, embeddings=self.embeddings)
+
+
+class MappingReID:
+    """A fake SpeakerResolver: relabels clusters by a fixed lookup."""
+
+    def __init__(self, names):
+        self.names = names
+        self.seen = None
+
+    def resolve(self, embeddings):
+        self.seen = dict(embeddings)
+        return {c: n for c, n in self.names.items() if c in embeddings}
+
+
+class TestFinalizeChannelReID:
+    def _samples(self):
+        return np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
+
+    def test_matched_cluster_takes_profile_name(self):
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0], np.float32)}
+        )
+        reid = MappingReID({"S0": "Daniel"})
+        entries = finalize_channel(
+            self._samples(),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+            reid=reid,
+        )
+        assert entries[0].speaker == "Daniel"
+        # Took the embeddings path, not the plain diarize path.
+        assert diarizer.embed_calls == 1
+        assert diarizer.diarize_calls == 0
+        # The resolver was handed the cluster embeddings.
+        assert set(reid.seen) == {"S0"}
+
+    def test_unmatched_cluster_keeps_raw_label(self):
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0], np.float32)}
+        )
+        reid = MappingReID({})  # matches nothing
+        entries = finalize_channel(
+            self._samples(),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+            reid=reid,
+        )
+        assert entries[0].speaker == "S0"
+
+    def test_no_reid_uses_plain_diarize(self):
+        diarizer = EmbeddingDiarizer([turn("S0", 0.0, 2.0)], {})
+        finalize_channel(
+            self._samples(),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+        )
+        assert diarizer.embed_calls == 0
+        assert diarizer.diarize_calls == 1
+
+    def test_reid_ignored_without_diarization(self):
+        # num_speakers=1 → no diarization → re-ID never runs (nothing to resolve).
+        diarizer = EmbeddingDiarizer([turn("S0", 0.0, 2.0)], {})
+        reid = MappingReID({"S0": "Daniel"})
+        entries = finalize_channel(
+            self._samples(),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=1,
+            reid=reid,
+        )
+        assert entries[0].speaker == "S0"
+        assert diarizer.embed_calls == 0
+        assert reid.seen is None

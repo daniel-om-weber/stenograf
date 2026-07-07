@@ -8,7 +8,8 @@ from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 from stenograf.config import Language, MeetingProfile
-from stenograf.diarization.base import Diarizer, SpeakerTurn
+from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+from stenograf.profiles import ProfileStore, SpeakerProfile, SpeakerReID
 from stenograf.session import (
     AudioBus,
     ChannelPlan,
@@ -255,6 +256,20 @@ class FakeDiarizer(Diarizer):
         return self.turns
 
 
+class EmbeddingDiarizer(Diarizer):
+    """FakeDiarizer that also carries a per-cluster embedding (the re-ID surface)."""
+
+    def __init__(self, turns: list[SpeakerTurn], embeddings: dict[str, np.ndarray]):
+        self.turns = turns
+        self.embeddings = embeddings
+
+    def diarize(self, samples, num_speakers=None):
+        return self.turns
+
+    def diarize_with_embeddings(self, samples, num_speakers=None):
+        return DiarizationResult(turns=self.turns, embeddings=self.embeddings)
+
+
 class RaisingDiarizer(Diarizer):
     """Throws on every diarize call — stands in for a mid-meeting backend fault."""
 
@@ -302,6 +317,44 @@ class TestMeetingRecorder:
         assert speakers == {"Local-1", "Remote-1"}
         # System channel was diarized with the known remote count; mic was not.
         assert diarizer.seen_num_speakers == 2
+
+    def test_reid_names_matched_cluster_and_survives_relabel(self):
+        # A cluster matching a stored profile is named by re-ID and must NOT be
+        # renumbered into the channel template (Remote-1) by finalize's relabel;
+        # an unmatched cluster still gets the template label.
+        model = "eres2net-voxceleb-16k.onnx"
+        store = ProfileStore(
+            profiles=[SpeakerProfile("Daniel", model, np.array([1.0, 0.0], np.float32))]
+        )
+        reid = SpeakerReID(store, model)
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = EmbeddingDiarizer(
+            [SpeakerTurn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0], np.float32)}
+        )
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=2),
+            asr=FakeASR(),
+            diarizer=diarizer,
+            reid=reid,
+        )
+        transcript = recorder.run(provider)
+        assert {e.speaker for e in transcript.entries} == {"Daniel"}
+
+    def test_no_reid_configured_keeps_channel_labels(self):
+        # Default (no re-ID) path is unchanged: raw clusters template to Remote-N.
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = EmbeddingDiarizer(
+            [SpeakerTurn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0], np.float32)}
+        )
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=2),
+            asr=FakeASR(),
+            diarizer=diarizer,
+        )
+        transcript = recorder.run(provider)
+        assert {e.speaker for e in transcript.entries} == {"Remote-1"}
 
     def test_channel_diarizer_failure_keeps_both_channels(self):
         # One channel's diarizer throwing must not lose the other channel's

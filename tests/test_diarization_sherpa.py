@@ -146,3 +146,24 @@ def test_distinct_clusters_have_distinct_embeddings(diarized):
     if len(vectors) < 2:
         pytest.skip("only one cluster embedded in this clip")
     assert float(vectors[0] @ vectors[1]) < 0.99
+
+
+def test_reid_round_trips_real_cluster_embeddings(diarized):
+    # Task 1b end-to-end on REAL eres2net vectors (fakes can't catch a
+    # dimension/geometry/threshold surprise): enrol each cluster as a profile,
+    # then the resolver must re-identify each cluster as itself. A self-match is
+    # cosine 1.0 — the maximum — so with the one-to-one constraint every cluster
+    # maps back to its own name.
+    from stenograf.profiles import ProfileStore, SpeakerReID
+
+    embeddings = diarized.embedded.embeddings
+    model = models.SPEAKER_EMBEDDING.name
+    store = ProfileStore(profiles=[])
+    for cluster, vector in embeddings.items():
+        store.enroll(f"person-{cluster}", vector, model)
+
+    mapping = SpeakerReID(store, model).resolve(embeddings)
+    assert mapping == {cluster: f"person-{cluster}" for cluster in embeddings}
+
+    # Scoped to the model: a query under a different embedding model matches nothing.
+    assert SpeakerReID(store, "some-other-model.onnx").resolve(embeddings) == {}

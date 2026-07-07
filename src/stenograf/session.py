@@ -45,7 +45,7 @@ from stenograf.config import Language, MeetingProfile
 from stenograf.diarization.base import Diarizer
 from stenograf.lid import detect_language
 from stenograf.live import LiveDecoder, StreamingUpdate
-from stenograf.pipeline import finalize_channel, group_words, relabel_speakers
+from stenograf.pipeline import SpeakerResolver, finalize_channel, group_words, relabel_speakers
 from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD
 from stenograf.view import LiveView
@@ -537,12 +537,14 @@ class MeetingRecorder:
         asr: ASRBackend,
         vad: SileroVAD | None = None,
         diarizer: Diarizer | None = None,
+        reid: SpeakerResolver | None = None,
         language: Language | None = None,
     ) -> None:
         self.profile = profile
         self.asr = asr
         self.vad = vad
         self.diarizer = diarizer
+        self.reid = reid
         self.language = language or profile.language
 
     def run(
@@ -800,14 +802,14 @@ class MeetingRecorder:
                 vad=self.vad,
                 diarizer=diarizer,
                 num_speakers=plan.num_speakers,
+                reid=self.reid,
             )
         except Exception as exc:  # noqa: BLE001 — resilience across channels is the point
             if diarizer is None:
                 view.error(f"{plan.channel}: finalize failed ({exc}); skipping channel")
                 return []
             view.error(
-                f"{plan.channel}: diarization failed ({exc}); "
-                "transcribing without speaker labels"
+                f"{plan.channel}: diarization failed ({exc}); transcribing without speaker labels"
             )
             try:
                 return finalize_channel(
@@ -862,8 +864,7 @@ class MeetingRecorder:
                 e.end + start_s,
                 e.provisional,
                 words=tuple(
-                    Word(w.text, w.start + start_s, w.end + start_s, w.confidence)
-                    for w in e.words
+                    Word(w.text, w.start + start_s, w.end + start_s, w.confidence) for w in e.words
                 ),
             )
             for e in raw

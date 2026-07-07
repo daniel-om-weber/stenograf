@@ -819,6 +819,27 @@ untouched (the channel-coarse → diarized swap in `finalize_channel` is the sea
   the embedding-model id (profiles are model-bound — record which model produced each),
   cosine-match ~0.5. Post-diarization relabel step maps clusters → named profiles or
   enrolls unmatched ones.
+  *Status (July 2026): shipped (`stenograf.profiles`, `tests/test_profiles.py`).
+  `SpeakerProfile` (name + embedding-model id + unit-norm mean + sample count) and
+  `ProfileStore` — atomic JSON in the platform **data** dir (`STENOGRAF_DATA` /
+  `~/Library/Application Support/stenograf`, deliberately not the re-downloadable model
+  cache), model-scoped `match`/`for_model` (a vector only compares against same-model
+  profiles), `enroll`/`rename`/`remove`/`reinforce` (sample-weighted running mean).
+  `SpeakerReID.resolve(embeddings)` does the cosine relabel: greedy **one-to-one**
+  cluster→profile assignment (two diarizer clusters can never collapse onto one
+  profile; unmatched/embedding-less clusters are omitted so the caller keeps its
+  channel-coarse label). Wired as an **opt-in, additive** seam: `finalize_channel`
+  gains a `reid` resolver (uses `diarize_with_embeddings`, renames matched clusters to
+  profile names), `relabel_speakers` now only renumbers raw `S<n>` labels so a matched
+  "Daniel" survives instead of becoming `Local-1`, and `MeetingRecorder(reid=…)` threads
+  it through the diarized finalize attempt. Default (no store) = zero behaviour change.
+  Verified on **real eres2net vectors** (`test_diarization_sherpa.py`): enrol each real
+  cluster, resolver re-identifies each as itself (self-match cosine 1.0), and a
+  different-model query matches nothing. **Enroll-on-the-fly is intentionally NOT wired
+  into the always-on finalize** (it would silently pollute the store with anonymous
+  profiles): the store's enroll/rename is built + tested for the 1c CLI to drive
+  explicitly ("name unmatched clusters post-meeting"); the wired default is match-only.
+  See [[phase3-verified-library-constraints]].*
 - **1c — enroll/name UX + CLI** (`steno profiles` list/enroll; name unmatched clusters
   post-meeting). Tune the ~0.5 threshold on the 0d data.
 

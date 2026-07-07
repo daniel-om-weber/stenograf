@@ -7,6 +7,12 @@ interleaves the results. ``steno transcribe`` runs it on a file.
 
 from __future__ import annotations
 
+import re
+from dataclasses import replace
+from typing import Protocol
+
+import numpy as np
+
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE
 from stenograf.config import Language
@@ -17,6 +23,22 @@ from stenograf.vad import SileroVAD, pack_windows
 MAX_ENTRY_GAP = 1.5
 """Silence (s) between words of one speaker that still reads as one entry."""
 
+_RAW_CLUSTER = re.compile(r"S\d+")
+"""Raw diarization cluster label (``S0``, ``S1``…), as emitted by
+:class:`~stenograf.diarization.base.SpeakerTurn` and :func:`merge_words_turns`.
+:func:`relabel_speakers` only renumbers labels of this shape; anything else (a
+re-ID profile name) is already final and passes through untouched."""
+
+
+class SpeakerResolver(Protocol):
+    """Maps a run's per-cluster voice embeddings to persistent speaker names.
+
+    Structurally satisfied by :class:`stenograf.profiles.SpeakerReID`; kept as a
+    Protocol so the accuracy core need not depend on the profile store.
+    """
+
+    def resolve(self, embeddings: dict[str, np.ndarray]) -> dict[str, str]: ...
+
 
 def finalize_channel(
     samples,
@@ -26,12 +48,19 @@ def finalize_channel(
     vad: SileroVAD | None = None,
     diarizer: Diarizer | None = None,
     num_speakers: int | None = None,
+    reid: SpeakerResolver | None = None,
     on_progress=None,
 ) -> list[TranscriptEntry]:
     """Transcribe one channel; returns entries with raw ``S<n>`` speaker labels.
 
     ``diarizer=None`` or ``num_speakers=1`` attributes everything to ``S0``.
     ``on_progress`` is called as ``on_progress(stage: str, done: int, total: int)``.
+
+    With ``reid`` given (and diarization running), the diarizer additionally emits
+    a per-cluster voice embedding and ``reid`` maps matched clusters to persistent
+    speaker-profile names; those entries carry the profile name instead of ``S<n>``
+    (cross-meeting re-ID, PLAN.md §2). Unmatched clusters keep their ``S<n>`` label
+    for the caller to template.
     """
     duration = len(samples) / SAMPLE_RATE
     if vad is not None:
@@ -76,8 +105,19 @@ def finalize_channel(
 
     if on_progress is not None:
         on_progress("diarization", 0, 1)
-    turns = diarizer.diarize(samples, num_speakers)
-    return merge_words_turns(words, turns)
+    if reid is not None:
+        result = diarizer.diarize_with_embeddings(samples, num_speakers)
+        turns = result.turns
+        names = reid.resolve(result.embeddings)
+    else:
+        turns = diarizer.diarize(samples, num_speakers)
+        names = {}
+    entries = merge_words_turns(words, turns)
+    if names:
+        entries = [
+            replace(e, speaker=names[e.speaker]) if e.speaker in names else e for e in entries
+        ]
+    return entries
 
 
 def _shift(seg: Segment, offset: float) -> Segment:
@@ -190,20 +230,17 @@ def _assign(word: Word, turns: list[SpeakerTurn]) -> tuple[str, bool]:
 def relabel_speakers(
     entries: list[TranscriptEntry], template: str = "Speaker {n}"
 ) -> list[TranscriptEntry]:
-    """Map raw ``S<n>`` labels to display names, numbered by first appearance."""
+    """Map raw ``S<n>`` cluster labels to display names, numbered by first
+    appearance. Labels that are not raw cluster labels — a speaker-profile name
+    assigned by re-ID — are already final and pass through unchanged (so a
+    matched "Daniel" is not renumbered into ``Local-1``)."""
     mapping: dict[str, str] = {}
     result = []
     for entry in entries:
-        if entry.speaker not in mapping:
-            mapping[entry.speaker] = template.format(n=len(mapping) + 1)
-        result.append(
-            TranscriptEntry(
-                speaker=mapping[entry.speaker],
-                text=entry.text,
-                start=entry.start,
-                end=entry.end,
-                provisional=entry.provisional,
-                words=entry.words,
-            )
-        )
+        label = entry.speaker
+        if _RAW_CLUSTER.fullmatch(label):
+            if label not in mapping:
+                mapping[label] = template.format(n=len(mapping) + 1)
+            label = mapping[label]
+        result.append(replace(entry, speaker=label))
     return result
