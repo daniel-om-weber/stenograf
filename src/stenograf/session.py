@@ -166,21 +166,38 @@ class ChannelPlan:
     label_template: str
 
 
+@dataclass(frozen=True)
+class SpeakerCount:
+    """How many speakers a channel asked for vs how many the finalize found.
+
+    ``requested`` is the plan's ``num_speakers`` (``None`` = estimated),
+    ``detected`` the number of distinct speakers in the finalized transcript.
+    Surfaced so the user can see an auto-detected count and, if it is wrong,
+    re-run finalize with an explicit count (PLAN.md §5 Stage 3a)."""
+
+    channel: Channel
+    requested: int | None
+    detected: int
+
+
 def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
     """Resolve which channels to record and each channel's speaker count.
 
-    The mic is recorded unless there is explicitly no local speaker
-    (``local_speakers == 0``, a listen-only session); an unknown local count
-    (``None``) defaults to 1 — a single local user — because far-field
-    local-count estimation is Phase 3 (PLAN.md §2). The system tap is recorded
-    unless the meeting is in-room (``remote_speakers == 0``); an unknown remote
-    count (``None``) means record it and estimate. ``MeetingProfile`` forbids
-    both counts being 0, so at least one channel is always planned.
+    Every count follows the same resolution order as elsewhere — explicit
+    setting > auto-detected > default — so an unknown count (``None``) means
+    "record the channel and estimate", never a hard-coded value. The mic is
+    recorded unless there is explicitly no local speaker (``local_speakers == 0``,
+    a listen-only session); the system tap unless the meeting is in-room
+    (``remote_speakers == 0``). Both channels estimate an unknown count: local
+    estimation is far-field and weaker than remote (PLAN.md §2), so the finalize
+    surfaces the detected count as editable. ``MeetingProfile`` forbids both
+    counts being 0, so at least one channel is always planned.
     """
     plans = []
     if profile.local_speakers != 0:
-        local = 1 if profile.local_speakers is None else profile.local_speakers
-        plans.append(ChannelPlan(Channel.MIC, local, _CHANNEL_LABEL[Channel.MIC]))
+        plans.append(
+            ChannelPlan(Channel.MIC, profile.local_speakers, _CHANNEL_LABEL[Channel.MIC])
+        )
     if profile.remote_speakers != 0:
         plans.append(
             ChannelPlan(Channel.SYSTEM, profile.remote_speakers, _CHANNEL_LABEL[Channel.SYSTEM])
@@ -551,6 +568,9 @@ class MeetingRecorder:
         self.glossary_threshold = (
             DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
         )
+        self.speaker_counts: list[SpeakerCount] = []
+        """Per-channel requested-vs-detected speaker counts from the last
+        :meth:`finalize`; the CLI reports estimated counts as editable."""
 
     def run(
         self,
@@ -772,6 +792,7 @@ class MeetingRecorder:
         plans = plans or plan_channels(self.profile)
         view = view or _CallbackView()
         entries: list[TranscriptEntry] = []
+        counts: list[SpeakerCount] = []
         for plan in plans:
             if plan.channel not in store.channels():
                 continue
@@ -779,7 +800,13 @@ class MeetingRecorder:
             samples = store.samples(plan.channel)
             diarizer = None if plan.num_speakers == 1 else self.diarizer
             raw = self._finalize_channel_safe(samples, diarizer, plan, view)
-            entries.extend(relabel_speakers(raw, plan.label_template))
+            labeled = relabel_speakers(raw, plan.label_template)
+            detected = len({e.speaker for e in labeled})
+            counts.append(SpeakerCount(plan.channel, plan.num_speakers, detected))
+            if plan.num_speakers is None:
+                view.status(f"{plan.channel}: detected {detected} speaker(s)")
+            entries.extend(labeled)
+        self.speaker_counts = counts
         interleaved = interleave(entries)
         # Snap domain vocabulary / attendee names to canonical spelling on the
         # authoritative transcript only (checkpoints stay raw — PLAN.md §5 Task 2b).

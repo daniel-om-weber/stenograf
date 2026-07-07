@@ -174,6 +174,51 @@ def test_start_no_live_uses_the_batch_path(tmp_path, monkeypatch):
     assert "You:" not in result.output  # no live captions in batch mode
 
 
+def test_start_surfaces_estimated_local_count_as_editable(tmp_path, monkeypatch):
+    # Omitting --local estimates the mic count (Stage 3a); the summary shows the
+    # detected count and the exact flag to lock or correct it by re-running.
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["start", "--remote", "0", "--replay", str(mic), "--no-live", "--out", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "local (detected)" in result.output
+    assert "re-run with --local 1" in result.output  # the correction hint
+
+
+def test_start_reports_given_counts_without_a_correction_hint(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["start", "--local", "1", "--remote", "0", "--replay", str(mic), "--no-live",
+         "--out", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "1 local (given)" in result.output
+    assert "re-run with" not in result.output  # nothing was estimated
+
+
+def test_transcribe_surfaces_estimated_count_as_editable(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "speakers: 1 detected" in result.output
+    assert "re-run with --speakers 1" in result.output
+
+
 def test_flush_interval_and_checkpoint_interval_are_aliases(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"

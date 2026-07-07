@@ -322,12 +322,41 @@ def start(
     paths = _write_transcript(transcript, out_dir, stem, write_formats)
     _cleanup_checkpoints(out_dir, stem)  # the final transcript supersedes them
     elapsed = time.monotonic() - started
-    found = len({e.speaker for e in transcript.entries})
-    click.echo(f"speakers: {found} found")
+    _report_speaker_counts(recorder.speaker_counts)
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s)")
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
+
+
+def _describe_channel(channel) -> tuple[str, str]:
+    """The human name and CLI flag for a channel's speaker count."""
+    from stenograf.capture.base import Channel
+
+    return ("local", "--local") if channel is Channel.MIC else ("remote", "--remote")
+
+
+def _report_speaker_counts(counts) -> None:
+    """Print per-channel speaker counts, flagging estimated ones as editable.
+
+    Explicit counts are echoed as given; an auto-detected count shows what the
+    finalize found and the exact flag to lock or correct it by re-running over
+    the retained/recorded audio (PLAN.md §5 Stage 3a — a wrong estimate is never
+    fatal, just re-run finalize)."""
+    if not counts:
+        click.echo("speakers: none found")
+        return
+    parts, corrections = [], []
+    for count in counts:
+        name, flag = _describe_channel(count.channel)
+        if count.requested is None:
+            parts.append(f"{count.detected} {name} (detected)")
+            corrections.append(f"{flag} {count.detected}")
+        else:
+            parts.append(f"{count.requested} {name} (given)")
+    click.echo("speakers: " + ", ".join(parts))
+    if corrections:
+        click.echo(f"  estimated — re-run with {' '.join(corrections)} to lock or correct")
 
 
 def _run_meeting(
@@ -597,8 +626,12 @@ def transcribe(
     paths = _write_transcript(transcript, out or audio_file.parent, audio_file.stem, write_formats)
     elapsed = time.monotonic() - started
     speed = duration / elapsed if elapsed else 0.0
-    found = len({e.speaker for e in entries})
-    click.echo(f"speakers: {found} found" if speakers is None else f"speakers: {speakers} given")
+    if speakers is None:
+        found = len({e.speaker for e in entries})
+        click.echo(f"speakers: {found} detected")
+        click.echo(f"  estimated — re-run with --speakers {found} to lock or correct the count")
+    else:
+        click.echo(f"speakers: {speakers} given")
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s, {speed:.1f}x realtime)")
     if print_markdown:
         click.echo()

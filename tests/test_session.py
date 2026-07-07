@@ -15,6 +15,7 @@ from stenograf.session import (
     ChannelPlan,
     MeetingRecorder,
     SessionStore,
+    SpeakerCount,
     _shield_interrupt,
     _TailCheckpointer,
     interleave,
@@ -160,9 +161,19 @@ class TestPlanChannels:
         assert [p.channel for p in plans] == [Channel.MIC]
         assert plans[0].num_speakers == 3
 
-    def test_unknown_local_defaults_to_single_speaker(self):
+    def test_unknown_local_estimates(self):
+        # Unspecified --local now estimates on the mic (symmetric with --remote),
+        # not "assume one local user" — PLAN.md §5 Stage 3a. The far-field estimate
+        # is weaker, so the finalize surfaces the detected count as editable.
         plans = plan_channels(MeetingProfile(remote_speakers=2))
-        assert plans[0] == ChannelPlan(Channel.MIC, 1, "Local-{n}")
+        assert plans[0] == ChannelPlan(Channel.MIC, None, "Local-{n}")
+
+    def test_all_unknown_records_both_channels_and_estimates_each(self):
+        plans = plan_channels(MeetingProfile())
+        assert [(p.channel, p.num_speakers) for p in plans] == [
+            (Channel.MIC, None),
+            (Channel.SYSTEM, None),
+        ]
 
     def test_unknown_remote_records_system_and_estimates(self):
         plans = plan_channels(MeetingProfile(local_speakers=1))
@@ -230,6 +241,29 @@ class RecordingASR(ASRBackend):
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
         self.lengths.append(len(samples))
         return [Segment(text="w", start=0.0, end=0.1, words=(Word("w", 0.0, 0.1),))]
+
+    def unload(self) -> None:
+        pass
+
+
+class TwoSpeakerASR(ASRBackend):
+    """Emits two well-separated words so a two-cluster diarization yields two
+    distinct entries (FakeASR's single word always lands in one cluster)."""
+
+    name = "twospeaker"
+
+    def load(self) -> None:
+        pass
+
+    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        return [
+            Segment(
+                text="alpha beta",
+                start=0.2,
+                end=1.4,
+                words=(Word("alpha", 0.2, 0.4), Word("beta", 1.2, 1.4)),
+            )
+        ]
 
     def unload(self) -> None:
         pass
@@ -355,6 +389,25 @@ class TestMeetingRecorder:
         )
         transcript = recorder.run(provider)
         assert {e.speaker for e in transcript.entries} == {"Remote-1"}
+
+    def test_finalize_records_requested_and_detected_speaker_counts(self):
+        # Local unspecified (estimate), remote given as 2. The diarizer finds two
+        # clusters on each channel; speaker_counts must carry requested=None for the
+        # estimated mic (with the detected count) and requested=2 for the given
+        # system channel (PLAN.md §5 Stage 3a surfacing).
+        pcm = np.ones(2 * SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = FakeDiarizer([SpeakerTurn("S0", 0.0, 1.0), SpeakerTurn("S1", 1.0, 2.0)])
+        recorder = MeetingRecorder(
+            MeetingProfile(remote_speakers=2),  # local unspecified → estimate
+            asr=TwoSpeakerASR(),
+            diarizer=diarizer,
+        )
+        recorder.run(provider)
+
+        by_channel = {c.channel: c for c in recorder.speaker_counts}
+        assert by_channel[Channel.MIC] == SpeakerCount(Channel.MIC, None, 2)
+        assert by_channel[Channel.SYSTEM] == SpeakerCount(Channel.SYSTEM, 2, 2)
 
     def test_channel_diarizer_failure_keeps_both_channels(self):
         # One channel's diarizer throwing must not lose the other channel's

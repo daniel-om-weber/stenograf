@@ -941,6 +941,30 @@ untouched (the channel-coarse → diarized swap in `finalize_channel` is the sea
   `None` on the mic channel; remote-count estimation already ships); the real work is
   far-field estimation *quality*, surfacing "Detected: N" as editable, and the cheap
   re-run (already supported over the retained store).
+  *Status (July 2026): shipped. `plan_channels` passes the mic count straight through
+  (unknown `--local` → estimate, symmetric with `--remote`), dropping the Phase-1 `→1`
+  placeholder — so the common `steno start` with no `--local` now diarizes the mic and
+  estimates the local count (and `--remote 0` alone becomes a fully-auto in-room run).
+  `MeetingRecorder.finalize` records a per-channel `SpeakerCount(channel, requested,
+  detected)` list on `recorder.speaker_counts` (`requested` = the plan's count,
+  `None`=estimated; `detected` = distinct speakers found) and emits a
+  `<channel>: detected N speaker(s)` status for estimated channels. The CLI surfaces it
+  as editable: `start` prints `speakers: N local (detected), M remote (given)` and, for
+  any estimated channel, `estimated — re-run with --local N [--remote M] to lock or
+  correct`; `transcribe` gained the matching `speakers: N detected` + `--speakers N`
+  hint. The cheap re-run is the existing `transcribe`/`--record-audio` path over the
+  retained/recorded audio (a wrong estimate is never fatal — §2). **Far-field estimation
+  quality is deliberately unchanged** (the documented weakness): sherpa's unconstrained
+  `FastClustering` over-clusters, so the surfaced count is the honest lever — tuning it
+  needs the 0d hand-labelled references (not being produced) or the community-1/VBx
+  clustering upgrade (later work). Verified end-to-end on `de-inroom.wav` via
+  `steno start --remote 0 --replay … --no-live` through the **real parakeet+sherpa**
+  backends (unit tests fake the diarizer): the mic estimated 8 local speakers
+  (over-split, as expected) and printed the detected count + correction hint. Tests:
+  `plan_channels` estimates unknown/all-unknown counts (`test_session.py`), `finalize`
+  populates requested/detected `speaker_counts`, and the CLI detected/given/hint output
+  (`test_cli.py`). **3b (parameter provenance written back to the transcript) is the
+  remaining Stage 3 task.**
 - **3b — parameter provenance** (`explicit | detected | default`) written back to the
   transcript/profile (today only `None`=auto, which collapses once filled, and detected
   values are not recorded back). Meeting-mode (online/hybrid/in-room) detection needs
