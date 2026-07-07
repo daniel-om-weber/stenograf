@@ -1178,6 +1178,26 @@ marks a hard prerequisite):
   == t` over a matrix (words present/absent, params None/populated, provisional, Path-valued
   store, hour-scale timestamps); legacy + version-999 + extra-key cases; real e2e via
   `steno transcribe` → reload. `[dep: none]`
+  *Status (July 2026): shipped (`stenograf.transcript`, `tests/test_transcript.py`).
+  `to_json` now stamps a top-level `"version": SCHEMA_VERSION` (=1); `Transcript.from_json`
+  is a classmethod that faithfully reconstructs every field — entries, `Word` timestamps
+  (incl. `confidence`), the `MeetingProfile` (glossary/attendee tuples + Path-valued store,
+  reproduced by leaning on `MeetingProfile.__post_init__`'s coercion), `language`, and the
+  `ResolvedParameters` provenance. The one type-erased snag (`ResolvedValue.value: object`)
+  is handled by a single parametrized `_value_from_json(obj, coerce)` — `coerce=Language`
+  for the language value, `coerce=int` for speaker counts, `None` (the DEFAULT provenance)
+  kept as-is (so an explicit `0` listen-only channel round-trips). Compat: a missing
+  `version` is read as legacy v1, unknown keys are `.get`-ignored (additive-field tolerant),
+  and a `version` newer than `SCHEMA_VERSION` raises `UnsupportedTranscriptVersion`.
+  Tests: a parametrized round-trip matrix (`from_json(t.to_json()) == t` across
+  words-present/absent, populated/default/absent params, provisional, Path store, hour-scale
+  times, zero-count channel), the version stamp, legacy-missing-version, version-999 reject,
+  and extra-key ignore. **Verified end-to-end with the real parakeet+sherpa backends**
+  (unit tests use synthetic transcripts): `steno transcribe eval/audio/de-1.wav --lang de
+  --speakers 2` → reload the written JSON through `from_json` was **byte-identical on
+  reserialize** (`t.to_json() == raw`) and dataclass-equal, faithfully carrying 12 entries /
+  230 word timestamps / resolved parameters. This is the keystone A1 the archive (B1), the
+  web reader (C6), and `steno notes` (D3) build on.
 - **A2 — add `MeetingProfile.title`.** Small field used by the archive record and the notes
   prompt (both siblings want it); `__post_init__` already normalizes the profile. `[dep: none]`
 

@@ -1,4 +1,7 @@
 import json
+from pathlib import Path
+
+import pytest
 
 from stenograf.asr.base import Word
 from stenograf.config import (
@@ -8,7 +11,12 @@ from stenograf.config import (
     ResolvedParameters,
     ResolvedValue,
 )
-from stenograf.transcript import Transcript, TranscriptEntry
+from stenograf.transcript import (
+    SCHEMA_VERSION,
+    Transcript,
+    TranscriptEntry,
+    UnsupportedTranscriptVersion,
+)
 
 
 def make_transcript() -> Transcript:
@@ -205,3 +213,115 @@ def test_timestamp_formats_hours():
     )
     assert "01:01:01,500 --> 01:01:01,900" in transcript.to_srt()
     assert "01:01:01.500 --> 01:01:01.900" in transcript.to_vtt()
+
+
+# --- Transcript.from_json round-trip (PLAN.md §5 Stage A1) ---------------------
+
+_ROUNDTRIP_CASES = {
+    "words_present_and_provisional": make_transcript,
+    "words_absent": lambda: Transcript(
+        language=Language.ENGLISH,
+        profile=MeetingProfile(language=Language.ENGLISH, local_speakers=1),
+        entries=[TranscriptEntry(speaker="Local-1", text="hello there", start=4.0, end=9.0)],
+    ),
+    "word_timestamps_and_confidence": lambda: Transcript(
+        language=Language.GERMAN,
+        profile=MeetingProfile(language=Language.GERMAN, local_speakers=1, remote_speakers=1),
+        entries=[
+            TranscriptEntry(
+                speaker="Remote-1",
+                text="guten morgen",
+                start=0.0,
+                end=0.9,
+                words=(Word("guten", 0.0, 0.4, confidence=0.98), Word("morgen", 0.5, 0.9)),
+            )
+        ],
+    ),
+    "parameters_populated": lambda: Transcript(
+        language=Language.GERMAN,
+        profile=MeetingProfile(remote_speakers=2),
+        parameters=ResolvedParameters(
+            language=ResolvedValue(Language.GERMAN, Provenance.DETECTED),
+            speakers={
+                "mic": ResolvedValue(3, Provenance.DETECTED),
+                "system": ResolvedValue(2, Provenance.EXPLICIT),
+            },
+        ),
+    ),
+    "parameters_with_default_value": lambda: Transcript(
+        language=None,
+        profile=MeetingProfile(),
+        parameters=ResolvedParameters(
+            language=ResolvedValue(None, Provenance.DEFAULT),
+            speakers={"audio": ResolvedValue(None, Provenance.DEFAULT)},
+        ),
+    ),
+    "path_valued_store_and_vocab": lambda: Transcript(
+        language=Language.GERMAN,
+        profile=MeetingProfile(
+            language=Language.GERMAN,
+            glossary=("Kubernetes", "Bierkliniken"),
+            attendee_names=("Daniel",),
+            speaker_profile_store=Path("/tmp/store.json"),
+        ),
+        entries=[],
+    ),
+    "hour_scale_timestamps": lambda: Transcript(
+        language=Language.ENGLISH,
+        profile=MeetingProfile(language=Language.ENGLISH, local_speakers=1),
+        entries=[
+            TranscriptEntry(
+                speaker="Local-1",
+                text="spät",
+                start=3661.5,
+                end=3661.9,
+                words=(Word("spät", 3661.5, 3661.9),),
+            )
+        ],
+    ),
+    "listen_only_channel_zero_count": lambda: Transcript(
+        language=Language.GERMAN,
+        profile=MeetingProfile(language=Language.GERMAN, local_speakers=2, remote_speakers=0),
+        parameters=ResolvedParameters(
+            language=ResolvedValue(Language.GERMAN, Provenance.EXPLICIT),
+            speakers={
+                "mic": ResolvedValue(2, Provenance.EXPLICIT),
+                "system": ResolvedValue(0, Provenance.EXPLICIT),
+            },
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("make", _ROUNDTRIP_CASES.values(), ids=list(_ROUNDTRIP_CASES))
+def test_from_json_round_trips(make):
+    original = make()
+    assert Transcript.from_json(original.to_json()) == original
+
+
+def test_to_json_stamps_the_schema_version():
+    assert json.loads(make_transcript().to_json())["version"] == SCHEMA_VERSION
+
+
+def test_from_json_treats_a_missing_version_as_legacy_v1():
+    # Files written before the version stamp existed must still load.
+    obj = json.loads(make_transcript().to_json())
+    del obj["version"]
+    reloaded = Transcript.from_json(json.dumps(obj))
+    assert reloaded == make_transcript()
+
+
+def test_from_json_rejects_a_newer_schema_version():
+    obj = json.loads(make_transcript().to_json())
+    obj["version"] = 999
+    with pytest.raises(UnsupportedTranscriptVersion) as exc:
+        Transcript.from_json(json.dumps(obj))
+    assert exc.value.version == 999
+
+
+def test_from_json_ignores_unknown_keys():
+    # An additive future field must not break a current reader.
+    obj = json.loads(make_transcript().to_json())
+    obj["title"] = "Weekly sync"
+    obj["entries"][0]["sentiment"] = "neutral"
+    assert Transcript.from_json(json.dumps(obj)) == make_transcript()

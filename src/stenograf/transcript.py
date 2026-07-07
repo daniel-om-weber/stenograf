@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 from stenograf.asr.base import Word
-from stenograf.config import Language, MeetingProfile, ResolvedParameters
+from stenograf.config import (
+    Language,
+    MeetingProfile,
+    Provenance,
+    ResolvedParameters,
+    ResolvedValue,
+)
+
+SCHEMA_VERSION = 1
+"""Major version of the persisted transcript JSON schema.
+
+Stamped into every ``to_json`` output so a reader can tell what wrote a file.
+Bumped only on a *breaking* change; additive fields are read back with
+``dict.get`` defaults, so a v1 reader still loads a file that gained new keys
+(see ``Transcript.from_json``). A file whose ``version`` exceeds this build's
+``SCHEMA_VERSION`` cannot be trusted and raises ``UnsupportedTranscriptVersion``.
+"""
+
+
+class UnsupportedTranscriptVersion(Exception):
+    """A transcript JSON was written by a newer, incompatible schema version."""
+
+    def __init__(self, version: int) -> None:
+        super().__init__(
+            f"transcript schema version {version} is newer than this build understands "
+            f"(max {SCHEMA_VERSION}); upgrade stenograf to read it"
+        )
+        self.version = version
 
 
 @dataclass(frozen=True)
@@ -42,6 +70,7 @@ class Transcript:
     def to_json(self) -> str:
         return json.dumps(
             {
+                "version": SCHEMA_VERSION,
                 "language": self.language.value if self.language else None,
                 "profile": asdict(self.profile),
                 "parameters": asdict(self.parameters) if self.parameters is not None else None,
@@ -50,6 +79,29 @@ class Transcript:
             ensure_ascii=False,
             indent=2,
             default=str,  # the profile's speaker_profile_store may be a Path
+        )
+
+    @classmethod
+    def from_json(cls, data: str) -> Transcript:
+        """Reconstruct a transcript from the JSON ``to_json`` produced.
+
+        Faithful round-trip: ``Transcript.from_json(t.to_json()) == t`` for every
+        field (entries with/without word timestamps, the profile including a
+        Path-valued store, the resolved-parameter provenance). Forward/backward
+        compat: a missing ``version`` is treated as legacy v1; unknown keys are
+        ignored so a v1 reader tolerates additive fields; a ``version`` newer than
+        this build raises :class:`UnsupportedTranscriptVersion`. Underpins the
+        meeting archive, the web transcript reader, and ``steno notes`` (PLAN.md §5
+        Stage A1)."""
+        obj = json.loads(data)
+        version = obj.get("version", 1)
+        if version > SCHEMA_VERSION:
+            raise UnsupportedTranscriptVersion(version)
+        return cls(
+            language=_language_from_json(obj.get("language")),
+            profile=_profile_from_json(obj["profile"]),
+            entries=[_entry_from_json(e) for e in obj.get("entries", [])],
+            parameters=_parameters_from_json(obj.get("parameters")),
         )
 
     def to_markdown(self) -> str:
@@ -78,6 +130,67 @@ class Transcript:
                 payload = f"<v {_escape_vtt(cue.speaker)}>{payload}</v>"
             blocks.append(f"{_ts(cue.start, '.')} --> {_ts(cue.end, '.')}\n{payload}\n")
         return "\n".join(blocks)
+
+
+def _language_from_json(value: str | None) -> Language | None:
+    return Language(value) if value is not None else None
+
+
+def _word_from_json(obj: dict) -> Word:
+    return Word(
+        text=obj["text"],
+        start=obj["start"],
+        end=obj["end"],
+        confidence=obj.get("confidence"),
+    )
+
+
+def _entry_from_json(obj: dict) -> TranscriptEntry:
+    return TranscriptEntry(
+        speaker=obj["speaker"],
+        text=obj["text"],
+        start=obj["start"],
+        end=obj["end"],
+        provisional=obj.get("provisional", False),
+        words=tuple(_word_from_json(w) for w in obj.get("words", ())),
+    )
+
+
+def _profile_from_json(obj: dict) -> MeetingProfile:
+    # __post_init__ coerces glossary/attendee_names to tuples and the store to a
+    # Path, so passing the JSON lists/str straight through reproduces the original.
+    return MeetingProfile(
+        language=_language_from_json(obj.get("language")),
+        local_speakers=obj.get("local_speakers"),
+        remote_speakers=obj.get("remote_speakers"),
+        glossary=tuple(obj.get("glossary", ())),
+        attendee_names=tuple(obj.get("attendee_names", ())),
+        speaker_profile_store=obj.get("speaker_profile_store"),
+    )
+
+
+def _value_from_json(obj: dict, coerce: Callable[[object], object]) -> ResolvedValue:
+    """Rebuild one :class:`ResolvedValue`, coercing its type-erased ``value``.
+
+    ``ResolvedValue.value`` is ``object | None``, so JSON alone can't say whether a
+    value should come back as a :class:`Language` or an ``int``; ``coerce`` supplies
+    that per call. ``None`` (the DEFAULT provenance's absent value) stays ``None``."""
+    value = obj.get("value")
+    return ResolvedValue(
+        value=None if value is None else coerce(value),
+        provenance=Provenance(obj["provenance"]),
+    )
+
+
+def _parameters_from_json(obj: dict | None) -> ResolvedParameters | None:
+    if obj is None:
+        return None
+    return ResolvedParameters(
+        language=_value_from_json(obj["language"], Language),
+        speakers={
+            channel: _value_from_json(rv, int) for channel, rv in obj.get("speakers", {}).items()
+        },
+    )
 
 
 @dataclass(frozen=True)
