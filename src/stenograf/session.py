@@ -24,11 +24,13 @@ text dedup at merge time is the backstop (PLAN.md §2 "Hybrid-mode caveats").
 from __future__ import annotations
 
 import contextlib
+import re
 import signal
 import threading
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 import numpy as np
 
@@ -239,6 +241,82 @@ def resolve_parameters(
 def interleave(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
     """Merge per-channel entries into one timeline, ordered by start time."""
     return sorted(entries, key=lambda e: (e.start, e.end))
+
+
+ECHO_COVERAGE = 0.8
+"""Fraction of a mic line that must also appear in an overlapping remote line
+before we call it echo. Measured on real leaked lines, echoes score 0.89-1.00 and
+genuine local speech scores 0.27-0.60, so the threshold sits in a wide gap."""
+
+ECHO_WINDOW_S = 2.0
+"""How far apart the two lines' spans may sit and still describe the same moment.
+The echo reaches the mic within ~25 ms, but the two channels are transcribed
+independently, so their segment boundaries drift apart by a second or so."""
+
+_ECHO_MIN_WORDS = 3
+"""Below this, a match means nothing: the local speaker agreeing ("yeah", "right")
+while the remote says the same word is a real utterance, not an echo."""
+
+_PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
+
+
+def _words_of(text: str) -> list[str]:
+    return _PUNCT.sub(" ", text.lower()).split()
+
+
+def _covered_by(mic: str, system: str) -> float:
+    """Fraction of the mic line's characters also present, in order, in the remote line.
+
+    Characters, not words: the two channels are decoded independently, so an echo
+    returns with small ASR divergences. The remote's "we cannot say sorry" came
+    back on the mic as "we can't not say sorry" — 0.57 by word coverage, which is
+    indistinguishable from unrelated speech, but 0.89 by character coverage.
+
+    Summing matching blocks rather than taking one longest run lets a match
+    survive a substituted word in the middle of an otherwise identical line.
+    """
+    if not mic:
+        return 0.0
+    matcher = SequenceMatcher(None, mic, system, autojunk=False)
+    return sum(block.size for block in matcher.get_matching_blocks()) / len(mic)
+
+
+def drop_echo_duplicates(
+    mic: list[TranscriptEntry],
+    system: list[TranscriptEntry],
+    *,
+    coverage: float = ECHO_COVERAGE,
+    window: float = ECHO_WINDOW_S,
+) -> list[TranscriptEntry]:
+    """Remove mic lines that are really the remote speakers, echoed back.
+
+    The backstop to :mod:`stenograf.aec`. Cancellation measured 30 dB on this
+    hardware, which leaves a residual that is quiet but still speech-shaped —
+    quiet enough to ignore, loud enough for the ASR to decode into a duplicate
+    ``Local-N`` line. Audio-domain gates cannot separate that residual from
+    genuine double-talk (real speech correlates with the reference too), so the
+    decision is made on text, where an echo is unmistakable: the same words, at
+    the same moment, on both channels. The system-channel copy is authoritative.
+    """
+    kept = []
+    for entry in mic:
+        words = _words_of(entry.text)
+        if len(words) < _ECHO_MIN_WORDS:
+            kept.append(entry)
+            continue
+        text = " ".join(words)
+        overlapping = (
+            other
+            for other in system
+            if other.end >= entry.start - window and other.start <= entry.end + window
+        )
+        if any(
+            _covered_by(text, " ".join(_words_of(other.text))) >= coverage
+            for other in overlapping
+        ):
+            continue
+        kept.append(entry)
+    return kept
 
 
 @contextlib.contextmanager
@@ -833,7 +911,7 @@ class MeetingRecorder:
         """Run the finalize pass on every stored channel and interleave them."""
         plans = plans or plan_channels(self.profile)
         view = view or _CallbackView()
-        entries: list[TranscriptEntry] = []
+        by_channel: dict[Channel, list[TranscriptEntry]] = {}
         counts: list[SpeakerCount] = []
         for plan in plans:
             if plan.channel not in store.channels():
@@ -847,8 +925,19 @@ class MeetingRecorder:
             counts.append(SpeakerCount(plan.channel, plan.num_speakers, detected))
             if plan.num_speakers is None:
                 view.status(f"{plan.channel}: detected {detected} speaker(s)")
-            entries.extend(labeled)
+            by_channel[plan.channel] = labeled
         self.speaker_counts = counts
+
+        # What the echo canceller could not remove, the remote channel's own
+        # transcript identifies for us (PLAN.md §2 "Speaker-bleed caveats").
+        mic, system = by_channel.get(Channel.MIC), by_channel.get(Channel.SYSTEM)
+        if mic and system:
+            kept = drop_echo_duplicates(mic, system)
+            if len(kept) < len(mic):
+                view.status(f"dropped {len(mic) - len(kept)} echoed mic line(s)")
+            by_channel[Channel.MIC] = kept
+
+        entries = [entry for plan in plans for entry in by_channel.get(plan.channel, [])]
         interleaved = interleave(entries)
         # Snap domain vocabulary / attendee names to canonical spelling on the
         # authoritative transcript only (checkpoints stay raw — PLAN.md §5 Task 2b).
