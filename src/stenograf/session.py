@@ -15,10 +15,10 @@ remote voices, only voices *within* a channel. The provider is swappable
 (Swift helper on macOS, sounddevice on Linux, file replay for dev/test), so the
 whole orchestrator is exercisable without native capture.
 
-Hybrid-mode cross-channel dedup (room speaker bleed on the mic) is not done
-here yet: its primary mitigation is AEC in the capture helper, which does not
-exist yet, so there is nothing to dedup in the synthetic paths. Tracked for
-when the macOS helper lands (PLAN.md §2 "Hybrid-mode caveats").
+Speaker bleed (remote audio leaving the speakers and re-entering the mic) is an
+echo-cancellation problem, handled upstream of this store against the system
+channel as the far-end reference. AEC never removes all of it, so cross-channel
+text dedup at merge time is the backstop (PLAN.md §2 "Hybrid-mode caveats").
 """
 
 from __future__ import annotations

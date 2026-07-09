@@ -41,7 +41,11 @@ class Channel(StrEnum):
 class AudioFrame:
     channel: Channel
     timestamp: float
-    """Seconds since session start, for the first sample of the frame."""
+    """Seconds since session start, for the first sample of the frame.
+
+    Both channels are stamped against one clock, so a mic frame and a system
+    frame bearing the same timestamp were captured at the same instant. The
+    echo canceller relies on this to align the far-end reference."""
     samples: np.ndarray
     """Mono int16 PCM at SAMPLE_RATE."""
 

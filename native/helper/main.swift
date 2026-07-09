@@ -2,13 +2,18 @@
 //
 // Captures two independent channels and streams them to the Python core:
 //   --system : whole-system audio via a Core Audio process tap (macOS 14.4+)
-//   --mic    : the microphone via AVAudioEngine (optional --aec echo cancel)
+//   --mic    : the microphone via AVAudioEngine
 //
 // Both are downmixed + resampled to mono 16 kHz int16 and written to stdout as
 // framed PCM. stdout carries frames only; all status/errors go to stderr.
 //
 //   frame = channel:u8  timestamp:f64le  count:u32le  samples:count×i16le
 //   channel: 0 = mic, 1 = system;  timestamp: seconds since capture start.
+//
+// Both channels' timestamps share one Mach host-time origin, so a sample at
+// time t on the mic and a sample at time t on the system tap were captured at
+// the same instant. The Python echo canceller depends on that: it aligns the
+// tap (far-end reference) against the mic (near-end) by timestamp.
 //
 // Audio is never written to disk — this process only streams it. Stop with
 // SIGINT/SIGTERM; the helper flushes and exits 0. The capture APIs were proven
@@ -51,25 +56,78 @@ func die(_ status: OSStatus, _ what: String) {
     }
 }
 
+// MARK: - clock
+
+/// The single timeline both channels are stamped against.
+///
+/// The mic and the tap are separate Core Audio devices that start at different
+/// instants — the tap is running before `AVAudioEngine` has even opened the mic.
+/// Counting each channel's samples from its own first frame would give both a
+/// timestamp of 0 for audio captured hundreds of milliseconds apart. Anchoring
+/// each channel to the Mach host time of its first buffer puts them on one
+/// timeline instead.
+enum Clock {
+    static let epoch = mach_absolute_time()
+
+    private static let scale: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return Double(info.numer) / Double(info.denom) / 1_000_000_000.0
+    }()
+
+    /// Seconds from capture start to `hostTime`; clamped at 0 for buffers
+    /// stamped fractionally before the epoch was read.
+    static func seconds(since hostTime: UInt64) -> Double {
+        guard hostTime > epoch else { return 0 }
+        return Double(hostTime - epoch) * scale
+    }
+
+    static func now() -> UInt64 { mach_absolute_time() }
+}
+
 // MARK: - frame emitter
 
 /// Serializes frame writes from the mic and tap callbacks onto stdout, and
-/// stamps each channel with a monotonic timestamp from its own sample count.
+/// stamps each channel against the shared clock.
 final class Emitter: @unchecked Sendable {
     private let lock = NSLock()
     private let out = FileHandle.standardOutput
     private var emitted: [UInt8: Int] = [:]
+    private var anchor: [UInt8: Double] = [:]
+    private var driftWarned: Set<UInt8> = []
 
-    /// Append one frame of mono 16 kHz int16 samples for `channel`.
-    func emit(_ channel: ChannelCode, _ samples: UnsafeBufferPointer<Int16>) {
+    /// Append one frame of mono 16 kHz int16 samples for `channel`. `hostTime`
+    /// is when the *input* buffer behind these samples was captured; it anchors
+    /// the channel on first use, after which sample counting carries the
+    /// timeline (monotonic, and sample-accurate within the channel).
+    func emit(_ channel: ChannelCode, _ samples: UnsafeBufferPointer<Int16>, hostTime: UInt64) {
         lock.lock()
         defer { lock.unlock() }
-        let priorSamples = emitted[channel.rawValue, default: 0]
-        let timestamp = Double(priorSamples) / SAMPLE_RATE
-        emitted[channel.rawValue] = priorSamples + samples.count
+        let code = channel.rawValue
+        let priorSamples = emitted[code, default: 0]
+        let base: Double
+        if let existing = anchor[code] {
+            base = existing
+        } else {
+            base = Clock.seconds(since: hostTime)
+            anchor[code] = base
+        }
+        let timestamp = base + Double(priorSamples) / SAMPLE_RATE
+        emitted[code] = priorSamples + samples.count
+
+        // A device that drops or repeats buffers walks its sample count away
+        // from wall clock, which silently misaligns the echo canceller. Say so
+        // once rather than emitting a plausible-looking lie forever.
+        if priorSamples > 0, !driftWarned.contains(code) {
+            let drift = Clock.seconds(since: hostTime) - timestamp
+            if abs(drift) > 0.25 {
+                driftWarned.insert(code)
+                log("WARNING channel \(code) drifted \(Int(drift * 1000)) ms from wall clock")
+            }
+        }
 
         var header = Data(capacity: 13)
-        header.append(channel.rawValue)
+        header.append(code)
         withUnsafeBytes(of: timestamp.bitPattern.littleEndian) { header.append(contentsOf: $0) }
         withUnsafeBytes(of: UInt32(samples.count).littleEndian) { header.append(contentsOf: $0) }
         var payload = Data(count: samples.count * 2)
@@ -104,7 +162,7 @@ final class Resampler {
         self.emitter = emitter
     }
 
-    func feed(_ input: AVAudioPCMBuffer) {
+    func feed(_ input: AVAudioPCMBuffer, hostTime: UInt64) {
         let ratio = SAMPLE_RATE / input.format.sampleRate
         let capacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 16
         guard capacity > 0,
@@ -127,7 +185,8 @@ final class Resampler {
             return
         }
         guard output.frameLength > 0, let data = output.int16ChannelData else { return }
-        emitter.emit(channel, UnsafeBufferPointer(start: data[0], count: Int(output.frameLength)))
+        emitter.emit(channel, UnsafeBufferPointer(start: data[0], count: Int(output.frameLength)),
+                     hostTime: hostTime)
     }
 }
 
@@ -158,6 +217,23 @@ func defaultOutputDeviceUID() -> String {
     return uid as String
 }
 
+/// Tracks the tap's observed channel layout so a mid-session change is logged
+/// once rather than per buffer.
+final class TapLayout: @unchecked Sendable {
+    private let lock = NSLock()
+    private var channels = 0
+
+    func note(_ observed: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        if channels != 0, channels != observed {
+            log("WARNING system tap changed from \(channels) to \(observed) channel(s) "
+                + "— the output device was renegotiated mid-capture")
+        }
+        channels = observed
+    }
+}
+
 func startSystemTap(emitter: Emitter) -> TapSession {
     let desc = CATapDescription(monoGlobalTapButExcludeProcesses: [])
     desc.name = "stenograf-tap"
@@ -176,12 +252,17 @@ func startSystemTap(emitter: Emitter) -> TapSession {
     die(AudioObjectGetPropertyData(tapID, &addr, 0, nil, &size, &asbd), "read tap format")
     log("system tap format: \(asbd.mSampleRate) Hz, \(asbd.mChannelsPerFrame) ch")
 
-    guard let sourceFormat = AVAudioFormat(streamDescription: &asbd),
-          let resampler = Resampler(source: sourceFormat, channel: .system, emitter: emitter)
+    // The resampler always sees mono float32 at the tap's rate; renderTapBuffer
+    // downmixes whatever channel layout the buffer actually arrives in.
+    guard let sourceFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: asbd.mSampleRate,
+        channels: 1, interleaved: false),
+        let resampler = Resampler(source: sourceFormat, channel: .system, emitter: emitter)
     else {
         log("FATAL: could not build system-audio resampler")
         exit(1)
     }
+    let layout = TapLayout()
 
     let outputUID = defaultOutputDeviceUID()
     let aggDesc: [String: Any] = [
@@ -203,31 +284,71 @@ func startSystemTap(emitter: Emitter) -> TapSession {
 
     var procID: AudioDeviceIOProcID?
     let queue = DispatchQueue(label: "dev.stenograf.tap")
-    die(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) { _, inInputData, _, _, _ in
-        renderTapBuffer(inInputData, sourceFormat: sourceFormat, resampler: resampler)
+    die(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) { _, inInputData, inInputTime, _, _ in
+        let stamp = inInputTime.pointee
+        let hostTime = stamp.mFlags.contains(.hostTimeValid) ? stamp.mHostTime : Clock.now()
+        renderTapBuffer(inInputData, hostTime: hostTime, sourceFormat: sourceFormat,
+                        resampler: resampler, layout: layout)
     }, "create tap IO proc")
     die(AudioDeviceStart(aggID, procID), "start aggregate device")
     log("system capture started")
     return TapSession(tapID: tapID, aggID: aggID, procID: procID)
 }
 
-/// Wrap the raw IO-proc buffer list as an AVAudioPCMBuffer and resample it.
-func renderTapBuffer(_ abl: UnsafePointer<AudioBufferList>,
-                     sourceFormat: AVAudioFormat, resampler: Resampler) {
+/// Downmix the IO-proc buffer to mono and hand it to the resampler.
+///
+/// The frame count is derived from the buffer we were handed, never from the
+/// format read at startup: Core Audio renegotiates the tap when the output
+/// device changes (headphones, AirPods, a display with speakers), and reading a
+/// multi-channel buffer as mono would emit several times too many samples.
+func renderTapBuffer(_ abl: UnsafePointer<AudioBufferList>, hostTime: UInt64,
+                     sourceFormat: AVAudioFormat, resampler: Resampler, layout: TapLayout) {
     let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: abl))
-    guard let first = list.first, let data = first.mData else { return }
-    let bytesPerFrame = Int(sourceFormat.streamDescription.pointee.mBytesPerFrame)
-    guard bytesPerFrame > 0 else { return }
-    let frames = AVAudioFrameCount(Int(first.mDataByteSize) / bytesPerFrame)
+    guard let first = list.first, first.mData != nil else { return }
+
+    let planes = list.count
+    let perPlane = Int(first.mNumberChannels)
+    guard perPlane > 0 else { return }
+    layout.note(planes * perPlane)
+
+    let bytesPerFrame = MemoryLayout<Float>.size * perPlane
+    let frames = Int(first.mDataByteSize) / bytesPerFrame
     guard frames > 0,
-          let buffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: frames)
+          let mono = AVAudioPCMBuffer(pcmFormat: sourceFormat,
+                                      frameCapacity: AVAudioFrameCount(frames)),
+          let dst = mono.floatChannelData
     else { return }
-    buffer.frameLength = frames
-    // The tap delivers deinterleaved float32; copy the first (mono) channel.
-    if let dst = buffer.floatChannelData {
-        memcpy(dst[0], data, Int(first.mDataByteSize))
+    mono.frameLength = AVAudioFrameCount(frames)
+    downmix(list, into: dst[0], frames: frames)
+    resampler.feed(mono, hostTime: hostTime)
+}
+
+/// Average every channel into one, for either buffer layout Core Audio uses:
+/// one plane per channel (deinterleaved), or one plane of interleaved frames.
+func downmix(_ list: UnsafeMutableAudioBufferListPointer,
+             into dst: UnsafeMutablePointer<Float>, frames: Int) {
+    if list.count > 1 {
+        for i in 0..<frames { dst[i] = 0 }
+        for plane in 0..<list.count {
+            guard let src = list[plane].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            for i in 0..<frames { dst[i] += src[i] }
+        }
+        let scale = 1.0 / Float(list.count)
+        for i in 0..<frames { dst[i] *= scale }
+        return
     }
-    resampler.feed(buffer)
+    guard let src = list[0].mData?.assumingMemoryBound(to: Float.self) else { return }
+    let channels = Int(list[0].mNumberChannels)
+    if channels <= 1 {
+        dst.update(from: src, count: frames)
+        return
+    }
+    let scale = 1.0 / Float(channels)
+    for i in 0..<frames {
+        var sum: Float = 0
+        for c in 0..<channels { sum += src[i * channels + c] }
+        dst[i] = sum * scale
+    }
 }
 
 func stopSystemTap(_ session: TapSession) {
@@ -241,7 +362,10 @@ func stopSystemTap(_ session: TapSession) {
 
 // MARK: - microphone
 
-func startMic(emitter: Emitter, aec: Bool) -> AVAudioEngine {
+/// Prompt for microphone access. Called before any capture starts: the prompt
+/// blocks, and doing it after the tap is running would skew the two channels'
+/// start by however long the user takes to answer.
+func requestMicrophoneAccess() {
     let sem = DispatchSemaphore(value: 0)
     var granted = false
     AVCaptureDevice.requestAccess(for: .audio) { granted = $0; sem.signal() }
@@ -250,17 +374,11 @@ func startMic(emitter: Emitter, aec: Bool) -> AVAudioEngine {
         log("FATAL: microphone permission denied")
         exit(1)
     }
+}
 
+func startMic(emitter: Emitter) -> AVAudioEngine {
     let engine = AVAudioEngine()
     let input = engine.inputNode
-    if aec {
-        do {
-            try input.setVoiceProcessingEnabled(true)  // AEC for speaker output
-            log("mic echo cancellation enabled")
-        } catch {
-            log("could not enable echo cancellation: \(error.localizedDescription)")
-        }
-    }
     let format = input.inputFormat(forBus: 0)
     log("mic format: \(format.sampleRate) Hz, \(format.channelCount) ch")
 
@@ -268,8 +386,9 @@ func startMic(emitter: Emitter, aec: Bool) -> AVAudioEngine {
         log("FATAL: could not build mic resampler")
         exit(1)
     }
-    input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
-        resampler.feed(buffer)
+    input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, when in
+        let hostTime = when.isHostTimeValid ? when.hostTime : Clock.now()
+        resampler.feed(buffer, hostTime: hostTime)
     }
     do {
         try engine.start()
@@ -286,10 +405,9 @@ func startMic(emitter: Emitter, aec: Bool) -> AVAudioEngine {
 let args = Array(CommandLine.arguments.dropFirst())
 let wantMic = args.contains("--mic")
 let wantSystem = args.contains("--system")
-let wantAEC = args.contains("--aec")
 
 if !wantMic && !wantSystem {
-    log("usage: stenocap [--mic] [--system] [--aec]  (at least one channel)")
+    log("usage: stenocap [--mic] [--system]  (at least one channel)")
     exit(2)
 }
 
@@ -297,8 +415,10 @@ let emitter = Emitter()
 var tapSession: TapSession?
 var micEngine: AVAudioEngine?
 
+if wantMic { requestMicrophoneAccess() }
+_ = Clock.epoch  // fix the shared origin before either channel can stamp a frame
 if wantSystem { tapSession = startSystemTap(emitter: emitter) }
-if wantMic { micEngine = startMic(emitter: emitter, aec: wantAEC) }
+if wantMic { micEngine = startMic(emitter: emitter) }
 
 func shutdown() -> Never {
     micEngine?.stop()

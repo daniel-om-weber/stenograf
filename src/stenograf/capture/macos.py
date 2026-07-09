@@ -12,8 +12,10 @@ Wire protocol (helper → us), little-endian, stdout carries frames only
     each frame = channel:u8  timestamp:f64  count:u32  samples:count×i16
 
 ``channel`` is 0 for mic, 1 for system; ``timestamp`` is seconds since capture
-start; ``samples`` is mono 16 kHz int16 PCM. There is no control channel back to
-the helper — selecting channels is done with argv flags, and stopping is a
+start on a **clock shared by both channels** (the helper anchors each channel to
+the Mach host time of its first buffer), so equal timestamps mean simultaneous
+capture; ``samples`` is mono 16 kHz int16 PCM. There is no control channel back
+to the helper — selecting channels is done with argv flags, and stopping is a
 SIGINT/SIGTERM.
 """
 
@@ -71,18 +73,21 @@ class MacOSCaptureProvider(CaptureProvider):
 
     ``command`` overrides the launch command (a path or an argv prefix) — used
     to point at a fake helper in tests; production locates the signed binary via
-    :func:`find_helper`. ``aec`` enables the helper's mic echo cancellation
-    (needed on speakers in hybrid meetings).
+    :func:`find_helper`.
+
+    Echo cancellation is *not* done here. The helper used to expose a ``--aec``
+    flag backed by Voice Processing IO; measured on macOS 26 it delivered an
+    all-zero mic and drove the tap to 6x real time, so it was removed. Echo is
+    cancelled downstream, with the system channel as the far-end reference.
     """
 
-    def __init__(self, *, command: str | Path | list[str] | None = None, aec: bool = False) -> None:
+    def __init__(self, *, command: str | Path | list[str] | None = None) -> None:
         if command is None:
             self._prefix = [str(find_helper())]
         elif isinstance(command, list):
             self._prefix = command
         else:
             self._prefix = [str(command)]
-        self._aec = aec
         self._proc: subprocess.Popen[bytes] | None = None
         # stop() is called from several threads (the capture loop on max_seconds,
         # the meeting thread on close, and the TUI's quit binding), so serialize it.
@@ -91,8 +96,6 @@ class MacOSCaptureProvider(CaptureProvider):
     def start(self, channels: set[Channel]) -> None:
         argv = list(self._prefix)
         argv += [_CHANNEL_FLAG[ch] for ch in (Channel.MIC, Channel.SYSTEM) if ch in channels]
-        if self._aec:
-            argv.append("--aec")
         # stdout is the binary frame stream; stderr (status/prompts) is inherited
         # so the user sees TCC prompts and any capture errors on their terminal.
         self._proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
