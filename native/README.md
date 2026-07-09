@@ -14,14 +14,25 @@ work; `helper/` is the production version that adds resampling, framing, and a
 clean lifecycle.
 
 Echo cancellation is **not** done here. The helper once had a `--aec` flag
-backed by Voice Processing IO (`setVoiceProcessingEnabled`). Measured on macOS
-26 it reported a 9-channel mic format and delivered an all-zero mic, while
-driving the system tap to 6x real time — so it was removed. Echo is cancelled on
-the Python side, using the system channel as the far-end reference. (VPIO
-does reference the whole output-device mix, so it cancels other apps' audio in
-principle; it also ducks that audio, which would attenuate the very remote
-speech we transcribe. Chrome, which ships both, defaults to loopback-fed AEC3
-for the same reason.)
+backed by Voice Processing IO (`setVoiceProcessingEnabled` on the input node).
+Measured on macOS 26, two things killed it:
+
+- **The mic goes dead.** VPIO reports the input as 7 or 9 channels (it varies
+  per run) with no channel layout anyone configured, and AVAudioConverter then
+  yields nothing: with VPIO on, no playback, and someone talking, the helper
+  emitted *zero frames*; the same run without VPIO captured speech normally.
+  Chromium drives VPIO as a raw AudioUnit with an explicitly forced mono format
+  for this reason, so the API is likely usable — `AVAudioEngine`'s wrapper is not.
+- **The system channel collapses.** With VPIO on, the process tap measured
+  −64.5 dBFS while audio played, against −28.2 dBFS for the identical run
+  without it. VPIO either ducks other applications' audio (WWDC23 "What's new in
+  voice processing") or retargets the default output to its own private
+  aggregate device. Either way it guts the remote-participant channel, which is
+  the signal this tool exists to transcribe.
+
+Echo is cancelled on the Python side instead, using the system channel as the
+far-end reference — which is also Chrome's default (`kSystemLoopbackAsAecReference`
+enabled, `kEnforceSystemEchoCancellation` disabled) despite shipping both.
 
 ## Wire protocol
 

@@ -252,10 +252,16 @@ and each run gets an exact speaker count, the biggest single accuracy lever.
 In-room-only mode skips the system tap entirely (no system-audio permission needed,
 single channel). Overlapped regions flagged as provisional in the transcript.
 
-Hybrid-mode caveats: (a) remote audio played through room speakers bleeds into the
-mic — AEC (Voice Processing IO) on the mic path is mandatory in hybrid mode, plus a
-cross-channel dedup at merge time (near-identical text at the same timestamps on
-both channels → keep the system-channel copy); (b) the reverse direction is safe —
+Speaker-bleed caveats: (a) remote audio played through speakers bleeds into the
+mic — echo cancellation is mandatory whenever both channels are captured without
+headphones, which is the *default* way of sitting in an online meeting, not just a
+hybrid-mode concern. `stenograf.aec` feeds the system channel to WebRTC AEC3 as the
+far-end reference (36 dB measured on synthetic echo; end-to-end, six duplicated
+`Local-1` lines drop to zero while genuine local speech survives double-talk).
+Voice Processing IO was evaluated and rejected — it ducks the remote audio we
+transcribe, see native/README.md. A cross-channel dedup at merge time (near-identical
+text at the same timestamps on both channels → keep the system-channel copy) remains
+the backstop for residual echo; (b) the reverse direction is safe —
 meeting apps send only remote voices, so the system channel stays clean. In-room
 mode is the acoustically hardest case (far-field mic, 2–8 speakers, more overlap):
 transcription and diarization quality depend heavily on the mic — recommend an
@@ -484,8 +490,8 @@ accurately (`steno start --local 0 --remote 1`). Automatic de/en language
 detection ships as a text vote over the finalized transcript (`stenograf.lid`),
 auto-filling the transcript language and locking it for the session. **Phase 1
 is complete** — a usable, legally-clean meeting transcriber. Deferred to later
-phases: hybrid-mode cross-channel dedup (needs the helper's AEC to matter in
-practice), moving checkpoint finalize off the consume thread (needs real-time
+phases: cross-channel text dedup (the backstop for echo AEC3 leaves behind),
+moving checkpoint finalize off the consume thread (needs real-time
 backpressure tuning), and acoustic first-segment LID for the live pass.*
 
 **Phase 2 — Live captions.**

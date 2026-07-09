@@ -219,6 +219,14 @@ def main() -> None:
     "TUI (also the automatic choice when stdout is not a terminal).",
 )
 @click.option(
+    "--aec/--no-aec",
+    "use_aec",
+    default=True,
+    help="Cancel speaker bleed out of the mic, using the system channel as the "
+    "reference. Only applies when both channels are captured; harmless on "
+    "headphones. Disable to capture the mic exactly as the device hears it.",
+)
+@click.option(
     "--reid/--no-reid",
     "use_reid",
     default=True,
@@ -254,6 +262,7 @@ def start(
     max_seconds: float | None,
     live: bool,
     plain: bool,
+    use_aec: bool,
     use_reid: bool,
     reid_threshold: float | None,
     formats: str,
@@ -288,7 +297,7 @@ def start(
     plans = plan_channels(profile)
     # Pace file replay to wall-clock only when it feeds the live pass, so
     # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
-    provider = _make_provider(replay, plans, paced=live)
+    provider = _make_provider(replay, plans, paced=live, aec=use_aec)
 
     # By default a meeting is filed in the managed archive: its own dir under the
     # data dir (or --out), holding transcript.{md,json,…} + optional audio.wav, plus
@@ -332,6 +341,9 @@ def start(
     if not use_tui:  # the TUI header shows REC / elapsed instead of this hint
         stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
         click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
+    if len(plans) > 1:
+        state = "on" if use_aec else "off"
+        click.echo(f"echo cancellation: {state} (mic cancelled against system audio)")
     try:
         transcript = _run_meeting(
             recorder,
@@ -546,8 +558,25 @@ def _make_tee(record_audio: str | None, default_path: Path, plans):
     return tee
 
 
-def _make_provider(replay: str | None, plans, *, paced: bool = False):
-    """Build the capture provider: file replay if given, else the native helper."""
+def _make_provider(replay: str | None, plans, *, paced: bool = False, aec: bool = True):
+    """Build the capture provider: file replay if given, else the native helper.
+
+    When both channels are captured, the mic is echo-cancelled against the system
+    channel — without it, remote participants coming out of the speakers land on
+    the mic channel and get transcribed as the local speaker.
+    """
+    from stenograf.capture.base import Channel
+
+    provider = _base_provider(replay, plans, paced=paced)
+    channels = {plan.channel for plan in plans}
+    if aec and {Channel.MIC, Channel.SYSTEM} <= channels:
+        from stenograf.aec import EchoCancellingProvider
+
+        return EchoCancellingProvider(provider)
+    return provider
+
+
+def _base_provider(replay: str | None, plans, *, paced: bool = False):
     from stenograf.capture.base import Channel
 
     if replay is not None:

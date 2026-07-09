@@ -76,9 +76,10 @@ class MacOSCaptureProvider(CaptureProvider):
     :func:`find_helper`.
 
     Echo cancellation is *not* done here. The helper used to expose a ``--aec``
-    flag backed by Voice Processing IO; measured on macOS 26 it delivered an
-    all-zero mic and drove the tap to 6x real time, so it was removed. Echo is
-    cancelled downstream, with the system channel as the far-end reference.
+    flag backed by Voice Processing IO; measured on macOS 26 it emitted no mic
+    frames at all and attenuated the system channel by ~36 dB, so it was removed
+    (see native/README.md). Echo is cancelled downstream, with the system channel
+    as the far-end reference.
     """
 
     def __init__(self, *, command: str | Path | list[str] | None = None) -> None:
