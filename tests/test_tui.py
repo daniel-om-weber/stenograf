@@ -80,6 +80,85 @@ class TestCaptions:
 
         _run(body)
 
+    def test_window_sized_batch_flushes_to_the_log_immediately(self):
+        # The window pass commits a whole ~30 s window per batch. Past the size
+        # cap it must land in the scrolling log at once — not accumulate on the
+        # open line inside the height-capped (bottom-clipped) interim area, which
+        # froze the UI for minutes during sustained remote speech.
+        async def body():
+            app = _app()
+            async with app.run_test() as pilot:
+                words = [_w(f"wort{i}", i * 0.3, i * 0.3 + 0.25) for i in range(60)]
+                app.push_committed(Channel.SYSTEM, words)
+                await pilot.pause()
+                assert len(app.committed_lines) == 1
+                assert app.committed_lines[0].startswith("Remote  wort0")
+                assert app.committed_lines[0].endswith("wort59")
+                # The open line is empty again, so the next window starts fresh
+                # instead of continuing a line that is already in the log.
+                app.push_committed(Channel.SYSTEM, [_w("weiter", 18.2, 18.5)])
+                await pilot.pause()
+                assert app._open_words == ["weiter"]
+
+        _run(body)
+
+    def test_small_commits_flush_once_the_open_line_exceeds_the_cap(self):
+        # Speculative-mode commits (a few words each) still merge into utterance
+        # paragraphs — but the merged line is bounded: crossing the cap moves the
+        # whole paragraph into the log in one piece.
+        async def body():
+            app = _app()
+            async with app.run_test() as pilot:
+                words = [_w(f"wort{i}", i * 0.3, i * 0.3 + 0.25) for i in range(40)]
+                app.push_committed(Channel.MIC, words[:30])  # under the cap → stays open
+                await pilot.pause()
+                assert app.committed_lines == []
+                app.push_committed(Channel.MIC, words[30:])  # crosses the cap → flush
+                await pilot.pause()
+                assert len(app.committed_lines) == 1
+                assert "wort0" in app.committed_lines[0]
+                assert app.committed_lines[0].endswith("wort39")
+
+        _run(body)
+
+    def test_idle_open_line_flushes_on_the_tick(self):
+        # The last window of a stretch of speech must not sit in the interim area
+        # until a future commit displaces it — the 1 Hz tick flushes it once no
+        # new commit has arrived for the idle threshold.
+        async def body():
+            app = _app()
+            async with app.run_test() as pilot:
+                app.push_committed(Channel.SYSTEM, [_w("hallo", 0.0, 0.4)])
+                await pilot.pause()
+                app._tick()  # commit is fresh → no flush yet
+                assert app.committed_lines == []
+                app._last_commit_at -= 6.0  # age the commit past the threshold
+                app._tick()
+                await pilot.pause()
+                assert app.committed_lines == ["Remote  hallo"]
+                interim = app.query_one("#interim").render()
+                shown = interim.plain if hasattr(interim, "plain") else str(interim)
+                assert "hallo" not in shown  # flushed line left the interim area
+
+        _run(body)
+
+    def test_interim_shows_only_the_tail_of_a_long_open_line(self):
+        # Defensive: a sub-cap open line can still outgrow the interim area's
+        # four rows, which clip at the bottom — render only its freshest tail.
+        async def body():
+            app = _app()
+            async with app.run_test() as pilot:
+                words = [_w(f"wort{i}", i * 0.3, i * 0.3 + 0.25) for i in range(33)]
+                app.push_committed(Channel.MIC, words)  # ~220 chars: under the flush cap
+                await pilot.pause()
+                assert app.committed_lines == []  # still open
+                interim = app.query_one("#interim").render()
+                shown = interim.plain if hasattr(interim, "plain") else str(interim)
+                assert "…" in shown and shown.rstrip().endswith("wort32")
+                assert "wort0 " not in shown  # the stale head is elided
+
+        _run(body)
+
     def test_interim_tail_shows_open_line_and_grey_tail_then_clears(self):
         async def body():
             app = _app()

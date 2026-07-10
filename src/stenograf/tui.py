@@ -8,7 +8,8 @@ interim tail (channel-coarse ``You``/``Remote`` — the real ``Local-N``/
 Design constraints from the plan:
 
 - **Minimal redraw.** One 1 Hz clock is the only periodic repaint (it advances
-  the header's elapsed time); everything else updates on an event. Animations are
+  the header's elapsed time and flushes an idle open caption line); everything
+  else updates on an event. Animations are
   disabled (``animation_level = "none"``) and the frame cap is pinned low
   (``TEXTUAL_FPS=15``, applied before textual is imported — the value is baked
   into ``Screen.UPDATE_PERIOD`` at import time).
@@ -66,6 +67,23 @@ textual.screen.UPDATE_PERIOD = 1 / _FPS
 _LIVE_LABEL = {Channel.MIC: "You", Channel.SYSTEM: "Remote"}
 _LABEL_STYLE = {Channel.MIC: "bold cyan", Channel.SYSTEM: "bold magenta"}
 _LINE_GAP = 1.5  # committed run continues while the gap to the next words is under this
+
+_LINE_FLUSH_CHARS = 250
+"""Once the open committed line grows past this, it moves into the scrolling log
+immediately. The open-line merge exists for the speculative pass's few-word
+commits; the window pass commits a whole ~30 s window per batch, and during a
+long remote stretch budget-closed windows join with sub-second gaps, so without
+this bound the line grows for minutes inside the height-capped interim area —
+invisible below its fourth row (the "UI frozen while remote talks" bug)."""
+
+_IDLE_FLUSH_S = 5.0
+"""Wall-clock seconds without a new commit before the open line flushes to the
+log anyway. The last window of a stretch of speech otherwise sits in the interim
+area until some future commit displaces it — minutes, in a quiet meeting."""
+
+_INTERIM_TAIL_CHARS = 200
+"""At most this much of the open line (its tail) renders in the interim area.
+The area clips at the bottom, so only the freshest words may occupy it."""
 
 
 def _clock(seconds: float) -> str:
@@ -129,10 +147,13 @@ class LiveApp(App[None]):
         # One interleaved committed stream (the RichLog), tracked like the plain
         # view: a run continues on the open line until the channel changes or a
         # pause opens. The open line lives in the interim area (bright) and moves
-        # into the log on break, so committed text is visible immediately.
+        # into the log on break — or once it outgrows _LINE_FLUSH_CHARS or sits
+        # idle past _IDLE_FLUSH_S, so continuous speech cannot hold text out of
+        # the log (and out of sight) indefinitely.
         self._open_channel: Channel | None = None
         self._open_words: list[str] = []
         self._last_end = 0.0
+        self._last_commit_at = 0.0  # wall clock of the newest commit (idle flush)
         self._interim: dict[Channel, str] = {}
 
         # Plain-text mirrors for tests / debugging.
@@ -164,6 +185,13 @@ class LiveApp(App[None]):
 
     def _tick(self) -> None:
         self._render_header()
+        # Idle flush: commits stopped arriving (the stretch of speech ended), so
+        # the open line cannot continue soon — move it into the log rather than
+        # leaving it stranded in the interim area until a future commit displaces
+        # it. Costs at most one extra log line if speech resumes within the gap.
+        if self._open_words and time.monotonic() - self._last_commit_at > _IDLE_FLUSH_S:
+            self._flush_open_line()
+            self._render_interim()
 
     # -- captions ----------------------------------------------------------
 
@@ -183,6 +211,13 @@ class LiveApp(App[None]):
             self._open_channel = channel
             self._open_words = list(text)
         self._last_end = words[-1].end
+        self._last_commit_at = time.monotonic()
+        # Size bound: past the cap the open line reads as a paragraph already, so
+        # move it into the log *now*. A window-mode batch (~30 s of speech) lands
+        # in the log the moment it commits instead of accumulating — clipped and
+        # invisible — in the height-capped interim area.
+        if len(" ".join(self._open_words)) >= _LINE_FLUSH_CHARS:
+            self._flush_open_line()
         self._render_interim()
 
     def push_interim(self, channel: Channel, text: str) -> None:
@@ -209,7 +244,10 @@ class LiveApp(App[None]):
         for channel in (Channel.MIC, Channel.SYSTEM):
             parts: list[str] = []
             if channel == self._open_channel and self._open_words:
-                parts.append(" ".join(self._open_words))
+                open_text = " ".join(self._open_words)
+                if len(open_text) > _INTERIM_TAIL_CHARS:  # the area clips at the bottom
+                    open_text = "…" + open_text[-_INTERIM_TAIL_CHARS:]
+                parts.append(open_text)
             tail = self._interim.get(channel, "")
             if tail:
                 parts.append(f"[dim]{tail}[/]")
