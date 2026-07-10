@@ -57,13 +57,15 @@ SCENARIOS = {
 ECHO_MIN_WORDS = 3  # session.py's dedup floor: shorter matches are agreement, not echo
 
 
-def steno_command(run_dir: Path, dump_dir: Path, seconds: float, aec: bool) -> list[str]:
+def steno_command(
+    run_dir: Path, dump_dir: Path, seconds: float, aec: bool, live: bool
+) -> list[str]:
     cmd = [
         sys.executable,
         "-c",
         "from stenograf.cli import main; main()",
         "start",
-        "--no-live",
+        "--live" if live else "--no-live",
         "--plain",
         "--no-archive",
         "--out",
@@ -143,6 +145,13 @@ def main() -> None:
         action="store_false",
         help="record the uncancelled baseline of the same scenario",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="run the live captions pass during capture — puts the real MLX "
+        "inference load on the machine, the regime that produced the historical "
+        "leaked lines (batch capture is idle by comparison)",
+    )
     args = parser.parse_args()
 
     plays_far, talk_type, instruction = SCENARIOS[args.scenario]
@@ -156,16 +165,19 @@ def main() -> None:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     label = args.scenario if args.aec else f"{args.scenario}-noaec"
+    if args.live:
+        label += "-live"
     run_dir = OUT_DIR / f"{label}-{stamp}"
     dump_dir = run_dir / "dump"
     run_dir.mkdir(parents=True)
 
-    print(f"scenario: {args.scenario}  (aec {'on' if args.aec else 'OFF — baseline'})")
+    mode = "live" if args.live else "batch"
+    print(f"scenario: {args.scenario}  ({mode}, aec {'on' if args.aec else 'OFF — baseline'})")
     print(f">>> {instruction}")
     print(f">>> {args.seconds:.0f} s once capture starts; results in {run_dir}")
 
     code = run_capture(
-        steno_command(run_dir, dump_dir, args.seconds, args.aec),
+        steno_command(run_dir, dump_dir, args.seconds, args.aec, args.live),
         args.source if plays_far else None,
     )
     if code != 0:
@@ -179,6 +191,7 @@ def main() -> None:
     metrics |= {
         "scenario": args.scenario,
         "aec": args.aec,
+        "live": args.live,
         "local_lines_3w": len(leaked),
         "entries_total": len(entries),
         "started": stamp,
