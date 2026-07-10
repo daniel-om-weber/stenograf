@@ -38,6 +38,11 @@ class NotesBackend(Protocol):
 
     name: str
     model: str | None
+    max_input_chars: int
+    """Rendered-transcript budget for ONE completion; longer meetings are
+    map-reduced. A backend property because it tracks the model behind it:
+    a local 8B model degrades on long input far sooner than a hosted frontier
+    model hard-limits. ``[notes] max_input_chars`` in settings.toml overrides."""
 
     def is_available(self) -> bool: ...
 

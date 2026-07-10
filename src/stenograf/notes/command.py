@@ -23,6 +23,11 @@ DEFAULT_TIMEOUT_S = 600.0
 """Generous by default: a long meeting through a large hosted model takes
 minutes, and a hang is cut off rather than waited on forever."""
 
+DEFAULT_MAX_INPUT_CHARS = 400_000
+"""~100k tokens — hosted frontier models take a multi-hour meeting in one pass
+(fewer calls, better coherence than map-reduce). Driving a small model through
+the command backend? Lower ``[notes] max_input_chars`` in settings.toml."""
+
 
 class CommandBackend:
     name = "command"
@@ -33,6 +38,7 @@ class CommandBackend:
         *,
         timeout_s: float | None = None,
         model: str | None = None,
+        max_input_chars: int | None = None,
     ) -> None:
         if not argv:
             raise NotesBackendUnavailableError(
@@ -43,10 +49,16 @@ class CommandBackend:
         self.timeout_s = DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
         # Provenance label only — the model is whatever the command runs.
         self.model = model or self.argv[0]
+        self.max_input_chars = max_input_chars or DEFAULT_MAX_INPUT_CHARS
 
     @classmethod
     def from_settings(cls, settings: NotesSettings) -> CommandBackend:
-        return cls(settings.command, timeout_s=settings.timeout_s, model=settings.model)
+        return cls(
+            settings.command,
+            timeout_s=settings.timeout_s,
+            model=settings.model,
+            max_input_chars=settings.max_input_chars,
+        )
 
     def is_available(self) -> bool:
         return shutil.which(self.argv[0]) is not None

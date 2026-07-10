@@ -8,6 +8,7 @@ propagates and the transcript stands untouched (PLAN.md §5 D4).
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from stenograf.notes.backend import (
     NotesBackend,
@@ -23,22 +24,22 @@ from stenograf.notes.prompt import (
 )
 from stenograf.transcript import Transcript
 
-MAX_SINGLE_SHOT_CHARS = 48_000
-"""Rendered-transcript budget for one completion (~12k tokens of speech —
-roughly a one-hour meeting). Sized for the small *local* models the Ollama
-backend defaults to; hosted models would take far more, but a smaller
-single-shot ceiling only costs long meetings one extra merge pass."""
-
 
 def generate_notes(
-    transcript: Transcript, backend: NotesBackend, *, instructions: str | None = None
+    transcript: Transcript,
+    backend: NotesBackend,
+    *,
+    instructions: str | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> MeetingNotes:
     """Produce :class:`MeetingNotes` for ``transcript`` via ``backend``.
 
     Raises :class:`NotesBackendUnavailableError` before any model work if the
     backend can't run, and :class:`NotesGenerationError` when the model's
     output can't be parsed into valid notes. A title the user set on the
-    meeting always wins over the derived one."""
+    meeting always wins over the derived one. ``on_progress`` receives one
+    human-readable line before each model call — a long meeting through a slow
+    model must not look like a hang."""
     if not transcript.entries:
         raise NotesGenerationError("the transcript has no entries — nothing to summarize")
     if not backend.is_available():
@@ -46,25 +47,33 @@ def generate_notes(
             f"notes backend {backend.name!r} is not available — "
             "see `steno doctor` for what it needs"
         )
-    return _generate(transcript, backend, instructions=instructions)
+    return _generate(transcript, backend, instructions=instructions, on_progress=on_progress)
 
 
 def _generate(
-    transcript: Transcript, backend: NotesBackend, *, instructions: str | None
+    transcript: Transcript,
+    backend: NotesBackend,
+    *,
+    instructions: str | None,
+    on_progress: Callable[[str], None] | None,
 ) -> MeetingNotes:
-    chunks = chunk_entries(transcript.entries, max_chars=MAX_SINGLE_SHOT_CHARS)
+    progress = on_progress or (lambda _message: None)
+    chunks = chunk_entries(transcript.entries, max_chars=backend.max_input_chars)
     if len(chunks) == 1:
+        progress(f"summarizing with {backend.name} ({backend.model}), single pass")
         messages = build_messages(transcript, instructions=instructions)
         obj = _parse_notes_object(backend.complete(messages, NOTES_SCHEMA))
         strategy = "single-shot"
     else:
         partials = []
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks, start=1):
+            progress(f"summarizing portion {i}/{len(chunks)} with {backend.name}")
             messages = build_messages(
                 transcript, instructions=instructions, entries=chunk, partial=True
             )
             partial = _parse_notes_object(backend.complete(messages, NOTES_SCHEMA))
             partials.append(json.dumps(partial, ensure_ascii=False))
+        progress(f"merging {len(chunks)} portion notes")
         reduce_messages = build_reduce_messages(transcript, partials, instructions=instructions)
         obj = _parse_notes_object(backend.complete(reduce_messages, NOTES_SCHEMA))
         strategy = f"map-reduce ({len(chunks)} portions)"

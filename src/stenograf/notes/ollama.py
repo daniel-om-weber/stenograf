@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 
 DEFAULT_URL = "http://localhost:11434"
 DEFAULT_MODEL = "qwen3:8b"  # ~5 GB — fits a 48 GB Mac without swapping
+DEFAULT_MAX_INPUT_CHARS = 128_000
+"""~32k tokens — a ~2 h meeting in one pass. Qwen3-class local models handle
+this; if a smaller model truncates or rambles, lower ``[notes]
+max_input_chars`` in settings.toml rather than this default."""
 _CONNECT_TIMEOUT = 5.0
 _CHAT_TIMEOUT = 600.0
 
@@ -31,14 +35,24 @@ class ModelNotFoundError(NotesBackendUnavailableError):
 class OllamaBackend:
     name = "ollama"
 
-    def __init__(self, url: str | None = None, model: str | None = None) -> None:
+    def __init__(
+        self,
+        url: str | None = None,
+        model: str | None = None,
+        max_input_chars: int | None = None,
+    ) -> None:
         self.url = _normalize_url(url or os.environ.get("OLLAMA_HOST") or DEFAULT_URL)
         self.model = model or os.environ.get("STENOGRAF_NOTES_MODEL") or DEFAULT_MODEL
+        self.max_input_chars = max_input_chars or DEFAULT_MAX_INPUT_CHARS
         self._model_verified = False
 
     @classmethod
     def from_settings(cls, settings: NotesSettings) -> OllamaBackend:
-        return cls(url=settings.ollama_url, model=settings.model)
+        return cls(
+            url=settings.ollama_url,
+            model=settings.model,
+            max_input_chars=settings.max_input_chars,
+        )
 
     def is_available(self) -> bool:
         try:

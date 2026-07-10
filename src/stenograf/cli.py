@@ -1876,7 +1876,12 @@ def _generate_and_write_notes(
     if settings.instructions is not None:
         instructions = settings.instructions.read_text(encoding="utf-8")
 
-    notes = generate_notes(transcript, backend, instructions=instructions)
+    notes = generate_notes(
+        transcript,
+        backend,
+        instructions=instructions,
+        on_progress=lambda message: click.echo(f"notes: {message}"),
+    )
 
     md_path = out_dir / f"{basename}.notes.md"
     json_path = out_dir / f"{basename}.notes.json"

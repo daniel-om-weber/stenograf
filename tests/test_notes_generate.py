@@ -4,7 +4,7 @@ import pytest
 
 from stenograf.config import Language, MeetingProfile
 from stenograf.notes import NotesBackendUnavailableError, NotesGenerationError
-from stenograf.notes.generate import MAX_SINGLE_SHOT_CHARS, generate_notes
+from stenograf.notes.generate import generate_notes
 from stenograf.notes.prompt import NOTES_SCHEMA, build_messages, chunk_entries
 from stenograf.transcript import Transcript, TranscriptEntry
 
@@ -41,9 +41,10 @@ class FakeBackend:
     name = "fake"
     model = "fake-model"
 
-    def __init__(self, responses=None, available=True):
+    def __init__(self, responses=None, available=True, max_input_chars=48_000):
         self.responses = list(responses) if responses is not None else [NOTES_JSON]
         self.available = available
+        self.max_input_chars = max_input_chars
         self.calls: list[tuple[list[dict[str, str]], dict]] = []
 
     def is_available(self) -> bool:
@@ -113,17 +114,30 @@ def test_profile_title_wins_over_derived_title():
     assert notes.title == "Weekly Sync"
 
 
-def test_over_budget_forces_map_reduce():
-    turn_chars = 2000
-    n_turns = (MAX_SINGLE_SHOT_CHARS // turn_chars) + 5
-    entries = [entry("w" * turn_chars, start=float(i)) for i in range(n_turns)]
-    backend = FakeBackend()
-    notes = generate_notes(transcript(entries), backend)
+def test_over_backend_budget_forces_map_reduce():
+    # The budget is the BACKEND's property — a small-window backend map-reduces
+    # a meeting that a frontier backend takes in one pass.
+    entries = [entry("w" * 500, start=float(i)) for i in range(10)]
+    backend = FakeBackend(max_input_chars=2000)
+    progress: list[str] = []
+    notes = generate_notes(transcript(entries), backend, on_progress=progress.append)
     assert len(backend.calls) > 2  # at least two map calls + one reduce
     assert notes.provenance.strategy.startswith("map-reduce")
     # The reduce call carries the partial notes, not raw transcript entries.
     reduce_messages = backend.calls[-1][0]
     assert "Portion 1 notes:" in reduce_messages[1]["content"]
+    # One progress line per model call — a slow run must not look like a hang.
+    assert len(progress) == len(backend.calls)
+    assert any("portion 1/" in line for line in progress)
+    assert "merging" in progress[-1]
+
+
+def test_same_meeting_is_single_shot_for_a_large_window_backend():
+    entries = [entry("w" * 500, start=float(i)) for i in range(10)]
+    backend = FakeBackend(max_input_chars=400_000)
+    notes = generate_notes(transcript(entries), backend)
+    assert len(backend.calls) == 1
+    assert notes.provenance.strategy == "single-shot"
 
 
 def test_fenced_json_is_extracted():

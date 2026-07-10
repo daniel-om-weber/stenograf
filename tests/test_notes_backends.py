@@ -157,6 +157,21 @@ def test_ollama_from_settings():
     assert backend.url == "http://gpu-box:11434"
 
 
+def test_input_budget_is_backend_dependent_and_overridable():
+    from stenograf.notes import command as command_mod
+    from stenograf.notes import ollama as ollama_mod
+
+    # A hosted frontier model takes far more in one pass than a local 8B.
+    assert OllamaBackend().max_input_chars == ollama_mod.DEFAULT_MAX_INPUT_CHARS
+    big = CommandBackend(("claude", "-p")).max_input_chars
+    assert big == command_mod.DEFAULT_MAX_INPUT_CHARS
+    assert big > OllamaBackend().max_input_chars
+
+    override = NotesSettings(command=("claude", "-p"), max_input_chars=9000)
+    assert CommandBackend.from_settings(override).max_input_chars == 9000
+    assert OllamaBackend.from_settings(override).max_input_chars == 9000
+
+
 # ---- command backend ---------------------------------------------------------
 
 

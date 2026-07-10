@@ -72,3 +72,14 @@ def test_wrong_typed_timeout_is_rejected(tmp_path):
     path.write_text('[notes]\ntimeout_s = "fast"\n', encoding="utf-8")
     with pytest.raises(SettingsError, match="timeout_s"):
         load_settings(path)
+
+
+def test_max_input_chars_parses_and_rejects_junk(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text("[notes]\nmax_input_chars = 200000\n", encoding="utf-8")
+    assert load_settings(path).notes.max_input_chars == 200_000
+
+    for bad in ('"many"', "true", "0", "-5"):
+        path.write_text(f"[notes]\nmax_input_chars = {bad}\n", encoding="utf-8")
+        with pytest.raises(SettingsError, match="max_input_chars"):
+            load_settings(path)

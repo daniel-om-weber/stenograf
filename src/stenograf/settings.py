@@ -42,6 +42,9 @@ class NotesSettings:
     instructions: Path | None = None
     ollama_url: str | None = None
     export_dir: Path | None = None
+    max_input_chars: int | None = None
+    """Single-completion transcript budget override; ``None`` = the backend's
+    own default (local models get a smaller one than hosted frontier models)."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,11 @@ def _notes_from_table(table: dict, path: Path) -> NotesSettings:
     timeout = table.get("timeout_s")
     if timeout is not None and not isinstance(timeout, int | float):
         raise ValueError("notes.timeout_s must be a number")
+    max_chars = table.get("max_input_chars")
+    if max_chars is not None and (
+        isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars <= 0
+    ):
+        raise ValueError("notes.max_input_chars must be a positive integer")
     export = table.get("export", {})
     if not isinstance(export, dict):
         raise ValueError("[notes.export] must be a table")
@@ -101,6 +109,7 @@ def _notes_from_table(table: dict, path: Path) -> NotesSettings:
         instructions=_opt_path(table, "instructions"),
         ollama_url=_opt_str(table, "ollama_url"),
         export_dir=_opt_path(export, "dir"),
+        max_input_chars=max_chars,
     )
 
 

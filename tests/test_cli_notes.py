@@ -34,6 +34,7 @@ def _isolate_data_dir(tmp_path, monkeypatch):
 class FakeBackend:
     name = "fake"
     model = "fake-model"
+    max_input_chars = 48_000
 
     def __init__(self, available=True, response=NOTES_JSON):
         self.available = available
