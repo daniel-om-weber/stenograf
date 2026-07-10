@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.3.2
+      # The runner image ships Rust (stenodiar); fail early and loudly if that
+      # ever changes rather than in the wheel-verify step.
+      - run: cargo --version
       - run: uv build --wheel
       - name: Verify the wheel bundles a signed helper for macOS 14.4+
         run: |
@@ -25,6 +28,14 @@ jobs:
           unzip -o dist/*.whl 'stenograf/bin/stenocap' -d /tmp/whl
           otool -l /tmp/whl/stenograf/bin/stenocap | grep -q 'minos 14.4'
           codesign -v /tmp/whl/stenograf/bin/stenocap
+      - name: Verify the wheel bundles the stenodiar diarization helper
+        # The build hook skips stenodiar when the runner lacks Rust rather
+        # than failing every source install — but a *published* wheel without
+        # it silently degrades estimated speaker counts, so refuse it here.
+        run: |
+          unzip -o dist/*.whl 'stenograf/bin/stenodiar' -d /tmp/whl
+          test -x /tmp/whl/stenograf/bin/stenodiar
+          /tmp/whl/stenograf/bin/stenodiar --help
       - uses: actions/upload-artifact@v7
         with:
           name: dist-macos
@@ -38,11 +49,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.3.2
       - run: uv build
-      - name: Verify the pure wheel carries no helper
+      - name: Verify the pure wheel carries no helpers
         run: |
           ls dist/*py3-none-any.whl dist/*.tar.gz
-          if unzip -l dist/*.whl | grep -q stenocap; then
-            echo "pure wheel must not contain the capture helper" >&2
+          if unzip -l dist/*.whl | grep -qE 'stenocap|stenodiar'; then
+            echo "pure wheel must not contain native helpers" >&2
             exit 1
           fi
       - uses: actions/upload-artifact@v7
