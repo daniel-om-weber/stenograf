@@ -1,7 +1,6 @@
 """CLI tests for `steno notes`, the `--notes` flag, and the combined-note export."""
 
 import json
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -27,7 +26,10 @@ NOTES_JSON = json.dumps(
 
 @pytest.fixture(autouse=True)
 def _isolate_data_dir(tmp_path, monkeypatch):
+    from stenograf import output
+
     monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "steno-data"))
+    monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings-home")
     monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
 
 
@@ -64,27 +66,12 @@ def write_transcript_json(path: Path, *, title=None) -> Transcript:
     return transcript
 
 
-def archive_meeting(*, title=None) -> str:
-    """Register one meeting in the (isolated) managed archive."""
-    from stenograf.archive import MeetingArchive, MeetingRecord
-
-    archive = MeetingArchive.load()
-    meeting_id = archive.allocate_id(datetime(2026, 7, 10, 14, 30))
-    meeting_dir = archive.meeting_dir(meeting_id)
+def meeting_folder(tmp_path, name="meeting-20260710-143000", *, title=None) -> Path:
+    """One finished meeting folder in the (isolated) output home."""
+    meeting_dir = tmp_path / "meetings-home" / name
     meeting_dir.mkdir(parents=True)
     write_transcript_json(meeting_dir / "transcript.json", title=title)
-    archive.add(
-        MeetingRecord(
-            id=meeting_id,
-            title=title,
-            created_at="2026-07-10T14:30:00",
-            duration_s=1.0,
-            language=Language.GERMAN,
-            formats=("json",),
-            dir=meeting_dir,
-        )
-    )
-    return meeting_id
+    return meeting_dir
 
 
 # ---- steno notes <path> --------------------------------------------------------
@@ -123,40 +110,53 @@ def test_notes_on_garbage_json_fails_cleanly(tmp_path, fake_backend):
     assert "not a readable transcript" in result.output
 
 
-# ---- steno notes <archive id> --------------------------------------------------
+# ---- steno notes <folder> / --last ----------------------------------------------
 
 
-def test_notes_on_archive_id_writes_into_meeting_dir_and_backfills_title(fake_backend):
-    meeting_id = archive_meeting(title=None)
+def test_notes_on_a_meeting_folder_uses_its_transcript(tmp_path, fake_backend):
+    meeting_dir = meeting_folder(tmp_path)
 
-    result = CliRunner().invoke(cli.main, ["notes", meeting_id])
-
-    assert result.exit_code == 0, result.output
-    from stenograf.archive import MeetingArchive
-
-    archive = MeetingArchive.load()
-    assert (archive.meeting_dir(meeting_id) / "transcript.notes.md").exists()
-    assert archive.get(meeting_id).title == "Quartalsplanung"  # back-filled
-    assert "title: Quartalsplanung" in result.output
-    listing = CliRunner().invoke(cli.main, ["meetings", "list"])
-    assert "Quartalsplanung" in listing.output
-
-
-def test_notes_never_overwrites_a_user_set_title(fake_backend):
-    meeting_id = archive_meeting(title="Weekly Sync")
-
-    result = CliRunner().invoke(cli.main, ["notes", meeting_id])
+    result = CliRunner().invoke(cli.main, ["notes", str(meeting_dir)])
 
     assert result.exit_code == 0, result.output
-    from stenograf.archive import MeetingArchive
-
-    assert MeetingArchive.load().get(meeting_id).title == "Weekly Sync"
+    assert (meeting_dir / "transcript.notes.md").exists()
 
 
-def test_notes_unknown_id_fails_with_guidance(fake_backend):
-    result = CliRunner().invoke(cli.main, ["notes", "meeting-19700101-000000"])
+def test_notes_on_a_folder_without_a_transcript_errors(tmp_path, fake_backend):
+    empty = tmp_path / "meetings-home" / "meeting-20260710-143000"
+    empty.mkdir(parents=True)
+
+    result = CliRunner().invoke(cli.main, ["notes", str(empty)])
+
     assert result.exit_code != 0
-    assert "meetings list" in result.output
+    assert "no transcript.json" in result.output
+
+
+def test_notes_last_picks_the_newest_meeting_folder(tmp_path, fake_backend):
+    meeting_folder(tmp_path, "meeting-20260709-090000")
+    newest = meeting_folder(tmp_path, "meeting-20260710-143000")
+    # Newer folder name, but no transcript.json (a crashed run) — skipped.
+    (tmp_path / "meetings-home" / "meeting-20260711-080000").mkdir()
+
+    result = CliRunner().invoke(cli.main, ["notes", "--last"])
+
+    assert result.exit_code == 0, result.output
+    assert str(newest) in result.output  # says which meeting it picked
+    assert (newest / "transcript.notes.md").exists()
+
+
+def test_notes_last_with_an_empty_home_fails_with_guidance(tmp_path, fake_backend):
+    result = CliRunner().invoke(cli.main, ["notes", "--last"])
+    assert result.exit_code != 0
+    assert "no finished meeting" in result.output
+
+
+def test_notes_requires_a_path_or_last_but_not_both(tmp_path, fake_backend):
+    assert CliRunner().invoke(cli.main, ["notes"]).exit_code != 0
+    meeting_dir = meeting_folder(tmp_path)
+    result = CliRunner().invoke(cli.main, ["notes", str(meeting_dir), "--last"])
+    assert result.exit_code != 0
+    assert "not both" in result.output
 
 
 def test_notes_backend_down_exits_nonzero_and_writes_nothing(tmp_path, monkeypatch):
@@ -177,10 +177,11 @@ def test_notes_backend_down_exits_nonzero_and_writes_nothing(tmp_path, monkeypat
 
 
 def test_notes_export_dir_writes_combined_note(tmp_path, fake_backend):
-    meeting_id = archive_meeting()
+    # The export date comes from the folder name, which encodes the start time.
+    meeting_dir = meeting_folder(tmp_path)
     vault = tmp_path / "vault" / "Meetings"
 
-    result = CliRunner().invoke(cli.main, ["notes", meeting_id, "--export-dir", str(vault)])
+    result = CliRunner().invoke(cli.main, ["notes", str(meeting_dir), "--export-dir", str(vault)])
 
     assert result.exit_code == 0, result.output
     exported = vault / "2026-07-10 – Quartalsplanung.md"

@@ -13,11 +13,10 @@ optional; a missing file is simply all defaults. The full schema::
     attendees = ["Ada Lovelace"]        # names corrected like glossary terms
     glossary_threshold = 0.82           # similarity 0-1 to correct a term
 
-    [archive]
-    enabled = true                      # false = flat files, as --no-archive
-    out_dir = "~/Transcripts"           # where flat files go when NOT archiving
-                                        # (ignored while the archive is on — a
-                                        # managed meeting gets its own dir)
+    [output]
+    dir = "~/Documents/Meetings"        # the output home: every run writes its
+                                        # own meeting-YYYYMMDD-HHMMSS/ folder
+                                        # here (--out bypasses it for one run)
 
     [speakers]
     reid_threshold = 0.5                # cosine similarity 0-1 to match a
@@ -92,9 +91,8 @@ SETTINGS_TEMPLATE = """\
 # attendees = ["Anja Müller"]              # file terms are one per line
 # glossary_threshold = 0.82                # similarity 0-1 to correct a term
 
-[archive]
-# enabled = true                           # false = flat files, as --no-archive
-# out_dir = "~/Transcripts"                # where flat files go when not archiving
+[output]
+# dir = "~/Documents/Meetings"             # where meeting folders are created
 
 [speakers]
 # reid_threshold = 0.5                     # voice-match strictness 0-1
@@ -135,13 +133,11 @@ class VocabSettings:
 
 
 @dataclass(frozen=True)
-class ArchiveSettings:
-    enabled: bool | None = None
-    """``False`` makes ``--no-archive`` the default; ``None`` = archive on."""
-    out_dir: Path | None = None
-    """Default ``--out`` for the flat (non-archived) layout. Deliberately not
-    applied while the archive is on: there ``--out`` names one meeting's own
-    dir, so a standing value would pile every meeting into the same files."""
+class OutputSettings:
+    dir: Path | None = None
+    """The output home meeting folders are created in; ``None`` = the default
+    (``~/Documents/Meetings``, :func:`stenograf.output.default_output_home`).
+    Not one meeting's dir — ``--out`` is that — but the folder of folders."""
 
 
 @dataclass(frozen=True)
@@ -176,7 +172,7 @@ class NotesSettings:
 class Settings:
     transcript: TranscriptSettings = field(default_factory=TranscriptSettings)
     vocab: VocabSettings = field(default_factory=VocabSettings)
-    archive: ArchiveSettings = field(default_factory=ArchiveSettings)
+    output: OutputSettings = field(default_factory=OutputSettings)
     speakers: SpeakerSettings = field(default_factory=SpeakerSettings)
     asr: AsrSettings = field(default_factory=AsrSettings)
     notes: NotesSettings = field(default_factory=NotesSettings)
@@ -200,12 +196,20 @@ def load_settings(path: Path | None = None) -> Settings:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise SettingsError(f"cannot read {path}: {exc}") from exc
+    if "archive" in data:
+        # The Stage C de-scope renamed the table; a stale file must say so, not
+        # just "unknown setting: archive".
+        raise SettingsError(
+            f"invalid settings in {path}: [archive] was renamed to [output] — meetings "
+            "now always get their own folder in the output home (set [output] dir; "
+            "enabled/out_dir are gone)"
+        )
     try:
         top = _Table("", data)
         settings = Settings(
             transcript=_transcript_from_table(top.table("transcript")),
             vocab=_vocab_from_table(top.table("vocab")),
-            archive=_archive_from_table(top.table("archive")),
+            output=_output_from_table(top.table("output")),
             speakers=_speakers_from_table(top.table("speakers")),
             asr=_asr_from_table(top.table("asr")),
             notes=_notes_from_table(top.table("notes")),
@@ -316,9 +320,9 @@ def _vocab_from_table(data: dict) -> VocabSettings:
     return settings
 
 
-def _archive_from_table(data: dict) -> ArchiveSettings:
-    t = _Table("archive", data)
-    settings = ArchiveSettings(enabled=t.bool_("enabled"), out_dir=t.path("out_dir"))
+def _output_from_table(data: dict) -> OutputSettings:
+    t = _Table("output", data)
+    settings = OutputSettings(dir=t.path("dir"))
     t.reject_unknown()
     return settings
 

@@ -483,16 +483,15 @@ quickly becomes the priority over the accuracy/in-memory core.
 
 ## 5. Phased roadmap
 
-**Status (2026-07-10): Phases 0–3 are complete. Phase 4 is in progress — Stages A
-(foundations), B (archive + reverse control), D (meeting notes), and E (macOS
-distribution) are shipped, and stenograf 0.1.0 is on PyPI
-(`uv tool install stenograf`). The one remaining Phase 4 work item is Stage C —
-re-scoped twice on 2026-07-10 (web UI → reverse-control CLI → the final
-**de-scope to a pipeline**): retire the meeting-management layer and move
-outputs into a visible folder; the web UI is dropped outright. Phase 5 (Linux)
-is designed but deferred.** The per-task
-build logs of the completed phases were removed from this file on 2026-07-10;
-they live in its git history (and in PLAN-AEC.md for echo cancellation).
+**Status (2026-07-10): Phases 0–4 are complete.** stenograf 0.1.0 is on PyPI
+(`uv tool install stenograf`); Stage C — the final Phase 4 stage, re-scoped
+twice on 2026-07-10 (web UI → reverse-control CLI → the final **de-scope to a
+pipeline**) — shipped the same day: outputs moved to a visible folder and the
+meeting-management layer (index, `meetings` group, archived reverse control)
+was retired; the web UI is dropped outright. Phase 5 (Linux) is designed but
+deferred. The per-task build logs of the completed phases were removed from
+this file on 2026-07-10; they live in its git history (and in PLAN-AEC.md for
+echo cancellation).
 
 ### Completed phases
 
@@ -592,7 +591,7 @@ through the already-shipped `stenograf.asr` factory; full sub-plan under
 ### Phase 4 build plan — product layer + macOS distribution (Linux → Phase 5)
 
 Planned July 2026 by a five-subagent design pass (web UI · persistence/archive ·
-Linux backends · notes · distribution); Stages A, B, D, and E are shipped and
+Linux backends · notes · distribution); all five stages are shipped and
 summarized below. Stage C was re-scoped twice on 2026-07-10 — web UI →
 reverse-control CLI → the final **de-scope to a pipeline** (below); the web UI
 is dropped (its full W1–W8 design lives in this file's git history).
@@ -688,60 +687,43 @@ headless CI), a CI matrix (macos-15 + ubuntu) and `release.yml` with
 clean-install smoke tests and Trusted-Publishing. Release procedure: bump the
 version, tag `vX.Y.Z`, push — release.yml does the rest.
 
-**Stage C — de-scope to a pipeline (final re-scope 2026-07-10; supersedes the
-reverse-control CLI, which had replaced the web UI). THE REMAINING PHASE 4
-WORK.** Decision (Daniel): stenograf's responsibility ends at producing text —
-the full transcript and the notes/summary. Managing, re-reading, and listening
-to recorded meetings is other tools' job: Obsidian (via the Stage D note
-export), Finder/`ls`, any audio player. The Stage B management layer duplicates
-those tools and keeps user documents in a hidden app-state directory, so it is
-retired. **No index at all:** the filesystem is the index — date-named
-per-meeting folders are self-describing, the one remaining lookup ("the newest
-meeting", for `steno notes --last`) is a directory scan, on-disk name checking
-already handles id collisions, and `reconcile()`'s very existence proved the
-index was derived state that can drift from what it derives from.
+**Stage C — de-scope to a pipeline: SHIPPED (2026-07-10; final re-scope, after
+web UI → reverse-control CLI).** Decision (Daniel): stenograf's responsibility
+ends at producing text — the full transcript and the notes/summary. Managing,
+re-reading, and listening to recorded meetings is other tools' job (Obsidian
+via the Stage D export, Finder/`ls`, any audio player), and **there is no
+index at all** — the filesystem is the index. As built:
 
-- **C1 — visible output home.** Transcripts move out of
-  `~/Library/Application Support` into a user-visible folder (default
-  `~/Documents/Meetings` — confirm at implementation), configurable via the
-  settings `[archive]` table (renamed `[output]`) and `--out`. Keep the
-  date-named per-meeting folder (`meeting-YYYYMMDD-HHMMSS/`, on-disk collision
-  suffixing) grouping `transcript.*`, the optional `audio.wav`, and the notes
-  siblings; the `.partial` crash checkpoint lands in the same folder. Existing
-  `data_dir()/meetings/` content stays readable as plain files; document the
-  move. Machine state (voiceprints, settings.toml, model cache) stays in the
-  data dir — user documents do not.
-- **C2 — retire the index and the `meetings` group.** Delete `index.json` +
-  `MeetingArchive`/`MeetingRecord`/`reconcile()` and `meetings list/show/rm`
-  (listing = Finder/`ls`, reading = Obsidian/`cat`, deleting = `rm`). Delete
-  the index-side title back-fill — the exported note's filename already carries
-  the LLM-derived title. `--no-archive` and the legacy flat layout collapse
-  into plain `--out` semantics (settle the exact flag surface at
-  implementation).
-- **C3 — `steno notes` addressing.** Drop the `<id>` form; keep `<path>` and
-  add `--last` (newest meeting folder in the output home, by name scan).
-- **C4 — delete the orphaned reverse-control layer.** `ArchivedMeeting`,
-  `AudioUnavailable`, `MeetingArchive.rewrite`; verify and also delete
-  `MeetingSession`/`control.py` and `recording.read_channels` if nothing else
-  consumes them. Re-processing a recorded meeting stays what it always was —
-  `steno transcribe <folder>/audio.wav --speakers N`; a one-off speaker rename
-  is a text edit; the recurring case is voiceprint enrollment.
-- **C5 — docs.** README's "Your meeting archive" section becomes "Where your
-  files land"; settings docs updated.
+- **Visible output home** (`stenograf.output`): every run writes its own
+  `meeting-YYYYMMDD-HHMMSS/` folder (on-disk collision suffixing; nothing is
+  created until the first write) under `~/Documents/Meetings`, configurable
+  via the `[output] dir` setting (the `[archive]` table is gone — a stale one
+  gets a targeted rename error); `--out DIR` uses DIR itself as the meeting's
+  folder. Plainly named `transcript.*`, notes siblings, optional `audio.wav`,
+  and the `.partial` checkpoint all land together. Machine state (voiceprints,
+  settings.toml, model cache) stays in the data dir — user documents do not.
+- **Deleted:** `archive.py` (`MeetingArchive`/`MeetingRecord`/`reconcile`/
+  `index.json`), the `meetings list/show/rm` group, `--archive/--no-archive` +
+  the legacy flat layout, the index-side title back-fill (the exported note's
+  filename carries the LLM title), and the orphaned reverse-control layer —
+  `control.py` (`MeetingSession`, `ArchivedMeeting`, `AudioUnavailable`) and
+  `pipeline.rename_entry_speaker`. `recording.read_channels` stays (the AEC
+  eval rig consumes it). Re-processing a recorded meeting is what it always
+  was: `steno transcribe <folder>/audio.wav --speakers N`.
+- **`steno notes`** takes a meeting folder or transcript path, or `--last`
+  (newest finished `meeting-*` folder in the output home, by name scan —
+  crashed runs without a `transcript.json` are skipped).
 
-Everything deleted remains in git history. Acceptance: label-free CLI tests
-(outputs land in the visible home, `--last` picks the newest, no index file is
-ever written) plus one real `--replay` e2e. **Phase 4 is complete when this
-stage lands.**
+Acceptance held: label-free CLI tests (outputs land in the visible home,
+`--last` picks the newest, no index file is ever written) plus a real-backend
+`--replay` e2e into a configured home. Everything deleted remains in git
+history.
 
 **Web UI: dropped (2026-07-10).** With no archive to browse there is nothing
 left for a browser to show that the files themselves don't, and the TUI covers
 live captions. The deferred design (W1–W8: Starlette server + token/Origin
 security + archive/reader views + `steno serve`) lives in this file's git
 history should it ever be wanted.
-
-**Ordering.** Stage C (C1 → C2 → C3 → C4 → C5; mostly deletions) is all that
-remains of Phase 4.
 
 **Deferred to Phase 5 (Linux Track 2 — designed, not built).** A CPU/ONNX ASR backend
 `stenograf/asr/sherpa.py::SherpaOnnxASRBackend` (`name="parakeet-onnx"`) wrapping the *same*

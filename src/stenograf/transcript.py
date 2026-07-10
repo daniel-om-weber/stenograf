@@ -34,9 +34,9 @@ FORMATS: dict[str, str] = {
     "vtt": "to_vtt",
 }
 """Every transcript format stenograf can emit: extension → the :class:`Transcript`
-method that renders it. The single registry behind ``--format``, the ``[transcript]
-formats`` setting, and the archive's format discovery — adding a renderer here makes
-it available everywhere at once."""
+method that renders it. The single registry behind ``--format`` and the
+``[transcript] formats`` setting — adding a renderer here makes it available
+everywhere at once."""
 
 DEFAULT_FORMATS: tuple[str, ...] = ("md", "json", "txt")
 """The formats written when neither ``--format`` nor ``[transcript] formats`` says
@@ -107,9 +107,8 @@ class Transcript:
         Path-valued store, the resolved-parameter provenance). Forward/backward
         compat: a missing ``version`` is treated as legacy v1; unknown keys are
         ignored so a v1 reader tolerates additive fields; a ``version`` newer than
-        this build raises :class:`UnsupportedTranscriptVersion`. Underpins the
-        meeting archive, the web transcript reader, and ``steno notes`` (PLAN.md §5
-        Stage A1)."""
+        this build raises :class:`UnsupportedTranscriptVersion`. Underpins
+        ``steno notes`` reading a written transcript back (PLAN.md §5 Stage A1)."""
         obj = json.loads(data)
         version = obj.get("version", 1)
         if version > SCHEMA_VERSION:

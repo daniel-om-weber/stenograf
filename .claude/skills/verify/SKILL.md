@@ -13,10 +13,15 @@ headlessly via `--replay` — no mic, no system tap, no native helper needed.
 No build step; run from the repo with uv:
 
 ```bash
-uv run steno start --local 1 --remote 1 --no-aec --no-archive \
+uv run steno start --local 1 --remote 1 --no-aec \
   --out <tmpdir> --replay mic.wav,remote.wav
 ```
 
+- `--out DIR` is the meeting's own folder — files land directly in it as
+  `transcript.{md,json,txt}`. Without it, a `meeting-YYYYMMDD-HHMMSS/` folder
+  is created under the output home (`[output] dir` in settings.toml, else
+  `~/Documents/Meetings`) — always pass `--out` when testing to stay out of
+  the user's real meetings.
 - `--replay MIC[,SYSTEM]` replays wav files as the two channels. With the live
   pass on (default), replay is **paced to wall-clock**, so a 2-minute file takes
   2 minutes — that is the point: it exercises the LiveWorker at meeting cadence.

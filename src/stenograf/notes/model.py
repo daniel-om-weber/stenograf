@@ -44,8 +44,8 @@ class NotesProvenance:
 @dataclass(frozen=True)
 class MeetingNotes:
     title: str
-    """LLM-derived when the meeting had none — flows into the note filename and
-    back-fills an untitled archive record (PLAN.md §5 Stage D6)."""
+    """LLM-derived when the meeting had none — flows into the combined-note
+    export filename (PLAN.md §5 Stage D6)."""
     summary: str
     decisions: tuple[str, ...] = ()
     action_items: tuple[ActionItem, ...] = ()

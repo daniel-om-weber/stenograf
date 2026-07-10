@@ -734,7 +734,7 @@ class MeetingRecorder:
         """Seconds the canceller cancelled against silence because the far-end
         reference never arrived (from ``far_end_missing_ticks``, recorded after
         capture). None means unknown — no canceller was observed (direct
-        :meth:`finalize` calls, archived re-finalize) — and finalize treats
+        :meth:`finalize` calls, e.g. a file transcribe) — and finalize treats
         unknown conservatively: backstop armed."""
         self.dropped_echo_lines = 0
         """Mic lines the last :meth:`finalize` dropped as echoed remote speech;

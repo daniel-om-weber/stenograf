@@ -108,9 +108,8 @@ glossary_file = "~/steno/glossary.txt"
 attendees = ["Ada Lovelace", "Grace Hopper"]
 glossary_threshold = 0.9
 
-[archive]
-enabled = false
-out_dir = "~/Transcripts"
+[output]
+dir = "~/Documents/Meetings"
 
 [speakers]
 reid_threshold = 0.6
@@ -126,8 +125,7 @@ backend = "parakeet"
     assert s.vocab.glossary_file == Path("~/steno/glossary.txt").expanduser()
     assert s.vocab.attendees == ("Ada Lovelace", "Grace Hopper")
     assert s.vocab.glossary_threshold == 0.9
-    assert s.archive.enabled is False
-    assert s.archive.out_dir == Path("~/Transcripts").expanduser()
+    assert s.output.dir == Path("~/Documents/Meetings").expanduser()
     assert s.speakers.reid_threshold == 0.6
     assert s.speakers.profile_store == Path("~/steno/profiles.json").expanduser()
     assert s.asr.backend == "parakeet"
@@ -186,8 +184,17 @@ def test_unknown_asr_backend_is_rejected_with_choices(tmp_path):
 
 def test_wrong_typed_bool_is_rejected(tmp_path):
     path = tmp_path / "settings.toml"
-    path.write_text('[archive]\nenabled = "yes"\n', encoding="utf-8")
+    path.write_text("[notes]\nthinking = 1\n", encoding="utf-8")
     with pytest.raises(SettingsError, match="must be true or false"):
+        load_settings(path)
+
+
+def test_stale_archive_table_names_the_rename(tmp_path):
+    # Pre-Stage-C files configured [archive]; the error must say what replaced
+    # it, not just "unknown setting".
+    path = tmp_path / "settings.toml"
+    path.write_text("[archive]\nenabled = false\n", encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"\[archive\] was renamed to \[output\]"):
         load_settings(path)
 
 

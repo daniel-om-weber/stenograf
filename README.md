@@ -78,7 +78,7 @@ Useful flags:
 ```sh
 steno start --plain                 # plain caption stream instead of the TUI
 steno start --no-live               # skip live captions; just finalize on stop
-steno start --title "Weekly sync"   # name the meeting in the archive
+steno start --title "Weekly sync"   # name the meeting (notes + export use it)
 steno start --flush-interval 60     # crash-checkpoint the captions every 60s
 steno start --no-aec                # disable echo cancellation (headphones)
 steno start --no-diarization        # skip speaker separation (labels stay per channel)
@@ -103,20 +103,22 @@ meeting pipeline (`Local-N`/`Remote-N` labels, per-channel diarization with
 `--local`/`--remote` counts) instead of downmixing; ordinary stereo still
 downmixes to mono. Force either way with `--channels split|mix`.
 
-## Your meeting archive
+## Where your files land
 
-Transcripts are filed automatically into a managed archive at
-`~/Library/Application Support/stenograf/meetings/<id>/`. Use `--out DIR` to
-write somewhere else (still archived), or `--no-archive` to write loose files
-next to the source and register nothing.
+Every run writes its own date-named folder into `~/Documents/Meetings`:
 
-```sh
-steno meetings list                 # every transcript, newest first
-steno meetings show meeting-20260710-091500
-steno meetings rm meeting-20260710-091500
+```
+~/Documents/Meetings/meeting-20260710-091500/
+    transcript.md / .json / .txt        # the transcript (--format adds srt/vtt)
+    transcript.notes.md / .notes.json   # if you generated notes
+    audio.wav                           # only with --record-audio
 ```
 
-Audio is stored only when you passed `--record-audio`; without it the archive
+That's it — there is no separate library or index to manage. Browse with
+Finder or `ls`, read with anything that opens markdown, delete with `rm`.
+Change the standing location with `[output] dir` in settings.toml, or give one
+run its own folder with `--out DIR` (files land directly in it). Audio is
+stored only when you passed `--record-audio`; without it a meeting folder
 holds text alone.
 
 ## Meeting notes (LLM summaries)
@@ -125,13 +127,13 @@ Turn any transcript into structured notes — summary, decisions, action items
 per owner, open questions — with the LLM of your choice:
 
 ```sh
-steno notes meeting-20260710-091500   # notes for an archived meeting
+steno notes --last                    # notes for the newest meeting
+steno notes ~/Documents/Meetings/meeting-20260710-091500
 steno notes path/to/transcript.json   # …or any transcript file
 steno start --notes                   # generate notes right after the meeting
 ```
 
-Notes land as sibling `transcript.notes.md`/`.notes.json` files. An untitled
-meeting gets its LLM-derived title back-filled into the archive. On Apple
+Notes land as sibling `transcript.notes.md`/`.notes.json` files. On Apple
 Silicon the default backend is `mlx` — a fully local in-process model, nothing
 to set up. To use a different backend, configure it once in
 `~/Library/Application Support/stenograf/settings.toml`:
@@ -220,9 +222,8 @@ glossary_file = "~/steno/glossary.txt"     # --glossary/--attendee flags
 attendees = ["Anja Müller"]
 glossary_threshold = 0.82
 
-[archive]
-enabled = true                    # false = flat files, as --no-archive
-out_dir = "~/Transcripts"         # where flat files go when not archiving
+[output]
+dir = "~/Documents/Meetings"      # where meeting folders are created
 
 [speakers]
 reid_threshold = 0.5              # cross-meeting voice match strictness (0–1)

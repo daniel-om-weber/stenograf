@@ -92,8 +92,8 @@ class MeetingProfile:
     speaker_profile_store: Path | None = field(default=None)
     """Override for the cross-meeting re-ID profile store; ``None`` = default store."""
     title: str | None = None
-    """Human-readable meeting title. Surfaced by the meeting archive record and fed
-    to the notes-enhancement prompt (PLAN.md §5 Stage A2); ``None`` = untitled."""
+    """Human-readable meeting title. Fed to the notes prompt and the combined-note
+    export filename (PLAN.md §5 Stage A2); ``None`` = untitled."""
 
     def __post_init__(self) -> None:
         for name in ("local_speakers", "remote_speakers"):

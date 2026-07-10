@@ -15,13 +15,17 @@ from stenograf.view import LiveView
 
 @pytest.fixture(autouse=True)
 def _isolate_data_dir(tmp_path, monkeypatch):
-    """Point the data dir (meeting archive + profile store) at a throwaway location.
+    """Point the data dir (profile store, settings) and the meetings output home
+    at throwaway locations.
 
-    ``steno start``/``transcribe`` now file every run in the managed archive by
-    default; isolating ``$STENOGRAF_DATA`` keeps that off the real
-    ~/.local/share/stenograf library for every CLI test (``_isolate_store`` still
-    overrides it where a test wants the profile store elsewhere)."""
+    A run without ``--out`` creates its meeting folder in the output home
+    (~/Documents/Meetings by default); patching :func:`default_output_home`
+    keeps every CLI test out of the real one, and ``$STENOGRAF_DATA`` keeps
+    settings/profiles off the real data dir."""
+    from stenograf import output
+
     monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "steno-data"))
+    monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings-home")
 
 
 class FakeASR(ASRBackend):
@@ -824,7 +828,7 @@ def test_start_with_no_speakers_errors_cleanly(tmp_path, monkeypatch):
     assert not isinstance(result.exception, ValueError)  # handled as a ClickException
 
 
-# ---- meeting archive (Task B2) --------------------------------------------
+# ---- output home (Stage C1/C2) ---------------------------------------------
 
 
 def _start_batch(tmp_path, monkeypatch, *extra):
@@ -838,116 +842,58 @@ def _start_batch(tmp_path, monkeypatch, *extra):
     )
 
 
-def test_start_archives_to_managed_dir_by_default(tmp_path, monkeypatch):
-    # No --out: the meeting is filed in the managed archive dir and registered, so
-    # `steno meetings` (and the web UI) can find it and read it back via A1.
-    from stenograf.archive import MeetingArchive
+def test_start_writes_a_dated_folder_into_the_output_home(tmp_path, monkeypatch):
+    # No --out: the meeting gets its own meeting-YYYYMMDD-HHMMSS/ folder in the
+    # visible output home, holding plainly named transcript files.
+    from stenograf.transcript import Transcript
 
     result = _start_batch(tmp_path, monkeypatch, "--title", "Weekly sync")
     assert result.exit_code == 0, result.output
-    assert "archived as meeting-" in result.output
 
-    archive = MeetingArchive.load()
-    (record,) = archive.records()
-    assert record.title == "Weekly sync"
-    assert record.id.startswith("meeting-")
-    assert record.dir.parent == archive.root  # under the managed root
-    assert (record.dir / "transcript.json").exists()  # plainly named, B1-readable
-    assert archive.load_transcript(record.id).profile.title == "Weekly sync"
+    (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
+    assert meeting_dir.name.startswith("meeting-")
+    assert (meeting_dir / "transcript.json").exists()
+    assert str(meeting_dir) in result.output  # the CLI says where the files landed
+    transcript = Transcript.from_json((meeting_dir / "transcript.json").read_text())
+    assert transcript.profile.title == "Weekly sync"
 
 
-def test_start_out_registers_pointing_at_the_override(tmp_path, monkeypatch):
-    from stenograf.archive import MeetingArchive
-
+def test_start_out_is_the_meetings_own_folder(tmp_path, monkeypatch):
     out = tmp_path / "custom"
     result = _start_batch(tmp_path, monkeypatch, "--out", str(out))
     assert result.exit_code == 0, result.output
-    assert (out / "transcript.json").exists()
-
-    (record,) = MeetingArchive.load().records()
-    assert record.dir == out  # registered, pointing at the explicit dir
+    assert (out / "transcript.json").exists()  # files land directly in --out
+    assert not (tmp_path / "meetings-home").exists()  # the home is untouched
 
 
-def test_transcribe_archives_by_default_and_references_the_source_audio(tmp_path, monkeypatch):
-    from stenograf.archive import MeetingArchive
-
+def test_transcribe_writes_into_the_output_home_by_default(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
-    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--title", "Retro"])
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio)])
     assert result.exit_code == 0, result.output
 
-    (record,) = MeetingArchive.load().records()
-    assert record.title == "Retro"
-    assert (record.dir / "transcript.json").exists()
-    # The input file is already on disk, so it becomes the meeting's audio.
-    assert record.audio_path == audio
-    assert record.has_audio()
+    (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
+    assert (meeting_dir / "transcript.md").exists()
+    assert str(meeting_dir) in result.output
 
 
-def test_no_archive_writes_flat_files_and_skips_registration(tmp_path, monkeypatch):
-    from stenograf.archive import MeetingArchive
-
-    result = _start_batch(tmp_path, monkeypatch, "--no-archive", "--out", str(tmp_path))
+def test_no_index_is_ever_written(tmp_path, monkeypatch):
+    # Stage C2: the filesystem is the index. A run leaves exactly the meeting
+    # folder — no index.json in the home or the data dir, ever.
+    result = _start_batch(tmp_path, monkeypatch)
     assert result.exit_code == 0, result.output
-    # Legacy flat, timestamp-named output; no managed transcript.json; nothing filed.
-    assert len(list(tmp_path.glob("meeting-*.transcript.md"))) == 1
-    assert not (tmp_path / "transcript.json").exists()
-    assert "archived as" not in result.output
-    assert MeetingArchive.load().records() == []
+    assert not list((tmp_path / "meetings-home").rglob("index.json"))
+    assert not list((tmp_path / "steno-data").rglob("index.json"))
 
 
-def test_record_audio_lands_in_the_managed_dir(tmp_path, monkeypatch):
-    from stenograf.archive import AUDIO_NAME, MeetingArchive
-
+def test_record_audio_lands_in_the_meeting_folder(tmp_path, monkeypatch):
     result = _start_batch(tmp_path, monkeypatch, "--record-audio")
     assert result.exit_code == 0, result.output
 
-    (record,) = MeetingArchive.load().records()
-    assert record.audio_path == record.dir / AUDIO_NAME
-    assert record.has_audio()  # the WAV was actually written and is gated on
-
-
-def test_meetings_list_show_and_rm(tmp_path, monkeypatch):
-    from stenograf.archive import MeetingArchive
-
-    assert _start_batch(tmp_path, monkeypatch, "--title", "Weekly sync").exit_code == 0
-    (record,) = MeetingArchive.load().records()
-    meeting_id, meeting_dir = record.id, record.dir
-
-    listed = CliRunner().invoke(cli.main, ["meetings", "list"])
-    assert listed.exit_code == 0, listed.output
-    assert meeting_id in listed.output and "Weekly sync" in listed.output
-
-    shown = CliRunner().invoke(cli.main, ["meetings", "show", meeting_id])
-    assert shown.exit_code == 0, shown.output
-    assert meeting_id in shown.output and "Weekly sync" in shown.output
-
-    removed = CliRunner().invoke(cli.main, ["meetings", "rm", meeting_id, "--yes"])
-    assert removed.exit_code == 0, removed.output
-    assert not meeting_dir.exists()  # managed files deleted
-    assert MeetingArchive.load().records() == []
-    assert "no meetings archived yet" in CliRunner().invoke(cli.main, ["meetings", "list"]).output
-
-
-def test_meetings_show_unknown_id_errors(tmp_path, monkeypatch):
-    result = CliRunner().invoke(cli.main, ["meetings", "show", "meeting-19990101-000000"])
-    assert result.exit_code != 0
-    assert "no meeting" in result.output
-
-
-def test_meetings_rm_keep_files_only_unregisters(tmp_path, monkeypatch):
-    from stenograf.archive import MeetingArchive
-
-    assert _start_batch(tmp_path, monkeypatch).exit_code == 0
-    (record,) = MeetingArchive.load().records()
-
-    removed = CliRunner().invoke(cli.main, ["meetings", "rm", record.id, "--yes", "--keep-files"])
-    assert removed.exit_code == 0, removed.output
-    assert record.dir.exists()  # files left in place
-    assert (record.dir / "transcript.json").exists()
-    assert MeetingArchive.load().records() == []  # but unregistered
+    (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
+    assert (meeting_dir / "audio.wav").exists()
 
 
 def _helper_wrapper(tmp_path, *forced_args):
@@ -1081,25 +1027,25 @@ def test_settings_formats_are_the_default_but_format_flag_wins(tmp_path, monkeyp
     assert not (out2 / "transcript.srt").exists()
 
 
-def test_settings_archive_disabled_and_archive_flag_overrides(tmp_path, monkeypatch):
-    from stenograf.archive import MeetingArchive
-
+def test_settings_output_dir_replaces_the_home_and_out_flag_wins(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
-    flat = tmp_path / "flat"
-    _write_settings(tmp_path, f'[archive]\nenabled = false\nout_dir = "{flat}"\n')
+    home = tmp_path / "configured-home"
+    _write_settings(tmp_path, f'[output]\ndir = "{home}"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
-    # File-beats-default: no flags → flat layout, into [archive] out_dir, unregistered.
+    # File-beats-default: no flags → the meeting folder is created in [output] dir.
     result = CliRunner().invoke(cli.main, ["transcribe", str(audio)])
     assert result.exit_code == 0, result.output
-    assert (flat / "meeting.transcript.md").exists()
-    assert MeetingArchive.load().records() == []
+    (meeting_dir,) = home.iterdir()
+    assert (meeting_dir / "transcript.md").exists()
 
-    # Tri-state: --archive turns the archive back on over enabled = false.
-    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--archive"])
+    # Flag-beats-file: --out bypasses the configured home for this run.
+    out = tmp_path / "explicit"
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(out)])
     assert result.exit_code == 0, result.output
-    assert len(MeetingArchive.load().records()) == 1
+    assert (out / "transcript.md").exists()
+    assert len(list(home.iterdir())) == 1  # nothing new in the home
 
 
 def test_settings_vocab_merges_with_flags(tmp_path, monkeypatch):

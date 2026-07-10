@@ -43,9 +43,8 @@ def read_channels(path: Path | str, channels: list[Channel]) -> dict[Channel, np
     """Read a :class:`WavTee` recording back into its per-channel int16 streams.
 
     The exact inverse of the tee's fixed layout (mic left, system right; mono when
-    a single channel was recorded), used to rehydrate a :class:`~stenograf.session.
-    SessionStore` from a ``--record-audio`` WAV for archived re-finalize (PLAN.md §5
-    Stage B4). ``channels`` is the ordered channel list the recording holds — the
+    a single channel was recorded), used by the AEC eval rig to score dump triples.
+    ``channels`` is the ordered channel list the recording holds — the
     meeting's captured channels (``mic`` before ``system``, matching the tee) — and
     disambiguates a mono file, which the WAV header alone cannot (a mono recording
     is mic-only *or* system-only depending on the meeting mode). Its length must
