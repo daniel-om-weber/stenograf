@@ -38,8 +38,8 @@ capture helper on your machine.
 
 ```sh
 uv tool install git+https://github.com/daniel-om-weber/stenograf
-steno doctor    # environment checks & model download
-steno setup     # one-time macOS mic + system-audio permission prompts
+steno doctor    # environment checks
+steno setup     # one-time: mic + system-audio permission prompts, model downloads
 ```
 
 macOS scopes the permission grant to the app the prompt came from, so run
@@ -55,6 +55,7 @@ cd stenograf
 uv sync
 sh native/helper/build.sh     # builds + ad-hoc signs native/helper/stenocap
 uv run steno doctor
+uv run steno setup
 ```
 
 Every command below is then `uv run steno …` from the repo.

@@ -120,8 +120,7 @@ def _ffmpeg_check() -> Check:
     return Check(
         name="ffmpeg",
         ok=path is not None,
-        detail=path or "not on PATH — needed to read anything but 16 kHz WAV "
-        "(brew install ffmpeg)",
+        detail=path or "not on PATH — needed to read anything but 16 kHz WAV (brew install ffmpeg)",
     )
 
 
@@ -131,8 +130,9 @@ def _models_check() -> Check:
     assets = (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING)
     missing = [asset.name for asset in assets if models.cached_path(asset) is None]
     if missing:
-        detail = f"{len(missing)}/{len(assets)} pending — downloaded on first use: " + ", ".join(
-            missing
+        detail = (
+            f"{len(missing)}/{len(assets)} pending — `steno setup` downloads them "
+            "(or they download on first use): " + ", ".join(missing)
         )
     else:
         detail = f"VAD + diarization cached in {models.cache_dir()} (ASR weights via HuggingFace)"

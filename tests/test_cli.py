@@ -658,11 +658,15 @@ def _helper_wrapper(tmp_path, *forced_args):
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
-def test_setup_succeeds_when_mic_frames_flow(tmp_path, monkeypatch):
+def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
+    fetched = []
+    monkeypatch.setattr(cli, "_prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
     assert result.exit_code == 0, result.output
     assert "granted" in result.output
+    assert fetched  # downloads run after the permission step
+    assert "setup complete" in result.output
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
@@ -670,6 +674,41 @@ def test_setup_fails_when_helper_dies_without_mic_frames(tmp_path, monkeypatch):
     # A denied permission means the helper exits before its first mic frame;
     # emitting only system frames then exiting reproduces that shape.
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path, "--system")))
+    fetched = []
+    monkeypatch.setattr(cli, "_prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
     assert result.exit_code != 0
     assert "denied" in result.output
+    assert not fetched  # no downloads on a failed permission grant
+
+
+def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):
+    from stenograf import models
+    from stenograf.asr.base import ASRBackend
+
+    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
+    # One asset pre-cached, the rest missing: only the missing ones are fetched.
+    (tmp_path / models.SILERO_VAD.name).write_bytes(b"\x00")
+    fetched = []
+    monkeypatch.setattr(models, "fetch", lambda asset, progress=None: fetched.append(asset.name))
+
+    class PrefetchASR(ASRBackend):
+        name = "fake"
+        model_id = "fake/model"
+        calls = []
+
+        def load(self):
+            self.calls.append("load")
+
+        def transcribe(self, samples, language):
+            return []
+
+        def unload(self):
+            self.calls.append("unload")
+
+    import stenograf.asr as asr
+
+    monkeypatch.setattr(asr, "create_backend", lambda name=None, **kw: PrefetchASR())
+    cli._prefetch_models()
+    assert set(fetched) == {models.PYANNOTE_SEGMENTATION.name, models.SPEAKER_EMBEDDING.name}
+    assert PrefetchASR.calls == ["load", "unload"]  # weights pulled and released

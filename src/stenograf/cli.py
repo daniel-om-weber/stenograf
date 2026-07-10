@@ -1035,12 +1035,14 @@ def doctor() -> None:
 
 @main.command()
 def setup() -> None:
-    """Grant the microphone and system-audio permissions (one-time).
+    """One-time setup: permission prompts, then model downloads.
 
-    Launches the capture helper so macOS shows both permission prompts now
-    instead of at the start of your first meeting. Nothing is recorded. macOS
-    scopes the grant to the app the helper was launched from, so re-run this
-    from each terminal app (or IDE) you will run meetings from.
+    Launches the capture helper so macOS shows both permission prompts (mic +
+    system audio) now instead of at the start of your first meeting — nothing
+    is recorded — then downloads every model the first meeting would otherwise
+    stop to fetch. macOS scopes the grant to the app the helper was launched
+    from, so re-run this from each terminal app (or IDE) you will run meetings
+    from; the models are cached machine-wide.
     """
     if sys.platform != "darwin":
         raise click.ClickException("setup is macOS-only — capture is not supported here yet")
@@ -1076,6 +1078,39 @@ def setup() -> None:
         )
     click.echo(click.style("✓", fg="green") + " microphone and system-audio access granted.")
     click.echo("  The grant is per launching app — a different terminal or IDE prompts again.")
+
+    # Permissions first (they need the user at the keyboard), then the long
+    # unattended part: everything a first meeting would otherwise stop to fetch.
+    try:
+        _prefetch_models()
+    except Exception as exc:
+        raise click.ClickException(
+            f"model download failed: {exc} — re-run `steno setup`, or let the models "
+            "download on first use."
+        ) from exc
+    click.echo(click.style("✓", fg="green") + " setup complete.")
+
+
+def _prefetch_models() -> None:
+    """Download the VAD/diarization assets and the ASR weights now, not mid-meeting."""
+    from stenograf import models
+    from stenograf.asr import backend_model_id, create_backend, get_spec
+
+    for asset in (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING):
+        if models.cached_path(asset) is not None:
+            click.echo(f"model: {asset.name} already cached")
+        else:
+            models.fetch(asset, _model_progress)
+
+    spec = get_spec()
+    try:
+        backend = create_backend()
+    except ImportError:
+        click.echo(f"ASR backend {spec.label} is not installed here; skipping its weights")
+        return
+    click.echo(f"model: fetching + loading ASR weights ({backend_model_id(spec)})")
+    backend.load()  # pulls from HuggingFace on first run, then verifies it loads
+    backend.unload()
 
 
 @main.group()
