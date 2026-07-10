@@ -23,6 +23,7 @@ command = ["claude", "-p", "Summarize."]
 timeout_s = 300
 instructions = "~/style.md"
 ollama_url = "http://gpu-box:11434"
+thinking = false
 
 [notes.export]
 dir = "~/Vault/Meetings"
@@ -37,6 +38,7 @@ dir = "~/Vault/Meetings"
     assert notes.instructions == Path("~/style.md").expanduser()
     assert notes.ollama_url == "http://gpu-box:11434"
     assert notes.export_dir == Path("~/Vault/Meetings").expanduser()
+    assert notes.thinking is False
 
 
 def test_settings_path_honors_data_dir(monkeypatch, tmp_path):
@@ -71,6 +73,15 @@ def test_wrong_typed_timeout_is_rejected(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text('[notes]\ntimeout_s = "fast"\n', encoding="utf-8")
     with pytest.raises(SettingsError, match="timeout_s"):
+        load_settings(path)
+
+
+def test_thinking_defaults_to_none_and_rejects_junk(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text("[notes]\n", encoding="utf-8")
+    assert load_settings(path).notes.thinking is None  # backend decides
+    path.write_text('[notes]\nthinking = "yes"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match="thinking"):
         load_settings(path)
 
 

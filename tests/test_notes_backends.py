@@ -213,9 +213,19 @@ class FakeMlxLm:
         self.loaded_repos.append(repo)
         return ("fake-model", self.tokenizer)
 
-    def generate(self, model, tokenizer, prompt, max_tokens):
-        self.generate_calls.append({"prompt": prompt, "max_tokens": max_tokens})
+    def generate(self, model, tokenizer, prompt, max_tokens, sampler=None):
+        self.generate_calls.append(
+            {"prompt": prompt, "max_tokens": max_tokens, "sampler": sampler}
+        )
         return self.response
+
+
+class FakeSampleUtils:
+    """Stands in for ``mlx_lm.sample_utils``."""
+
+    @staticmethod
+    def make_sampler(**kwargs):
+        return ("sampler", kwargs)
 
 
 class FakeTokenizer:
@@ -233,21 +243,40 @@ def fake_mlx_lm(monkeypatch):
 
     fake = FakeMlxLm()
     monkeypatch.setitem(sys.modules, "mlx_lm", fake)
+    monkeypatch.setitem(sys.modules, "mlx_lm.sample_utils", FakeSampleUtils())
     return fake, MlxBackend()
 
 
-def test_mlx_complete_renders_template_without_thinking(fake_mlx_lm):
+def test_mlx_complete_thinks_by_default_with_qwen_sampling(fake_mlx_lm):
     fake, backend = fake_mlx_lm
     assert backend.complete(MESSAGES, SCHEMA) == '{"title": "T"}'
     assert fake.loaded_repos == [backend.model]
     call = fake.tokenizer.template_calls[0]
     assert call["add_generation_prompt"] is True
-    assert call["enable_thinking"] is False
+    assert call["enable_thinking"] is True
     # The schema instruction rides in the last message (no decode-time grammar)
     # and the caller's message list is not mutated.
     assert '"required": ["title"]' in call["messages"][-1]["content"]
     assert MESSAGES[-1]["content"] == "The transcript."
-    assert fake.generate_calls[0]["prompt"] == [1, 2, 3]
+    generated = fake.generate_calls[0]
+    assert generated["prompt"] == [1, 2, 3]
+    # Qwen3's card: greedy decoding in thinking mode loops — a sampler is
+    # mandatory, and the think block needs output-budget headroom.
+    assert generated["sampler"] == ("sampler", {"temp": 0.6, "top_p": 0.95})
+    assert generated["max_tokens"] > 4096
+
+
+def test_mlx_thinking_off_is_greedy_and_lean(fake_mlx_lm, monkeypatch):
+    from stenograf.notes.mlx import MlxBackend
+
+    fake, _ = fake_mlx_lm
+    backend = MlxBackend(thinking=False)
+    backend.complete(MESSAGES, SCHEMA)
+    assert fake.tokenizer.template_calls[0]["enable_thinking"] is False
+    assert fake.generate_calls[0]["sampler"] is None
+    assert fake.generate_calls[0]["max_tokens"] == 4096
+    assert MlxBackend.from_settings(NotesSettings(thinking=False)).thinking is False
+    assert MlxBackend.from_settings(NotesSettings()).thinking is True
 
 
 def test_mlx_strips_a_stray_think_block(fake_mlx_lm):

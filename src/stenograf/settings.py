@@ -12,6 +12,8 @@ would leak into shared files). First consumer is the ``[notes]`` table
     command = ["claude", "-p", "Summarize the meeting transcript on stdin."]
     timeout_s = 600
     instructions = "~/notes-style.md"   # appended to the built-in system prompt
+    thinking = false               # mlx backend: skip the model's reasoning
+                                   # pass — faster, less careful (default true)
 
     [notes.export]
     dir = "~/Obsidian/Meetings"    # combined-note export target (unset = off)
@@ -46,6 +48,9 @@ class NotesSettings:
     max_input_chars: int | None = None
     """Single-completion transcript budget override; ``None`` = the backend's
     own default (local models get a smaller one than hosted frontier models)."""
+    thinking: bool | None = None
+    """Reasoning mode for local models that have one (Qwen3 via the mlx
+    backend); ``None`` = the backend's default."""
 
 
 @dataclass(frozen=True)
@@ -99,6 +104,9 @@ def _notes_from_table(table: dict, path: Path) -> NotesSettings:
         isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars <= 0
     ):
         raise ValueError("notes.max_input_chars must be a positive integer")
+    thinking = table.get("thinking")
+    if thinking is not None and not isinstance(thinking, bool):
+        raise ValueError("notes.thinking must be true or false")
     export = table.get("export", {})
     if not isinstance(export, dict):
         raise ValueError("[notes.export] must be a table")
@@ -111,6 +119,7 @@ def _notes_from_table(table: dict, path: Path) -> NotesSettings:
         ollama_url=_opt_str(table, "ollama_url"),
         export_dir=_opt_path(export, "dir"),
         max_input_chars=max_chars,
+        thinking=thinking,
     )
 
 

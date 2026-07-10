@@ -40,9 +40,22 @@ DEFAULT_MAX_INPUT_CHARS = 100_000
 """~25k tokens — inside Qwen3's 32k window with room for the chat template
 and the JSON response. Longer meetings map-reduce (see :mod:`.generate`)."""
 
+DEFAULT_THINKING = True
+"""Reasoning mode on by default: notes are a batch job where minutes don't
+matter but a misattributed decision does. ``[notes] thinking = false`` in
+settings.toml trades that headroom for speed."""
+
 _MAX_OUTPUT_TOKENS = 4096
 """Hard stop for one completion. Notes are 1-2k tokens of JSON; a model that
 runs past this is looping, and an unbounded generate would spin forever."""
+
+_MAX_OUTPUT_TOKENS_THINKING = 12_288
+"""With reasoning on, the think block spends output tokens before the JSON
+starts — give it room, still bounded against loops."""
+
+_THINKING_SAMPLER = {"temp": 0.6, "top_p": 0.95}
+"""Qwen3's model card is explicit: greedy decoding in thinking mode causes
+endless repetition. Non-thinking mode keeps mlx-lm's greedy default."""
 
 _THINK_BLOCK = re.compile(r"\A\s*<think>.*?</think>", re.DOTALL)
 
@@ -56,15 +69,25 @@ class MlxBackend:
 
     name = "mlx"
 
-    def __init__(self, model: str | None = None, max_input_chars: int | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        max_input_chars: int | None = None,
+        thinking: bool | None = None,
+    ) -> None:
         self.model = model or os.environ.get("STENOGRAF_NOTES_MODEL") or DEFAULT_MODEL
         self.max_input_chars = max_input_chars or DEFAULT_MAX_INPUT_CHARS
+        self.thinking = DEFAULT_THINKING if thinking is None else thinking
         self._loaded: tuple[object, object] | None = None
         self._generation_thread: int | None = None
 
     @classmethod
     def from_settings(cls, settings: NotesSettings) -> MlxBackend:
-        return cls(model=settings.model, max_input_chars=settings.max_input_chars)
+        return cls(
+            model=settings.model,
+            max_input_chars=settings.max_input_chars,
+            thinking=settings.thinking,
+        )
 
     def is_available(self) -> bool:
         try:
@@ -98,9 +121,18 @@ class MlxBackend:
 
         model, tokenizer = self._load()
         prompt = self._render(tokenizer, messages, schema)
-        text = generate(model, tokenizer, prompt=prompt, max_tokens=_MAX_OUTPUT_TOKENS)
-        # enable_thinking=False should suppress reasoning, but a stray think
-        # block would put its prose (possibly with braces) before the JSON.
+        kwargs = {"max_tokens": _MAX_OUTPUT_TOKENS}
+        if self.thinking:
+            from mlx_lm.sample_utils import make_sampler
+
+            kwargs = {
+                "max_tokens": _MAX_OUTPUT_TOKENS_THINKING,
+                "sampler": make_sampler(**_THINKING_SAMPLER),
+            }
+        text = generate(model, tokenizer, prompt=prompt, **kwargs)
+        # The think block precedes the JSON (and with thinking off a stray one
+        # still can); its prose may contain braces, so it must not reach the
+        # JSON extraction.
         return _THINK_BLOCK.sub("", text)
 
     def _load(self) -> tuple[object, object]:
@@ -129,9 +161,8 @@ class MlxBackend:
         mlx-lm has no decode-time grammar (Ollama's ``format=``), so like the
         command backend the schema rides along as an instruction and the
         tolerant JSON extraction in :mod:`.generate` does the rest.
-        ``enable_thinking=False`` keeps Qwen3's reasoning mode from spending
-        the token budget before the JSON; templates without that variable
-        simply ignore it."""
+        ``enable_thinking`` toggles Qwen3's reasoning mode; templates without
+        that variable simply ignore it."""
         messages = [*messages[:-1], dict(messages[-1])]
         messages[-1]["content"] += (
             "\n\nRespond with exactly one JSON object matching this JSON Schema — "
@@ -139,7 +170,7 @@ class MlxBackend:
         )
         try:
             return tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True, enable_thinking=False
+                messages, add_generation_prompt=True, enable_thinking=self.thinking
             )
         except (TypeError, ValueError) as exc:
             raise NotesGenerationError(
