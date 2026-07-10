@@ -8,8 +8,12 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    import numpy as np
 
 from stenograf import __version__
 from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
@@ -735,6 +739,94 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False):
         raise click.ClickException(str(exc)) from exc
 
 
+def _resolve_split_channels(
+    audio_file: Path, mode: str
+) -> tuple[tuple[np.ndarray, np.ndarray] | None, float | None]:
+    """Decide mixed vs per-channel transcription for ``steno transcribe``.
+
+    Returns ``(pcms, correlation)``: ``pcms`` is the ``(left, right)`` float32
+    pair when the file should be transcribed as two voice channels, ``None``
+    for the classic mixed stream. ``correlation`` is the envelope correlation
+    whenever ``auto`` examined a 2-channel file (for the CLI to explain its
+    decision), ``None`` when no decision was needed or the split was forced.
+    """
+    from stenograf.audio import (
+        audio_channel_count,
+        channels_look_independent,
+        load_audio_channels,
+    )
+
+    count = audio_channel_count(audio_file)
+    if mode == "split" and count != 2:
+        raise click.ClickException(
+            f"--channels split needs 2-channel audio; {audio_file.name} has {count} channel(s)"
+        )
+    if count != 2 or mode == "mix":
+        return None, None
+    left, right = load_audio_channels(audio_file)
+    if mode == "split":
+        return (left, right), None
+    independent, correlation = channels_look_independent(left, right)
+    return ((left, right) if independent else None), correlation
+
+
+def _transcribe_split_channels(
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    profile: MeetingProfile,
+    use_reid: bool,
+    reid_threshold: float | None,
+    glossary_threshold: float | None,
+):
+    """Transcribe two voice channels through the meeting finalize.
+
+    This is the exact pipeline a live meeting runs on stop — per-channel ASR
+    and diarization with the channel's speaker count, cross-channel echo-text
+    dedup (armed conservatively: the recording's canceller state is unknown),
+    glossary, one interleaved Local-N/Remote-N transcript — just fed from a
+    file instead of a capture session. Returns ``(transcript, recorder)``; the
+    recorder carries the per-channel speaker counts for reporting.
+    """
+    from stenograf.audio import to_int16
+    from stenograf.capture.base import AudioFrame, Channel
+    from stenograf.session import MeetingRecorder, SessionStore, plan_channels
+    from stenograf.view import LiveView
+
+    class _StatusEcho(LiveView):
+        def status(self, message: str) -> None:
+            click.echo(message)
+
+        def error(self, message: str) -> None:
+            click.echo(f"warning: {message}", err=True)
+
+    plans = plan_channels(profile)
+    asr, vad, diarizer = _load_backends(need_diarizer=any(p.num_speakers != 1 for p in plans))
+    reid = (
+        _load_reid(
+            enabled=use_reid,
+            threshold=reid_threshold,
+            store_path=profile.speaker_profile_store,
+        )
+        if diarizer is not None
+        else None
+    )
+    if reid is not None:
+        click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
+    recorder = MeetingRecorder(
+        profile,
+        asr=asr,
+        vad=vad,
+        diarizer=diarizer,
+        reid=reid,
+        glossary_threshold=glossary_threshold,
+    )
+    store = SessionStore({Channel.MIC, Channel.SYSTEM})
+    store.append(AudioFrame(Channel.MIC, 0.0, to_int16(left)))
+    store.append(AudioFrame(Channel.SYSTEM, 0.0, to_int16(right)))
+    return recorder.finalize(store, plans, view=_StatusEcho()), recorder
+
+
 @main.command()
 @click.argument("audio_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
@@ -749,7 +841,34 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False):
     type=click.IntRange(1, _FILE_MAX_SPEAKERS),
     default=None,
     help="Known speaker count (the biggest diarization accuracy lever); "
-    "1 skips diarization, omit to estimate.",
+    "1 skips diarization, omit to estimate. Mixed single stream only — "
+    "with split voice channels give --local/--remote instead.",
+)
+@click.option(
+    "--channels",
+    "channels_mode",
+    type=click.Choice(["auto", "mix", "split"]),
+    default="auto",
+    show_default=True,
+    help="How to treat 2-channel audio. Two separate voice feeds (a "
+    "--record-audio tee: mic left / system right; a dual-channel call "
+    "recording) are transcribed per channel through the meeting pipeline — "
+    "auto detects them by their independent activity; a stereo image of one "
+    "room is downmixed to mono as before. mix/split force either way.",
+)
+@click.option(
+    "--local",
+    "local_speakers",
+    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
+    default=None,
+    help="Split channels: number of speakers on the left/local channel; omit to auto-detect.",
+)
+@click.option(
+    "--remote",
+    "remote_speakers",
+    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
+    default=None,
+    help="Split channels: number of speakers on the right/remote channel; omit to auto-detect.",
 )
 @click.option(
     "--out",
@@ -798,6 +917,9 @@ def transcribe(
     audio_file: Path,
     lang: str | None,
     speakers: int | None,
+    channels_mode: str,
+    local_speakers: int | None,
+    remote_speakers: int | None,
     out: Path | None,
     title: str | None,
     no_archive: bool,
@@ -813,6 +935,12 @@ def transcribe(
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).
 
+    A 2-channel recording whose channels are separate voice feeds — a
+    `--record-audio` tee (mic left, system right) or a dual-channel call
+    recording — is detected and transcribed per channel through the meeting
+    pipeline (Local/Remote labels, per-channel diarization); ordinary stereo
+    is downmixed to mono as before. See --channels to force either way.
+
     Files the transcript in the managed archive by default (browse it with
     `steno meetings`), the same pipeline a live meeting runs on stop. Use
     --out to write elsewhere, or --no-archive to drop flat
@@ -820,8 +948,6 @@ def transcribe(
     also emits srt/vtt subtitles.
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
-    from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
-    from stenograf.pipeline import finalize_channel, relabel_speakers
 
     started = time.monotonic()
     write_formats = _parse_formats(formats)
@@ -829,65 +955,120 @@ def transcribe(
     given_language = Language(lang) if lang else None
     language = given_language
 
-    samples = load_audio(audio_file)
-    duration = len(samples) / SAMPLE_RATE
-    click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)})")
-
-    asr, vad, diarizer = _load_backends(need_diarizer=speakers != 1)
-    reid = (
-        _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=profile_store)
-        if diarizer is not None
-        else None
-    )
-    if reid is not None:
-        click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
-    if glossary_terms or attendee_names:
-        click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
-
-    def progress(stage: str, done: int, total: int) -> None:
-        if stage == "asr" and done == 0:
-            click.echo(f"transcribing {total} windows")
-        elif stage == "diarization":
-            click.echo(f"diarizing ({speakers or 'estimating'} speakers)")
-
-    entries = relabel_speakers(
-        finalize_channel(
-            samples,
-            asr=asr,
-            language=language,
-            vad=vad,
-            diarizer=diarizer,
-            num_speakers=speakers,
-            reid=reid,
-            on_progress=progress,
+    split_pcms, correlation = _resolve_split_channels(audio_file, channels_mode)
+    if split_pcms is not None and speakers is not None:
+        raise click.ClickException(
+            "--speakers applies to one mixed stream; with split voice channels "
+            "give --local/--remote (or force --channels mix)"
         )
-    )
-    threshold = DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
-    entries = apply_glossary(
-        entries, glossary=glossary_terms, attendee_names=attendee_names, threshold=threshold
-    )
-    if language is None:
-        from stenograf.lid import detect_language
+    if split_pcms is None and (local_speakers is not None or remote_speakers is not None):
+        raise click.ClickException(
+            "--local/--remote apply to split voice channels only; this run "
+            "transcribes one mixed stream (--channels split to force splitting)"
+        )
 
-        language = detect_language(" ".join(e.text for e in entries))
-        if language is not None:
+    if split_pcms is not None:
+        duration = len(split_pcms[0]) / SAMPLE_RATE
+        reason = (
+            f"independent activity, envelope correlation {correlation:.2f}"
+            if correlation is not None
+            else "--channels split"
+        )
+        click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)}, 2 voice channels)")
+        click.echo(
+            f"  {reason} — transcribing per channel: left → Local, right → Remote"
+            + ("; --channels mix to downmix" if correlation is not None else "")
+        )
+        if glossary_terms or attendee_names:
+            click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
+        profile = MeetingProfile(
+            language=given_language,
+            local_speakers=local_speakers,
+            remote_speakers=remote_speakers,
+            glossary=glossary_terms,
+            attendee_names=attendee_names,
+            speaker_profile_store=profile_store,
+            title=title,
+        )
+        transcript, recorder = _transcribe_split_channels(
+            *split_pcms,
+            profile=profile,
+            use_reid=use_reid,
+            reid_threshold=reid_threshold,
+            glossary_threshold=glossary_threshold,
+        )
+        entries = transcript.entries
+        language = transcript.language
+        if given_language is None and language is not None:
             click.echo(f"language: detected {language.value}")
-    profile = MeetingProfile(
-        language=given_language,
-        glossary=glossary_terms,
-        attendee_names=attendee_names,
-        speaker_profile_store=profile_store,
-        title=title,
-    )
-    # A file transcribe is one un-split stream (no local/remote model), so its
-    # speaker provenance is recorded under a single "audio" channel (PLAN.md §5 3b).
-    parameters = ResolvedParameters(
-        language=resolve_value(given_language, language),
-        speakers={"audio": resolve_value(speakers, len({e.speaker for e in entries}))},
-    )
-    transcript = Transcript(
-        language=language, profile=profile, entries=entries, parameters=parameters
-    )
+    else:
+        from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
+        from stenograf.pipeline import finalize_channel, relabel_speakers
+
+        samples = load_audio(audio_file)
+        duration = len(samples) / SAMPLE_RATE
+        click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)})")
+        if correlation is not None:  # auto looked at 2 channels and declined
+            click.echo(
+                f"  2 channels carry one stereo image (envelope correlation {correlation:.2f})"
+                " — downmixed to mono; --channels split to treat them as separate voices"
+            )
+
+        asr, vad, diarizer = _load_backends(need_diarizer=speakers != 1)
+        reid = (
+            _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=profile_store)
+            if diarizer is not None
+            else None
+        )
+        if reid is not None:
+            click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
+        if glossary_terms or attendee_names:
+            click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
+
+        def progress(stage: str, done: int, total: int) -> None:
+            if stage == "asr" and done == 0:
+                click.echo(f"transcribing {total} windows")
+            elif stage == "diarization":
+                click.echo(f"diarizing ({speakers or 'estimating'} speakers)")
+
+        entries = relabel_speakers(
+            finalize_channel(
+                samples,
+                asr=asr,
+                language=language,
+                vad=vad,
+                diarizer=diarizer,
+                num_speakers=speakers,
+                reid=reid,
+                on_progress=progress,
+            )
+        )
+        threshold = DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
+        entries = apply_glossary(
+            entries, glossary=glossary_terms, attendee_names=attendee_names, threshold=threshold
+        )
+        if language is None:
+            from stenograf.lid import detect_language
+
+            language = detect_language(" ".join(e.text for e in entries))
+            if language is not None:
+                click.echo(f"language: detected {language.value}")
+        profile = MeetingProfile(
+            language=given_language,
+            glossary=glossary_terms,
+            attendee_names=attendee_names,
+            speaker_profile_store=profile_store,
+            title=title,
+        )
+        # A file transcribe is one un-split stream (no local/remote model), so its
+        # speaker provenance is recorded under a single "audio" channel (PLAN.md §5 3b).
+        parameters = ResolvedParameters(
+            language=resolve_value(given_language, language),
+            speakers={"audio": resolve_value(speakers, len({e.speaker for e in entries}))},
+        )
+        transcript = Transcript(
+            language=language, profile=profile, entries=entries, parameters=parameters
+        )
 
     created_at = datetime.now()
     archive, meeting_id, out_dir, basename, _ = _prepare_output(
@@ -905,7 +1086,9 @@ def transcribe(
         )
     elapsed = time.monotonic() - started
     speed = duration / elapsed if elapsed else 0.0
-    if speakers is None:
+    if split_pcms is not None:
+        _report_speaker_counts(recorder.speaker_counts)
+    elif speakers is None:
         found = len({e.speaker for e in entries})
         click.echo(f"speakers: {found} detected")
         hint = _lock_hint(found, _FILE_MAX_SPEAKERS)

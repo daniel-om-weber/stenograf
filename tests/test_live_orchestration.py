@@ -613,9 +613,7 @@ class RecordingDiarizer(Diarizer):
         return list(self._turns)
 
 
-def _pcm_with_speech(
-    seconds: int, spans: list[tuple[float, float]], amplitude: int
-) -> np.ndarray:
+def _pcm_with_speech(seconds: int, spans: list[tuple[float, float]], amplitude: int) -> np.ndarray:
     pcm = np.zeros(seconds * SAMPLE_RATE, dtype=np.int16)
     for start, end in spans:
         pcm[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)] = amplitude

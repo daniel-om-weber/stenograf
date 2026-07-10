@@ -88,6 +88,13 @@ steno start --replay mic.wav        # dev: drive the live pass from a file
 Both `start` and `transcribe` accept `--format md,json,srt,vtt` (default
 `md,json`), `--lang de|en`, and `--print` to echo the transcript to stdout.
 
+`steno transcribe` recognizes 2-channel recordings whose channels are separate
+voice feeds — a `--record-audio` tee (mic left, system right) or a
+dual-channel call recording — and transcribes them per channel through the
+meeting pipeline (`Local-N`/`Remote-N` labels, per-channel diarization with
+`--local`/`--remote` counts) instead of downmixing; ordinary stereo still
+downmixes to mono. Force either way with `--channels split|mix`.
+
 ## Your meeting archive
 
 Transcripts are filed automatically into a managed archive at

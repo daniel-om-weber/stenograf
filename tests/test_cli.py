@@ -173,6 +173,189 @@ def test_transcribe_glossary_corrects_the_transcript(tmp_path, monkeypatch):
     assert "gute Idee für" in md
 
 
+class ChannelASR(ASRBackend):
+    """Decodes each buffer's peak amplitude into a channel-specific word stem.
+
+    A split run's mic (amplitude 1000) decodes to ``foxtrot…`` and its system
+    channel (amplitude 3000) to ``quebec…`` — letter-disjoint stems, so the
+    tests can see exactly which channel every transcript line came from (and
+    the echo backstop can never mistake one channel's text for the other's).
+    """
+
+    name = "channel"
+    model_id = "fake/channel"
+
+    def load(self) -> None:
+        pass
+
+    def unload(self) -> None:
+        pass
+
+    def transcribe(self, samples, language) -> list[Segment]:
+        pcm = np.asarray(samples)
+        if pcm.dtype == np.int16:
+            pcm = pcm.astype(np.float32) / 32768.0
+        peak = float(np.abs(pcm).max()) * 32768
+        if peak == 0:
+            return []
+        stem = "foxtrot" if peak < 2000 else "quebec"
+        words = tuple(Word(f"{stem}{i}", 0.4 * i + 0.1, 0.4 * i + 0.4) for i in range(4))
+        return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
+
+
+def fake_channel_backends(*, need_diarizer):
+    return ChannelASR(), None, None
+
+
+def write_stereo_wav(path, left: np.ndarray, right: np.ndarray) -> None:
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(16_000)
+        w.writeframes(np.column_stack([left, right]).ravel().astype(np.int16).tobytes())
+
+
+def _voice_channel_pcms(seconds: int = 4) -> tuple[np.ndarray, np.ndarray]:
+    """Turn-taking voice channels: local speaks the first half, remote the second."""
+    left = np.zeros(seconds * 16_000, dtype=np.int16)
+    right = np.zeros(seconds * 16_000, dtype=np.int16)
+    left[: seconds * 8_000] = 1000
+    right[seconds * 8_000 :] = 3000
+    return left, right
+
+
+def test_transcribe_auto_splits_independent_voice_channels(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    audio = tmp_path / "meeting.wav"
+    write_stereo_wav(audio, *_voice_channel_pcms())
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "2 voice channels" in result.output
+    assert "left → Local, right → Remote" in result.output
+    assert "local (detected)" in result.output  # meeting-style per-channel counts
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    by_speaker = {e["speaker"] for e in entries}
+    assert by_speaker == {"Local-1", "Remote-1"}
+    # No cross-channel bleed: each channel decoded its own audio only.
+    for entry in entries:
+        stem = "foxtrot" if entry["speaker"] == "Local-1" else "quebec"
+        assert stem in entry["text"]
+
+
+def test_transcribe_channels_mix_forces_the_downmix(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    audio = tmp_path / "meeting.wav"
+    write_stereo_wav(audio, *_voice_channel_pcms())
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--channels", "mix", "--out", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "voice channels" not in result.output
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    assert {e["speaker"] for e in entries} == {"Speaker 1"}  # classic single stream
+
+
+def test_transcribe_auto_downmixes_a_stereo_image(tmp_path, monkeypatch):
+    # The same programme on both channels (panned): every voice would be
+    # transcribed twice if split, so auto must keep the classic downmix.
+    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    left, _ = _voice_channel_pcms()
+    audio = tmp_path / "meeting.wav"
+    write_stereo_wav(audio, left, (left * 0.5).astype(np.int16))
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "stereo image" in result.output
+    assert "--channels split" in result.output  # the override is advertised
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    assert {e["speaker"] for e in entries} == {"Speaker 1"}
+
+
+def test_transcribe_split_needs_two_channels(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--channels", "split", "--out", str(tmp_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "needs 2-channel audio" in result.output
+
+
+def test_transcribe_split_conflicts_with_speakers(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    audio = tmp_path / "meeting.wav"
+    write_stereo_wav(audio, *_voice_channel_pcms())
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--speakers", "3", "--out", str(tmp_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "--local/--remote" in result.output
+
+
+def test_transcribe_local_remote_require_split_channels(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--local", "1", "--out", str(tmp_path)]
+    )
+
+    assert result.exit_code != 0
+    assert "split voice channels" in result.output
+
+
+def test_transcribe_split_matches_start_replay(tmp_path, monkeypatch):
+    # The unification promise: a split-channel transcribe IS the meeting
+    # pipeline, so it must produce the same transcript as replaying the two
+    # channels through `steno start` (batch mode; --no-aec because a recording
+    # is past capture-time cancellation).
+    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    left, right = _voice_channel_pcms()
+    stereo = tmp_path / "stereo.wav"
+    write_stereo_wav(stereo, left, right)
+    mic, system = tmp_path / "mic.wav", tmp_path / "system.wav"
+    for path, pcm in ((mic, left), (system, right)):
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16_000)
+            w.writeframes(pcm.tobytes())
+
+    split_out, replay_out = tmp_path / "split", tmp_path / "replay"
+    split = CliRunner().invoke(
+        cli.main, ["transcribe", str(stereo), "--channels", "split", "--out", str(split_out)]
+    )
+    replay = CliRunner().invoke(
+        cli.main,
+        [
+            "start",
+            "--replay",
+            f"{mic},{system}",
+            "--no-live",
+            "--no-aec",
+            "--out",
+            str(replay_out),
+        ],
+    )
+
+    assert split.exit_code == 0, split.output
+    assert replay.exit_code == 0, replay.output
+    split_entries = json.loads((split_out / "transcript.json").read_text())["entries"]
+    replay_entries = json.loads((replay_out / "transcript.json").read_text())["entries"]
+    assert split_entries == replay_entries
+
+
 def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
     # Default is live: a non-TTY runner gets the plain caption stream, then the
     # on-stop finalize swap. The whole live path runs through the real orchestrator.

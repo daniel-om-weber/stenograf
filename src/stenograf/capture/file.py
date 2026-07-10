@@ -19,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from stenograf.audio import load_audio
+from stenograf.audio import load_audio, to_int16
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 
 DEFAULT_FRAME_MS = 200
@@ -45,7 +45,7 @@ class FileCaptureProvider(CaptureProvider):
     def start(self, channels: set[Channel]) -> None:
         self._stopped = False
         self._loaded = {
-            ch: _to_int16(load_audio(path)) for ch, path in self._sources.items() if ch in channels
+            ch: to_int16(load_audio(path)) for ch, path in self._sources.items() if ch in channels
         }
 
     def frames(self) -> Iterator[AudioFrame]:
@@ -69,10 +69,3 @@ class FileCaptureProvider(CaptureProvider):
 
     def stop(self) -> None:
         self._stopped = True
-
-
-def _to_int16(samples: np.ndarray) -> np.ndarray:
-    """float32 [-1, 1] → int16 PCM (the capture wire format)."""
-    if samples.dtype == np.int16:
-        return samples
-    return np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int16)
