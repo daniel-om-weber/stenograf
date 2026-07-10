@@ -195,8 +195,14 @@ spoken as one word, but not a term split across word boundaries.
 
 Standing preferences live in `settings.toml` in the platform data dir
 (`~/Library/Application Support/stenograf/` on macOS) so you stop re-typing
-them. A flag always beats the file; the file beats the built-in default. All
-keys are optional:
+them. A flag always beats the file; the file beats the built-in default.
+
+```sh
+steno settings show   # effective configuration + where each value comes from
+steno settings edit   # open in $EDITOR (template on first run), validate on save
+```
+
+All keys are optional:
 
 ```toml
 [transcript]

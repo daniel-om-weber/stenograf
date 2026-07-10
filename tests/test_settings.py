@@ -189,3 +189,13 @@ def test_wrong_typed_bool_is_rejected(tmp_path):
     path.write_text('[archive]\nenabled = "yes"\n', encoding="utf-8")
     with pytest.raises(SettingsError, match="must be true or false"):
         load_settings(path)
+
+
+def test_settings_template_loads_as_all_defaults(tmp_path):
+    # Every template key is commented out, so the pristine file `steno settings
+    # edit` creates must parse (live table headers included) to exactly Settings().
+    from stenograf.settings import SETTINGS_TEMPLATE
+
+    path = tmp_path / "settings.toml"
+    path.write_text(SETTINGS_TEMPLATE, encoding="utf-8")
+    assert load_settings(path) == Settings()

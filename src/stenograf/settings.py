@@ -67,6 +67,49 @@ class SettingsError(Exception):
     """settings.toml exists but cannot be used; the message names the file."""
 
 
+SETTINGS_TEMPLATE = """\
+# stenograf settings — every key is optional; a missing key keeps its built-in
+# default. Uncomment what you want to change, then save; the file is validated
+# on the way out. `steno settings show` prints the effective configuration and
+# where each value comes from. A CLI flag always beats this file.
+
+[transcript]
+# formats = ["md", "json", "txt"]          # any of: md, json, txt, srt, vtt
+
+[vocab]                                    # standing vocabulary — merged with
+# glossary_file = "~/steno/glossary.txt"   # per-run --glossary/--attendee flags;
+# attendees = ["Anja Müller"]              # file terms are one per line
+# glossary_threshold = 0.82                # similarity 0-1 to correct a term
+
+[archive]
+# enabled = true                           # false = flat files, as --no-archive
+# out_dir = "~/Transcripts"                # where flat files go when not archiving
+
+[speakers]
+# reid_threshold = 0.5                     # voice-match strictness 0-1
+# profile_store = "~/steno/profiles.json"  # re-ID voiceprint store location
+
+[asr]
+# backend = "parakeet"
+
+[notes]
+# backend = "mlx"                          # mlx | ollama | command
+# model = "Qwen/Qwen3-8B-MLX-4bit"         # HF repo id (mlx) / Ollama tag
+# command = ["claude", "-p"]               # argv for backend = "command"
+# timeout_s = 600                          # command backend time limit
+# instructions = "~/notes-style.md"        # appended to the system prompt
+# thinking = true                          # mlx: run the model's reasoning pass
+
+[notes.export]
+# dir = "~/Obsidian/Meetings"              # also write one combined note here
+"""
+"""The commented-out starter file ``steno settings edit`` creates on first run.
+
+Every table header is live (an empty table is all defaults) and every key is
+commented — so the pristine template loads as exactly ``Settings()``, which the
+tests pin. Keep it in step with the schema above."""
+
+
 @dataclass(frozen=True)
 class TranscriptSettings:
     formats: tuple[str, ...] = ()

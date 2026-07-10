@@ -1180,3 +1180,63 @@ def test_settings_profile_store_stays_off_the_transcript(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     profile = json.loads((tmp_path / "transcript.json").read_text())["profile"]
     assert profile.get("speaker_profile_store") is None
+
+
+def test_settings_show_reports_values_and_sources(tmp_path, monkeypatch):
+    _write_settings(tmp_path, '[transcript]\nformats = ["srt"]\n')
+
+    result = CliRunner().invoke(cli.main, ["settings", "show"])
+
+    assert result.exit_code == 0, result.output
+    assert 'formats = ["srt"]  (settings.toml)' in result.output
+    assert "glossary_threshold = 0.82  (default)" in result.output
+    assert "[notes.export]" in result.output
+
+    # An env override wins over the file and is attributed to the variable.
+    monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
+    result = CliRunner().invoke(cli.main, ["settings", "show"])
+    assert "backend = parakeet  ($STENOGRAF_ASR_BACKEND)" in result.output
+
+
+def test_settings_show_names_a_missing_file(tmp_path):
+    result = CliRunner().invoke(cli.main, ["settings", "show"])
+    assert result.exit_code == 0, result.output
+    assert "not present — all defaults" in result.output
+
+
+def test_settings_show_broken_file_points_at_edit(tmp_path):
+    _write_settings(tmp_path, "[vocab]\nbad_key = 1\n")
+    result = CliRunner().invoke(cli.main, ["settings", "show"])
+    assert result.exit_code != 0
+    assert "bad_key" in result.output
+    assert "steno settings edit" in result.output
+
+
+def test_settings_edit_creates_the_template_and_validates(tmp_path, monkeypatch):
+    opened = {}
+    monkeypatch.setattr(cli.click, "edit", lambda filename=None: opened.update(path=filename))
+
+    result = CliRunner().invoke(cli.main, ["settings", "edit"])
+
+    assert result.exit_code == 0, result.output
+    path = tmp_path / "steno-data" / "settings.toml"
+    assert opened["path"] == str(path)
+    assert "created" in result.output
+    assert "OK" in result.output
+    assert path.read_text(encoding="utf-8").startswith("# stenograf settings")
+
+
+def test_settings_edit_keeps_and_reports_a_bad_save(tmp_path, monkeypatch):
+    def fake_edit(filename=None):
+        Path(filename).write_text('[vocab]\nglossry_file = "x"\n', encoding="utf-8")
+
+    monkeypatch.setattr(cli.click, "edit", fake_edit)
+
+    result = CliRunner().invoke(cli.main, ["settings", "edit"])
+
+    assert result.exit_code != 0
+    assert "glossry_file" in result.output
+    assert "your edits are saved" in result.output
+    # The bad content was not reverted — the user's work survives the failure.
+    path = tmp_path / "steno-data" / "settings.toml"
+    assert "glossry_file" in path.read_text(encoding="utf-8")

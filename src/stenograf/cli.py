@@ -1845,6 +1845,166 @@ def meetings_rm(meeting_id: str, yes: bool, keep_files: bool) -> None:
         click.echo(f"unregistered {meeting_id} (files at {record.dir})")
 
 
+@main.group("settings")
+def settings_group() -> None:
+    """Inspect and edit the settings.toml defaults."""
+
+
+@settings_group.command("show")
+def settings_show() -> None:
+    """Print the effective configuration and where each value comes from.
+
+    Sources: an environment override, settings.toml, or the built-in default.
+    (CLI flags outrank all three but are per-run, so they never appear here.)
+    """
+    from stenograf.settings import SettingsError, load_settings, settings_path
+
+    path = settings_path()
+    suffix = "" if path.exists() else " (not present — all defaults)"
+    click.echo(f"settings: {path}{suffix}")
+    try:
+        settings = load_settings()
+    except SettingsError as exc:
+        raise click.ClickException(f"{exc} — fix it with `steno settings edit`") from exc
+    for table, rows in _settings_rows(settings):
+        click.echo(f"\n[{table}]")
+        width = max(len(key) for key, _, _ in rows)
+        for key, value, source in rows:
+            click.echo(f"  {key:<{width}} = {value}  ({source})")
+
+
+@settings_group.command("edit")
+def settings_edit() -> None:
+    """Open settings.toml in $EDITOR and validate it on save.
+
+    A missing file is first created from a fully commented template, so every
+    available key is in front of you. Validation failures keep your edits —
+    rerun to fix them.
+    """
+    from stenograf.settings import SETTINGS_TEMPLATE, SettingsError, load_settings, settings_path
+
+    path = settings_path()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(path, SETTINGS_TEMPLATE)
+        click.echo(f"created {path}")
+    click.edit(filename=str(path))
+    try:
+        load_settings(path)
+    except SettingsError as exc:
+        raise click.ClickException(
+            f"{exc}\nyour edits are saved — run `steno settings edit` again to fix them"
+        ) from exc
+    click.echo(f"{path} OK")
+
+
+def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """``(table, [(key, value, source), …])`` rows behind ``settings show``.
+
+    Values are TOML-flavored so a line can be pasted into the file; defaults
+    that aren't literal values (an unset optional, a per-backend choice) read
+    as a parenthesized description instead."""
+    from stenograf.asr.registry import default_backend_name as asr_default
+    from stenograf.glossary import DEFAULT_THRESHOLD as GLOSSARY_THRESHOLD
+    from stenograf.notes.backend import default_backend_name as notes_default
+    from stenograf.profiles import DEFAULT_THRESHOLD as REID_THRESHOLD
+    from stenograf.profiles import default_store_path
+
+    def pick(file_value, default, env_var: str | None = None) -> tuple[str, str]:
+        if env_var and (env_value := os.environ.get(env_var)):
+            return _fmt_setting(env_value), f"${env_var}"
+        if file_value is not None and file_value != ():
+            return _fmt_setting(file_value), "settings.toml"
+        return _fmt_setting(default), "default"
+
+    # Per-backend notes defaults resolve against the *effective* backend, so the
+    # display matches what a notes run would actually use.
+    notes_backend = notes_default(settings.notes.backend)
+    if notes_backend == "mlx":
+        from stenograf.notes.mlx import DEFAULT_MAX_INPUT_CHARS, DEFAULT_MODEL
+
+        model_default, thinking_default = DEFAULT_MODEL, "true"
+    elif notes_backend == "ollama":
+        from stenograf.notes.ollama import DEFAULT_MAX_INPUT_CHARS, DEFAULT_MODEL
+
+        model_default, thinking_default = DEFAULT_MODEL, "(mlx backend only)"
+    else:
+        from stenograf.notes.command import DEFAULT_MAX_INPUT_CHARS
+
+        model_default, thinking_default = "(provenance label — none)", "(mlx backend only)"
+    from stenograf.notes.command import DEFAULT_TIMEOUT_S
+    from stenograf.notes.ollama import DEFAULT_URL
+
+    timeout_default = DEFAULT_TIMEOUT_S if notes_backend == "command" else "(command backend only)"
+
+    return [
+        ("transcript", [("formats", *pick(settings.transcript.formats, DEFAULT_FORMATS))]),
+        (
+            "vocab",
+            [
+                ("glossary_file", *pick(settings.vocab.glossary_file, "(none)")),
+                ("attendees", *pick(settings.vocab.attendees, "(none)")),
+                (
+                    "glossary_threshold",
+                    *pick(settings.vocab.glossary_threshold, GLOSSARY_THRESHOLD),
+                ),
+            ],
+        ),
+        (
+            "archive",
+            [
+                ("enabled", *pick(settings.archive.enabled, True)),
+                (
+                    "out_dir",
+                    *pick(settings.archive.out_dir, "(next to the input / current dir)"),
+                ),
+            ],
+        ),
+        (
+            "speakers",
+            [
+                ("reid_threshold", *pick(settings.speakers.reid_threshold, REID_THRESHOLD)),
+                ("profile_store", *pick(settings.speakers.profile_store, default_store_path())),
+            ],
+        ),
+        (
+            "asr",
+            [("backend", *pick(settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"))],
+        ),
+        (
+            "notes",
+            [
+                (
+                    "backend",
+                    *pick(settings.notes.backend, notes_backend, "STENOGRAF_NOTES_BACKEND"),
+                ),
+                ("model", *pick(settings.notes.model, model_default, "STENOGRAF_NOTES_MODEL")),
+                ("command", *pick(settings.notes.command, "(none)")),
+                ("timeout_s", *pick(settings.notes.timeout_s, timeout_default)),
+                ("instructions", *pick(settings.notes.instructions, "(none)")),
+                ("ollama_url", *pick(settings.notes.ollama_url, DEFAULT_URL, "OLLAMA_HOST")),
+                (
+                    "max_input_chars",
+                    *pick(settings.notes.max_input_chars, DEFAULT_MAX_INPUT_CHARS),
+                ),
+                ("thinking", *pick(settings.notes.thinking, thinking_default)),
+            ],
+        ),
+        ("notes.export", [("dir", *pick(settings.notes.export_dir, "(off)"))]),
+    ]
+
+
+def _fmt_setting(value) -> str:
+    """One effective value, TOML-flavored (bools lowercase, arrays bracketed)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, tuple):
+        return "[" + ", ".join(f'"{item}"' for item in value) + "]"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)
+
+
 @main.command("notes")
 @click.argument("meeting")
 @click.option(
