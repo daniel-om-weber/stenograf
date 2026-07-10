@@ -695,9 +695,23 @@ class MeetingRecorder:
         self.diarizer = diarizer
         self.reid = reid
         self.dedup_echo = dedup_echo
-        """Whether finalize runs :func:`drop_echo_duplicates` on the mic channel.
+        """Whether finalize may run :func:`drop_echo_duplicates` on the mic channel.
         The CLI ties this to ``--aec``: with cancellation off the user asked for
-        the mic exactly as captured, and no transcript lines should vanish."""
+        the mic exactly as captured, and no transcript lines should vanish. Even
+        when True the backstop only *arms* if the canceller reported losing its
+        reference (see :attr:`reference_gap_s`): a healthy canceller leaks nothing
+        the ASR can decode (measured across the PLAN-AEC.md scenario matrix), so
+        in the healthy case the backstop's one false-positive class — the local
+        speaker verbatim-repeating the remote — can never fire."""
+        self.reference_gap_s: float | None = None
+        """Seconds the canceller cancelled against silence because the far-end
+        reference never arrived (from ``far_end_missing_ticks``, recorded after
+        capture). None means unknown — no canceller was observed (direct
+        :meth:`finalize` calls, archived re-finalize) — and finalize treats
+        unknown conservatively: backstop armed."""
+        self.dropped_echo_lines = 0
+        """Mic lines the last :meth:`finalize` dropped as echoed remote speech;
+        the CLI folds this into its degraded-reference warning."""
         self.language = language or profile.language
         self.glossary_threshold = (
             DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
@@ -832,6 +846,7 @@ class MeetingRecorder:
         if checkpointer is not None and checkpointer.error is not None:
             view.error(f"checkpoint stopped early: {checkpointer.error}")
         view.finalizing()
+        self._note_reference_gap(provider)
         # Capture has stopped; the finalize is authoritative. Shield it from a
         # second Ctrl-C so an impatient interrupt cannot discard the transcript.
         with _shield_interrupt():
@@ -918,6 +933,7 @@ class MeetingRecorder:
             if worker.error is not None:
                 view.error(f"live pass stopped early: {worker.error}")
             view.finalizing()
+            self._note_reference_gap(provider)
             # Single-flight: the worker is already joined, but taking the same lock it
             # held documents (and future-proofs) that finalize never runs alongside a
             # live decode.
@@ -925,6 +941,17 @@ class MeetingRecorder:
                 transcript = self.finalize(store, plans, view=view)
         view.finalized(transcript)
         return transcript
+
+    def _note_reference_gap(self, provider: CaptureProvider) -> None:
+        """Record how long the canceller ran without its far-end reference.
+
+        Read after capture stops, immediately before finalize, which arms the
+        echo-text backstop on it. A provider without an enabled canceller (mic
+        only, ``--no-aec`` baselines, plain test providers) leaves the gap None.
+        """
+        canceller = getattr(provider, "canceller", None)
+        if canceller is not None and canceller.enabled:
+            self.reference_gap_s = canceller.far_end_missing_ticks / 100
 
     def finalize(
         self,
@@ -953,13 +980,28 @@ class MeetingRecorder:
             by_channel[plan.channel] = labeled
         self.speaker_counts = counts
 
-        # What the echo canceller could not remove, the remote channel's own
-        # transcript identifies for us (PLAN.md §2 "Speaker-bleed caveats").
+        # The text backstop for a canceller that lost its reference (a stalled or
+        # mis-clocked tap): echo then lands on the mic channel uncancelled, and
+        # the remote channel's own transcript identifies it. Armed only when the
+        # reference was degraded (or unobserved) — a healthy canceller leaks
+        # nothing decodeable, and never arming it then means a verbatim local
+        # repeat of remote speech can never be mistaken for echo.
         mic, system = by_channel.get(Channel.MIC), by_channel.get(Channel.SYSTEM)
-        if self.dedup_echo and mic and system:
+        armed = self.dedup_echo and (self.reference_gap_s is None or self.reference_gap_s > 0)
+        self.dropped_echo_lines = 0
+        if armed and mic and system:
             kept = drop_echo_duplicates(mic, system)
             if len(kept) < len(mic):
-                view.status(f"dropped {len(mic) - len(kept)} echoed mic line(s)")
+                self.dropped_echo_lines = len(mic) - len(kept)
+                cause = (
+                    f" — the canceller ran {self.reference_gap_s:.1f}s without its reference"
+                    if self.reference_gap_s
+                    else ""
+                )
+                view.status(
+                    f"echo backstop: dropped {self.dropped_echo_lines} mic line(s) "
+                    f"duplicating remote speech{cause}"
+                )
             by_channel[Channel.MIC] = kept
 
         entries = [entry for plan in plans for entry in by_channel.get(plan.channel, [])]

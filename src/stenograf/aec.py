@@ -26,8 +26,12 @@ Two properties of AEC3 shape the design:
   hint. Feeding a deliberately wrong 500 ms hint measured the same 26 dB ERLE as
   the correct 25 ms, so the constant below is a nicety, not a load-bearing value.
 
-Echo cancellation is never perfect — residual echo survives double-talk and
-speaker nonlinearity. Cross-channel text dedup at merge time is the backstop.
+Measured across the PLAN-AEC.md scenario matrix (quiet/loud, batch/live,
+built-in/Bluetooth, double-talk), a canceller with a live reference leaks
+nothing the ASR decodes. What residual echo survives comes from *losing* the
+reference — a stalled or mis-clocked tap — which ``far_end_missing_ticks``
+counts; a cross-channel text backstop at merge time arms itself on that signal
+(``session.MeetingRecorder``), and the CLI warns when it had to act.
 """
 
 from __future__ import annotations
@@ -222,7 +226,13 @@ class EchoCanceller:
                 if not flush and self._near.available < hold:
                     break
                 far = np.zeros(TICK_SAMPLES, dtype=np.int16)
-                self.far_end_missing_ticks += 1
+                if not flush:
+                    # Only mid-capture counts as reference loss. At end-of-stream
+                    # flush the far end has legitimately ended a hair before the
+                    # mic tail; counting those ticks made every clean meeting
+                    # report a phantom "ran without its reference for 0.0s" and
+                    # spuriously armed the echo-text backstop.
+                    self.far_end_missing_ticks += 1
 
             count = min(TICK_SAMPLES, self._near.available)
             near = self._near.take(count)

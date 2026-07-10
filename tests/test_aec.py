@@ -157,6 +157,14 @@ class TestFailureModes:
         total = sum(p.samples.size for p in produced)
         assert total == MIC_CHUNK * 2, "the hole was not filled, so the timeline shifted"
 
+    def test_end_of_stream_flush_is_not_reference_loss(self) -> None:
+        """The far end legitimately ends a hair before the mic tail; the flush
+        must not count those ticks, or every clean meeting reports a phantom
+        reference gap and spuriously arms the echo-text backstop."""
+        far = _speech(2.0, seed=11)
+        _, aec = _run(_interleave(_i16(_echo_of(far)), _i16(far)))
+        assert aec.far_end_missing_ticks == 0
+
     def test_a_backwards_frame_is_an_error(self) -> None:
         aec = EchoCanceller(BOTH)
         aec.process(AudioFrame(Channel.MIC, 1.0, np.ones(MIC_CHUNK, np.int16)))

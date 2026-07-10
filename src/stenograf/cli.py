@@ -393,13 +393,20 @@ def start(
     # The canceller counts every 10 ms mic tick it had to cancel against silence
     # because the system reference never arrived. A stalled tap degrades to "no
     # cancellation" by design — but silently, so say how much of the meeting ran
-    # unprotected (echo in those spans lands on the mic channel as Local-N).
+    # unprotected, and whether the armed text backstop had to clean up after it.
     canceller = getattr(provider, "canceller", None)
     if canceller is not None and canceller.far_end_missing_ticks > 0:
+        if recorder.dropped_echo_lines:
+            backstop = (
+                f"; the text backstop removed {recorder.dropped_echo_lines} mic "
+                "line(s) that duplicated remote speech"
+            )
+        else:
+            backstop = "; review Local lines in those spans for leaked remote speech"
         click.secho(
             f"echo cancellation ran without its reference for "
             f"{canceller.far_end_missing_ticks / 100:.1f}s — the system-audio tap "
-            "stalled; speaker echo in those spans is not cancelled",
+            f"stalled{backstop}",
             fg="yellow",
         )
 

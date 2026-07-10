@@ -426,11 +426,12 @@ class TestMeetingRecorder:
         transcript = recorder.run(provider)
         assert {e.speaker for e in transcript.entries} == {"Remote-1"}
 
-    def test_dedup_echo_off_never_drops_a_mic_line(self):
-        """--no-aec means 'the mic exactly as captured' — including its transcript.
-        Both channels decode to the same words (a perfect echo), yet with
-        dedup_echo=False both lines must survive; with the default both-channel
-        dedup, the mic copy is dropped."""
+    @staticmethod
+    def _run_echoed(*, dedup: bool, missing_ticks: int | None = None):
+        """A meeting where both channels decode to the same five words (a perfect
+        echo textually). ``missing_ticks`` simulates the canceller's report of
+        reference loss; None runs a plain provider with no canceller at all.
+        Returns (transcript, recorder)."""
 
         class EchoedASR(ASRBackend):
             name = "echoed"
@@ -449,15 +450,40 @@ class TestMeetingRecorder:
                 pass
 
         pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
+        if missing_ticks is not None:
+            provider.canceller = type(
+                "CancellerReport", (), {"enabled": True, "far_end_missing_ticks": missing_ticks}
+            )()
         profile = MeetingProfile(local_speakers=1, remote_speakers=1)
+        recorder = MeetingRecorder(profile, asr=EchoedASR(), dedup_echo=dedup)
+        return recorder.run(provider), recorder
 
-        def run(dedup: bool):
-            provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
-            recorder = MeetingRecorder(profile, asr=EchoedASR(), dedup_echo=dedup)
-            return recorder.run(provider)
+    def test_dedup_echo_off_never_drops_a_mic_line(self):
+        """--no-aec means 'the mic exactly as captured' — including its transcript.
+        With the backstop allowed (and the reference state unknown → conservatively
+        armed), the mic copy of the echoed line drops; with dedup_echo=False both
+        lines must survive."""
+        armed, _ = self._run_echoed(dedup=True)
+        assert [e.speaker for e in armed.entries] == ["Remote-1"]
+        off, _ = self._run_echoed(dedup=False)
+        assert sorted(e.speaker for e in off.entries) == ["Local-1", "Remote-1"]
 
-        assert [e.speaker for e in run(dedup=True).entries] == ["Remote-1"]
-        assert sorted(e.speaker for e in run(dedup=False).entries) == ["Local-1", "Remote-1"]
+    def test_backstop_disarms_when_the_canceller_kept_its_reference(self):
+        """A healthy canceller leaks nothing decodeable, so identical text on both
+        channels is a verbatim local repeat, not echo — it must survive."""
+        transcript, recorder = self._run_echoed(dedup=True, missing_ticks=0)
+        assert sorted(e.speaker for e in transcript.entries) == ["Local-1", "Remote-1"]
+        assert recorder.reference_gap_s == 0.0
+        assert recorder.dropped_echo_lines == 0
+
+    def test_backstop_arms_when_the_reference_was_lost(self):
+        """With the reference gone the mic ran uncancelled: the duplicate is echo,
+        and the drop is recorded for the CLI's degraded-reference warning."""
+        transcript, recorder = self._run_echoed(dedup=True, missing_ticks=250)
+        assert [e.speaker for e in transcript.entries] == ["Remote-1"]
+        assert recorder.reference_gap_s == pytest.approx(2.5)
+        assert recorder.dropped_echo_lines == 1
 
     def test_finalize_records_requested_and_detected_speaker_counts(self):
         # Local unspecified (estimate), remote given as 2. The diarizer finds two
