@@ -107,3 +107,76 @@ def test_models_check_reflects_cache(monkeypatch):
     missing = doctor._models_check()
     assert not missing.ok
     assert "pending" in missing.detail
+
+
+def test_notes_check_ollama_down_is_optional_not_ok(monkeypatch, tmp_path):
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))  # no settings.toml → ollama default
+    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    from stenograf.notes.ollama import OllamaBackend
+
+    monkeypatch.setattr(OllamaBackend, "is_available", lambda self: False)
+    check = doctor._notes_check()
+    assert not check.ok
+    assert check.optional  # an absent backend must not fail the doctor gate
+    assert "ollama serve" in check.detail
+
+
+def test_notes_check_ollama_up_but_model_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    from stenograf.notes.ollama import OllamaBackend
+
+    monkeypatch.setattr(OllamaBackend, "is_available", lambda self: True)
+    monkeypatch.setattr(OllamaBackend, "installed_models", lambda self: ["llama3:8b"])
+    check = doctor._notes_check()
+    assert not check.ok
+    assert check.optional
+    assert "ollama pull" in check.detail
+
+
+def test_notes_check_command_backend_reports_path_presence(monkeypatch, tmp_path):
+    import sys
+
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    settings = tmp_path / "settings.toml"
+    settings.write_text(
+        f'[notes]\nbackend = "command"\ncommand = ["{sys.executable}", "-c", "pass"]\n',
+        encoding="utf-8",
+    )
+    check = doctor._notes_check()
+    assert check.ok, check.detail
+
+    settings.write_text(
+        '[notes]\nbackend = "command"\ncommand = ["no-such-notes-binary"]\n', encoding="utf-8"
+    )
+    check = doctor._notes_check()
+    assert not check.ok
+    assert check.optional
+    assert "PATH" in check.detail
+
+
+def test_notes_check_unconfigured_command_backend_is_optional(monkeypatch, tmp_path):
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    (tmp_path / "settings.toml").write_text('[notes]\nbackend = "command"\n', encoding="utf-8")
+    check = doctor._notes_check()
+    assert not check.ok
+    assert check.optional
+    assert "settings.toml" in check.detail
+
+
+def test_doctor_exit_gate_ignores_optional_failures(monkeypatch):
+    from click.testing import CliRunner
+
+    from stenograf import cli
+
+    ok = doctor.Check(name="A", ok=True, detail="fine")
+    opt = doctor.Check(name="B", ok=False, detail="absent", optional=True)
+    hard = doctor.Check(name="C", ok=False, detail="broken")
+
+    monkeypatch.setattr(cli, "run_checks", lambda: [ok, opt])
+    assert CliRunner().invoke(cli.main, ["doctor"]).exit_code == 0
+
+    monkeypatch.setattr(cli, "run_checks", lambda: [ok, opt, hard])
+    assert CliRunner().invoke(cli.main, ["doctor"]).exit_code == 1

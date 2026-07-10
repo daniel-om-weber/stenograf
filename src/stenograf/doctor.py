@@ -18,6 +18,9 @@ class Check:
     name: str
     ok: bool
     detail: str
+    optional: bool = False
+    """A not-ok optional check is reported but doesn't fail the doctor exit
+    gate — for opt-in features (LLM notes) a machine can healthily lack."""
 
 
 def run_checks() -> list[Check]:
@@ -45,6 +48,7 @@ def run_checks() -> list[Check]:
     checks.append(_asr_check())
     checks.append(_ffmpeg_check())
     checks.append(_models_check())
+    checks.append(_notes_check())
     return checks
 
 
@@ -161,6 +165,59 @@ def _models_check() -> Check:
     else:
         detail = f"VAD + diarization cached in {models.cache_dir()} (ASR weights via HuggingFace)"
     return Check(name="Models", ok=not missing, detail=detail)
+
+
+def _notes_check() -> Check:
+    """Whether the *configured* notes backend could run (`steno notes`, `--notes`).
+
+    Notes are opt-in, so this check is ``optional``: an absent Ollama or an
+    unconfigured command never fails the overall doctor gate — it only tells
+    the user what `--notes` would need."""
+    from stenograf.notes import NotesBackendError, create_backend
+    from stenograf.settings import SettingsError, load_settings
+
+    name = "Notes backend (optional)"
+    try:
+        settings = load_settings().notes
+        backend = create_backend(None, settings)
+    except (SettingsError, NotesBackendError, ValueError) as exc:
+        return Check(name=name, ok=False, detail=str(exc), optional=True)
+
+    from stenograf.notes.ollama import OllamaBackend
+
+    if isinstance(backend, OllamaBackend):
+        if not backend.is_available():
+            return Check(
+                name=name,
+                ok=False,
+                detail=f"Ollama not reachable at {backend.url} — start `ollama serve`, or "
+                "configure another backend under [notes] in settings.toml",
+                optional=True,
+            )
+        try:
+            installed = backend.installed_models()
+        except NotesBackendError as exc:
+            return Check(name=name, ok=False, detail=str(exc), optional=True)
+        names = set(installed) | {m.split(":", 1)[0] for m in installed}
+        if backend.model not in names:
+            return Check(
+                name=name,
+                ok=False,
+                detail=f"Ollama up, but model {backend.model!r} is not pulled "
+                f"(`ollama pull {backend.model}`)",
+                optional=True,
+            )
+        return Check(name=name, ok=True, detail=f"Ollama at {backend.url}, model {backend.model}")
+    if not backend.is_available():
+        argv0 = getattr(backend, "argv", ("?",))[0]
+        return Check(
+            name=name,
+            ok=False,
+            detail=f"notes command {argv0!r} is not on PATH",
+            optional=True,
+        )
+    label = " ".join(getattr(backend, "argv", (backend.name,)))
+    return Check(name=name, ok=True, detail=f"command backend: {label}")
 
 
 def _macos_version_check() -> Check:

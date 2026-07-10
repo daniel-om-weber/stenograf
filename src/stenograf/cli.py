@@ -321,6 +321,14 @@ def main() -> None:
     "finalize pass would (so reuse is the default); this forces the "
     "from-scratch ASR pass for A/B comparison or paranoia.",
 )
+@click.option(
+    "--notes",
+    "notes_flag",
+    is_flag=True,
+    help="After the transcript is written, generate LLM meeting notes "
+    "(summary, decisions, action items) with the backend configured in "
+    "settings.toml. Non-fatal: a notes failure never loses the transcript.",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def start(
     lang: str | None,
@@ -347,6 +355,7 @@ def start(
     glossary_threshold: float | None,
     profile_store: Path | None,
     full_finalize: bool,
+    notes_flag: bool,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
@@ -516,6 +525,15 @@ def start(
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s)")
     if archive is not None:
         click.echo(f"archived as {meeting_id} — see `steno meetings show {meeting_id}`")
+    if notes_flag:
+        _notes_after_run(
+            transcript,
+            out_dir,
+            basename,
+            archive=archive,
+            meeting_id=meeting_id,
+            created_at=created_at,
+        )
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
@@ -952,6 +970,14 @@ def _transcribe_split_channels(
     "srt/vtt re-flow speaker turns into subtitle cues.",
 )
 @_vocab_options
+@click.option(
+    "--notes",
+    "notes_flag",
+    is_flag=True,
+    help="After the transcript is written, generate LLM meeting notes "
+    "(summary, decisions, action items) with the backend configured in "
+    "settings.toml. Non-fatal: a notes failure never loses the transcript.",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def transcribe(
     audio_file: Path,
@@ -972,6 +998,7 @@ def transcribe(
     attendee: tuple[str, ...],
     glossary_threshold: float | None,
     profile_store: Path | None,
+    notes_flag: bool,
     print_markdown: bool,
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).
@@ -1153,6 +1180,15 @@ def transcribe(
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s, {speed:.1f}x realtime)")
     if archive is not None:
         click.echo(f"archived as {meeting_id} — see `steno meetings show {meeting_id}`")
+    if notes_flag:
+        _notes_after_run(
+            transcript,
+            out_dir,
+            basename,
+            archive=archive,
+            meeting_id=meeting_id,
+            created_at=created_at,
+        )
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
@@ -1348,9 +1384,14 @@ def doctor() -> None:
     """Check this machine's readiness (permissions, OS version, models)."""
     checks = run_checks()
     for check in checks:
-        symbol = click.style("✓", fg="green") if check.ok else click.style("✗", fg="red")
+        if check.ok:
+            symbol = click.style("✓", fg="green")
+        elif check.optional:  # reported, but doesn't fail the run — opt-in feature
+            symbol = click.style("○", fg="yellow")
+        else:
+            symbol = click.style("✗", fg="red")
         click.echo(f" {symbol} {check.name}: {check.detail}")
-    if not all(check.ok for check in checks):
+    if not all(check.ok or check.optional for check in checks):
         raise SystemExit(1)
 
 
@@ -1705,3 +1746,181 @@ def meetings_rm(meeting_id: str, yes: bool, keep_files: bool) -> None:
         click.echo(f"removed {meeting_id} and its files")
     else:
         click.echo(f"unregistered {meeting_id} (files at {record.dir})")
+
+
+@main.command("notes")
+@click.argument("meeting")
+@click.option(
+    "--backend",
+    "backend_name",
+    default=None,
+    metavar="NAME",
+    help="Notes backend: ollama (local) or command (any CLI, e.g. claude) "
+    "[default: settings.toml, else ollama].",
+)
+@click.option(
+    "--model",
+    default=None,
+    help="Model to use (Ollama model tag; a provenance label for command backends).",
+)
+@click.option("--ollama-url", default=None, metavar="URL", help="Ollama server URL.")
+@click.option(
+    "--export-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Also export one combined markdown note (frontmatter + summary + transcript) "
+    "here — e.g. an Obsidian vault folder [default: [notes.export] dir in settings.toml].",
+)
+@click.option(
+    "--no-export",
+    is_flag=True,
+    help="Skip the combined-note export even when settings.toml configures a dir.",
+)
+def notes_command(
+    meeting: str,
+    backend_name: str | None,
+    model: str | None,
+    ollama_url: str | None,
+    export_dir: Path | None,
+    no_export: bool,
+) -> None:
+    """Generate LLM meeting notes (summary, decisions, action items).
+
+    MEETING is an archived meeting id (see `steno meetings list`) or a path to
+    a transcript.json. Notes are written as sibling .notes.md/.notes.json
+    files; the meeting profile's glossary and attendees steer the prompt.
+    Configure the backend in settings.toml under [notes].
+    """
+    import json as json_mod
+
+    from stenograf.transcript import UnsupportedTranscriptVersion
+
+    archive = record = None
+    path = Path(meeting)
+    if path.is_file():
+        try:
+            transcript = Transcript.from_json(path.read_text(encoding="utf-8"))
+        except (json_mod.JSONDecodeError, UnsupportedTranscriptVersion, KeyError) as exc:
+            raise click.ClickException(f"{path} is not a readable transcript JSON: {exc}") from exc
+        out_dir, basename = path.parent, path.stem
+        created_at = datetime.fromtimestamp(path.stat().st_mtime)
+    else:
+        from stenograf.archive import TRANSCRIPT_STEM, MeetingArchive
+
+        archive = MeetingArchive.load()
+        record = archive.get(meeting)
+        if record is None and archive.root.exists():
+            archive.reconcile()  # the meeting may exist on disk but not in the index
+            record = archive.get(meeting)
+        if record is None:
+            raise click.ClickException(
+                f"{meeting!r} is neither a transcript file nor an archived meeting id "
+                "(see `steno meetings list`)"
+            )
+        transcript = archive.load_transcript(meeting)
+        out_dir, basename = record.dir, TRANSCRIPT_STEM
+        created_at = (
+            datetime.fromisoformat(record.created_at) if record.created_at else datetime.now()
+        )
+
+    try:
+        written, notes = _generate_and_write_notes(
+            transcript,
+            out_dir,
+            basename,
+            created_at=created_at,
+            backend_name=backend_name,
+            model=model,
+            ollama_url=ollama_url,
+            export_dir=export_dir,
+            no_export=no_export,
+        )
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    _backfill_title(archive, record, notes)
+    click.echo(f"wrote {', '.join(str(p) for p in written)}")
+
+
+def _generate_and_write_notes(
+    transcript: Transcript,
+    out_dir: Path,
+    basename: str,
+    *,
+    created_at: datetime,
+    backend_name: str | None = None,
+    model: str | None = None,
+    ollama_url: str | None = None,
+    export_dir: Path | None = None,
+    no_export: bool = False,
+):
+    """Generate notes and write ``<basename>.notes.md``/``.notes.json`` (plus the
+    combined-note export when a target dir is configured). Returns
+    ``(written_paths, notes)``; raises typed errors, writing nothing, on failure."""
+    import dataclasses
+
+    from stenograf.notes import create_backend
+    from stenograf.notes.export import export_note
+    from stenograf.notes.generate import generate_notes
+    from stenograf.settings import load_settings
+
+    settings = load_settings().notes
+    if model or ollama_url:
+        settings = dataclasses.replace(
+            settings,
+            model=model or settings.model,
+            ollama_url=ollama_url or settings.ollama_url,
+        )
+    backend = create_backend(backend_name, settings)
+    instructions = None
+    if settings.instructions is not None:
+        instructions = settings.instructions.read_text(encoding="utf-8")
+
+    notes = generate_notes(transcript, backend, instructions=instructions)
+
+    md_path = out_dir / f"{basename}.notes.md"
+    json_path = out_dir / f"{basename}.notes.json"
+    _atomic_write_text(md_path, notes.to_markdown())
+    _atomic_write_text(json_path, notes.to_json())
+    written = [md_path, json_path]
+
+    target = None if no_export else (export_dir or settings.export_dir)
+    if target is not None:
+        written.append(export_note(transcript, notes, target, created_at=created_at))
+    return written, notes
+
+
+def _backfill_title(archive, record, notes) -> None:
+    """Give an untitled archived meeting its LLM-derived title (index only — the
+    transcript file records what the user set at meeting time)."""
+    if archive is not None and record is not None and record.title is None:
+        record.title = notes.title
+        archive.add(record)
+        click.echo(f"title: {notes.title}")
+
+
+def _notes_after_run(
+    transcript: Transcript,
+    out_dir: Path,
+    basename: str,
+    *,
+    archive,
+    meeting_id: str | None,
+    created_at: datetime,
+) -> None:
+    """The opt-in ``--notes`` step after a transcript is safely written.
+
+    Non-fatal by contract (PLAN.md §5 D6): the transcript already stands, so
+    any notes failure warns and returns — rerun later with ``steno notes``."""
+    try:
+        written, notes = _generate_and_write_notes(
+            transcript, out_dir, basename, created_at=created_at
+        )
+    except Exception as exc:
+        retry = f"steno notes {meeting_id}" if meeting_id else "steno notes <transcript.json>"
+        click.secho(f"notes failed: {exc}", fg="yellow")
+        click.secho(f"  the transcript is safe — retry with `{retry}`", fg="yellow")
+        return
+    record = archive.get(meeting_id) if archive is not None and meeting_id else None
+    _backfill_title(archive, record, notes)
+    click.echo(f"notes: wrote {', '.join(str(p) for p in written)}")

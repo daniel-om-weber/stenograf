@@ -114,6 +114,45 @@ steno meetings rm meeting-20260710-091500
 Audio is stored only when you passed `--record-audio`; without it the archive
 holds text alone.
 
+## Meeting notes (LLM summaries)
+
+Turn any transcript into structured notes — summary, decisions, action items
+per owner, open questions — with the LLM of your choice:
+
+```sh
+steno notes meeting-20260710-091500   # notes for an archived meeting
+steno notes path/to/transcript.json   # …or any transcript file
+steno start --notes                   # generate notes right after the meeting
+```
+
+Notes land as sibling `transcript.notes.md`/`.notes.json` files. An untitled
+meeting gets its LLM-derived title back-filled into the archive. The backend is
+configured once in `~/Library/Application Support/stenograf/settings.toml`:
+
+```toml
+[notes]
+backend = "ollama"          # fully local (default); needs `ollama serve`
+model = "qwen3:8b"
+```
+
+or drive any CLI you already have (prompt on stdin, JSON out):
+
+```toml
+[notes]
+backend = "command"
+command = ["claude", "-p"]
+
+[notes.export]
+dir = "~/Documents/Obsidian/Meetings"   # optional: also write one combined
+                                        # "YYYY-MM-DD – Title.md" note here
+```
+
+With `[notes.export]` set, every summarized meeting also produces a single
+self-contained markdown note (frontmatter, summary, action items, collapsible
+transcript) — drop the dir inside an Obsidian vault and meetings file
+themselves. Notes never run unless you ask (`--notes` or `steno notes`), and a
+notes failure never touches the transcript.
+
 ## Naming speakers across meetings
 
 Enroll a voice once and every later meeting relabels that speaker automatically

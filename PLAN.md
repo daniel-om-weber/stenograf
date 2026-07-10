@@ -1522,6 +1522,14 @@ verifiable, and repeatable.
 *Follows Stage E; parallel to C.* Opt-in, stdlib-only; fully local **when the Ollama
 backend is chosen**. Nearly independent — only `steno notes` needs A1.
 
+*Status (2026-07-10): **Stage D COMPLETE** — D1–D8 all shipped in one pass
+(`stenograf.notes` package + `stenograf.settings`, `steno notes`, `--notes`,
+doctor check; `tests/test_notes_*`, `test_settings`, `test_cli_notes`,
+doctor additions). Verified against the real `claude` CLI end-to-end
+(`STENOGRAF_NOTES_E2E=1` gates that test — it bills a real model call). Real
+`ollama` e2e still pending a machine with Ollama installed. Remaining Phase 4
+work: Stage C (web UI) only.*
+
 *Redesigned 2026-07-10 (was "Ollama note-enhancement").* Driver: Daniel's production
 meeting workflow (reference implementation: `~/.config/typewhisper/meeting-summary.sh`)
 pipes the transcript through the **`claude` CLI** (Opus) because local models aren't
