@@ -2384,13 +2384,34 @@ wheels = [
 ]
 
 [[package]]
+name = "onnx-asr"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/f6/b154881761a593312f509522f99542acffa2516f7a1df6ddf5660ad4a162/onnx_asr-0.11.0.tar.gz", hash = "sha256:57ad8d9571dc17db95f0daf9ba432b9472383de320c610735850e56b5375a37d", size = 43665, upload-time = "2026-03-23T02:30:57.349Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/04/bdffd682cc38b43144b6528186c80451f219a05e3fd0eb331a548f455b9a/onnx_asr-0.11.0-py3-none-any.whl", hash = "sha256:142d8b3ce7716684992826a269304f5ce9cf1c0fe704b751358e223f45d2a5cf", size = 138349, upload-time = "2026-03-23T02:30:58.566Z" },
+]
+
+[package.optional-dependencies]
+cpu = [
+    { name = "onnxruntime" },
+]
+hub = [
+    { name = "huggingface-hub" },
+]
+
+[[package]]
 name = "onnxruntime"
 version = "1.27.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "flatbuffers" },
     { name = "numpy" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" } },
+    { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval-canary'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
     { name = "protobuf" },
 ]
 wheels = [
@@ -3700,6 +3721,7 @@ dependencies = [
     { name = "mlx-lm", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "numba", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "numpy" },
+    { name = "onnx-asr", extra = ["cpu", "hub"] },
     { name = "parakeet-mlx", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
@@ -3735,6 +3757,7 @@ requires-dist = [
     { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.29.1,<0.30" },
     { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.60" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "onnx-asr", extras = ["cpu", "hub"], specifier = ">=0.11" },
     { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.2" },
     { name = "sherpa-onnx", specifier = ">=1.12.40,<1.13" },
     { name = "sherpa-onnx-core", specifier = ">=1.12.40,<1.13" },

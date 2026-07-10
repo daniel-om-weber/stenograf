@@ -1,0 +1,37 @@
+"""SentencePiece token → word merging (shared by the MLX and ONNX backends)."""
+
+from stenograf.asr.tokens import Token, merge_tokens
+
+
+def _texts(tokens):
+    return [w.text for w in merge_tokens(tokens)]
+
+
+def test_merge_tokens_leading_space_starts_a_word():
+    toks = [Token(" hal", 0.0, 0.2), Token("lo", 0.2, 0.3), Token(" welt", 0.4, 0.7)]
+    assert _texts(toks) == ["hallo", "welt"]
+
+
+def test_merge_tokens_bare_space_token_is_a_word_boundary():
+    # Numbers arrive as a bare " " boundary token followed by digit pieces
+    # (real decode of de-2: " und", " ", "1", "5", ".", "7", "."). The empty
+    # token has no visible text but must still break the word — this used to
+    # render "und15.7.".
+    toks = [
+        Token(" und", 0.0, 0.2),
+        Token(" ", 0.2, 0.25),
+        Token("1", 0.25, 0.3),
+        Token("5", 0.3, 0.35),
+        Token(".", 0.35, 0.4),
+        Token("7", 0.4, 0.45),
+        Token(".", 0.45, 0.5),
+    ]
+    merged = merge_tokens(toks)
+    assert [w.text for w in merged] == ["und", "15.7."]
+    assert merged[1].start == 0.25  # the number's time span, not the space's
+    assert merged[1].end == 0.5
+
+
+def test_merge_tokens_empty_text_token_is_not_a_boundary():
+    toks = [Token(" ge", 0.0, 0.1), Token("", 0.1, 0.1), Token("sagt", 0.1, 0.3)]
+    assert _texts(toks) == ["gesagt"]

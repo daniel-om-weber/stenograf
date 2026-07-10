@@ -13,7 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-from stenograf.asr.base import ASRBackend, Segment, Word
+from stenograf.asr.base import ASRBackend, Segment
+from stenograf.asr.tokens import merge_tokens
 from stenograf.audio import to_float32
 from stenograf.config import Language
 
@@ -99,7 +100,7 @@ class ParakeetMLXBackend(ASRBackend):
 
         segments = []
         for sentence in result.sentences:
-            words = _merge_tokens(sentence.tokens)
+            words = merge_tokens(sentence.tokens)
             if not words:
                 continue
             segments.append(
@@ -117,29 +118,3 @@ class ParakeetMLXBackend(ASRBackend):
         import mlx.core as mx
 
         mx.clear_cache()
-
-
-def _merge_tokens(tokens) -> list[Word]:
-    """Merge subword tokens into words.
-
-    parakeet-mlx tokens are SentencePiece pieces with the word-boundary
-    marker rendered as a leading space; a token without one continues the
-    previous word. Numbers arrive as a *bare* space token followed by digit
-    pieces (" und", " ", "1", "5", ".", "7", "."), so a whitespace-only token
-    carries no text but must still open the boundary — dropping it silently
-    glued "und 15.7." into "und15.7.".
-    """
-    words: list[Word] = []
-    boundary = False  # a pending word break left by a bare space token
-    for token in tokens:
-        text = token.text.strip()
-        if not text:
-            boundary = boundary or bool(token.text)
-            continue
-        if token.text.startswith(" ") or boundary or not words:
-            words.append(Word(text=text, start=token.start, end=token.end))
-        else:
-            prev = words[-1]
-            words[-1] = Word(text=prev.text + text, start=prev.start, end=token.end)
-        boundary = False
-    return words

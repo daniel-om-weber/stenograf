@@ -147,7 +147,8 @@ def _asr_check() -> Check:
     from stenograf.asr import backend_model_id, get_spec
 
     spec = get_spec()  # the default backend (STENOGRAF_ASR_BACKEND override applies)
-    if all(_installed(module) for module in spec.requires):
+    missing = [module for module in spec.requires if not _installed(module)]
+    if not missing:
         model = backend_model_id(spec)
         detail = f"{spec.label} ready"
         if model:
@@ -156,8 +157,9 @@ def _asr_check() -> Check:
     return Check(
         name="ASR backend",
         ok=False,
-        detail=f"{spec.label} not installed — the default backend needs Apple Silicon + MLX "
-        "(ONNX/CTranslate2 backends for other platforms are planned)",
+        detail=f"{spec.label} not installed (missing: {', '.join(missing)}) — reinstall "
+        "stenograf, or select another backend via [asr] backend in settings.toml "
+        "or STENOGRAF_ASR_BACKEND",
     )
 
 

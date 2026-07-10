@@ -754,16 +754,25 @@ live captions. The deferred design (W1–W8: Starlette server + token/Origin
 security + archive/reader views + `steno serve`) lives in this file's git
 history should it ever be wanted.
 
-**Phase 5 technical sub-plan (Linux Track 2 — active as of 2026-07-10; dev-environment
+**Phase 5 technical sub-plan (Linux Track 2 — SHIPPED 2026-07-11; dev-environment
 plan in §5).** A CPU/ONNX ASR backend
-`stenograf/asr/sherpa.py::SherpaOnnxASRBackend` (`name="parakeet-onnx"`) wrapping the *same*
-Parakeet-TDT-v3 int8 model with real per-token timestamps, registered through the existing
-`stenograf.asr` factory (`create_backend` already the seam — zero CLI change; only
-`default_backend_name()` goes platform-aware and two `doctor` strings change). **Open
-Decision A:** whether the pinned `sherpa-onnx<1.13` (pin exists because 1.13.x macOS wheels
-are broken) already yields Parakeet-v3 timestamps — if yes, **zero new dependency**; if it
-needs 1.13.x, use `onnx-asr` (small MIT dep, isolated runtime, leaves the diarization pin
-untouched) — probe first. A `LinuxCaptureProvider` (`stenograf/capture/linux.py`, in-process,
+`stenograf/asr/parakeet_onnx.py::ParakeetOnnxBackend` (`name="parakeet-onnx"`) wrapping the
+*same* Parakeet-TDT-v3 (fp32 ONNX, via `onnx-asr`), registered through the existing
+`stenograf.asr` factory (`create_backend` already the seam — zero CLI change;
+`default_backend_name()` went capability-based like the notes default, and the two `doctor`
+strings changed). **Decision A — resolved to `onnx-asr`, on accuracy, not timestamps.**
+The probe surprised: the pinned `sherpa-onnx<1.13` *does* decode Parakeet-v3 with real
+per-token timestamps **and** TDT durations (~27× RT, 4 threads) — but its only published v3
+export is **int8**, and int8 measurably degrades the transcript: cross-WER against MLX on
+the eval WAVs was 4.1–20.8 % (int8, both sherpa's and onnx-asr's exports, German worst)
+vs **2.0–6.8 % for fp32** — while fp32 on CPU ran *faster* (~36–44× RT, all cores). With
+the accuracy-first charter that decided it; `quantization="int8"` stays available on the
+backend for RAM-constrained boxes. onnx-asr returns token starts without durations, so word
+ends are approximated (next token's start, capped at TDT's 4-frame/0.32 s duration ceiling
+— can't move a word across a turn boundary farther than real durations could). Verification
+(label-free, eval/parity.py): timestamp parity MLX↔ONNX median |Δstart| 0.00 s / p95 0.08 s
+(one TDT frame); cross-WER within the fp32 band above. ORT's CoreML provider fails to
+initialize on this model — the backend pins CPUExecutionProvider (GPU EPs a later opt-in). A `LinuxCaptureProvider` (`stenograf/capture/linux.py`, in-process,
 no helper): monitor discovery via `pactl`, capture via **SoundCard** (`include_loopback`) or
 `parec`/`pw-record` subprocess (**Decision B** — prototype both; macOS is already
 subprocess-based), 16 kHz mono direct (PipeWire resamples → no resampler dep), idempotent

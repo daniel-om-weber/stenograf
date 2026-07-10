@@ -20,16 +20,16 @@ from stenograf.asr import (
 )
 
 
-def test_parakeet_is_registered_and_default():
+def test_both_parakeet_backends_are_registered():
     assert "parakeet" in available_backends()
-    assert default_backend_name() == "parakeet"
-    assert get_spec().name == "parakeet"
+    assert "parakeet-onnx" in available_backends()
+    assert get_spec().name == default_backend_name()
 
 
 def test_create_backend_returns_the_default_instance():
     backend = create_backend()
     assert isinstance(backend, ASRBackend)
-    assert backend.name == "parakeet"  # no MLX import needed to construct it
+    assert backend.name == default_backend_name()  # no runtime import to construct it
 
 
 def test_env_override_selects_the_default(monkeypatch):
@@ -51,9 +51,16 @@ def test_backend_model_id_is_importable_without_the_runtime():
 
 
 def test_default_backend_name_precedence(monkeypatch):
+    import importlib.util
+
     # env override > configured ([asr] backend in settings.toml) > built-in default
     monkeypatch.delenv("STENOGRAF_ASR_BACKEND", raising=False)
+    # The built-in default is capability-based: MLX Parakeet where its runtime
+    # is installed (Apple Silicon), the cross-platform ONNX build elsewhere.
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
     assert default_backend_name() == "parakeet"
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    assert default_backend_name() == "parakeet-onnx"
     assert default_backend_name("configured") == "configured"
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "env-backend")
     assert default_backend_name("configured") == "env-backend"

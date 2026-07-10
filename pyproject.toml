@@ -31,6 +31,13 @@ dependencies = [
     "sherpa-onnx-core>=1.12.40,<1.13",
     # Default ASR backend (PLAN.md Phase 0 verdict); MLX is Apple-Silicon-only.
     "parakeet-mlx>=0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Cross-platform ASR backend (Phase 5): the same Parakeet-TDT-v3, fp32 ONNX
+    # on CPU. Decision A resolved to onnx-asr over sherpa's export on accuracy —
+    # sherpa ships v3 only as int8, and int8 measurably degrades German (see
+    # asr/parakeet_onnx.py). Unmarked: on macOS it is the parity reference the
+    # eval harness compares MLX against. [cpu] pins onnxruntime, [hub] the
+    # HuggingFace download path.
+    "onnx-asr[cpu,hub]>=0.11",
     # In-process notes LLM (Stage D) — the zero-setup default backend on Apple
     # Silicon. Pinned to the 0.29 line (verified 2026-07-10): mlx-lm >=0.30
     # requires transformers>=5, but the current transformers 5.13 crashes

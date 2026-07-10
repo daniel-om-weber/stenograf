@@ -4,20 +4,21 @@ One selection seam so a second backend — the Linux ONNX/CTranslate2 path the p
 calls for, or a Whisper/Voxtral backend — is a drop-in *registration* rather than a
 rewrite of the CLI's backend loading (PLAN.md §5, Phase 3→4 readiness audit). Imports
 stay lazy: choosing one backend never imports another backend's (possibly
-platform-specific, e.g. MLX-only) dependencies. Today only ``parakeet`` ships; a new
-backend registers a :class:`BackendSpec` and becomes selectable everywhere at once.
+platform-specific, e.g. MLX-only) dependencies. ``parakeet`` (MLX, macOS) and
+``parakeet-onnx`` (onnx-asr CPU, cross-platform) ship; a new backend registers a
+:class:`BackendSpec` and becomes selectable everywhere at once.
 """
 
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
 from dataclasses import dataclass
 
 from stenograf.asr.base import ASRBackend
 
 _ENV_OVERRIDE = "STENOGRAF_ASR_BACKEND"
-_DEFAULT = "parakeet"
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,16 @@ register_backend(
     )
 )
 
+register_backend(
+    BackendSpec(
+        name="parakeet-onnx",
+        module="stenograf.asr.parakeet_onnx",
+        cls="ParakeetOnnxBackend",
+        requires=("onnx_asr",),
+        label="parakeet-onnx",
+    )
+)
+
 
 def available_backends() -> list[str]:
     """Names of every registered backend."""
@@ -61,10 +72,20 @@ def available_backends() -> list[str]:
 
 def default_backend_name(configured: str | None = None) -> str:
     """The backend used when none is named: the ``STENOGRAF_ASR_BACKEND`` override,
-    else ``configured`` (the ``[asr] backend`` setting), else the built-in default.
-    Only ``parakeet`` ships today; a Linux backend that registers here can become
-    the platform default."""
-    return os.environ.get(_ENV_OVERRIDE) or configured or _DEFAULT
+    else ``configured`` (the ``[asr] backend`` setting), else the built-in default —
+    ``parakeet`` where the MLX runtime is installed (Apple Silicon), the
+    cross-platform ``parakeet-onnx`` everywhere else (capability-based like the
+    notes default, so a mac install without MLX still resolves to a runnable
+    backend)."""
+    return os.environ.get(_ENV_OVERRIDE) or configured or _builtin_default()
+
+
+def _builtin_default() -> str:
+    try:
+        mlx_installed = importlib.util.find_spec("parakeet_mlx") is not None
+    except (ImportError, ValueError):
+        mlx_installed = False
+    return "parakeet" if mlx_installed else "parakeet-onnx"
 
 
 def get_spec(name: str | None = None) -> BackendSpec:
