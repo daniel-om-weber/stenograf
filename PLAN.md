@@ -198,42 +198,54 @@ naive 60–120 s window, which would be ~27% duty) — every ~1–1.5 s costs on
 the stable prefix; the last ~2–3 s stays grey. The incremental API and
 Voxtral/Qwen streaming remain documented fallbacks only.*
 
-**Diarization:** shipped baseline (July 2026): **sherpa-onnx** (pyannote
-segmentation-3.0 + 3D-Speaker eres2net embeddings, ONNX/CPU) — pip-installable on
-every platform, takes a known speaker count, and was planned for Linux/Windows
-anyway. Embedding-model caveat from validation: sherpa's CAM++ VoxCeleb export
-flips cluster identity between segmentation windows (one speaker shredded into
-many); eres2net and titanet-small agree with each other and with the audio —
-eres2net is the default. The community-1-accuracy upgrade on macOS needs a
-wrapper binary we build ourselves, since **speakrs and FluidAudio are both
-libraries, not CLIs**: either a small Rust CLI around speakrs or diarization in
-the Swift helper via FluidAudio (evaluate when live capture lands; same
-``Diarizer`` interface either way).
+**Diarization:** two backends behind one ``Diarizer`` interface (shipped July
+2026, commit a3ebff8):
 
-**Cross-platform accuracy path (no Mac-native models) — documented for later
-(research July 2026):** the many-speaker weakness is sherpa's greedy
-`FastClustering`, not the models. pyannote's own 3.1→community-1 gain ("marked
-reductions in speaker confusion" at higher counts) was *only* a clustering swap
-(AHC→VBx) on the *same* segmentation — so community-1-class accuracy is three
-swappable ONNX pieces, and only the *runtime* is CoreML in the native ports:
-pyannote segmentation-3.0 (have it) + **WeSpeaker ResNet293-LM** embedding (ONNX
-in sherpa's zoo, VoxCeleb EER 0.447%, English — vs our current eres2net, the
-lower-EER *zh-cn* export) + a ported **VBx** clustering step (the one missing
-piece; BUT's `VBx` is the reference to lift). That reproduces speakrs/FluidAudio
-in Python/ONNX — CPU everywhere, no PyTorch/CUDA/CoreML — behind the same
-`Diarizer` interface. Staged: (a) cheap interim — swap the embedding to
-ResNet293-LM (~1 line, strictly better for de/en); (b) least-code way to reach
-the ceiling and measure the real gain — run `pyannote.audio` community-1 directly
-(PyTorch, CC-BY-4.0, heavy + slow-ish on Mac MPS, but diarization is a small
-slice of runtime); (c) the real target — the pure-ONNX VBx rebuild. **DiariZen**
-(WavLM+Conformer+VBx, CC-BY-4.0) tops the open leaderboard (~13.3% DER overall,
-7.1% at 5+ speakers) but is PyTorch/GPU-oriented with no ONNX export — skip
-unless chasing the very top with a GPU. Dead end for our 2–8-speaker case: every
-*end-to-end neural* diarizer is hard-capped (NVIDIA Sortformer at 4 speakers,
-FluidAudio's LS-EEND streaming at 10) — only the clustering pipelines scale.
-Lever order for many speakers: **known count** (done — biggest) > **VBx
-clustering** > **better embedding** > the 3-speaker-per-window segmentation cap
-(least important; it's a local per-window limit, not a global one).
+- **sherpa-onnx** (pyannote segmentation-3.0 + 3D-Speaker eres2net embeddings,
+  ONNX/CPU) — pip-installable on every platform, handles every run with a
+  **known** speaker count. Embedding-model caveat from validation: sherpa's
+  CAM++ VoxCeleb export flips cluster identity between segmentation windows
+  (one speaker shredded into many); eres2net and titanet-small agree with each
+  other and with the audio — eres2net is the default. Its greedy
+  `FastClustering` cannot *estimate* a count: measured on the five eval
+  segments it found 13/25/9/13/16 "speakers" where the true counts are 2–5 —
+  no cosine threshold is robust across meetings (structural, don't re-tune).
+- **stenodiar** (`native/stenodiar/`, optional) — a small Rust CLI around
+  **speakrs**, which reimplements the full pyannote community-1 pipeline
+  (segmentation → powerset → embedding → PLDA → **VBx clustering**) with
+  native CoreML; VBx is what makes *automatic* count estimation trustworthy.
+  Same segments: 3/5/2/3/3 speakers, coherent turn-taking, ~450× realtime
+  warm (first run per machine downloads models from the ungated HF mirror
+  `avencera/speakrs-models` and compiles CoreML — minutes; `--warmup`).
+  Audio is piped as raw PCM on stdin — meeting audio never touches disk.
+  `SpeakrsCliDiarizer` routes **estimated** counts to the helper and
+  **explicit** counts to sherpa (speakrs exposes no way to force a count);
+  re-ID voiceprints always come from sherpa's `SpeakerEmbeddingExtractor`
+  regardless of backend, so enrolled profiles keep matching.
+  `cli._load_diarizer` prefers the helper when built (`build.sh`, needs a
+  Rust toolchain), falls back to sherpa-only otherwise; `steno doctor`
+  reports it; `eval/diarize.py --sherpa-only` pins the baseline.
+
+**Deferred task — stenodiar on Windows/Linux:** speakrs itself is
+cross-platform (ONNX Runtime CPU/CUDA/MIGraphX backends; the CoreML feature is
+macOS-only), so the port is "build without the `coreml` feature + package the
+binary". The blocker is performance, not correctness: **speakrs' ORT CPU path
+measured ~1× realtime pinned to a single core** (407 s per 300 s segment on
+the M4 Max; counts matched CoreML on every file). Before shipping it anywhere
+without a GPU: investigate threading (ORT intra-op/session thread settings,
+speakrs `RuntimeConfig.chunk_emb_workers`, possibly an upstream issue — the
+project is v0.5.0 and publishes no CPU numbers); acceptance is multi-core
+scaling to well above realtime for a 1-h finalize. CUDA on Linux is already
+fast (50–121× RT per speakrs' benchmarks). Fallbacks if CPU can't be fixed:
+NME-SC k-estimation (`spectralcluster`, numpy/scipy) feeding sherpa's
+known-count path, or pyannote community-1 direct (torch-CPU, HF-gated).
+Ruled out: **DiariZen** (best DER but CC-BY-**NC** weights — not shippable,
+and WavLM-Large is CPU-heavy); every *end-to-end neural* diarizer (hard-capped:
+NVIDIA Sortformer at 4 speakers, LS-EEND at 10) — only clustering pipelines
+scale to our 2–8-speaker case. Lever order for many speakers: **known count**
+(biggest) > **VBx clustering** (shipped for estimates) > **better embedding** >
+the 3-speaker-per-window segmentation cap (least important; a local per-window
+limit, not a global one).
 
 Diarization is a
 **per-channel** operation, configured by a meeting profile set at start
@@ -286,8 +298,8 @@ fatal: correct the value and re-run finalize in seconds.
 | Parameter | Auto-detection mechanism | Reliability / phase |
 |---|---|---|
 | Language (de/en) | **Shipped (Phase 1, `stenograf.lid`):** function-word + umlaut/ß vote over the finalized transcript, locked for the session. Acoustic first-segment LID (sherpa-onnx `SpokenLanguageIdentification`) is the live-pass upgrade — it can lock before any text exists and feed a language-*requiring* backend | High for a de/en binary choice |
-| Remote speaker count | community-1's speaker-count estimation on the system channel (run unconstrained, or with bounds 1–8) | Decent; explicit count still more accurate — Phase 1 (it's just "don't pass `num_speakers`") |
-| Local speaker count | Same, on the mic channel | Weaker (far-field audio) — Phase 3 |
+| Remote speaker count | **Shipped (July 2026):** speakrs' VBx estimation via the stenodiar helper on the system channel (an estimated count = "don't pass `num_speakers`") | Good — exact on the online-meeting eval segments; explicit count still authoritative when given |
+| Local speaker count | Same, on the mic channel | Weaker (far-field audio) — the one eval miss was the in-room segment (2 detected vs 3 enrolled); detected count stays editable + cheap re-finalize |
 | Meeting mode (online/hybrid/in-room) | Meeting-app detection (running Zoom/Teams/browser-call process + audio activity on the tap) → remote component exists; multiple voices on mic → local component >1 | Phase 3–4; until then mode falls back to "online" if a meeting app is audible, else "in-room" |
 | Participant names/glossary | Calendar-invite integration (attendees, title → re-ID hints + `initial_prompt`) | Phase 4 |
 
@@ -1552,8 +1564,11 @@ untouched) — probe first. A `LinuxCaptureProvider` (`stenograf/capture/linux.p
 no helper): monitor discovery via `pactl`, capture via **SoundCard** (`include_loopback`) or
 `parec`/`pw-record` subprocess (**Decision B** — prototype both; macOS is already
 subprocess-based), 16 kHz mono direct (PipeWire resamples → no resampler dep), idempotent
-thread-safe `stop()` like `MacOSCaptureProvider`. Diarization already runs ONNX/CPU (Task =
-verification). **Decision C** (settled): finalize-first is first-class, live captions
+thread-safe `stop()` like `MacOSCaptureProvider`. Known-count diarization already runs
+ONNX/CPU via sherpa (Task = verification); *estimated* counts need the **stenodiar
+port** — build speakrs without the `coreml` feature (ORT CPU/CUDA) and fix its
+single-core ~1×-realtime CPU throughput first (details in §2 "Deferred task — stenodiar
+on Windows/Linux"). **Decision C** (settled): finalize-first is first-class, live captions
 best-effort with a CPU-RTF probe. Verification is label-free throughout (parakeet-onnx↔MLX
 parity + timestamp sanity, reusing the Phase-2 agreement harness). Distribution then gains
 the Linux pure-`any` wheel's dep markers and a Linux functional-transcription CI step.

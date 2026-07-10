@@ -1,4 +1,20 @@
-# Native capture helper (macOS)
+# Native helpers (macOS)
+
+Two optional binaries live here, both speaking simple pipes to the Python core
+and both honoring the same rule: **meeting audio never touches disk**.
+
+`stenodiar/` holds the **diarization helper**, a Rust CLI around
+[speakrs](https://github.com/avencera/speakrs) (the pyannote community-1
+pipeline with VBx clustering, CoreML). It exists because sherpa's threshold
+clustering cannot *estimate* a speaker count (it over-splits absurdly), while
+VBx can; stenograf routes estimate-mode diarization through it and known
+counts through sherpa (see `stenograf/diarization/speakrs.py`). Raw mono
+16 kHz s16le PCM goes in on stdin, JSON speaker turns come out on stdout.
+Build with `stenodiar/build.sh` (needs a Rust toolchain: `brew install rust`);
+no signing needed — it touches no TCC-guarded resource. The first run per
+machine downloads models and compiles them for CoreML (minutes; `--warmup`
+does it eagerly). Without the binary, stenograf silently falls back to
+sherpa-only diarization.
 
 `helper/` holds **stenocap**, the ad-hoc-signed Swift binary that feeds live
 audio to the Python core. It captures
