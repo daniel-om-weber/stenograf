@@ -14,8 +14,10 @@ import threading
 import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
+from stenograf.audio import to_float32
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 from stenograf.config import MeetingProfile
+from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.live import StreamingUpdate
 from stenograf.session import (
     AudioBus,
@@ -485,3 +487,264 @@ class TestFinalizeReuse:
         transcript = recorder.run(ListProvider(_one_second_frames(4)), live=True, view=spy)
         assert asr.calls > spy.decodes_at_finalizing  # finalize decoded again
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
+
+
+# -- Two-channel live fixtures -------------------------------------------------
+#
+# The hybrid scenario (local and remote speakers, overlapping or in turn) needs
+# fakes whose output depends on the *audio*, so that a cross-channel mix-up or a
+# live/batch window drift changes the transcript and fails the test. FakeASR and
+# CountingASR cannot see either.
+
+_AMPLITUDE_STEM = {1000: "foxtrot", 3000: "quebec"}
+"""Peak sample value → word stem. The stems share no letters, so one channel's
+text can never read as (an echo of) the other's unless the audio really matches."""
+
+
+class AmplitudeASR(ASRBackend):
+    """Deterministic, content-dependent decode: the window's peak amplitude picks
+    the word stem and the window length fixes the word count (two per second).
+    Byte-identical windows therefore decode to identical words — the property the
+    live-reuse parity tests pin down."""
+
+    name = "amplitude"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def load(self) -> None:
+        pass
+
+    def unload(self) -> None:
+        pass
+
+    def transcribe(self, samples, language):
+        self.calls += 1
+        pcm = to_float32(np.asarray(samples))
+        peak = round(float(np.abs(pcm).max()) * 32768)
+        if peak == 0:
+            return []
+        stem = _AMPLITUDE_STEM[peak]
+        count = max(1, round(2 * len(pcm) / SAMPLE_RATE))
+        words = tuple(Word(f"{stem}{i}", 0.5 * i + 0.1, 0.5 * i + 0.4) for i in range(count))
+        return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
+
+
+def _nonzero_runs(samples, origin: float) -> list[SpeechSegment]:
+    idx = np.flatnonzero(np.asarray(samples) != 0)
+    if len(idx) == 0:
+        return []
+    breaks = np.flatnonzero(np.diff(idx) > 1)
+    starts = [idx[0], *idx[breaks + 1]]
+    ends = [*idx[breaks], idx[-1]]
+    return [
+        SpeechSegment(origin + s / SAMPLE_RATE, origin + (e + 1) / SAMPLE_RATE)
+        for s, e in zip(starts, ends, strict=True)
+    ]
+
+
+class _EnergyStream:
+    """Streaming half of :class:`EnergyVAD`: a run completes once ``CLOSE`` s of
+    silence follow it (or at ``finish()``); the trailing run still touching the
+    live edge is the open segment."""
+
+    CLOSE = 0.5
+
+    def __init__(self, origin: float) -> None:
+        self._origin = origin
+        self._buf = np.zeros(0, dtype=np.float32)
+        self._emitted_to = origin
+        self._finished = False
+
+    def push(self, samples) -> None:
+        self._buf = np.concatenate([self._buf, np.asarray(samples, dtype=np.float32)])
+
+    def _edge(self) -> float:
+        return self._origin + len(self._buf) / SAMPLE_RATE
+
+    def take_completed(self) -> list[SpeechSegment]:
+        done = []
+        for run in _nonzero_runs(self._buf, self._origin):
+            if run.end <= self._emitted_to:
+                continue
+            if self._finished or run.end <= self._edge() - self.CLOSE:
+                done.append(run)
+                self._emitted_to = run.end
+        return done
+
+    def open_segment(self) -> SpeechSegment | None:
+        runs = _nonzero_runs(self._buf, self._origin)
+        if self._finished or not runs:
+            return None
+        last = runs[-1]
+        if last.end <= self._emitted_to or last.end <= self._edge() - self.CLOSE:
+            return None
+        return last
+
+    def finish(self) -> None:
+        self._finished = True
+
+
+class EnergyVAD:
+    """Content-defined fake VAD: speech = maximal runs of nonzero samples.
+
+    The batch scan and the stream report identical runs over the same timeline,
+    regardless of how the worker chunks its feeds — the agreement the
+    finalize-reuse guarantee rests on."""
+
+    def speech_segments(self, samples) -> list[SpeechSegment]:
+        return _nonzero_runs(samples, 0.0)
+
+    def stream(self, origin: float) -> _EnergyStream:
+        return _EnergyStream(origin)
+
+
+class RecordingDiarizer(Diarizer):
+    """Returns preset turns and records what audio/count it was asked about."""
+
+    def __init__(self, turns: list[SpeakerTurn]) -> None:
+        self._turns = turns
+        self.samples_len: int | None = None
+        self.num_speakers: int | None = None
+
+    def diarize(self, samples, num_speakers=None):
+        self.samples_len = len(samples)
+        self.num_speakers = num_speakers
+        return list(self._turns)
+
+
+def _pcm_with_speech(
+    seconds: int, spans: list[tuple[float, float]], amplitude: int
+) -> np.ndarray:
+    pcm = np.zeros(seconds * SAMPLE_RATE, dtype=np.int16)
+    for start, end in spans:
+        pcm[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)] = amplitude
+    return pcm
+
+
+def _interleaved_frames(mic_pcm: np.ndarray, system_pcm: np.ndarray) -> list[AudioFrame]:
+    """One-second frames of both channels, arriving turn about — the two streams
+    land in the store concurrently, as a real capture delivers them."""
+    frames = []
+    for t in range(len(mic_pcm) // SAMPLE_RATE):
+        lo, hi = t * SAMPLE_RATE, (t + 1) * SAMPLE_RATE
+        frames.append(AudioFrame(Channel.MIC, float(t), mic_pcm[lo:hi]))
+        frames.append(AudioFrame(Channel.SYSTEM, float(t), system_pcm[lo:hi]))
+    return frames
+
+
+class TestTwoChannelLive:
+    """The hybrid scenario: local and remote speakers, overlapping and in turn.
+
+    Channels are independent end-to-end — each is decoded and diarized on its
+    own, and only the finished entries interleave — so the live window pass must
+    yield the same transcript as the offline passes, per channel, with no
+    cross-channel bleed."""
+
+    SECONDS = 7
+    MIC_SPANS = [(1.0, 2.0), (3.0, 4.0)]
+    SYSTEM_SPANS = [(1.5, 2.5), (5.0, 5.5)]  # overlaps the mic, then speaks alone
+
+    def _provider(self) -> ListProvider:
+        mic = _pcm_with_speech(self.SECONDS, self.MIC_SPANS, 1000)
+        system = _pcm_with_speech(self.SECONDS, self.SYSTEM_SPANS, 3000)
+        return ListProvider(_interleaved_frames(mic, system))
+
+    def _recorder(self, asr, **kwargs) -> MeetingRecorder:
+        return MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=1),
+            asr=asr,
+            vad=EnergyVAD(),
+            **kwargs,
+        )
+
+    def test_live_reuse_matches_batch_and_full_finalize(self):
+        # The headline parity: online with reuse, online with --full-finalize,
+        # and pure offline batch must produce the same transcript for the same
+        # two-channel audio, overlapping speech included.
+        reuse_asr = AmplitudeASR()
+        reused = self._recorder(reuse_asr).run(self._provider(), live=True)
+
+        full_asr = AmplitudeASR()
+        recorder = self._recorder(full_asr)
+        recorder.reuse_live_finalize = False
+        full = recorder.run(self._provider(), live=True)
+
+        batch_asr = AmplitudeASR()
+        batch = self._recorder(batch_asr).run(self._provider())
+
+        assert reused.entries == full.entries == batch.entries
+        # Reuse decoded each channel's one window exactly once, in the live pass;
+        # the finalize added no ASR. --full-finalize re-decoded both channels.
+        assert reuse_asr.calls == 2
+        assert batch_asr.calls == 2
+        assert full_asr.calls == 4
+
+        local, remote = reused.entries
+        assert [local.speaker, remote.speaker] == ["Local-1", "Remote-1"]
+        # The simultaneous stretch survived on both channels, in time order...
+        assert local.start < remote.start < local.end
+        # ...and neither channel's text bled into the other.
+        assert "foxtrot" in local.text and "quebec" not in local.text
+        assert "quebec" in remote.text and "foxtrot" not in remote.text
+
+    def test_live_commits_are_channel_tagged_and_checkpoints_cover_both(self):
+        # Long trailing silence (> the packer's max_gap) closes both windows
+        # mid-meeting, so commits and a checkpoint exist before the finalize.
+        mic = _pcm_with_speech(9, [(1.0, 2.0)], 1000)
+        system = _pcm_with_speech(9, [(1.5, 2.5)], 3000)
+        provider = ListProvider(_interleaved_frames(mic, system))
+        updates: list[tuple[Channel, StreamingUpdate]] = []
+        checkpoints: list[object] = []
+        transcript = self._recorder(AmplitudeASR()).run(
+            provider,
+            live=True,
+            on_update=lambda ch, u: updates.append((ch, u)),
+            on_checkpoint=checkpoints.append,
+            checkpoint_interval=1.0,
+        )
+        mic_words = [w.text for ch, u in updates if ch is Channel.MIC for w in u.committed]
+        sys_words = [w.text for ch, u in updates if ch is Channel.SYSTEM for w in u.committed]
+        # Both channels streamed commits, each carrying its own channel's audio.
+        assert mic_words and all(w.startswith("foxtrot") for w in mic_words)
+        assert sys_words and all(w.startswith("quebec") for w in sys_words)
+        # The live checkpoint is channel-coarse and covers both channels.
+        assert {e.speaker for e in checkpoints[-1].entries} == {"Local", "Remote"}
+        assert [e.speaker for e in transcript.entries] == ["Local-1", "Remote-1"]
+
+    def test_reused_live_words_still_diarize_the_full_channel(self):
+        # Two remote speakers back to back: the finalize reuses the live ASR
+        # words but must still run diarization over the channel's ENTIRE audio —
+        # never just the live windows — and split the reused words by the turns.
+        mic = _pcm_with_speech(6, [(0.5, 1.5)], 1000)
+        system = _pcm_with_speech(6, [(1.0, 2.0), (2.2, 3.2)], 3000)
+        provider = ListProvider(_interleaved_frames(mic, system))
+        asr = AmplitudeASR()
+        diarizer = RecordingDiarizer([SpeakerTurn("S0", 0.0, 2.0), SpeakerTurn("S1", 2.0, 4.0)])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=2),
+            asr=asr,
+            vad=EnergyVAD(),
+            diarizer=diarizer,
+        )
+        transcript = recorder.run(provider, live=True)
+        assert asr.calls == 2  # one live decode per channel window; finalize added none
+        assert diarizer.samples_len == 6 * SAMPLE_RATE  # the whole channel, not a window
+        assert diarizer.num_speakers == 2
+        assert [e.speaker for e in transcript.entries] == ["Local-1", "Remote-1", "Remote-2"]
+
+    def test_echo_backstop_still_applies_to_reused_live_words(self):
+        # A textual echo (identical words at the same moment on both channels)
+        # must still be dropped when the finalize reuses live decodes; --no-aec
+        # (dedup off) must still keep both lines.
+        def run(dedup: bool):
+            pcm = _pcm_with_speech(5, [(1.0, 3.0)], 1000)
+            provider = ListProvider(_interleaved_frames(pcm, pcm.copy()))
+            recorder = self._recorder(AmplitudeASR(), dedup_echo=dedup)
+            return recorder.run(provider, live=True), recorder
+
+        armed, recorder = run(dedup=True)
+        assert [e.speaker for e in armed.entries] == ["Remote-1"]
+        assert recorder.dropped_echo_lines == 1
+        off, _ = run(dedup=False)
+        assert sorted(e.speaker for e in off.entries) == ["Local-1", "Remote-1"]
