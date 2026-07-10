@@ -9,8 +9,8 @@ in from the start.
 
 > **Status: pre-alpha, macOS only.** The pipeline is complete end to end: live
 > system-audio + microphone capture, live captions, and the high-accuracy
-> speaker-labelled finalize pass. The local web UI, meeting notes, and Linux
-> capture are not built yet. See [PLAN.md](PLAN.md).
+> speaker-labelled finalize pass, plus meeting notes. The local web UI and
+> Linux capture are not built yet. See [PLAN.md](PLAN.md).
 
 ## Why another transcription tool?
 
@@ -83,6 +83,7 @@ steno start --flush-interval 60     # crash-checkpoint the captions every 60s
 steno start --no-aec                # disable echo cancellation (headphones)
 steno start --no-diarization        # skip speaker separation (labels stay per channel)
 steno start --record-audio          # opt in to keeping a WAV (off by default)
+steno start --max-seconds 3600      # stop capture automatically after an hour
 steno start --replay mic.wav        # dev: drive the live pass from a file
 ```
 
@@ -90,6 +91,10 @@ Both `start` and `transcribe` accept `--format md,json,txt,srt,vtt` (default
 `md,json,txt` — `txt` is the plain prose without speaker labels or timestamps),
 `--lang de|en`, `--no-diarization` to skip speaker separation entirely (the
 diarizer model is never loaded), and `--print` to echo the transcript to stdout.
+
+If you know how many people spoke in a recording, tell `steno transcribe` with
+`--speakers N` — it is the biggest diarization accuracy lever (`--speakers 1`
+skips diarization; omitted, the count is estimated).
 
 `steno transcribe` recognizes 2-channel recordings whose channels are separate
 voice feeds — a `--record-audio` tee (mic left, system right) or a
@@ -126,12 +131,14 @@ steno start --notes                   # generate notes right after the meeting
 ```
 
 Notes land as sibling `transcript.notes.md`/`.notes.json` files. An untitled
-meeting gets its LLM-derived title back-filled into the archive. The backend is
-configured once in `~/Library/Application Support/stenograf/settings.toml`:
+meeting gets its LLM-derived title back-filled into the archive. On Apple
+Silicon the default backend is `mlx` — a fully local in-process model, nothing
+to set up. To use a different backend, configure it once in
+`~/Library/Application Support/stenograf/settings.toml`:
 
 ```toml
 [notes]
-backend = "ollama"          # fully local (default); needs `ollama serve`
+backend = "ollama"          # fully local via `ollama serve`
 model = "qwen3:8b"
 ```
 
@@ -233,7 +240,8 @@ validates the whole file.
 
 ## Development
 
-Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.
+Requires [uv](https://docs.astral.sh/uv/) and Python 3.12 or 3.13 (3.14 is not
+yet supported by the ASR stack).
 
 ```sh
 uv sync
