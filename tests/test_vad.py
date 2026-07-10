@@ -1,4 +1,14 @@
-from stenograf.vad import SpeechSegment, pack_windows
+import wave
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from stenograf import models
+from stenograf.audio import SAMPLE_RATE
+from stenograf.vad import SileroVAD, SpeechSegment, pack_windows
+
+_EVAL_WAV = Path(__file__).resolve().parent.parent / "eval" / "audio" / "de-1.wav"
 
 
 def seg(start: float, end: float) -> SpeechSegment:
@@ -37,3 +47,40 @@ def test_oversized_segment_is_hard_split():
 def test_padding_clamped_to_audio_bounds():
     windows = pack_windows([seg(0.0, 29.9)], total_duration=30.0)
     assert windows == [(0.0, 30.0)]
+
+
+@pytest.mark.skipif(
+    models.cached_path(models.SILERO_VAD) is None or not _EVAL_WAV.exists(),
+    reason="needs the cached silero model and the eval audio",
+)
+def test_stream_matches_batch_scan_on_real_speech():
+    # The live pass swaps the fresh-detector-per-call window scan for one
+    # persistent stream fed incrementally; both must find the same speech.
+    with wave.open(str(_EVAL_WAV)) as w:
+        raw = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+        if w.getnchannels() == 2:
+            raw = raw[::2]
+    audio = raw[: 30 * SAMPLE_RATE].astype(np.float32) / 32768.0
+
+    vad = SileroVAD(models.cached_path(models.SILERO_VAD))
+    batch = vad.speech_segments(audio)
+    assert batch, "the eval clip should contain speech"
+
+    stream = vad.stream(origin=0.0)
+    for offset in range(0, len(audio), SAMPLE_RATE // 5):  # ~200 ms live frames
+        stream.push(audio[offset : offset + SAMPLE_RATE // 5])
+    streamed = stream.segments(min_end=0.0)
+
+    assert len(streamed) == len(batch)
+    for b, s in zip(batch, streamed, strict=True):
+        assert abs(b.start - s.start) < 0.15
+        # The trailing segment may still be open in the stream (no flush), so
+        # its end can only lag the batch scan's flushed end.
+        assert abs(b.end - s.end) < 0.15 or (s is streamed[-1] and s.end <= b.end)
+
+    # Segments are reported on the stream's absolute clock.
+    shifted = vad.stream(origin=100.0)
+    for offset in range(0, len(audio), SAMPLE_RATE // 5):
+        shifted.push(audio[offset : offset + SAMPLE_RATE // 5])
+    for s, t in zip(streamed, shifted.segments(min_end=0.0), strict=True):
+        assert abs((t.start - s.start) - 100.0) < 1e-6

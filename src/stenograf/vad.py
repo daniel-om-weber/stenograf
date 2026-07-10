@@ -70,6 +70,68 @@ class SileroVAD:
         drain()
         return segments
 
+    def stream(self, origin: float) -> SileroVADStream:
+        """A persistent incremental detector for the live pass.
+
+        ``origin`` is the absolute session time of the first pushed sample;
+        reported segments are on that clock.
+        """
+        return SileroVADStream(self._config, origin)
+
+
+class SileroVADStream:
+    """One long-lived Silero detector fed only new samples (the live pass's VAD).
+
+    Constructing sherpa's detector costs ~25 ms and the live decoder asks for
+    speech on every audio frame, so :meth:`SileroVAD.speech_segments` — a fresh
+    detector re-scanning the whole retained window per call — dominated the
+    session's CPU. This keeps one causal detector per channel: completed
+    segments accumulate as they close, and the in-progress run comes from
+    sherpa's ``current_segment``, so each call costs only the new audio.
+    """
+
+    def __init__(self, config, origin: float) -> None:
+        import sherpa_onnx
+
+        self._vad = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=120)
+        self._window = config.silero_vad.window_size
+        self._origin = origin
+        self._fed = 0  # samples pushed through the detector (whole windows only)
+        self._pending = np.zeros(0, dtype=np.float32)
+        self._segments: list[SpeechSegment] = []
+
+    def push(self, samples: np.ndarray) -> None:
+        """Feed mono 16 kHz float32 PCM continuing the stream (any length)."""
+        buf = np.concatenate([self._pending, samples]) if len(self._pending) else samples
+        end = len(buf) - len(buf) % self._window
+        for offset in range(0, end, self._window):
+            self._vad.accept_waveform(buf[offset : offset + self._window])
+        self._fed += end
+        self._pending = buf[end:]
+        self._drain()
+
+    def segments(self, min_end: float) -> list[SpeechSegment]:
+        """Speech runs (absolute time) ending after ``min_end``, open tail included.
+
+        ``min_end`` is the decoder's retained-buffer start; it only moves
+        forward, so segments are pruned as they fall out of the window.
+        """
+        self._segments = [s for s in self._segments if s.end > min_end]
+        out = list(self._segments)
+        if self._vad.is_speech_detected():
+            start = self._origin + self._vad.current_segment.start / SAMPLE_RATE
+            open_seg = SpeechSegment(start, self._origin + self._fed / SAMPLE_RATE)
+            if open_seg.end > min_end:
+                out.append(open_seg)
+        return out
+
+    def _drain(self) -> None:
+        while not self._vad.empty():
+            seg = self._vad.front
+            start = self._origin + seg.start / SAMPLE_RATE
+            self._segments.append(SpeechSegment(start, start + len(seg.samples) / SAMPLE_RATE))
+            self._vad.pop()
+
 
 def pack_windows(
     segments: list[SpeechSegment],

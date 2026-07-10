@@ -6,7 +6,8 @@ incremental ``transcribe_stream`` API** — the Phase 2 spike measured that API 
 garbage at small right-context and fragile otherwise (PLAN.md §2 "Live ASR").
 
 Instead the decoder re-decodes a short trailing window over the model's full
-``generate()`` path every time it is fed audio, and commits text with a
+``generate()`` path — at most once per ``decode_interval`` of audio, since a
+re-decode mostly re-transcribes the same window — and commits text with a
 LocalAgreement-2 policy: a word becomes final ("committed", shown black) only
 once two consecutive window decodes agree on it. The unstable tail stays
 provisional ("interim", shown grey) and is replaced on the next decode. Because
@@ -89,6 +90,7 @@ class LiveDecoder:
         endpoint_silence: float = 0.6,
         pre_roll: float = 0.25,
         match_tolerance: float = 0.15,
+        decode_interval: float = 0.75,
     ) -> None:
         self._asr = asr
         self._vad = vad
@@ -103,9 +105,17 @@ class LiveDecoder:
         # Silence kept after a reset so a word starting right away is not clipped.
         self.pre_roll = pre_roll
         self.match_tolerance = match_tolerance
+        # Minimum audio time between speculative window re-decodes. Frames arrive
+        # ~5×/s and each decode re-runs the whole window, so this is the GPU duty
+        # cycle; endpoint and overflow flushes bypass it (accuracy-critical).
+        self.decode_interval = decode_interval
 
         self._buf = np.zeros(0, dtype=np.float32)
         self._buf_start: float | None = None  # absolute time of _buf[0]
+        # Persistent incremental VAD (created per buffer origin) when the vad
+        # object supports streaming; None falls back to a per-feed window scan.
+        self._vad_stream = None
+        self._last_decode_end = float("-inf")  # audio_end at the last decode
         self._committed: list[Word] = []
         # Previous decode's uncommitted tail; LocalAgreement-2 commits the prefix
         # this agrees on with the next decode.
@@ -148,6 +158,11 @@ class LiveDecoder:
         if audio_end - keep_from > self.window_cap and self._buffer:
             return StreamingUpdate(tuple(self._finalize_utterance(speech)), "")
 
+        # Throttle: a speculative re-decode within decode_interval of the last one
+        # would mostly re-transcribe the same audio — skip it, keep the interim.
+        if audio_end - self._last_decode_end < self.decode_interval:
+            return StreamingUpdate((), self._interim_text())
+
         words = self._decode()
         new = self._filter_new(words)
         committed = self._commit(new, audio_end)
@@ -176,6 +191,9 @@ class LiveDecoder:
         self._buf = np.zeros(0, dtype=np.float32)
         self._buf_start = None
         self._buffer = []
+        # The VAD stream's sample clock can't jump; the next feed rebuilds it
+        # at its own origin.
+        self._vad_stream = None
 
     @property
     def committed_words(self) -> tuple[Word, ...]:
@@ -196,6 +214,9 @@ class LiveDecoder:
         if self._buf_start is None:
             self._buf_start = float(t_offset)
             self._buf = chunk.copy()
+            stream = getattr(self._vad, "stream", None)
+            self._vad_stream = stream(self._buf_start) if stream is not None else None
+            self._push_vad(chunk)
             return
         gap = t_offset - self._audio_end()
         tol = self.match_tolerance
@@ -205,8 +226,15 @@ class LiveDecoder:
                 f"< buffered end {self._audio_end():.3f}s); frames must arrive in order"
             )
         if gap > tol:  # a real gap since the last chunk → pad silence
-            self._buf = np.concatenate([self._buf, np.zeros(round(gap * SAMPLE_RATE), np.float32)])
+            pad = np.zeros(round(gap * SAMPLE_RATE), np.float32)
+            self._buf = np.concatenate([self._buf, pad])
+            self._push_vad(pad)
         self._buf = np.concatenate([self._buf, chunk])
+        self._push_vad(chunk)
+
+    def _push_vad(self, samples: np.ndarray) -> None:
+        if self._vad_stream is not None:
+            self._vad_stream.push(samples)
 
     def _audio_end(self) -> float:
         return (self._buf_start or 0.0) + len(self._buf) / SAMPLE_RATE
@@ -219,6 +247,8 @@ class LiveDecoder:
         if self._vad is None or len(self._buf) == 0:
             return None
         start = self._buf_start or 0.0
+        if self._vad_stream is not None:
+            return self._vad_stream.segments(start)
         return [
             SpeechSegment(s.start + start, s.end + start)
             for s in self._vad.speech_segments(self._buf)
@@ -227,6 +257,7 @@ class LiveDecoder:
     def _decode(self) -> list[Word]:
         """Re-decode the whole retained window; word times shifted to absolute."""
         self.decodes += 1
+        self._last_decode_end = self._audio_end()
         start = self._buf_start or 0.0
         return [
             Word(w.text, w.start + start, w.end + start, w.confidence)
