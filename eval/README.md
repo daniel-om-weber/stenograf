@@ -113,6 +113,22 @@ activity) and AECMOS (`speechmos`, the AEC-Challenge metric) — `echo_mos` for
 "is the echo gone", `deg_mos` for "did we damage the local speaker". The
 `--no-aec --aec-dump DIR` combination records the uncancelled baseline.
 
+`aec_rig.py` runs a whole scenario on real hardware — plays a speech WAV out
+the speakers while the real pipeline captures — and scores both layers (signal
+metrics + leaked `Local-N` lines in the transcript):
+
+```sh
+uv run --group eval eval/aec_rig.py far-only --seconds 60   # pass = 0 leaked lines
+uv run --group eval eval/aec_rig.py far-only --no-aec       # uncancelled baseline
+uv run --group eval eval/aec_rig.py double-talk             # talk over it yourself
+```
+
+Runs land in `eval/out/aec/<scenario>-<stamp>/` with the meeting output, the
+dump triple, and `rig.json`. Keep volume, lid angle, and source clip fixed
+across runs you compare. Measured 2026-07-10 (MacBook speakers, volume 63):
+AEC on → 37.6 dB ERLE, −65 dBFS residual, AECMOS echo 4.73, **0 leaked lines
+before any text backstop**; AEC off → −27 dBFS raw echo, AECMOS echo 1.49.
+
 ## Side quests
 
 - ~~Canary-1B-v2 runtime~~ — resolved, see above: no accelerated runtime with
