@@ -150,13 +150,21 @@ which would silently blind the canceller.
 3. **Post-AEC energy gate** — in `stenograf.aec`, behind the same `--aec` flag.
    Threshold placed with rig data (the 42 dB gap), not hand-tuned feel.
    Acceptance: far-only leakage 0 lines pre-dedup; near-only WER unchanged;
-   double-talk AECMOS degradation unchanged. **Blocked on operator runs**: the
-   double-talk / near-only scenarios need a local talker (and a far-only sweep
-   at 100 % volume probes the smart-amp nonlinearity). Given Task 1's clean
-   post-fix numbers, first re-establish that residual text leakage exists at
-   all before building the gate.
-4. **Neural RES spike (conditional)** — only if (3) leaves leakage. LocalVQE
-   behind an off-by-default flag, judged by the same rig.
+   double-talk AECMOS degradation unchanged. **CLOSED as unnecessary
+   2026-07-10.** The full scenario matrix ran clean with no gate: far-only at
+   volume 63 and 100 % (37.6 / 33.0 dB ERLE, 0 leaks), far-only under live
+   inference load (0 leaks ≥3 words), double-talk (0 leaks, 0 false drops,
+   local speech transcribed throughout), and Bluetooth after the aggregate-rate
+   fix (`7dd1510`; 28.1 dB ERLE, 0 leaks). A healthy canceller's residual
+   simply does not decode. What *does* leak is a canceller that lost its
+   reference — two capture bugs proved it — so the shipped mitigation is the
+   **armed backstop** (`3d079cb`): `drop_echo_duplicates` runs only when
+   `far_end_missing_ticks > 0` (or the canceller was unobserved), and the CLI
+   warns with cause and drop count when it acts. Healthy meetings never run
+   it, so a verbatim local repeat can never be deleted.
+4. **Neural RES spike (conditional)** — only if (3) leaves leakage. **CLOSED
+   with (3)**: no decodeable residual to suppress. LocalVQE/DTLN-aec remain in
+   §5 as the escalation path if a future device class measures differently.
 
 ## 5. Sources
 
