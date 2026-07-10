@@ -387,6 +387,19 @@ def start(
             tee.close()
             click.echo(f"recorded audio: {tee.path}")
 
+    # The canceller counts every 10 ms mic tick it had to cancel against silence
+    # because the system reference never arrived. A stalled tap degrades to "no
+    # cancellation" by design — but silently, so say how much of the meeting ran
+    # unprotected (echo in those spans lands on the mic channel as Local-N).
+    canceller = getattr(provider, "canceller", None)
+    if canceller is not None and canceller.far_end_missing_ticks > 0:
+        click.secho(
+            f"echo cancellation ran without its reference for "
+            f"{canceller.far_end_missing_ticks / 100:.1f}s — the system-audio tap "
+            "stalled; speaker echo in those spans is not cancelled",
+            fg="yellow",
+        )
+
     if transcript is None:
         # Defensive: a live view exited without producing a transcript. There is
         # nothing authoritative to write; leave any .partial checkpoint in place

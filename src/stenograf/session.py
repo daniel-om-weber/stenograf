@@ -311,8 +311,7 @@ def drop_echo_duplicates(
             if other.end >= entry.start - window and other.start <= entry.end + window
         )
         if any(
-            _covered_by(text, " ".join(_words_of(other.text))) >= coverage
-            for other in overlapping
+            _covered_by(text, " ".join(_words_of(other.text))) >= coverage for other in overlapping
         ):
             continue
         kept.append(entry)
@@ -625,9 +624,17 @@ class _TailCheckpointer(threading.Thread):
     def run(self) -> None:
         finalized = {p.channel: 0.0 for p in self._plans}
         next_cp = {p.channel: self._interval for p in self._plans}
+        # Wait on the marks last *observed*, not last *checkpointed*: `finalized`
+        # only advances every `interval`, so waiting on it makes the predicate
+        # permanently true after the first frame and turns this loop into a hot
+        # spin. Measured on live hardware, that spin starves the capture thread
+        # off the GIL, the helper's stdout pipe fills, and Core Audio kills the
+        # system tap ~3 s into every batch meeting — the remote channel dies.
+        seen = dict(finalized)
         try:
             while True:
-                marks, closed = self._bus.wait(finalized)
+                marks, closed = self._bus.wait(seen)
+                seen = marks
                 flushed = False
                 for plan in self._plans:
                     ch = plan.channel

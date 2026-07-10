@@ -1,5 +1,6 @@
 import signal
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -551,6 +552,42 @@ class TestMeetingRecorder:
         # Each checkpoint holds the full transcript-so-far: entries only ever grow.
         counts = [len(c.entries) for c in checkpoints]
         assert counts == sorted(counts)
+
+    def test_checkpointer_blocks_between_frames_instead_of_spinning(self):
+        """Waiting on the last-*checkpointed* marks makes wait() return instantly
+        forever once any audio exists — a hot spin that, measured on live
+        hardware, starves the capture thread off the GIL until the helper's
+        stdout pipe fills and Core Audio kills the system tap ~3 s in. The
+        checkpointer must block until audio it has not yet *seen* arrives."""
+
+        class CountingBus(AudioBus):
+            def __init__(self, channels):
+                super().__init__(channels)
+                self.wait_returns = 0
+
+            def wait(self, seen):
+                result = super().wait(seen)
+                self.wait_returns += 1
+                return result
+
+        bus = CountingBus([Channel.MIC])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
+        )
+        store = SessionStore({Channel.MIC})
+        checkpointer = _TailCheckpointer(
+            recorder, store, plan_channels(recorder.profile), bus, lambda t: None, 180.0
+        )
+        checkpointer.start()
+        bus.advance(Channel.MIC, 1.0)  # far below the interval: nothing to do yet
+        time.sleep(0.2)
+        bus.close()
+        checkpointer.join(timeout=5)
+        assert checkpointer.error is None
+        # One wake for the frame, one for close; a spinning loop racks up thousands.
+        assert bus.wait_returns <= 10, (
+            f"checkpointer woke {bus.wait_returns} times for a single frame — busy-spinning"
+        )
 
     def test_tail_entries_shift_onto_the_session_clock_with_a_coarse_label(self):
         store = SessionStore({Channel.MIC})
