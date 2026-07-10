@@ -488,8 +488,9 @@ quickly becomes the priority over the accuracy/in-memory core.
 twice on 2026-07-10 (web UI → reverse-control CLI → the final **de-scope to a
 pipeline**) — shipped the same day: outputs moved to a visible folder and the
 meeting-management layer (index, `meetings` group, archived reverse control)
-was retired; the web UI is dropped outright. Phase 5 (Linux) is designed but
-deferred. The per-task build logs of the completed phases were removed from
+was retired; the web UI is dropped outright. Phase 5 (Linux) is designed and
+active as of 2026-07-10 (ONNX backend on the Mac first, then capture on the
+CachyOS notebook — dev-environment plan in §5). The per-task build logs of the completed phases were removed from
 this file on 2026-07-10; they live in its git history (and in PLAN-AEC.md for
 echo cancellation).
 
@@ -558,10 +559,38 @@ writes for every transcript/checkpoint artifact, and the small web-UI landmines
 
 **Phase 4 Stages A, B, D, E — SHIPPED** (summaries under the build plan below).
 
-**Phase 5 — Linux + cross-platform ASR. DEFERRED (designed, not built).** Linux
+**Phase 5 — Linux + cross-platform ASR. ACTIVE (started 2026-07-10).** Linux
 in-process capture (PipeWire/PulseAudio monitor) + a CPU/ONNX Parakeet backend
-through the already-shipped `stenograf.asr` factory; full sub-plan under
-"Deferred to Phase 5" at the end of the Phase 4 build plan.
+through the already-shipped `stenograf.asr` factory; full technical sub-plan
+under "Deferred to Phase 5" at the end of the Phase 4 build plan.
+
+**Development-environment plan (decided 2026-07-10).** Two machines, sequenced:
+
+1. **Mac first — ONNX backend (Track 2).** Build `SherpaOnnxASRBackend`
+   (`parakeet-onnx`) natively on macOS, where MLX and ONNX coexist — the only
+   place the MLX↔ONNX parity harness can run. Settle **Decision A** here by
+   probing whether the pinned `sherpa-onnx<1.13` yields Parakeet-v3 per-token
+   timestamps (if not: `onnx-asr`). Also: platform-aware
+   `default_backend_name()`, `doctor` strings, wheel dep markers.
+2. **CachyOS notebook next — capture (Track 1) + throughput.** Development
+   moves to Daniel's CachyOS (Arch, x86_64) notebook with VS Code + Claude
+   Code. Real PipeWire/WirePlumber session, real mic/sinks: prototype both
+   **Decision B** capture candidates (SoundCard `include_loopback` vs
+   `parec`/`pw-record` subprocess) against `pactl`-discovered monitors — use
+   `module-null-sink` + `paplay` for deterministic tests, real devices for the
+   messy cases. Measure speakrs' ORT CPU throughput here (the x86 number that
+   gates the stenodiar port). End-to-end runs: capture → finalize, compare
+   against Mac output.
+3. **GitHub Actions Ubuntu x86_64 — the stable-distro reference.** Functional
+   transcription CI via the null-sink trick (load `module-null-sink`, `paplay`
+   a fixture WAV, capture the monitor, assert text) + wheel-marker checks.
+   Rationale: CachyOS is rolling/bleeding-edge (newest Python/PipeWire), Ubuntu
+   LTS is the old end — the pair brackets the version range users actually run.
+   Plain-PulseAudio (non-PipeWire) testing, if ever needed: a container on
+   either machine.
+
+No Linux VM on the Mac: the notebook covers real-hardware + x86_64, CI covers
+stable-distro; nothing in the design touches ALSA directly, so these suffice.
 
 ### Open items & known deferrals (standing)
 
@@ -725,7 +754,8 @@ live captions. The deferred design (W1–W8: Starlette server + token/Origin
 security + archive/reader views + `steno serve`) lives in this file's git
 history should it ever be wanted.
 
-**Deferred to Phase 5 (Linux Track 2 — designed, not built).** A CPU/ONNX ASR backend
+**Phase 5 technical sub-plan (Linux Track 2 — active as of 2026-07-10; dev-environment
+plan in §5).** A CPU/ONNX ASR backend
 `stenograf/asr/sherpa.py::SherpaOnnxASRBackend` (`name="parakeet-onnx"`) wrapping the *same*
 Parakeet-TDT-v3 int8 model with real per-token timestamps, registered through the existing
 `stenograf.asr` factory (`create_backend` already the seam — zero CLI change; only
