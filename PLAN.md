@@ -1368,9 +1368,10 @@ marks a hard prerequisite):
   `ArchivedMeeting` — that record still supports rename + playback. Unblocks C7 (web reverse-
   control POSTs consume `MeetingSession`/`ArchivedMeeting`).*
 
-**Stage E — macOS distribution (the shipping path). E1–E3 shipped 2026-07-10; E4 (CI +
-PyPI) and E5 (README flip to the PyPI path) remain. `uv tool install git+<repo>` is the
-working install path today.**
+**Stage E — macOS distribution (the shipping path). E1–E4 shipped 2026-07-10 (CI +
+release pipeline green on GitHub); E5 (README flip to the PyPI path) waits on the first
+tagged release, which needs the PyPI Trusted-Publisher registration (see E4 status).
+`uv tool install git+<repo>` is the working install path today.**
 Ships the current Mac tool to colleagues via PyPI; the `stenocap` bundling is the one true
 shipping blocker. Promoted ahead of C and D on 2026-07-10 — Stages A+B built a real product
 that no one but this checkout can run.
@@ -1432,6 +1433,20 @@ verifiable, and repeatable.
   --replay` pipeline smoke on a synthetic WAV, publish to PyPI via Trusted Publishing/OIDC).
   Acceptance: green both OSes; on a tag, a *different* clean Mac's `uv tool install stenograf`
   captures. `[dep: E1, E2]`
+  *Status (2026-07-10): shipped and green on GitHub — ci.yml (macos-15 + ubuntu; macos-14
+  runners are deprecated) and a full release.yml workflow_dispatch dry run (both builds +
+  both clean-install smokes; publish correctly skipped without a tag). The macOS smoke
+  installs the wheel, runs the new `steno setup --models-only` (headless model prefetch —
+  TCC prompts can't be answered on a runner), requires `steno doctor` green, and drives the
+  pipeline via `--replay` on a synthetic WAV; the build job asserts the wheel carries a
+  signed `stenocap` with `minos 14.4`. Shaken out along the way: `build.sh` now pins
+  `-target arm64-apple-macos14.4` (swiftc otherwise stamps the build host's OS as the
+  minimum — a helper built on macOS 26 refused to launch on 14/15 despite the wheel tag),
+  and `tests/test_asr_parakeet.py` gates MLX via `importorskip` (a plain import aborted
+  Linux collection). Linux jobs were validated in a local container before pushing.
+  **Publishing still needs one manual step by Daniel:** register the Trusted Publisher on
+  PyPI (project `stenograf`, owner `daniel-om-weber`, repo `stenograf`, workflow
+  `release.yml`, environment `pypi`); then tagging `v0.1.0` publishes.*
 - **E5 — README install path.** Once E1–E4 land, the README's "Install from source" section
   reverts to `uv tool install stenograf`, and the pre-alpha status note drops the shipping
   caveat. (Written down because the README currently documents the source install *as* the
