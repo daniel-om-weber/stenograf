@@ -17,6 +17,17 @@ from stenograf.config import Language
 
 MODEL_ID = "mlx-community/parakeet-tdt-0.6b-v3"
 
+CACHE_LIMIT_BYTES = 2 << 30
+"""Cap on MLX's Metal buffer cache while this backend is loaded.
+
+MLX never returns a freed buffer to the OS on its own; every distinct window
+length leaves its own activation-sized buffers behind, and a finalize pass
+over a long meeting decodes hundreds of variable-length windows back to back
+— measured 12.8 GB of cache after 35 windows (~15 min of one channel), ~60 GB
+over a full two-channel meeting, all invisible in the process RSS (Metal
+buffers count against unified memory, not RSS). One window's working set is
+~1-2 GB, so 2 GB keeps same-shape reuse while excess buffers are freed."""
+
 
 class ParakeetMLXBackend(ASRBackend):
     name = "parakeet"
@@ -30,6 +41,11 @@ class ParakeetMLXBackend(ASRBackend):
         from parakeet_mlx import from_pretrained
 
         self._model = from_pretrained(self.model_id)
+        # Bound the Metal buffer cache (see CACHE_LIMIT_BYTES): without a limit
+        # a long batch pass accumulates tens of GB of dead buffers and swaps
+        # the machine. Process-global, which is fine — this is the process's
+        # one Metal workload.
+        mx.set_cache_limit(CACHE_LIMIT_BYTES)
         # Materialize the weights on the load thread. MLX is lazy and its GPU
         # streams are thread-local: left lazy, the freshly loaded weights carry a
         # pending computation bound to *this* thread's Stream(gpu, 0), and the
