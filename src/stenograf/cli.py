@@ -227,6 +227,16 @@ def main() -> None:
     "headphones. Disable to capture the mic exactly as the device hears it.",
 )
 @click.option(
+    "--aec-dump",
+    "aec_dump",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    metavar="DIR",
+    help="Write the echo canceller's mic/lpb/enh WAV triple to DIR for offline "
+    "scoring (eval/aec_score.py). Writes meeting audio to disk, like "
+    "--record-audio. With --no-aec the triple records the uncancelled baseline.",
+)
+@click.option(
     "--reid/--no-reid",
     "use_reid",
     default=True,
@@ -263,6 +273,7 @@ def start(
     live: bool,
     plain: bool,
     use_aec: bool,
+    aec_dump: Path | None,
     use_reid: bool,
     reid_threshold: float | None,
     formats: str,
@@ -297,7 +308,21 @@ def start(
     plans = plan_channels(profile)
     # Pace file replay to wall-clock only when it feeds the live pass, so
     # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
-    provider = _make_provider(replay, plans, paced=live, aec=use_aec)
+    provider = _make_provider(replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump)
+    if aec_dump is not None:
+        from stenograf.aec import EchoCancellingProvider
+
+        if isinstance(provider, EchoCancellingProvider):
+            click.secho(
+                f"● AEC DUMP to {aec_dump} — mic/lpb/enh audio is being written to disk",
+                fg="red",
+                bold=True,
+            )
+        else:
+            click.secho(
+                "--aec-dump ignored: it needs both the mic and the system channel",
+                fg="yellow",
+            )
 
     # By default a meeting is filed in the managed archive: its own dir under the
     # data dir (or --out), holding transcript.{md,json,…} + optional audio.wav, plus
@@ -558,21 +583,29 @@ def _make_tee(record_audio: str | None, default_path: Path, plans):
     return tee
 
 
-def _make_provider(replay: str | None, plans, *, paced: bool = False, aec: bool = True):
+def _make_provider(
+    replay: str | None,
+    plans,
+    *,
+    paced: bool = False,
+    aec: bool = True,
+    aec_dump: Path | None = None,
+):
     """Build the capture provider: file replay if given, else the native helper.
 
     When both channels are captured, the mic is echo-cancelled against the system
     channel — without it, remote participants coming out of the speakers land on
-    the mic channel and get transcribed as the local speaker.
+    the mic channel and get transcribed as the local speaker. ``aec_dump`` wraps
+    even with ``--no-aec`` so the eval rig can record the uncancelled baseline.
     """
     from stenograf.capture.base import Channel
 
     provider = _base_provider(replay, plans, paced=paced)
     channels = {plan.channel for plan in plans}
-    if aec and {Channel.MIC, Channel.SYSTEM} <= channels:
+    if (aec or aec_dump is not None) and {Channel.MIC, Channel.SYSTEM} <= channels:
         from stenograf.aec import EchoCancellingProvider
 
-        return EchoCancellingProvider(provider)
+        return EchoCancellingProvider(provider, cancel=aec, dump_dir=aec_dump)
     return provider
 
 

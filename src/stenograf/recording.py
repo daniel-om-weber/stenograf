@@ -1,10 +1,12 @@
-"""Opt-in audio recording — the only path that writes audio to disk.
+"""Opt-in audio recording — audio touches disk only on explicit request.
 
 Off by default: stenograf's guarantee is that audio stays in RAM. When the user
 explicitly passes ``--record-audio``, this tee additionally appends the incoming
 PCM to a WAV file as it arrives — mic on the left channel, system audio on the
 right (mono when only one channel is captured), preserving the channel
-separation in a file any player opens.
+separation in a file any player opens. The only other disk path is the equally
+opt-in AEC debug dump (``--aec-dump``, :class:`stenograf.aec.AecDump`), which
+reuses this tee.
 
 Written at the capture wire format (mono 16 kHz int16 per channel): enough for
 speech playback and exactly what re-transcription via ``steno transcribe``

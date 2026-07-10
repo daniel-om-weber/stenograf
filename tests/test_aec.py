@@ -7,6 +7,7 @@ import pytest
 
 from stenograf.aec import TICK_SAMPLES, EchoCanceller, EchoCancellingProvider
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.recording import read_channels
 
 BOTH = {Channel.MIC, Channel.SYSTEM}
 SECONDS = 6.0
@@ -193,3 +194,39 @@ class TestProvider:
         assert {f.channel for f in out} == BOTH
         mic = np.concatenate([f.samples for f in out if f.channel is Channel.MIC])
         assert mic.size % TICK_SAMPLES == 0
+
+
+class TestDump:
+    """--aec-dump: the mic/lpb/enh triple that eval/aec_score.py scores."""
+
+    def _run(self, tmp_path, *, cancel: bool):
+        far = _speech(1.0, seed=9)
+        near = _i16(_echo_of(far))
+        inner = _FakeProvider(_interleave(near, _i16(far)))
+        provider = EchoCancellingProvider(inner, cancel=cancel, dump_dir=tmp_path)
+        provider.start(BOTH)
+        out = list(provider.frames())
+        provider.stop()
+        mic = read_channels(tmp_path / "mic.wav", [Channel.MIC])[Channel.MIC]
+        lpb = read_channels(tmp_path / "lpb.wav", [Channel.SYSTEM])[Channel.SYSTEM]
+        enh = read_channels(tmp_path / "enh.wav", [Channel.MIC])[Channel.MIC]
+        return near, _i16(far), out, mic, lpb, enh
+
+    def test_triple_is_sample_aligned_on_the_capture_clock(self, tmp_path) -> None:
+        near, far, out, mic, lpb, enh = self._run(tmp_path, cancel=True)
+
+        # The mic opened 50 ms after the tap; every file pads its head to t=0.
+        lead = int(0.05 * SAMPLE_RATE)
+        assert np.array_equal(mic[:lead], np.zeros(lead, np.int16))
+        assert np.array_equal(mic[lead:], near)
+        assert np.array_equal(lpb, far)
+
+        produced = np.concatenate([f.samples for f in out if f.channel is Channel.MIC])
+        assert np.array_equal(enh[lead:], produced)
+        assert enh.size == mic.size, "enh and mic must cover the same span"
+
+    def test_no_cancel_baseline_records_the_raw_mic_as_enh(self, tmp_path) -> None:
+        near, far, out, mic, lpb, enh = self._run(tmp_path, cancel=False)
+
+        assert np.array_equal(enh, mic), "--no-aec baseline: the ASR hears the raw mic"
+        assert np.array_equal(lpb, far)

@@ -43,9 +43,11 @@ from stenograf.capture.base import (
     CaptureProvider,
     Channel,
 )
+from stenograf.recording import WavTee
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 TICK_SAMPLES = SAMPLE_RATE // 100
 """AEC3 processes exactly 10 ms at a time; neither channel may be fed anything else."""
@@ -162,8 +164,9 @@ class EchoCanceller:
         *,
         delay_ms: int = DEFAULT_DELAY_MS,
         noise_suppression: bool = False,
+        cancel: bool = True,
     ) -> None:
-        self.enabled = Channel.MIC in channels and Channel.SYSTEM in channels
+        self.enabled = cancel and Channel.MIC in channels and Channel.SYSTEM in channels
         self.far_end_missing_ticks = 0
         self._delay_ms = delay_ms
         self._near = _Track(Channel.MIC)
@@ -234,9 +237,7 @@ class EchoCanceller:
 
         if first_ts is None:
             return []
-        return [
-            AudioFrame(channel=Channel.MIC, timestamp=first_ts, samples=np.concatenate(ticks))
-        ]
+        return [AudioFrame(channel=Channel.MIC, timestamp=first_ts, samples=np.concatenate(ticks))]
 
     def _tick(self, far: np.ndarray, near: np.ndarray) -> np.ndarray:
         """One 10 ms step: reference first, then the mic, per AEC3's contract."""
@@ -249,8 +250,45 @@ class EchoCanceller:
         return np.frombuffer(bytes(capture.data), dtype=np.int16)
 
 
+class AecDump:
+    """The mic/lpb/enh WAV triple that ``eval/aec_score.py`` scores.
+
+    AECMOS naming: ``mic.wav`` is the near end as the device heard it,
+    ``lpb.wav`` (loopback) is the far-end reference the canceller saw, and
+    ``enh.wav`` is the mic as the ASR receives it. All three are mono 16 kHz
+    and share the capture clock's t=0 (``WavTee`` pads each file's head up to
+    its first frame's timestamp), so they are sample-aligned for scoring.
+
+    Opt-in via ``--aec-dump``: like ``--record-audio``, this writes meeting
+    audio to disk.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        self._mic = WavTee(directory / "mic.wav", {Channel.MIC})
+        self._lpb = WavTee(directory / "lpb.wav", {Channel.SYSTEM})
+        self._enh = WavTee(directory / "enh.wav", {Channel.MIC})
+
+    def add_input(self, frame: AudioFrame) -> None:
+        (self._mic if frame.channel is Channel.MIC else self._lpb).add(frame)
+
+    def add_output(self, frame: AudioFrame) -> None:
+        if frame.channel is Channel.MIC:
+            self._enh.add(frame)
+
+    def close(self) -> None:
+        self._mic.close()
+        self._lpb.close()
+        self._enh.close()
+
+
 class EchoCancellingProvider(CaptureProvider):
-    """Wraps a provider, cancelling speaker bleed out of its mic channel."""
+    """Wraps a provider, cancelling speaker bleed out of its mic channel.
+
+    ``cancel=False`` keeps the wrapper as a pure pass-through — used with
+    ``dump_dir`` to record the uncancelled baseline the eval rig compares
+    against (``--no-aec --aec-dump``).
+    """
 
     def __init__(
         self,
@@ -258,10 +296,15 @@ class EchoCancellingProvider(CaptureProvider):
         *,
         delay_ms: int = DEFAULT_DELAY_MS,
         noise_suppression: bool = False,
+        cancel: bool = True,
+        dump_dir: Path | None = None,
     ) -> None:
         self._inner = inner
         self._delay_ms = delay_ms
         self._noise_suppression = noise_suppression
+        self._cancel = cancel
+        self._dump_dir = dump_dir
+        self._dump: AecDump | None = None
         self._canceller: EchoCanceller | None = None
 
     @property
@@ -270,15 +313,33 @@ class EchoCancellingProvider(CaptureProvider):
 
     def start(self, channels: set[Channel]) -> None:
         self._canceller = EchoCanceller(
-            channels, delay_ms=self._delay_ms, noise_suppression=self._noise_suppression
+            channels,
+            delay_ms=self._delay_ms,
+            noise_suppression=self._noise_suppression,
+            cancel=self._cancel,
         )
+        if self._dump_dir is not None:
+            self._dump = AecDump(self._dump_dir)
         self._inner.start(channels)
 
     def frames(self) -> Iterator[AudioFrame]:
         assert self._canceller is not None, "frames() called before start()"
-        for frame in self._inner.frames():
-            yield from self._canceller.process(frame)
-        yield from self._canceller.drain()
+        try:
+            for frame in self._inner.frames():
+                if self._dump is not None:
+                    self._dump.add_input(frame)
+                for produced in self._canceller.process(frame):
+                    if self._dump is not None:
+                        self._dump.add_output(produced)
+                    yield produced
+            for produced in self._canceller.drain():
+                if self._dump is not None:
+                    self._dump.add_output(produced)
+                yield produced
+        finally:
+            if self._dump is not None:
+                self._dump.close()
+                self._dump = None
 
     def stop(self) -> None:
         self._inner.stop()
