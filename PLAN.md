@@ -1652,6 +1652,14 @@ best-effort with a CPU-RTF probe. Verification is label-free throughout (parakee
 parity + timestamp sanity, reusing the Phase-2 agreement harness). Distribution then gains
 the Linux pure-`any` wheel's dep markers and a Linux functional-transcription CI step.
 
+*Settings portability (audited 2026-07-10):* `settings.toml` load/validate/show/edit is
+already fully cross-platform — pure stdlib `tomllib`, `click.edit`, `os.replace` (atomic on
+Windows too) — so Phase 5 inherits it as-is. Two small follow-ups when Windows becomes real:
+`data_dir()` has no `win32` branch (data currently lands in `~/.local/share/stenograf`
+instead of `%APPDATA%`; adding the branch implies a migration for early Windows users), and
+backend-name validation is deliberately registry-level, not platform-aware (`backend = "mlx"`
+validates anywhere; runnability is the backend's own check at use).
+
 ---
 
 ## 6. Key sources

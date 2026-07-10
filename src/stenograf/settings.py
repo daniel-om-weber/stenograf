@@ -52,6 +52,17 @@ Unknown tables and keys are rejected: a typo in a hand-edited file must fail
 loudly (naming the file and key), never silently configure nothing. All
 validation happens at load time so ``steno doctor`` — and every command's
 startup — vets the whole file before any real work begins.
+
+Portability: this module is pure stdlib (``tomllib``/``pathlib``) and works
+unchanged on Linux and Windows, as do ``steno settings show``/``edit``
+(``click.edit`` handles ``$EDITOR`` vs. notepad; the atomic write uses
+``os.replace``, atomic on both POSIX and Windows). Two deliberate limits:
+backend-name validation is registry-level, not platform-aware — ``backend =
+"mlx"`` validates on any platform because the spec is registered everywhere;
+whether the backend can *run* (mlx-lm installed, Ollama reachable) is checked
+at use, which keeps settings validation independent of what's installed. And
+the file's location comes from :func:`stenograf.profiles.data_dir`, which has
+no Windows-idiomatic branch yet (see its docstring).
 """
 
 from __future__ import annotations
