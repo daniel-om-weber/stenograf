@@ -59,11 +59,12 @@ def available_backends() -> list[str]:
     return list(_REGISTRY)
 
 
-def default_backend_name() -> str:
+def default_backend_name(configured: str | None = None) -> str:
     """The backend used when none is named: the ``STENOGRAF_ASR_BACKEND`` override,
-    else the built-in default. Only ``parakeet`` ships today; a Linux backend that
-    registers here can become the platform default."""
-    return os.environ.get(_ENV_OVERRIDE) or _DEFAULT
+    else ``configured`` (the ``[asr] backend`` setting), else the built-in default.
+    Only ``parakeet`` ships today; a Linux backend that registers here can become
+    the platform default."""
+    return os.environ.get(_ENV_OVERRIDE) or configured or _DEFAULT
 
 
 def get_spec(name: str | None = None) -> BackendSpec:

@@ -191,6 +191,40 @@ steno transcribe rec.mov --glossary-file terms.txt
 A term and its transcription must share a word count — `gRPC` can fix `G R P C`
 spoken as one word, but not a term split across word boundaries.
 
+## Settings
+
+Standing preferences live in `settings.toml` in the platform data dir
+(`~/Library/Application Support/stenograf/` on macOS) so you stop re-typing
+them. A flag always beats the file; the file beats the built-in default. All
+keys are optional:
+
+```toml
+[transcript]
+formats = ["md", "json", "txt"]   # default --format list (srt/vtt for subtitles)
+
+[vocab]                           # standing vocabulary — MERGED with per-run
+glossary_file = "~/steno/glossary.txt"     # --glossary/--attendee flags
+attendees = ["Anja Müller"]
+glossary_threshold = 0.82
+
+[archive]
+enabled = true                    # false = flat files, as --no-archive
+out_dir = "~/Transcripts"         # where flat files go when not archiving
+
+[speakers]
+reid_threshold = 0.5              # cross-meeting voice match strictness (0–1)
+profile_store = "~/steno/profiles.json"
+
+[asr]
+backend = "parakeet"
+
+[notes]                           # see "Meeting notes" above
+backend = "mlx"
+```
+
+Typos fail loudly: an unknown table or key is an error, and `steno doctor`
+validates the whole file.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.

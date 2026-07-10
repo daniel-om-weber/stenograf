@@ -18,21 +18,10 @@ if TYPE_CHECKING:
 from stenograf import __version__
 from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
 from stenograf.doctor import run_checks
-from stenograf.transcript import Transcript
+from stenograf.transcript import DEFAULT_FORMATS, FORMATS, Transcript
 
 # Sentinel for --record-audio given without a value (write next to the transcript).
 _RECORD_DEFAULT = "\0default"
-
-# The transcript formats stenograf can emit, and how each Transcript renders it.
-# SRT/VTT re-flow the retained word timestamps into short subtitle cues.
-_FORMATS: dict[str, str] = {
-    "md": "to_markdown",
-    "json": "to_json",
-    "txt": "to_text",
-    "srt": "to_srt",
-    "vtt": "to_vtt",
-}
-_DEFAULT_FORMATS = ("md", "json", "txt")
 # Crash checkpoints render these (no subtitles — pointless for a partial
 # transcript). _cleanup_checkpoints must remove exactly this set.
 _CHECKPOINT_FORMATS = ("md", "json", "txt")
@@ -80,6 +69,34 @@ def _apply_no_diarization(
     return (0 if local_speakers == 0 else 1, 0 if remote_speakers == 0 else 1)
 
 
+def _cli_settings():
+    """Load settings.toml once, at command start, as a clean CLI error.
+
+    Every ``start``/``transcribe``/``notes`` invocation resolves its defaults
+    from here — and loading up front means a broken file fails *before* an
+    hour of capture, not when the finalize (or notes) step first reads it."""
+    from stenograf.settings import SettingsError, load_settings
+
+    try:
+        return load_settings()
+    except SettingsError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _resolve_formats(spec: str | None, settings) -> list[str]:
+    """``--format`` > ``[transcript] formats`` > the built-in default."""
+    if spec is not None:
+        return _parse_formats(spec)
+    return list(settings.transcript.formats or DEFAULT_FORMATS)
+
+
+def _resolve_archived(flag: bool | None, settings) -> bool:
+    """``--archive/--no-archive`` > ``[archive] enabled`` > archived."""
+    if flag is not None:
+        return flag
+    return settings.archive.enabled is not False
+
+
 def _parse_formats(spec: str) -> list[str]:
     """Parse a ``--format`` value (comma-separated) into an ordered, de-duped list."""
     formats: list[str] = []
@@ -87,9 +104,9 @@ def _parse_formats(spec: str) -> list[str]:
         name = name.strip().lower()
         if not name or name in formats:
             continue
-        if name not in _FORMATS:
+        if name not in FORMATS:
             raise click.BadParameter(
-                f"unknown format {name!r}; choose from {', '.join(_FORMATS)}",
+                f"unknown format {name!r}; choose from {', '.join(FORMATS)}",
                 param_hint="--format",
             )
         formats.append(name)
@@ -128,13 +145,15 @@ def _vocab_options(func: Callable) -> Callable:
                 "--glossary-threshold",
                 type=click.FloatRange(0, 1),
                 default=None,
-                help="Similarity 0–1 required to correct a term [default: 0.82].",
+                help="Similarity 0–1 required to correct a term "
+                "[default: [vocab] glossary_threshold in settings.toml, else 0.82].",
             ),
             click.option(
                 "--profile-store",
                 type=click.Path(dir_okay=False, path_type=Path),
                 default=None,
-                help="Use this re-ID profile store instead of the default location.",
+                help="Use this re-ID profile store instead of the default location "
+                "([speakers] profile_store in settings.toml also sets this).",
             ),
         )
     ):
@@ -143,25 +162,53 @@ def _vocab_options(func: Callable) -> Callable:
 
 
 def _collect_terms(
-    glossary: tuple[str, ...], glossary_file: Path | None, attendee: tuple[str, ...]
+    glossary: tuple[str, ...],
+    glossary_file: Path | None,
+    attendee: tuple[str, ...],
+    *,
+    vocab=None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Gather glossary terms (inline + file) and attendee names from the options.
 
-    Inline ``--glossary``/``--attendee`` values may each be comma-separated; the
-    file is one term per line. Both are de-duplicated preserving first-seen order.
+    ``vocab`` (the ``[vocab]`` settings table) is the standing baseline: its
+    glossary file and attendees come first and per-run ``--glossary``/
+    ``--glossary-file``/``--attendee`` values *merge* on top — configuring a
+    vocabulary must never make the flags stop working, or vice versa. Inline
+    values may each be comma-separated; a file is one term per line. Both lists
+    are de-duplicated preserving first-seen order.
     """
     terms: list[str] = []
+    names: list[str] = []
+    if vocab is not None:
+        if vocab.glossary_file is not None:
+            terms.extend(_read_glossary_lines(vocab.glossary_file, source="[vocab] glossary_file"))
+        names.extend(vocab.attendees)
     for value in glossary:
         terms.extend(part.strip() for part in value.split(",") if part.strip())
     if glossary_file is not None:
-        for raw in glossary_file.read_text(encoding="utf-8").splitlines():
-            line = raw.split("#", 1)[0].strip()
-            if line:
-                terms.append(line)
-    names: list[str] = []
+        terms.extend(_read_glossary_lines(glossary_file))
     for value in attendee:
         names.extend(part.strip() for part in value.split(",") if part.strip())
     return tuple(dict.fromkeys(terms)), tuple(dict.fromkeys(names))
+
+
+def _read_glossary_lines(path: Path, *, source: str | None = None) -> list[str]:
+    """Terms from a glossary file (# comments and blank lines ignored).
+
+    ``source`` names the setting that configured the path — the CLI flag
+    validates existence itself (``exists=True``), but a stale path in
+    settings.toml must say where it came from, not just fail to open."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        where = f" ({source} in settings.toml)" if source else ""
+        raise click.ClickException(f"cannot read glossary file {path}{where}: {exc}") from exc
+    terms = []
+    for raw_line in raw.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if line:
+            terms.append(line)
+    return terms
 
 
 @click.group()
@@ -222,11 +269,12 @@ def main() -> None:
     help="A human-readable title for this meeting (shown in `steno meetings`).",
 )
 @click.option(
-    "--no-archive",
-    "no_archive",
-    is_flag=True,
-    help="Don't file this meeting in the managed archive; write flat, timestamp-named "
-    "transcript files to --out (or the current directory), as before Phase 4.",
+    "--archive/--no-archive",
+    "archive_flag",
+    default=None,
+    help="File this meeting in the managed archive (the default), or write flat, "
+    "timestamp-named transcript files to --out (or the current directory), as "
+    "before Phase 4 [default: [archive] enabled in settings.toml, else on].",
 )
 @click.option(
     "--record-audio",
@@ -301,16 +349,18 @@ def main() -> None:
     "--reid-threshold",
     type=click.FloatRange(0, 1),
     default=None,
-    help="Cosine similarity required to match a saved profile [default: 0.5].",
+    help="Cosine similarity required to match a saved profile "
+    "[default: [speakers] reid_threshold in settings.toml, else 0.5].",
 )
 @click.option(
     "--format",
     "formats",
-    default=",".join(_DEFAULT_FORMATS),
+    default=None,
     metavar="LIST",
     help="Comma-separated transcript formats to write: md, json, txt, srt, vtt "
-    "[default: md,json,txt]. txt is plain prose without speakers or timestamps; "
-    "srt/vtt re-flow speaker turns into subtitle cues.",
+    "[default: [transcript] formats in settings.toml, else md,json,txt]. txt is "
+    "plain prose without speakers or timestamps; srt/vtt re-flow speaker turns "
+    "into subtitle cues.",
 )
 @_vocab_options
 @click.option(
@@ -338,7 +388,7 @@ def start(
     replay: str | None,
     out: Path | None,
     title: str | None,
-    no_archive: bool,
+    archive_flag: bool | None,
     record_audio: str | None,
     flush_interval: float | None,
     max_seconds: float | None,
@@ -348,7 +398,7 @@ def start(
     aec_dump: Path | None,
     use_reid: bool,
     reid_threshold: float | None,
-    formats: str,
+    formats: str | None,
     glossary: tuple[str, ...],
     glossary_file: Path | None,
     attendee: tuple[str, ...],
@@ -361,8 +411,23 @@ def start(
     """Start transcribing a meeting (capture → finalize on stop)."""
     from stenograf.session import MeetingRecorder, plan_channels
 
-    write_formats = _parse_formats(formats)
-    glossary_terms, attendee_names = _collect_terms(glossary, glossary_file, attendee)
+    settings = _cli_settings()
+    write_formats = _resolve_formats(formats, settings)
+    glossary_terms, attendee_names = _collect_terms(
+        glossary, glossary_file, attendee, vocab=settings.vocab
+    )
+    if glossary_threshold is None:
+        glossary_threshold = settings.vocab.glossary_threshold
+    if reid_threshold is None:
+        reid_threshold = settings.speakers.reid_threshold
+    # The [speakers] profile_store default feeds re-ID loading only — never the
+    # MeetingProfile, which serializes into every transcript (the settings file's
+    # whole point is keeping machine-local paths out of shared files). An explicit
+    # --profile-store is recorded on the profile, as before.
+    reid_store = profile_store or settings.speakers.profile_store
+    no_archive = not _resolve_archived(archive_flag, settings)
+    if no_archive and out is None:
+        out = settings.archive.out_dir
 
     local_speakers, remote_speakers = _apply_no_diarization(
         no_diarization, local_speakers, remote_speakers
@@ -414,9 +479,12 @@ def start(
     )
 
     started = time.monotonic()
-    asr, vad, diarizer = _load_backends(need_diarizer=any(p.num_speakers != 1 for p in plans))
+    asr, vad, diarizer = _load_backends(
+        need_diarizer=any(p.num_speakers != 1 for p in plans),
+        asr_backend=settings.asr.backend,
+    )
     reid = (
-        _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=profile_store)
+        _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
         if diarizer is not None
         else None
     )
@@ -533,6 +601,7 @@ def start(
             archive=archive,
             meeting_id=meeting_id,
             created_at=created_at,
+            notes_settings=settings.notes,
         )
     if print_markdown:
         click.echo()
@@ -827,6 +896,8 @@ def _transcribe_split_channels(
     use_reid: bool,
     reid_threshold: float | None,
     glossary_threshold: float | None,
+    asr_backend: str | None = None,
+    profile_store: Path | None = None,
 ):
     """Transcribe two voice channels through the meeting finalize.
 
@@ -850,12 +921,14 @@ def _transcribe_split_channels(
             click.echo(f"warning: {message}", err=True)
 
     plans = plan_channels(profile)
-    asr, vad, diarizer = _load_backends(need_diarizer=any(p.num_speakers != 1 for p in plans))
+    asr, vad, diarizer = _load_backends(
+        need_diarizer=any(p.num_speakers != 1 for p in plans), asr_backend=asr_backend
+    )
     reid = (
         _load_reid(
             enabled=use_reid,
             threshold=reid_threshold,
-            store_path=profile.speaker_profile_store,
+            store_path=profile_store or profile.speaker_profile_store,
         )
         if diarizer is not None
         else None
@@ -941,11 +1014,12 @@ def _transcribe_split_channels(
     help="A human-readable title for this transcription (shown in `steno meetings`).",
 )
 @click.option(
-    "--no-archive",
-    "no_archive",
-    is_flag=True,
-    help="Don't file this transcription in the managed archive; write flat "
-    "<name>.transcript.{md,json,…} files next to the input (or --out), as before.",
+    "--archive/--no-archive",
+    "archive_flag",
+    default=None,
+    help="File this transcription in the managed archive (the default), or write "
+    "flat <name>.transcript.{md,json,…} files next to the input (or --out), as "
+    "before [default: [archive] enabled in settings.toml, else on].",
 )
 @click.option(
     "--reid/--no-reid",
@@ -958,16 +1032,18 @@ def _transcribe_split_channels(
     "--reid-threshold",
     type=click.FloatRange(0, 1),
     default=None,
-    help="Cosine similarity required to match a saved profile [default: 0.5].",
+    help="Cosine similarity required to match a saved profile "
+    "[default: [speakers] reid_threshold in settings.toml, else 0.5].",
 )
 @click.option(
     "--format",
     "formats",
-    default=",".join(_DEFAULT_FORMATS),
+    default=None,
     metavar="LIST",
     help="Comma-separated transcript formats to write: md, json, txt, srt, vtt "
-    "[default: md,json,txt]. txt is plain prose without speakers or timestamps; "
-    "srt/vtt re-flow speaker turns into subtitle cues.",
+    "[default: [transcript] formats in settings.toml, else md,json,txt]. txt is "
+    "plain prose without speakers or timestamps; srt/vtt re-flow speaker turns "
+    "into subtitle cues.",
 )
 @_vocab_options
 @click.option(
@@ -989,10 +1065,10 @@ def transcribe(
     no_diarization: bool,
     out: Path | None,
     title: str | None,
-    no_archive: bool,
+    archive_flag: bool | None,
     use_reid: bool,
     reid_threshold: float | None,
-    formats: str,
+    formats: str | None,
     glossary: tuple[str, ...],
     glossary_file: Path | None,
     attendee: tuple[str, ...],
@@ -1018,8 +1094,21 @@ def transcribe(
     from stenograf.audio import SAMPLE_RATE, load_audio
 
     started = time.monotonic()
-    write_formats = _parse_formats(formats)
-    glossary_terms, attendee_names = _collect_terms(glossary, glossary_file, attendee)
+    settings = _cli_settings()
+    write_formats = _resolve_formats(formats, settings)
+    glossary_terms, attendee_names = _collect_terms(
+        glossary, glossary_file, attendee, vocab=settings.vocab
+    )
+    if glossary_threshold is None:
+        glossary_threshold = settings.vocab.glossary_threshold
+    if reid_threshold is None:
+        reid_threshold = settings.speakers.reid_threshold
+    # Settings-derived store path stays off the MeetingProfile (it serializes
+    # into the transcript); see the matching comment in ``start``.
+    reid_store = profile_store or settings.speakers.profile_store
+    no_archive = not _resolve_archived(archive_flag, settings)
+    if no_archive and out is None:
+        out = settings.archive.out_dir
     given_language = Language(lang) if lang else None
     language = given_language
 
@@ -1073,6 +1162,8 @@ def transcribe(
             use_reid=use_reid,
             reid_threshold=reid_threshold,
             glossary_threshold=glossary_threshold,
+            asr_backend=settings.asr.backend,
+            profile_store=reid_store,
         )
         entries = transcript.entries
         language = transcript.language
@@ -1091,9 +1182,11 @@ def transcribe(
                 " — downmixed to mono; --channels split to treat them as separate voices"
             )
 
-        asr, vad, diarizer = _load_backends(need_diarizer=speakers != 1)
+        asr, vad, diarizer = _load_backends(
+            need_diarizer=speakers != 1, asr_backend=settings.asr.backend
+        )
         reid = (
-            _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=profile_store)
+            _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
             if diarizer is not None
             else None
         )
@@ -1188,23 +1281,27 @@ def transcribe(
             archive=archive,
             meeting_id=meeting_id,
             created_at=created_at,
+            notes_settings=settings.notes,
         )
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
 
 
-def _load_backends(*, need_diarizer: bool):
+def _load_backends(*, need_diarizer: bool, asr_backend: str | None = None):
     """Load the finalize backends (ASR, VAD, and optionally the diarizer).
 
     Shared by ``start`` and ``transcribe`` so both use the same committed
-    defaults (parakeet-mlx, Silero VAD, sherpa-onnx diarization).
+    defaults (parakeet-mlx, Silero VAD, sherpa-onnx diarization). ``asr_backend``
+    is the ``[asr] backend`` setting; ``STENOGRAF_ASR_BACKEND`` still overrides it.
     """
     from stenograf import models
     from stenograf.asr import create_backend
+    from stenograf.asr.registry import default_backend_name
     from stenograf.vad import SileroVAD
 
-    asr = create_backend()  # the selection seam; a Linux backend registers alongside
+    # The selection seam; a Linux backend registers alongside.
+    asr = create_backend(default_backend_name(asr_backend))
     click.echo(f"asr: loading {getattr(asr, 'model_id', None) or asr.name}")
     asr.load()
     vad = SileroVAD(models.fetch(models.SILERO_VAD, _model_progress))
@@ -1331,7 +1428,7 @@ def _write_transcript(
     transcript: Transcript,
     out_dir: Path,
     basename: str,
-    formats: tuple[str, ...] | list[str] = _DEFAULT_FORMATS,
+    formats: tuple[str, ...] | list[str] = DEFAULT_FORMATS,
 ) -> list[Path]:
     """Write the transcript in each requested format; returns the written paths.
 
@@ -1344,7 +1441,7 @@ def _write_transcript(
     paths = []
     for fmt in formats:
         path = out_dir / f"{basename}.{fmt}"
-        _atomic_write_text(path, getattr(transcript, _FORMATS[fmt])())
+        _atomic_write_text(path, getattr(transcript, FORMATS[fmt])())
         paths.append(path)
     return paths
 
@@ -1854,18 +1951,26 @@ def _generate_and_write_notes(
     ollama_url: str | None = None,
     export_dir: Path | None = None,
     no_export: bool = False,
+    notes_settings=None,
 ):
     """Generate notes and write ``<basename>.notes.md``/``.notes.json`` (plus the
     combined-note export when a target dir is configured). Returns
-    ``(written_paths, notes)``; raises typed errors, writing nothing, on failure."""
+    ``(written_paths, notes)``; raises typed errors, writing nothing, on failure.
+
+    ``notes_settings`` is the ``[notes]`` table a command already loaded at its
+    start (so a ``--notes`` run uses the values in force when the meeting began);
+    ``None`` loads it here (the standalone ``steno notes`` path)."""
     import dataclasses
 
     from stenograf.notes import create_backend
     from stenograf.notes.export import export_note
     from stenograf.notes.generate import generate_notes
-    from stenograf.settings import load_settings
 
-    settings = load_settings().notes
+    if notes_settings is None:
+        from stenograf.settings import load_settings
+
+        notes_settings = load_settings().notes
+    settings = notes_settings
     if backend_name and settings.backend and backend_name != settings.backend:
         # [notes] model in settings.toml was written for the configured
         # backend and must not ride along to an explicitly chosen other one
@@ -1918,6 +2023,7 @@ def _notes_after_run(
     archive,
     meeting_id: str | None,
     created_at: datetime,
+    notes_settings=None,
 ) -> None:
     """The opt-in ``--notes`` step after a transcript is safely written.
 
@@ -1925,7 +2031,7 @@ def _notes_after_run(
     any notes failure warns and returns — rerun later with ``steno notes``."""
     try:
         written, notes = _generate_and_write_notes(
-            transcript, out_dir, basename, created_at=created_at
+            transcript, out_dir, basename, created_at=created_at, notes_settings=notes_settings
         )
     except Exception as exc:
         retry = f"steno notes {meeting_id}" if meeting_id else "steno notes <transcript.json>"

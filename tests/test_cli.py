@@ -67,7 +67,7 @@ class FakeDiarizer(Diarizer):
         return DiarizationResult(turns=list(self._turns), embeddings=dict(self._embeddings))
 
 
-def fake_load_backends(*, need_diarizer):
+def fake_load_backends(*, need_diarizer, asr_backend=None):
     # No VAD (whole buffer is one window) and no diarizer (single speaker).
     return FakeASR(), None, None
 
@@ -148,7 +148,7 @@ def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch
 def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer):
+    def recording_load_backends(*, need_diarizer, asr_backend=None):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -253,7 +253,7 @@ class ChannelASR(ASRBackend):
         return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
 
 
-def fake_channel_backends(*, need_diarizer):
+def fake_channel_backends(*, need_diarizer, asr_backend=None):
     return ChannelASR(), None, None
 
 
@@ -428,7 +428,7 @@ def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
 def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer):
+    def recording_load_backends(*, need_diarizer, asr_backend=None):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -756,7 +756,9 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     write_wav(audio)
     CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
 
-    monkeypatch.setattr(cli, "_load_backends", lambda *, need_diarizer: (FakeASR(), None, diar))
+    monkeypatch.setattr(
+        cli, "_load_backends", lambda *, need_diarizer, asr_backend=None: (FakeASR(), None, diar)
+    )
     reid = CliRunner().invoke(
         cli.main, ["transcribe", str(audio), "--speakers", "2", "--out", str(tmp_path)]
     )
@@ -1043,3 +1045,138 @@ def test_prefetch_models_skips_asr_when_backend_deps_absent(monkeypatch, tmp_pat
     monkeypatch.setattr(asr, "create_backend", boom)
     cli._prefetch_models()  # must not raise
     assert "skipping its weights" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# settings.toml wiring — one test per *mechanism* (the resolution helpers are
+# shared, so file-beats-default / flag-beats-file / tri-state / merge each need
+# proving once, not per field).
+
+
+def _write_settings(tmp_path, text):
+    """Write settings.toml into the isolated $STENOGRAF_DATA dir."""
+    data_dir = tmp_path / "steno-data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "settings.toml").write_text(text, encoding="utf-8")
+
+
+def test_settings_formats_are_the_default_but_format_flag_wins(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    _write_settings(tmp_path, '[transcript]\nformats = ["srt"]\n')
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    out1 = tmp_path / "one"
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(out1)])
+    assert result.exit_code == 0, result.output
+    assert (out1 / "transcript.srt").exists()
+    assert not (out1 / "transcript.md").exists()
+
+    out2 = tmp_path / "two"
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(out2), "--format", "md"]
+    )
+    assert result.exit_code == 0, result.output
+    assert (out2 / "transcript.md").exists()
+    assert not (out2 / "transcript.srt").exists()
+
+
+def test_settings_archive_disabled_and_archive_flag_overrides(tmp_path, monkeypatch):
+    from stenograf.archive import MeetingArchive
+
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    flat = tmp_path / "flat"
+    _write_settings(tmp_path, f'[archive]\nenabled = false\nout_dir = "{flat}"\n')
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    # File-beats-default: no flags → flat layout, into [archive] out_dir, unregistered.
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio)])
+    assert result.exit_code == 0, result.output
+    assert (flat / "meeting.transcript.md").exists()
+    assert MeetingArchive.load().records() == []
+
+    # Tri-state: --archive turns the archive back on over enabled = false.
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--archive"])
+    assert result.exit_code == 0, result.output
+    assert len(MeetingArchive.load().records()) == 1
+
+
+def test_settings_vocab_merges_with_flags(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    glossary_file = tmp_path / "glossary.txt"
+    glossary_file.write_text("Idee\n", encoding="utf-8")
+    _write_settings(tmp_path, f'[vocab]\nglossary_file = "{glossary_file}"\nattendees = ["Ada"]\n')
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--glossary", "Wirklich"]
+    )
+
+    assert result.exit_code == 0, result.output
+    # Configured file + inline flag merge (2 terms), attendees ride along (1 name).
+    assert "glossary: 2 term(s), 1 name(s)" in result.output
+    md = (tmp_path / "transcript.md").read_text()
+    assert "gute Idee für" in md  # the settings-file term corrected the transcript
+
+
+def test_settings_missing_glossary_file_is_a_clean_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    _write_settings(tmp_path, '[vocab]\nglossary_file = "/nonexistent/glossary.txt"\n')
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "cannot read glossary file" in result.output
+    assert "[vocab] glossary_file" in result.output  # says where the bad path came from
+
+
+def test_broken_settings_fail_fast_with_a_clean_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    _write_settings(tmp_path, '[vocab]\nglossry_file = "x"\n')
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "invalid settings" in result.output
+    assert "glossry_file" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
+    calls = {}
+
+    def recording(*, need_diarizer, asr_backend=None):
+        calls["asr_backend"] = asr_backend
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(cli, "_load_backends", recording)
+    _write_settings(tmp_path, '[asr]\nbackend = "parakeet"\n')
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert calls["asr_backend"] == "parakeet"
+
+
+def test_settings_profile_store_stays_off_the_transcript(tmp_path, monkeypatch):
+    # The configured store must feed re-ID loading only: MeetingProfile serializes
+    # into every transcript, and keeping machine-local paths out of shared files
+    # is the settings file's founding rule.
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    _write_settings(tmp_path, f'[speakers]\nprofile_store = "{tmp_path}/profiles.json"\n')
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    profile = json.loads((tmp_path / "transcript.json").read_text())["profile"]
+    assert profile.get("speaker_profile_store") is None

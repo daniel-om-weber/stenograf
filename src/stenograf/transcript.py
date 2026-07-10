@@ -26,6 +26,23 @@ Bumped only on a *breaking* change; additive fields are read back with
 """
 
 
+FORMATS: dict[str, str] = {
+    "md": "to_markdown",
+    "json": "to_json",
+    "txt": "to_text",
+    "srt": "to_srt",
+    "vtt": "to_vtt",
+}
+"""Every transcript format stenograf can emit: extension → the :class:`Transcript`
+method that renders it. The single registry behind ``--format``, the ``[transcript]
+formats`` setting, and the archive's format discovery — adding a renderer here makes
+it available everywhere at once."""
+
+DEFAULT_FORMATS: tuple[str, ...] = ("md", "json", "txt")
+"""The formats written when neither ``--format`` nor ``[transcript] formats`` says
+otherwise. Subtitles (srt/vtt) stay opt-in."""
+
+
 class UnsupportedTranscriptVersion(Exception):
     """A transcript JSON was written by a newer, incompatible schema version."""
 

@@ -37,7 +37,7 @@ from pathlib import Path
 
 from stenograf.config import Language
 from stenograf.profiles import data_dir
-from stenograf.transcript import Transcript, UnsupportedTranscriptVersion
+from stenograf.transcript import FORMATS, Transcript, UnsupportedTranscriptVersion
 
 _INDEX_VERSION = 1
 
@@ -46,17 +46,8 @@ TRANSCRIPT_STEM = "transcript"
 ``transcript.json`` / ``transcript.md`` / ``transcript.txt`` / ``transcript.srt`` /
 ``transcript.vtt``."""
 
-TRANSCRIPT_FORMATS = ("md", "json", "txt", "srt", "vtt")
+TRANSCRIPT_FORMATS = tuple(FORMATS)
 """Transcript file extensions the archive recognizes when summarizing a dir."""
-
-_FORMAT_METHODS = {
-    "md": "to_markdown",
-    "json": "to_json",
-    "txt": "to_text",
-    "srt": "to_srt",
-    "vtt": "to_vtt",
-}
-"""Transcript extension → the :class:`Transcript` method that renders it."""
 
 AUDIO_NAME = "audio.wav"
 """Managed name of the opt-in ``--record-audio`` WAV inside a meeting dir."""
@@ -231,7 +222,7 @@ class MeetingArchive:
         updated record is re-added (persisting the index) and returned."""
         record.dir.mkdir(parents=True, exist_ok=True)
         for fmt in record.formats:
-            method = _FORMAT_METHODS.get(fmt)
+            method = FORMATS.get(fmt)
             if method is None:
                 continue  # an unknown extension in the record — nothing to render
             path = record.dir / f"{TRANSCRIPT_STEM}.{fmt}"

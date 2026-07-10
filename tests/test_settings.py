@@ -94,3 +94,98 @@ def test_max_input_chars_parses_and_rejects_junk(tmp_path):
         path.write_text(f"[notes]\nmax_input_chars = {bad}\n", encoding="utf-8")
         with pytest.raises(SettingsError, match="max_input_chars"):
             load_settings(path)
+
+
+def test_full_new_tables_parse(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text(
+        """
+[transcript]
+formats = ["md", "srt"]
+
+[vocab]
+glossary_file = "~/steno/glossary.txt"
+attendees = ["Ada Lovelace", "Grace Hopper"]
+glossary_threshold = 0.9
+
+[archive]
+enabled = false
+out_dir = "~/Transcripts"
+
+[speakers]
+reid_threshold = 0.6
+profile_store = "~/steno/profiles.json"
+
+[asr]
+backend = "parakeet"
+""",
+        encoding="utf-8",
+    )
+    s = load_settings(path)
+    assert s.transcript.formats == ("md", "srt")
+    assert s.vocab.glossary_file == Path("~/steno/glossary.txt").expanduser()
+    assert s.vocab.attendees == ("Ada Lovelace", "Grace Hopper")
+    assert s.vocab.glossary_threshold == 0.9
+    assert s.archive.enabled is False
+    assert s.archive.out_dir == Path("~/Transcripts").expanduser()
+    assert s.speakers.reid_threshold == 0.6
+    assert s.speakers.profile_store == Path("~/steno/profiles.json").expanduser()
+    assert s.asr.backend == "parakeet"
+
+
+def test_unknown_transcript_format_is_rejected_with_choices(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[transcript]\nformats = ["docx"]\n', encoding="utf-8")
+    with pytest.raises(SettingsError) as excinfo:
+        load_settings(path)
+    assert "docx" in str(excinfo.value)
+    assert "vtt" in str(excinfo.value)
+
+
+def test_out_of_range_thresholds_are_rejected(tmp_path):
+    path = tmp_path / "settings.toml"
+    for table, key in (("vocab", "glossary_threshold"), ("speakers", "reid_threshold")):
+        path.write_text(f"[{table}]\n{key} = 1.5\n", encoding="utf-8")
+        with pytest.raises(SettingsError, match="between 0 and 1"):
+            load_settings(path)
+
+
+def test_unknown_key_in_a_table_is_rejected(tmp_path):
+    # The typo guard: a misspelled key must fail loudly, not silently do nothing.
+    path = tmp_path / "settings.toml"
+    path.write_text('[vocab]\nglossry_file = "x"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"unknown setting\(s\) in \[vocab\]: glossry_file"):
+        load_settings(path)
+
+
+def test_unknown_toplevel_table_is_rejected(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[vocap]\nglossary_file = "x"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"unknown setting\(s\): vocap"):
+        load_settings(path)
+
+
+def test_unknown_notes_and_export_keys_are_rejected(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[notes]\nmodle = "x"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"in \[notes\]: modle"):
+        load_settings(path)
+    path.write_text('[notes.export]\nfolder = "x"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"in \[notes.export\]: folder"):
+        load_settings(path)
+
+
+def test_unknown_asr_backend_is_rejected_with_choices(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[asr]\nbackend = "whisper"\n', encoding="utf-8")
+    with pytest.raises(SettingsError) as excinfo:
+        load_settings(path)
+    assert "whisper" in str(excinfo.value)
+    assert "parakeet" in str(excinfo.value)
+
+
+def test_wrong_typed_bool_is_rejected(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[archive]\nenabled = "yes"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match="must be true or false"):
+        load_settings(path)

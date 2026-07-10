@@ -48,8 +48,26 @@ def run_checks() -> list[Check]:
     checks.append(_asr_check())
     checks.append(_ffmpeg_check())
     checks.append(_models_check())
+    checks.append(_settings_check())
     checks.append(_notes_check())
     return checks
+
+
+def _settings_check() -> Check:
+    """Whether settings.toml (if present) parses and validates whole.
+
+    Not optional: every command now resolves its defaults from the file at
+    startup, so a broken file blocks ``steno start`` itself."""
+    from stenograf.settings import SettingsError, load_settings, settings_path
+
+    path = settings_path()
+    try:
+        load_settings()
+    except SettingsError as exc:
+        return Check(name="Settings", ok=False, detail=str(exc))
+    if not path.exists():
+        return Check(name="Settings", ok=True, detail=f"{path} not present — all defaults")
+    return Check(name="Settings", ok=True, detail=f"{path} OK")
 
 
 def _installed(module: str) -> bool:
@@ -196,9 +214,7 @@ def _notes_check() -> Check:
                 optional=True,
             )
         hint = "cached" if backend.weights_cached() else "downloads on first notes run"
-        return Check(
-            name=name, ok=True, detail=f"MLX in-process, model {backend.model} ({hint})"
-        )
+        return Check(name=name, ok=True, detail=f"MLX in-process, model {backend.model} ({hint})")
     if isinstance(backend, OllamaBackend):
         if not backend.is_available():
             return Check(
