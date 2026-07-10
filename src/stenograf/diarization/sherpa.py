@@ -46,9 +46,7 @@ class SherpaOnnxDiarizer(Diarizer):
         segmentation = self._segmentation_model or models.fetch(
             models.PYANNOTE_SEGMENTATION, self._progress
         )
-        embedding = self._embedding_model or models.fetch(
-            models.SPEAKER_EMBEDDING, self._progress
-        )
+        embedding = self._embedding_model or models.fetch(models.SPEAKER_EMBEDDING, self._progress)
         config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
             segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
                 pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
