@@ -1187,9 +1187,12 @@ in-process `TestClient` = the headless-test analogue of the TUI's `app.run_test(
 front-end = **vanilla JS + server-rendered shell, no build step**, assets packaged via
 `importlib.resources`; web auth = **per-process bearer token + Host/Origin guard by
 default** (reverse-control can re-finalize / rename; DNS-rebinding defense); notes stored
-as **sibling `<stem>.notes.md`/`.notes.json`** (keep `Transcript` pure); notes default
-model = **`qwen3:8b`** (~5 GB, won't swap the 48 GB Mac); no `ollama` pip dep (**stdlib
-`urllib` HTTP** to `localhost:11434`); refinalize **keeps the locked language** unless
+as **sibling `<stem>.notes.md`/`.notes.json`** (keep `Transcript` pure); notes LLM =
+**pluggable backend** (revised 2026-07-10, see Stage D preamble): an `ollama` backend
+(fully local; default model **`qwen3:8b`**, ~5 GB, won't swap the 48 GB Mac; no `ollama`
+pip dep — **stdlib `urllib` HTTP** to `localhost:11434`) and a `command` backend (any
+CLI that takes a prompt on stdin and emits schema JSON — e.g. `claude -p`);
+refinalize **keeps the locked language** unless
 overridden; transcript JSON gets an **index-only `version` stamp** (metadata lives in the
 archive index); macOS signing stays **ad-hoc only** (no Developer ID — verified in the
 Phase-1 spike); platform deps via **markers, not extras**; Windows **left installable**
@@ -1201,7 +1204,8 @@ independently flagged it. Build it first; it unblocks the most.
 
 **Evaluation stays label-free** (Daniel's standing no-hand-labels call): round-trip /
 property tests, fakes + headless `TestClient`, real-backend end-to-end via `--replay`,
-and a real-Ollama-gated e2e mirroring the model-gated ASR tests. No accuracy scoring.
+and real-backend-gated e2e (Ollama and/or a real `claude` CLI, skipped when absent)
+mirroring the model-gated ASR tests. No accuracy scoring.
 
 Task sequence (independent, testable increments; interface names illustrative; ``[dep:…]``
 marks a hard prerequisite):
@@ -1514,31 +1518,96 @@ verifiable, and repeatable.
   headless, `TestClient` lists+reads a seeded archive from the *installed* package. `[dep:
   C5–C7]`
 
-**Stage D — Ollama note-enhancement (`stenograf.notes`).** *Follows Stage E; parallel to C.*
-Opt-in, fully local, stdlib-only. Nearly independent — only `steno notes` needs A1.
-- **D1 — notes model + Ollama client.** `notes/model.py::MeetingNotes` (summary, decisions,
-  `ActionItem{task,owner,due,timestamp}`, `SpeakerHighlight`, open_questions + provenance
-  model/strategy/language) with `to_markdown`/`to_json`; `notes/ollama.py::OllamaClient`
-  over `urllib` (`is_available` via `/api/version`, `installed_models` via `/api/tags`,
-  `chat(..., format=schema, stream=False)`), typed `OllamaUnavailableError`/
-  `ModelNotFoundError`; `OLLAMA_HOST`/`--ollama-url`. Acceptance: monkeypatched `urlopen`
-  fakes the 3 endpoints; **zero non-stdlib imports**. `[dep: none]`
-- **D2 — prompt + chunking + generate.** `notes/prompt.py::build_messages` (system role,
-  respond-in-`transcript.language`, inject title/attendees/glossary, anti-hallucination:
-  cite speaker+timestamp, never invent), `chunk_entries` (whole-turn map-reduce for long
-  meetings, no entry dropped), `NOTES_SCHEMA`; `notes/generate.py::generate_notes(transcript,
-  client, model=…)` (resolve model arg>env>default, verify installed, single-shot vs
-  map-reduce, parse schema JSON, stamp provenance; never write a partial). Acceptance:
-  `FakeOllamaClient` canned JSON → populated notes; over-budget forces >1 chat; absent
-  Ollama → typed error, nothing written. `[dep: D1, A2]`
-- **D3 — `steno notes <transcript.json>` + `--notes` flag.** New command (load via A1 →
-  generate → `_write_notes` sibling `.notes.md`/`.json`); an opt-in `--notes` flag on
-  `transcribe`/`start` that runs after `_write_transcript`, **non-fatal on failure** (warn,
-  transcript stands, exit 0). Never contacts Ollama unless asked. Acceptance: `CliRunner` +
-  fake client; Ollama-down → clean message, no notes file. `[dep: D2, A1]`
-- **D4 — `doctor` Ollama check.** `_ollama_check` (reachable? model pulled?) + a
-  `Check.optional` field so an absent Ollama doesn't fail the overall `doctor` exit gate.
-  Acceptance: monkeypatched client; not-running → not-ok but exit 0. `[dep: D1]`
+**Stage D — meeting notes: pluggable LLM backend + note export (`stenograf.notes`).**
+*Follows Stage E; parallel to C.* Opt-in, stdlib-only; fully local **when the Ollama
+backend is chosen**. Nearly independent — only `steno notes` needs A1.
+
+*Redesigned 2026-07-10 (was "Ollama note-enhancement").* Driver: Daniel's production
+meeting workflow (reference implementation: `~/.config/typewhisper/meeting-summary.sh`)
+pipes the transcript through the **`claude` CLI** (Opus) because local models aren't
+accurate enough for him yet, then writes a titled note (YAML frontmatter, summary,
+collapsible transcript) into an Obsidian vault folder. Three lessons folded in:
+1. **The LLM is a backend, not a dependency.** Mirror the `stenograf.asr` registry seam
+   (`register_backend`/`create_backend`/`available_backends`): an `ollama` backend for
+   fully-local users and a `command` backend that runs any configured CLI (prompt on
+   stdin → schema JSON on stdout). Prompt building, chunking, schema, and parsing stay
+   in stenograf, shared by all backends — providers are one line of config.
+2. **Title is a schema field, not a `TITLE::` sniffing hack.** The LLM derives a title;
+   it flows into the note filename and back into an untitled archive record.
+3. **"Obsidian export" is just a markdown exporter.** A vault is a folder; the exporter
+   writes one combined `{date} – {title}.md` note to any configured directory. No
+   Obsidian-specific code; the callout syntax degrades gracefully elsewhere. TypeWhisper's
+   detached-worker/nohup dance and `MIN_CHARS` gate are obsolete here — notes run in our
+   own process, only when asked.
+
+- **D1 — notes model + backend seam.** `notes/model.py::MeetingNotes` (**`title`**,
+  summary, decisions, `ActionItem{task,owner,due,timestamp}`, `SpeakerHighlight`,
+  open_questions + provenance **backend**/model/strategy/language) with
+  `to_markdown`/`to_json`/`from_json`; `notes/backend.py::NotesBackend` protocol
+  (`name`, `is_available()`, `complete(messages, schema) -> str`) + a registry mirroring
+  `stenograf.asr.registry`; typed `NotesBackendUnavailableError`/`NotesGenerationError`.
+  Acceptance: round-trip + markdown golden; registry register/create/unknown-name;
+  **zero non-stdlib imports**. `[dep: none]`
+- **D2 — Ollama backend.** `notes/ollama.py::OllamaBackend` over `urllib`
+  (`is_available` via `/api/version`, `installed_models` via `/api/tags`,
+  `chat(..., format=schema, stream=False)`), `ModelNotFoundError`; `OLLAMA_HOST`/
+  `--ollama-url`; default model `qwen3:8b`. Acceptance: monkeypatched `urlopen` fakes
+  the 3 endpoints. `[dep: D1]`
+- **D3 — command backend.** `notes/command.py::CommandBackend`: run a user-configured
+  argv (e.g. `["claude", "-p", …, "--output-format", "text"]`), rendered prompt +
+  schema instruction on **stdin**, expect a JSON object matching `NOTES_SCHEMA` on
+  **stdout** (tolerate surrounding prose/fences: extract the first top-level JSON
+  object); configurable timeout (default 600 s); `is_available` = argv[0] resolvable
+  on PATH; non-zero exit / no JSON / timeout → typed error, **never a partial**.
+  Acceptance: fake-script fixtures (canned JSON, fenced JSON, garbage, exit 1, sleep >
+  timeout); a real-`claude`-gated e2e (skipped when absent). `[dep: D1]`
+- **D4 — prompt + chunking + generate (backend-agnostic core).**
+  `notes/prompt.py::build_messages` (system role, respond-in-`transcript.language`,
+  inject title/attendees/glossary, anti-hallucination: cite speaker+timestamp, never
+  invent; optional user **instructions file appended** to — never replacing — the
+  built-in system prompt), `chunk_entries` (whole-turn map-reduce for long meetings, no
+  entry dropped), `NOTES_SCHEMA`; `notes/generate.py::generate_notes(transcript,
+  backend, model=…)` (single-shot vs map-reduce, parse+validate schema JSON, stamp
+  provenance, derive `title` when `profile.title` is None; never write a partial).
+  Acceptance: `FakeBackend` canned JSON → populated notes; over-budget forces >1
+  completion; unavailable backend → typed error, nothing written. `[dep: D1, A2]`
+- **D5 — settings file.** `stenograf/settings.py`: `data_dir()/settings.toml` read via
+  stdlib `tomllib`, first consumer is a `[notes]` table — `backend = "ollama"|"command"`
+  (default `ollama`), `model`, `command = [argv…]`, `timeout_s`, `instructions =
+  "<path>"`, `[notes.export] dir = "<path>"`. Precedence: CLI flag > env
+  (`STENOGRAF_NOTES_BACKEND`, …) > settings.toml > built-in default. Missing file ⇒ all
+  defaults; malformed TOML / unknown backend ⇒ one clear error naming the file.
+  Machine-specific config lives **here, not in `MeetingProfile`** (profiles serialize
+  into transcripts; a local argv must not). Acceptance: tmp-file precedence matrix;
+  malformed-TOML message. `[dep: none]`
+- **D6 — CLI: `steno notes <id|transcript.json>` + `--notes` flag.** New command
+  accepting an **archive id or a path** (id → `MeetingArchive.load_transcript`, path →
+  A1 loader); generate → `_write_notes` sibling `<stem>.notes.md`/`.notes.json`
+  (via the existing `_atomic_write_text`); when the meeting is archived and its record
+  is untitled, **write the derived title back to the index** (same path as
+  reverse-control rename). An opt-in `--notes` flag on `transcribe`/`start` runs after
+  `_write_transcript`, **non-fatal on failure** (warn, transcript stands, exit 0; rerun
+  later via `steno notes <id>`). Never contacts any backend unless asked. Acceptance:
+  `CliRunner` + fake backend; id and path forms; backend-down → clean message, no notes
+  file, exit 0 with `--notes`, exit ≠0 for the dedicated command; title back-fill
+  visible in `meetings list`. `[dep: D4, D5, A1, B]`
+- **D7 — combined-note export (the Obsidian consumer).** `notes/export.py::
+  export_note(transcript, notes, dir) -> Path`: one self-contained markdown note —
+  YAML frontmatter (`title`, `date`, `created`, `source: stenograf`, `type: meeting`,
+  `language`, `tags: [meeting]`), summary, decisions, **action items grouped by
+  owner**, open questions, then the full speaker-labeled transcript in a collapsible
+  `> [!quote]- Transcript` callout. Filename `YYYY-MM-DD – <title>.md`: strip
+  `[]#^|`, replace `/:*?"<>\`, collapse whitespace, cap 80 chars, ` (n)` suffix on
+  collision; atomic write; parent dir created. Wired as `--export-dir` on `steno
+  notes`/`--notes` runs, defaulting from `[notes.export] dir` (unset ⇒ no export);
+  `--no-export` opt-out. Export failure is non-fatal to the notes files. Acceptance:
+  golden note; slug edge cases (umlauts kept, emoji kept, path chars gone); collision
+  suffix; dir-with-spaces (iCloud vault paths). `[dep: D6]`
+- **D8 — `doctor` notes check.** `_notes_check` resolves the configured backend and
+  reports it: Ollama → reachable + model pulled; command → argv[0] on PATH. Uses a
+  `Check.optional` field so an absent backend doesn't fail the overall `doctor` exit
+  gate. Acceptance: monkeypatched backends; not-configured/not-running → not-ok but
+  exit 0. `[dep: D2, D3, D5]`
 
 **Ordering (revised 2026-07-10).** ~~A → (B ∥ C-live ∥ D) → C-consumers → E.~~
 A and B are shipped. The remaining order is **E → (C ∥ D)**:
@@ -1548,7 +1617,9 @@ A and B are shipped. The remaining order is **E → (C ∥ D)**:
    lands the tool cannot leave this checkout.
 2. Then **C (web UI)** and **D (notes)** in parallel — both independent of each other.
    Within C: C1 → C2 → C3 → C4, with C5–C7 gating on the shipped Stage B and C8
-   packaging the assets. D1 → D2 → D3, D4 alongside.
+   packaging the assets. Within D: D1 → (D2 ∥ D3 ∥ D4, with D5 anytime) → D6 → D7,
+   D8 alongside. Daniel's own path needs only D1 → D3 → D4 → D5 → D6 → D7 (the
+   Ollama backend D2 is for local-LLM users and can trail).
 3. C8 re-touches packaging (the `web/static` assets), so re-run E4's clean-install
    smoke test after it; E1's build hook needs no change (assets are package data).
 
