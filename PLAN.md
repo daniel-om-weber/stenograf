@@ -1368,10 +1368,9 @@ marks a hard prerequisite):
   `ArchivedMeeting` — that record still supports rename + playback. Unblocks C7 (web reverse-
   control POSTs consume `MeetingSession`/`ArchivedMeeting`).*
 
-**Stage E — macOS distribution (the shipping path). E1–E4 shipped 2026-07-10 (CI +
-release pipeline green on GitHub); E5 (README flip to the PyPI path) waits on the first
-tagged release, which needs the PyPI Trusted-Publisher registration (see E4 status).
-`uv tool install git+<repo>` is the working install path today.**
+**Stage E — macOS distribution: COMPLETE (E1–E5 shipped 2026-07-10). stenograf 0.1.0 is
+on PyPI; the install path is `uv tool install stenograf`, verified from a clean
+environment. Remaining Phase 4 work: C (web UI) ∥ D (notes).**
 Ships the current Mac tool to colleagues via PyPI; the `stenocap` bundling is the one true
 shipping blocker. Promoted ahead of C and D on 2026-07-10 — Stages A+B built a real product
 that no one but this checkout can run.
@@ -1451,6 +1450,12 @@ verifiable, and repeatable.
   reverts to `uv tool install stenograf`, and the pre-alpha status note drops the shipping
   caveat. (Written down because the README currently documents the source install *as* the
   install path, and that must not silently outlive the blocker.) `[dep: E4]`
+  *Status (2026-07-10): shipped. **stenograf 0.1.0 is on PyPI** — Daniel registered the
+  Trusted Publisher, tag `v0.1.0` ran release.yml green end to end (publish included,
+  attestations attached to the GitHub release). Verified from PyPI itself: a clean
+  `uv tool install stenograf` → doctor fully green, bundled helper reports `minos 14.4`
+  and delivers live mic frames. README now leads with the PyPI path; `git+<repo>` is the
+  documented pre-release channel.*
 
 **Stage C — Web UI (`stenograf.web`).** *Follows Stage E.* The web view is "a new `LiveView`
 + a `serve()` twin, zero core changes" — confirmed against `view.py`/`tui.py`/`session.py`.
