@@ -6,7 +6,10 @@
 set -e
 cd "$(dirname "$0")"
 
-swiftc -swift-version 5 -O main.swift -o stenocap \
+# Explicit deployment target: without it the binary inherits the build host's
+# OS as its minimum (a helper built on macOS 26 refuses to launch on 14/15),
+# and the wheel is tagged macosx_14_0. 14.4 = the Core Audio process-tap floor.
+swiftc -swift-version 5 -O -target arm64-apple-macos14.4 main.swift -o stenocap \
   -framework CoreAudio -framework AudioToolbox -framework AVFoundation \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
 
