@@ -131,15 +131,30 @@ which would silently blind the canceller.
 1. **Measurement rig** — `--aec-dump`, `eval/aec_score.py` (+ `speechmos` in
    the eval group), `eval/aec_rig.py`. Cheapest item; de-risks everything else.
    Acceptance: one command produces scored far-only / near-only / double-talk
-   results on this machine.
+   results on this machine. **DONE 2026-07-10.** Its first far-only run caught
+   a bug this plan didn't predict: the batch tail-checkpointer busy-spun on
+   `AudioBus.wait`, starved the capture thread, and Core Audio killed the
+   system tap ~3 s into every real-hardware `--no-live` meeting — the
+   canceller lost its reference and leaked everything (fixed in `ebf660a`;
+   regression-tested). After the fix, far-only measures **37.6 dB ERLE live,
+   −65 dBFS residual, AECMOS echo 4.73/deg 5.00, and 0 leaked lines before any
+   text backstop** (vs −27 dBFS raw / echo 1.49 uncancelled). The historical
+   "AEC leaks lines" evidence predates this fix and needs re-measuring.
 2. **Fix the dedup data loss** — normalize coverage against the aligned remote
    span, not the whole remote line; `--no-aec` disables dedup; dedup skipped
    when no echo path exists. Acceptance: the measured false-positive utterances
-   survive; the original leaked-echo fixtures still drop.
+   survive; the original leaked-echo fixtures still drop. **DONE 2026-07-10**
+   (`c2795f4`): span-density normalization drops the chance-subsequence scores
+   from 0.80–0.95 to 0.08–0.16 while real echoes stay at 0.89–1.00, and
+   `--no-aec` now disables dedup entirely.
 3. **Post-AEC energy gate** — in `stenograf.aec`, behind the same `--aec` flag.
    Threshold placed with rig data (the 42 dB gap), not hand-tuned feel.
    Acceptance: far-only leakage 0 lines pre-dedup; near-only WER unchanged;
-   double-talk AECMOS degradation unchanged.
+   double-talk AECMOS degradation unchanged. **Blocked on operator runs**: the
+   double-talk / near-only scenarios need a local talker (and a far-only sweep
+   at 100 % volume probes the smart-amp nonlinearity). Given Task 1's clean
+   post-fix numbers, first re-establish that residual text leakage exists at
+   all before building the gate.
 4. **Neural RES spike (conditional)** — only if (3) leaves leakage. LocalVQE
    behind an off-by-default flag, judged by the same rig.
 
