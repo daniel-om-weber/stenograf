@@ -78,17 +78,22 @@ def _merge_tokens(tokens) -> list[Word]:
 
     parakeet-mlx tokens are SentencePiece pieces with the word-boundary
     marker rendered as a leading space; a token without one continues the
-    previous word.
+    previous word. Numbers arrive as a *bare* space token followed by digit
+    pieces (" und", " ", "1", "5", ".", "7", "."), so a whitespace-only token
+    carries no text but must still open the boundary — dropping it silently
+    glued "und 15.7." into "und15.7.".
     """
     words: list[Word] = []
+    boundary = False  # a pending word break left by a bare space token
     for token in tokens:
-        starts_word = token.text.startswith(" ") or not words
         text = token.text.strip()
         if not text:
+            boundary = boundary or bool(token.text)
             continue
-        if starts_word:
+        if token.text.startswith(" ") or boundary or not words:
             words.append(Word(text=text, start=token.start, end=token.end))
         else:
             prev = words[-1]
             words[-1] = Word(text=prev.text + text, start=prev.start, end=token.end)
+        boundary = False
     return words
