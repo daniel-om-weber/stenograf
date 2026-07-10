@@ -7,11 +7,10 @@ Accuracy-first, fully local meeting transcription for **German** and **English**
 Built for Apple Silicon (M-series) first; Linux and Windows support is designed
 in from the start.
 
-> **Status: pre-alpha, macOS only, not yet on PyPI.** The pipeline is complete
-> end to end: live system-audio + microphone capture, live captions, and the
-> high-accuracy speaker-labelled finalize pass. Installing straight from this
-> repository works (below); PyPI wheels, the local web UI, meeting notes, and
-> Linux capture are not built yet. See [PLAN.md](PLAN.md).
+> **Status: pre-alpha, macOS only.** The pipeline is complete end to end: live
+> system-audio + microphone capture, live captions, and the high-accuracy
+> speaker-labelled finalize pass. The local web UI, meeting notes, and Linux
+> capture are not built yet. See [PLAN.md](PLAN.md).
 
 ## Why another transcription tool?
 
@@ -31,21 +30,22 @@ in from the start.
 
 ## Install
 
-Requires macOS 14.4+ on Apple Silicon, [uv](https://docs.astral.sh/uv/), and —
-until wheels are on PyPI — the Xcode command-line tools (`xcode-select
---install`), because installing from the repository compiles the `stenocap`
-capture helper on your machine.
+Requires macOS 14.4+ on Apple Silicon and [uv](https://docs.astral.sh/uv/).
+The wheel ships the signed capture helper — no toolchain needed.
 
 ```sh
-uv tool install git+https://github.com/daniel-om-weber/stenograf
+uv tool install stenograf
 steno doctor    # environment checks
 steno setup     # one-time: mic + system-audio permission prompts, model downloads
 ```
 
 macOS scopes the permission grant to the app the prompt came from, so run
 `steno setup` once from each terminal app (or IDE) you'll start meetings from.
-`uv tool install stenograf` (no toolchain needed) becomes the install path once
-wheels are published to PyPI (PLAN.md Phase 4, Stage E4).
+
+Pre-release channel: `uv tool install git+https://github.com/daniel-om-weber/stenograf`
+installs the current main branch; building from the repository compiles the
+capture helper on your machine, which needs the Xcode command-line tools
+(`xcode-select --install`).
 
 ### From a checkout
 
