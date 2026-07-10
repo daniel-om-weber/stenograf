@@ -31,6 +31,12 @@ dependencies = [
     "sherpa-onnx-core>=1.12.40,<1.13",
     # Default ASR backend (PLAN.md Phase 0 verdict); MLX is Apple-Silicon-only.
     "parakeet-mlx>=0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Resolver guard, not a direct import: numba (via parakeet-mlx → librosa)
+    # caps numpy (0.66: <2.5), and without a numba floor a fresh resolve keeps
+    # the newest numpy and backtracks numba into ancient sdists that no longer
+    # build. The floor makes the resolver downgrade numpy instead, and the
+    # effective numpy cap tracks numba's own metadata as it advances.
+    "numba>=0.60; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Live-caption TUI (stenograf.tui). Imported lazily, only when the TUI runs —
     # the plain stdout view (stenograf.view) stays textual-free.
     "textual>=8.2.8",
