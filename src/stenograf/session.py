@@ -562,6 +562,12 @@ class LiveWorker(threading.Thread):
                     for ch in self._channels:
                         with self._inference_lock:
                             self._emit(ch, self._decoders[ch].flush())
+                    # One last checkpoint now that every word is committed: the
+                    # finalize (diarization included) runs next and can still die,
+                    # and the periodic flush may be an interval behind. Zero
+                    # inference — it only snapshots the decoders' committed text.
+                    if flushing:
+                        self._on_flush()  # type: ignore[misc]  # guarded by `flushing`
                     return
         except Exception as exc:  # surfaced on join, like the capture thread
             self.error = exc
@@ -899,7 +905,10 @@ class MeetingRecorder:
         already-committed text to ``on_checkpoint`` every ``checkpoint_interval``
         seconds — pure file I/O, no extra inference, since the live pass already
         produced that text. Empty flushes (nothing committed yet) are skipped so a
-        ``.partial`` only appears once there is text to recover.
+        ``.partial`` only appears once there is text to recover. The worker flushes
+        once more after its final decode, so the checkpoint holds every committed
+        word before the finalize — which can still die (e.g. OOM in diarization) —
+        begins.
         """
         channels = [p.channel for p in plans]
         bus = AudioBus(channels)

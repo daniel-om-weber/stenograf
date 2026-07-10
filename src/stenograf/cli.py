@@ -33,6 +33,9 @@ _FORMATS: dict[str, str] = {
     "vtt": "to_vtt",
 }
 _DEFAULT_FORMATS = ("md", "json", "txt")
+# Crash checkpoints render these (no subtitles — pointless for a partial
+# transcript). _cleanup_checkpoints must remove exactly this set.
+_CHECKPOINT_FORMATS = ("md", "json", "txt")
 
 # Settable speaker-count ranges, kept in sync with the --local/--remote and
 # --speakers IntRange bounds. The unconstrained diarizer can *detect* more (or, on
@@ -59,6 +62,22 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     if value is not None:
         return value
     return _LIVE_FLUSH_INTERVAL_S if live else _BATCH_FLUSH_INTERVAL_S
+
+
+def _apply_no_diarization(
+    enabled: bool, local_speakers: int | None, remote_speakers: int | None
+) -> tuple[int | None, int | None]:
+    """Coerce the per-channel speaker counts to 1 for ``--no-diarization``.
+
+    A count of 1 is the pipeline's existing diarizer-free path: the model is
+    never loaded and every word on the channel lands on one label. An explicit
+    0 (channel off) is preserved; a count above 1 contradicts the flag.
+    """
+    if not enabled:
+        return local_speakers, remote_speakers
+    if (local_speakers or 0) > 1 or (remote_speakers or 0) > 1:
+        raise click.UsageError("--no-diarization conflicts with a speaker count above 1")
+    return (0 if local_speakers == 0 else 1, 0 if remote_speakers == 0 else 1)
 
 
 def _parse_formats(spec: str) -> list[str]:
@@ -171,6 +190,14 @@ def main() -> None:
     type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
     default=None,
     help="Number of remote speakers; 0 = in-room meeting without system audio.",
+)
+@click.option(
+    "--no-diarization",
+    "no_diarization",
+    is_flag=True,
+    help="Skip speaker diarization: the diarizer model is never loaded and each "
+    "captured channel is attributed to a single speaker (Local-1/Remote-1). "
+    "Conflicts with a --local/--remote count above 1.",
 )
 @click.option(
     "--replay",
@@ -299,6 +326,7 @@ def start(
     lang: str | None,
     local_speakers: int | None,
     remote_speakers: int | None,
+    no_diarization: bool,
     replay: str | None,
     out: Path | None,
     title: str | None,
@@ -327,6 +355,9 @@ def start(
     write_formats = _parse_formats(formats)
     glossary_terms, attendee_names = _collect_terms(glossary, glossary_file, attendee)
 
+    local_speakers, remote_speakers = _apply_no_diarization(
+        no_diarization, local_speakers, remote_speakers
+    )
     try:
         profile = MeetingProfile(
             language=Language(lang) if lang else None,
@@ -654,9 +685,7 @@ def _checkpoint_writer(
     """
 
     def on_checkpoint(transcript: Transcript) -> None:
-        # Checkpoints are crash recovery, always plain md+json — subtitles of a
-        # partial transcript are pointless and the final write supersedes these.
-        md = _write_transcript(transcript, out_dir, f"{basename}.partial")[0]
+        md = _write_transcript(transcript, out_dir, f"{basename}.partial", _CHECKPOINT_FORMATS)[0]
         if announce is not None:
             announce(f"checkpoint: {md.name} ({len(transcript.entries)} entries)")
 
@@ -873,6 +902,14 @@ def _transcribe_split_channels(
     help="Split channels: number of speakers on the right/remote channel; omit to auto-detect.",
 )
 @click.option(
+    "--no-diarization",
+    "no_diarization",
+    is_flag=True,
+    help="Skip speaker diarization: the diarizer model is never loaded and each "
+    "voice channel (or the mixed stream) is attributed to a single speaker. "
+    "Conflicts with a speaker count above 1.",
+)
+@click.option(
     "--out",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
@@ -923,6 +960,7 @@ def transcribe(
     channels_mode: str,
     local_speakers: int | None,
     remote_speakers: int | None,
+    no_diarization: bool,
     out: Path | None,
     title: str | None,
     no_archive: bool,
@@ -969,6 +1007,15 @@ def transcribe(
             "--local/--remote apply to split voice channels only; this run "
             "transcribes one mixed stream (--channels split to force splitting)"
         )
+    if no_diarization:
+        if (speakers or 0) > 1:
+            raise click.UsageError("--no-diarization conflicts with a speaker count above 1")
+        if split_pcms is None:
+            speakers = 1
+        else:
+            local_speakers, remote_speakers = _apply_no_diarization(
+                True, local_speakers, remote_speakers
+            )
 
     if split_pcms is not None:
         duration = len(split_pcms[0]) / SAMPLE_RATE
@@ -1281,7 +1328,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 def _cleanup_checkpoints(out_dir: Path, basename: str) -> None:
     """Remove the crash-recovery checkpoints once the final transcript is written."""
-    for fmt in ("md", "json"):
+    for fmt in _CHECKPOINT_FORMATS:
         (out_dir / f"{basename}.partial.{fmt}").unlink(missing_ok=True)
 
 

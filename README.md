@@ -81,13 +81,15 @@ steno start --no-live               # skip live captions; just finalize on stop
 steno start --title "Weekly sync"   # name the meeting in the archive
 steno start --flush-interval 60     # crash-checkpoint the captions every 60s
 steno start --no-aec                # disable echo cancellation (headphones)
+steno start --no-diarization        # skip speaker separation (labels stay per channel)
 steno start --record-audio          # opt in to keeping a WAV (off by default)
 steno start --replay mic.wav        # dev: drive the live pass from a file
 ```
 
 Both `start` and `transcribe` accept `--format md,json,txt,srt,vtt` (default
 `md,json,txt` — `txt` is the plain prose without speaker labels or timestamps),
-`--lang de|en`, and `--print` to echo the transcript to stdout.
+`--lang de|en`, `--no-diarization` to skip speaker separation entirely (the
+diarizer model is never loaded), and `--print` to echo the transcript to stdout.
 
 `steno transcribe` recognizes 2-channel recordings whose channels are separate
 voice feeds — a `--record-audio` tee (mic left, system right) or a

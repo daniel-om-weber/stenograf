@@ -145,6 +145,54 @@ def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch
     assert "transcript.srt" in result.output
 
 
+def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
+    calls = {}
+
+    def recording_load_backends(*, need_diarizer):
+        calls["need_diarizer"] = need_diarizer
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(cli, "_load_backends", recording_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--no-diarization"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["need_diarizer"] is False  # the diarizer model is never requested
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    assert {e["speaker"] for e in entries} == {"Speaker 1"}
+
+
+def test_transcribe_no_diarization_conflicts_with_a_speaker_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["transcribe", str(audio), "--out", str(tmp_path), "--no-diarization", "--speakers", "2"],
+    )
+
+    assert result.exit_code != 0
+    assert "--no-diarization conflicts" in result.output
+
+
+def test_apply_no_diarization_preserves_a_disabled_channel():
+    # --local 0 (listen-only) stays off; unknown counts collapse to 1 (no estimate).
+    assert cli._apply_no_diarization(True, 0, None) == (0, 1)
+    assert cli._apply_no_diarization(False, None, 3) == (None, 3)
+
+
+def test_cleanup_checkpoints_removes_every_checkpoint_format(tmp_path):
+    for fmt in ("md", "json", "txt"):
+        (tmp_path / f"transcript.partial.{fmt}").write_text("x", encoding="utf-8")
+    cli._cleanup_checkpoints(tmp_path, "transcript")
+    assert not list(tmp_path.glob("transcript.partial.*"))
+
+
 def test_transcribe_rejects_unknown_format(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
@@ -375,6 +423,37 @@ def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
     assert "You:" in result.output  # a live caption streamed
     assert "language: de" in result.output  # structured language event, plain-rendered
     assert "finalized:" in result.output  # the on-stop finalize swap was announced
+
+
+def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
+    calls = {}
+
+    def recording_load_backends(*, need_diarizer):
+        calls["need_diarizer"] = need_diarizer
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(cli, "_load_backends", recording_load_backends)
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "start",
+            "--no-diarization",
+            "--remote",
+            "0",
+            "--replay",
+            str(mic),
+            "--out",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["need_diarizer"] is False  # counts collapsed to 1 → no diarizer load
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    assert {e["speaker"] for e in entries} == {"Local-1"}
 
 
 def test_start_no_live_uses_the_batch_path(tmp_path, monkeypatch):

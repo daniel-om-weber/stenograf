@@ -216,6 +216,35 @@ class TestLiveWorker:
         assert worker.error is None
         assert flushes  # committed text flushed at least once (reconciled → once here)
 
+    def test_flushes_once_more_after_the_final_decode(self):
+        # 1 s of audio but a huge interval: no periodic flush ever fires, yet the
+        # worker still checkpoints once after its closing decoder flush — so every
+        # committed word is on disk before the (crash-prone) finalize starts.
+        store = SessionStore({Channel.MIC})
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        for f in _frames(Channel.MIC, pcm, SAMPLE_RATE):
+            store.append(f)
+        bus = AudioBus([Channel.MIC])
+        bus.advance(Channel.MIC, store.duration(Channel.MIC))
+        bus.close()
+
+        flushes: list[int] = []
+        worker = LiveWorker(
+            store,
+            bus,
+            {Channel.MIC: StubDecoder()},
+            threading.Lock(),
+            channels=[Channel.MIC],
+            on_flush=lambda: flushes.append(1),
+            flush_interval=1000.0,
+        )
+        worker.start()
+        worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert worker.error is None
+        assert len(flushes) == 1  # the close-time flush, not an interval one
+
     def test_load_sheds_an_over_long_backlog(self):
         # Inference fell far behind: 40 s of audio are already present and the bus
         # is closed before the worker looks. Feeding all 40 s into one decode would
