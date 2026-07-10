@@ -43,12 +43,19 @@ _INDEX_VERSION = 1
 
 TRANSCRIPT_STEM = "transcript"
 """Basename (without extension) of the managed transcript files in a meeting dir:
-``transcript.json`` / ``transcript.md`` / ``transcript.srt`` / ``transcript.vtt``."""
+``transcript.json`` / ``transcript.md`` / ``transcript.txt`` / ``transcript.srt`` /
+``transcript.vtt``."""
 
-TRANSCRIPT_FORMATS = ("md", "json", "srt", "vtt")
+TRANSCRIPT_FORMATS = ("md", "json", "txt", "srt", "vtt")
 """Transcript file extensions the archive recognizes when summarizing a dir."""
 
-_FORMAT_METHODS = {"md": "to_markdown", "json": "to_json", "srt": "to_srt", "vtt": "to_vtt"}
+_FORMAT_METHODS = {
+    "md": "to_markdown",
+    "json": "to_json",
+    "txt": "to_text",
+    "srt": "to_srt",
+    "vtt": "to_vtt",
+}
 """Transcript extension → the :class:`Transcript` method that renders it."""
 
 AUDIO_NAME = "audio.wav"

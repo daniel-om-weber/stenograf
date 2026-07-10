@@ -28,10 +28,11 @@ _RECORD_DEFAULT = "\0default"
 _FORMATS: dict[str, str] = {
     "md": "to_markdown",
     "json": "to_json",
+    "txt": "to_text",
     "srt": "to_srt",
     "vtt": "to_vtt",
 }
-_DEFAULT_FORMATS = ("md", "json")
+_DEFAULT_FORMATS = ("md", "json", "txt")
 
 # Settable speaker-count ranges, kept in sync with the --local/--remote and
 # --speakers IntRange bounds. The unconstrained diarizer can *detect* more (or, on
@@ -280,8 +281,9 @@ def main() -> None:
     "formats",
     default=",".join(_DEFAULT_FORMATS),
     metavar="LIST",
-    help="Comma-separated transcript formats to write: md, json, srt, vtt "
-    "[default: md,json]. srt/vtt re-flow speaker turns into subtitle cues.",
+    help="Comma-separated transcript formats to write: md, json, txt, srt, vtt "
+    "[default: md,json,txt]. txt is plain prose without speakers or timestamps; "
+    "srt/vtt re-flow speaker turns into subtitle cues.",
 )
 @_vocab_options
 @click.option(
@@ -908,8 +910,9 @@ def _transcribe_split_channels(
     "formats",
     default=",".join(_DEFAULT_FORMATS),
     metavar="LIST",
-    help="Comma-separated transcript formats to write: md, json, srt, vtt "
-    "[default: md,json]. srt/vtt re-flow speaker turns into subtitle cues.",
+    help="Comma-separated transcript formats to write: md, json, txt, srt, vtt "
+    "[default: md,json,txt]. txt is plain prose without speakers or timestamps; "
+    "srt/vtt re-flow speaker turns into subtitle cues.",
 )
 @_vocab_options
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
@@ -1251,8 +1254,8 @@ def _write_transcript(
 
     ``basename`` is the full file stem (extension excluded): ``transcript`` in the
     managed archive dir, or ``<name>.transcript`` for the flat ``--no-archive``
-    layout. Markdown + JSON are the default (the only files stenograf emits unless
-    the user asks for subtitles); SRT/VTT are opt-in via ``--format``.
+    layout. Markdown + JSON + plain text are the default (the only files stenograf
+    emits unless the user asks for subtitles); SRT/VTT are opt-in via ``--format``.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []

@@ -90,6 +90,7 @@ def test_transcribe_writes_outputs_and_detects_language(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert (tmp_path / "transcript.md").exists()
     assert (tmp_path / "transcript.json").exists()
+    assert (tmp_path / "transcript.txt").exists()
     assert "language: detected de" in result.output  # LID ran over the German text
 
 
@@ -136,9 +137,10 @@ def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch
     assert result.exit_code == 0, result.output
     assert (tmp_path / "transcript.srt").exists()
     assert (tmp_path / "transcript.vtt").exists()
-    # Only the requested formats — md/json are not written when --format overrides them.
+    # Only the requested formats — the defaults are not written when --format overrides them.
     assert not (tmp_path / "transcript.md").exists()
     assert not (tmp_path / "transcript.json").exists()
+    assert not (tmp_path / "transcript.txt").exists()
     assert (tmp_path / "transcript.vtt").read_text().startswith("WEBVTT")
     assert "transcript.srt" in result.output
 

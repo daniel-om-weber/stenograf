@@ -85,8 +85,9 @@ steno start --record-audio          # opt in to keeping a WAV (off by default)
 steno start --replay mic.wav        # dev: drive the live pass from a file
 ```
 
-Both `start` and `transcribe` accept `--format md,json,srt,vtt` (default
-`md,json`), `--lang de|en`, and `--print` to echo the transcript to stdout.
+Both `start` and `transcribe` accept `--format md,json,txt,srt,vtt` (default
+`md,json,txt` — `txt` is the plain prose without speaker labels or timestamps),
+`--lang de|en`, and `--print` to echo the transcript to stdout.
 
 `steno transcribe` recognizes 2-channel recordings whose channels are separate
 voice feeds — a `--record-audio` tee (mic left, system right) or a

@@ -111,6 +111,10 @@ class Transcript:
             lines.append(f"**{entry.speaker}** [{_fmt(entry.start)}]{marker}: {entry.text}")
         return "\n\n".join(lines) + "\n"
 
+    def to_text(self) -> str:
+        """Render as plain prose — no speakers, timestamps, or overlap markers."""
+        return "\n\n".join(entry.text for entry in self.entries) + "\n"
+
     def to_srt(self) -> str:
         """Render as SubRip (SRT) subtitles — one numbered cue per re-flowed chunk."""
         blocks = []

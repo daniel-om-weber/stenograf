@@ -38,6 +38,11 @@ def test_markdown_rendering():
     assert "*(overlap)*" in md
 
 
+def test_text_rendering_is_prose_only():
+    text = make_transcript().to_text()
+    assert text == "Guten Morgen zusammen.\n\nMorgen!\n"  # no speakers/timestamps/markers
+
+
 def test_json_roundtrip():
     data = json.loads(make_transcript().to_json())
     assert data["language"] == "de"
