@@ -41,6 +41,63 @@ def test_load_materializes_weights_for_cross_thread_use(monkeypatch):
     assert evaled == [(fake.parameters(),)]  # weights materialized on the load thread
 
 
+def test_load_prefers_the_complete_local_snapshot(monkeypatch, tmp_path):
+    # A complete cache must load fully offline: hf_hub_download revision-checks
+    # the Hub on every call otherwise (unauthenticated-request warning each run,
+    # 10 s/file stall on a hanging network). load() resolves the snapshot with
+    # local_files_only=True and hands from_pretrained the directory instead of
+    # the repo id.
+    import huggingface_hub
+
+    resolved: list[tuple] = []
+
+    def fake_hf_hub_download(repo_id, filename, **kwargs):
+        resolved.append((repo_id, filename, kwargs))
+        return str(tmp_path / filename)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
+    loaded: list[str] = []
+
+    def fake_from_pretrained(model_id):
+        loaded.append(model_id)
+        return _FakeModel()
+
+    monkeypatch.setattr(parakeet_mlx, "from_pretrained", fake_from_pretrained)
+    monkeypatch.setattr(mx, "eval", lambda *args: None)
+
+    ParakeetMLXBackend().load()
+
+    assert loaded == [str(tmp_path)]
+    assert [f for _, f, _ in resolved] == ["config.json", "model.safetensors"]
+    assert all(kw == {"local_files_only": True} for _, _, kw in resolved)
+
+
+def test_load_falls_back_online_when_cache_is_incomplete(monkeypatch, tmp_path):
+    # First run or an interrupted download: local resolution raises, and load()
+    # must pass the repo id through so from_pretrained downloads normally.
+    import huggingface_hub
+
+    def fake_hf_hub_download(repo_id, filename, **kwargs):
+        if kwargs.get("local_files_only"):
+            raise huggingface_hub.errors.LocalEntryNotFoundError("not cached")
+        return str(tmp_path / filename)
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
+    loaded: list[str] = []
+
+    def fake_from_pretrained(model_id):
+        loaded.append(model_id)
+        return _FakeModel()
+
+    monkeypatch.setattr(parakeet_mlx, "from_pretrained", fake_from_pretrained)
+    monkeypatch.setattr(mx, "eval", lambda *args: None)
+
+    backend = ParakeetMLXBackend()
+    backend.load()
+
+    assert loaded == [backend.model_id]
+
+
 class _Tok:
     def __init__(self, text: str, start: float, end: float):
         self.text = text

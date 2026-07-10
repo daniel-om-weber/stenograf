@@ -9,6 +9,8 @@ two steps directly.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
@@ -29,6 +31,32 @@ buffers count against unified memory, not RSS). One window's working set is
 ~1-2 GB, so 2 GB keeps same-shape reuse while excess buffers are freed."""
 
 
+def _cached_snapshot(model_id: str) -> str | None:
+    """Directory of the fully downloaded HF snapshot, or ``None`` to go online.
+
+    ``hf_hub_download`` phones home to huggingface.co on *every* call to
+    revision-check ``main``, even with a complete cache — that's the Hub's
+    unauthenticated-request warning on each run and up to a 10 s stall per
+    file (``DEFAULT_ETAG_TIMEOUT``) on a network that hangs instead of
+    refusing. Resolving with ``local_files_only=True`` never touches the
+    network and raises on files that were never (or only partially)
+    downloaded, so a hit means the load is safe fully offline and a miss —
+    first run, interrupted download — falls back to the online path.
+
+    The two filenames mirror what ``parakeet_mlx.from_pretrained`` reads; if
+    a parakeet_mlx upgrade ever needs more files, this misses and the online
+    path stays correct.
+    """
+    from huggingface_hub import hf_hub_download
+
+    try:
+        config = hf_hub_download(model_id, "config.json", local_files_only=True)
+        hf_hub_download(model_id, "model.safetensors", local_files_only=True)
+    except Exception:
+        return None
+    return str(Path(config).parent)
+
+
 class ParakeetMLXBackend(ASRBackend):
     name = "parakeet"
 
@@ -40,7 +68,9 @@ class ParakeetMLXBackend(ASRBackend):
         import mlx.core as mx
         from parakeet_mlx import from_pretrained
 
-        self._model = from_pretrained(self.model_id)
+        # Load from the local cache when it's complete (no network, no Hub
+        # warning); from_pretrained treats a directory path like a repo id.
+        self._model = from_pretrained(_cached_snapshot(self.model_id) or self.model_id)
         # Bound the Metal buffer cache (see CACHE_LIMIT_BYTES): without a limit
         # a long batch pass accumulates tens of GB of dead buffers and swaps
         # the machine. Process-global, which is fine — this is the process's
