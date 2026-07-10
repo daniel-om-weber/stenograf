@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.3.2
       - run: uv build --wheel
       - name: Verify the wheel bundles a signed helper for macOS 14.4+
         run: |
@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.3.2
       - run: uv build
       - name: Verify the pure wheel carries no helper
         run: |
@@ -59,7 +59,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.3.2
       - uses: actions/download-artifact@v8
         with:
           name: dist-macos
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.3.2
       - uses: actions/download-artifact@v8
         with:
           name: dist-linux
