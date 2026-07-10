@@ -97,6 +97,22 @@ uv run eval/der.py                                 # → eval/out/diar-report.md
 real stenograf backends. Everything under `eval/refs/` and `eval/out/` stays
 gitignored (private content).
 
+## Echo cancellation (PLAN-AEC.md)
+
+Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
+writes the clock-aligned `mic.wav`/`lpb.wav`/`enh.wav` triple (near end as
+captured, far-end reference, near end as the ASR receives it); score it with:
+
+```sh
+uv run --group eval eval/aec_score.py DIR --scenario st   # far-end single-talk
+uv run --group eval eval/aec_score.py DIR --scenario dt   # double-talk
+```
+
+Reports ERLE + residual level (energy over 10 ms frames during far-end
+activity) and AECMOS (`speechmos`, the AEC-Challenge metric) — `echo_mos` for
+"is the echo gone", `deg_mos` for "did we damage the local speaker". The
+`--no-aec --aec-dump DIR` combination records the uncancelled baseline.
+
 ## Side quests
 
 - ~~Canary-1B-v2 runtime~~ — resolved, see above: no accelerated runtime with

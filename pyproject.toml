@@ -62,6 +62,8 @@ eval = [
     # mlx-lm 0.31 crashes on import against transformers 5.x
     # (AutoTokenizer.register signature change); voxtral needs the 4.x line.
     "transformers>=4.55.2,<5",
+    "speechmos>=0.0.1.1",
+    "onnxruntime>=1.27.0",
 ]
 # Canary-1B-v2 accuracy-ceiling reference via NeMo-on-MPS (slow, never shipped).
 # Kept apart from `eval`: NeMo's pins don't coexist with the MLX stack.
