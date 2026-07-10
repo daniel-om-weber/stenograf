@@ -252,18 +252,6 @@ func startSystemTap(emitter: Emitter) -> TapSession {
     die(AudioObjectGetPropertyData(tapID, &addr, 0, nil, &size, &asbd), "read tap format")
     log("system tap format: \(asbd.mSampleRate) Hz, \(asbd.mChannelsPerFrame) ch")
 
-    // The resampler always sees mono float32 at the tap's rate; renderTapBuffer
-    // downmixes whatever channel layout the buffer actually arrives in.
-    guard let sourceFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32, sampleRate: asbd.mSampleRate,
-        channels: 1, interleaved: false),
-        let resampler = Resampler(source: sourceFormat, channel: .system, emitter: emitter)
-    else {
-        log("FATAL: could not build system-audio resampler")
-        exit(1)
-    }
-    let layout = TapLayout()
-
     let outputUID = defaultOutputDeviceUID()
     let aggDesc: [String: Any] = [
         kAudioAggregateDeviceNameKey: "stenograf-agg",
@@ -281,6 +269,40 @@ func startSystemTap(emitter: Emitter) -> TapSession {
     var aggID = AudioObjectID(kAudioObjectUnknown)
     die(AudioHardwareCreateAggregateDevice(aggDesc as CFDictionary, &aggID),
         "create aggregate device")
+
+    // The IO proc delivers buffers at the *aggregate's* rate — it follows the
+    // main sub-device, i.e. the current output device — not at the rate the tap
+    // advertises. On the built-in speakers both are 48 kHz and the difference is
+    // invisible; a Bluetooth output runs at 44.1 kHz, and resampling those
+    // buffers as 48 kHz warps the reference by 8 % and walks this channel's
+    // sample-counted timestamps off the shared clock (measured: ERLE collapses
+    // to ~1 dB and the canceller starves). Trust the device doing the delivering.
+    // Read once at startup — a mid-capture output-device switch that changes the
+    // rate still mis-times this channel, which the drift warning surfaces.
+    var sampleRate = asbd.mSampleRate
+    var aggRate = 0.0
+    var rateSize = UInt32(MemoryLayout<Double>.size)
+    var rateAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyNominalSampleRate,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    if AudioObjectGetPropertyData(aggID, &rateAddr, 0, nil, &rateSize, &aggRate) == noErr,
+       aggRate > 0, aggRate != sampleRate {
+        log("system buffers arrive at \(aggRate) Hz (aggregate rate), not \(sampleRate) Hz")
+        sampleRate = aggRate
+    }
+
+    // The resampler always sees mono float32 at that rate; renderTapBuffer
+    // downmixes whatever channel layout the buffer actually arrives in.
+    guard let sourceFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+        channels: 1, interleaved: false),
+        let resampler = Resampler(source: sourceFormat, channel: .system, emitter: emitter)
+    else {
+        log("FATAL: could not build system-audio resampler")
+        exit(1)
+    }
+    let layout = TapLayout()
 
     var procID: AudioDeviceIOProcID?
     let queue = DispatchQueue(label: "dev.stenograf.tap")
