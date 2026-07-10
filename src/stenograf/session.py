@@ -265,20 +265,33 @@ def _words_of(text: str) -> list[str]:
 
 
 def _covered_by(mic: str, system: str) -> float:
-    """Fraction of the mic line's characters also present, in order, in the remote line.
+    """How much of the mic line reads as a contiguous slice of the remote line.
 
     Characters, not words: the two channels are decoded independently, so an echo
     returns with small ASR divergences. The remote's "we cannot say sorry" came
     back on the mic as "we can't not say sorry" — 0.57 by word coverage, which is
     indistinguishable from unrelated speech, but 0.89 by character coverage.
-
     Summing matching blocks rather than taking one longest run lets a match
     survive a substituted word in the middle of an otherwise identical line.
+
+    Normalized by the *longer* of the mic line and the span its matches occupy in
+    the remote line — not by the mic line alone. Almost any short utterance is a
+    chance character-subsequence of a long enough remote monologue ("no I don't
+    think so" scored 1.00 against a 56-word remote line and was destroyed), but
+    those chance matches scatter across the monologue, while a real echo lands in
+    one dense stretch. The span denominator kills the scattered case and leaves
+    genuine echoes — including an echo of one sentence inside a longer remote
+    line — untouched.
     """
     if not mic:
         return 0.0
     matcher = SequenceMatcher(None, mic, system, autojunk=False)
-    return sum(block.size for block in matcher.get_matching_blocks()) / len(mic)
+    blocks = [b for b in matcher.get_matching_blocks() if b.size]
+    if not blocks:
+        return 0.0
+    matched = sum(b.size for b in blocks)
+    span = blocks[-1].b + blocks[-1].size - blocks[0].b
+    return matched / max(len(mic), span)
 
 
 def drop_echo_duplicates(
@@ -674,12 +687,17 @@ class MeetingRecorder:
         reid: SpeakerResolver | None = None,
         language: Language | None = None,
         glossary_threshold: float | None = None,
+        dedup_echo: bool = True,
     ) -> None:
         self.profile = profile
         self.asr = asr
         self.vad = vad
         self.diarizer = diarizer
         self.reid = reid
+        self.dedup_echo = dedup_echo
+        """Whether finalize runs :func:`drop_echo_duplicates` on the mic channel.
+        The CLI ties this to ``--aec``: with cancellation off the user asked for
+        the mic exactly as captured, and no transcript lines should vanish."""
         self.language = language or profile.language
         self.glossary_threshold = (
             DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
@@ -938,7 +956,7 @@ class MeetingRecorder:
         # What the echo canceller could not remove, the remote channel's own
         # transcript identifies for us (PLAN.md §2 "Speaker-bleed caveats").
         mic, system = by_channel.get(Channel.MIC), by_channel.get(Channel.SYSTEM)
-        if mic and system:
+        if self.dedup_echo and mic and system:
             kept = drop_echo_duplicates(mic, system)
             if len(kept) < len(mic):
                 view.status(f"dropped {len(mic) - len(kept)} echoed mic line(s)")

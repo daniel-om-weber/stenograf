@@ -426,6 +426,39 @@ class TestMeetingRecorder:
         transcript = recorder.run(provider)
         assert {e.speaker for e in transcript.entries} == {"Remote-1"}
 
+    def test_dedup_echo_off_never_drops_a_mic_line(self):
+        """--no-aec means 'the mic exactly as captured' — including its transcript.
+        Both channels decode to the same words (a perfect echo), yet with
+        dedup_echo=False both lines must survive; with the default both-channel
+        dedup, the mic copy is dropped."""
+
+        class EchoedASR(ASRBackend):
+            name = "echoed"
+
+            def load(self) -> None:
+                pass
+
+            def transcribe(self, samples, language):
+                words = tuple(
+                    Word(w, 0.1 * i, 0.1 * i + 0.1)
+                    for i, w in enumerate(["the", "same", "five", "words", "here"])
+                )
+                return [Segment(text="the same five words here", start=0.0, end=0.5, words=words)]
+
+            def unload(self) -> None:
+                pass
+
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        profile = MeetingProfile(local_speakers=1, remote_speakers=1)
+
+        def run(dedup: bool):
+            provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
+            recorder = MeetingRecorder(profile, asr=EchoedASR(), dedup_echo=dedup)
+            return recorder.run(provider)
+
+        assert [e.speaker for e in run(dedup=True).entries] == ["Remote-1"]
+        assert sorted(e.speaker for e in run(dedup=False).entries) == ["Local-1", "Remote-1"]
+
     def test_finalize_records_requested_and_detected_speaker_counts(self):
         # Local unspecified (estimate), remote given as 2. The diarizer finds two
         # clusters on each channel; speaker_counts must carry requested=None for the

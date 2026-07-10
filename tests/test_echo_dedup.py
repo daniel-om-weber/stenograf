@@ -67,6 +67,46 @@ class TestKeepsRealSpeech:
         assert drop_echo_duplicates(entries, system) == entries
 
 
+class TestChanceSubsequence:
+    """Short local lines vs a long remote monologue — the measured data-loss bug.
+
+    Almost any generic utterance is a chance character-subsequence of a long
+    enough remote line: normalized by the mic line's length alone, these scored
+    0.80–0.95 and were destroyed. Their matches scatter across the monologue,
+    though, while a real echo lands in one dense stretch — which is what the
+    span denominator in ``_covered_by`` measures.
+    """
+
+    MONOLOGUE = [
+        remote(
+            "And I think what we should probably do here is to go through the "
+            "notes from the last meeting first, because there were some open "
+            "questions about who is responsible for the deployment and whether "
+            "we can move the date, and I don't want us to lose track of that "
+            "again like we did last time.",
+            10.0,
+            30.0,
+        )
+    ]
+
+    def test_keeps_generic_lines_that_chance_match_a_monologue(self) -> None:
+        entries = [
+            mic("No, I don't think so.", 12.0, 13.5),
+            mic("Yeah, I think so.", 15.0, 16.0),
+            mic("Who is taking notes today?", 18.0, 19.5),
+            mic("Sorry, could you go back one slide?", 22.0, 24.0),
+        ]
+        assert drop_echo_duplicates(entries, self.MONOLOGUE) == entries
+
+    def test_still_drops_an_echo_of_one_sentence_inside_the_monologue(self) -> None:
+        """The density denominator must not over-correct: an echo that is a
+        contiguous slice of a longer remote line is still an echo."""
+        entries = [
+            mic("because there were some open questions about who is responsible", 14.0, 18.0)
+        ]
+        assert drop_echo_duplicates(entries, self.MONOLOGUE) == []
+
+
 class TestWindow:
     def test_respects_the_overlap_window(self) -> None:
         system = [remote("we are mainly talking about the motion model", 0.0, 4.0)]

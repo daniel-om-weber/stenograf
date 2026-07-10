@@ -224,7 +224,9 @@ def main() -> None:
     default=True,
     help="Cancel speaker bleed out of the mic, using the system channel as the "
     "reference. Only applies when both channels are captured; harmless on "
-    "headphones. Disable to capture the mic exactly as the device hears it.",
+    "headphones. Disable to capture the mic exactly as the device hears it — "
+    "this also disables the cross-channel echo dedup at merge time, so no mic "
+    "line is ever dropped.",
 )
 @click.option(
     "--aec-dump",
@@ -355,6 +357,7 @@ def start(
         reid=reid,
         language=profile.language,
         glossary_threshold=glossary_threshold,
+        dedup_echo=use_aec,
     )
 
     tee = _make_tee(record_audio, audio_default, plans)
