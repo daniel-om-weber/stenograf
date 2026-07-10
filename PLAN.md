@@ -475,8 +475,10 @@ quickly becomes the priority over the accuracy/in-memory core.
 **Status (2026-07-10): Phases 0–3 are complete. Phase 4 is in progress — Stages A
 (foundations), B (archive + reverse control), D (meeting notes), and E (macOS
 distribution) are shipped, and stenograf 0.1.0 is on PyPI
-(`uv tool install stenograf`). The one remaining Phase 4 work item is Stage C
-(the local web UI). Phase 5 (Linux) is designed but deferred.** The per-task
+(`uv tool install stenograf`). The one remaining Phase 4 work item is Stage C —
+re-scoped 2026-07-10 from the local web UI to a small reverse-control CLI; the
+browser UI itself is deferred, demand-driven. Phase 5 (Linux) is designed but
+deferred.** The per-task
 build logs of the completed phases were removed from this file on 2026-07-10;
 they live in its git history (and in PLAN-AEC.md for echo cancellation).
 
@@ -579,11 +581,16 @@ through the already-shipped `stenograf.asr` factory; full sub-plan under
 
 Planned July 2026 by a five-subagent design pass (web UI · persistence/archive ·
 Linux backends · notes · distribution); Stages A, B, D, and E are shipped and
-summarized below, Stage C remains in full.
+summarized below. Stage C was re-scoped on 2026-07-10 from the web UI to a
+reverse-control CLI; the original web design is preserved after it as a
+demand-driven deferral.
 
 **Locked scope decisions (Daniel, July 2026):**
 - **Product layer first; Linux deferred to Phase 5.** Phase 4 = a tangible
   Mac-native product (web UI + archive + notes) + the macOS shipping path.
+  *(Amended 2026-07-10: the web-UI leg re-scoped to the Stage C reverse-control
+  CLI, browser view deferred — the TUI and the Obsidian note export cover its
+  use cases today.)*
 - **`steno start` writes into a managed archive dir by default** —
   `data_dir()/meetings/<id>/transcript.*`; `--out PATH` overrides and still
   registers. Makes the archive an authoritative library, not an index over
@@ -593,7 +600,8 @@ summarized below, Stage C remains in full.
   live in the JSON); archive audio **playback** and archived **re-diarize** are
   opt-in, gated on one `record.has_audio()` predicate.
 
-**Adopted recommendations still governing Stage C:** web server = **Starlette +
+**Adopted recommendations for the deferred web UI** (kept so a future build
+doesn't re-litigate them): web server = **Starlette +
 uvicorn** (one localhost port for HTTP + WebSocket + static assets +
 reverse-control POSTs; in-process `TestClient` = the headless-test analogue of
 the TUI's `app.run_test()`); web front-end = **vanilla JS + server-rendered
@@ -628,8 +636,8 @@ sticky per-field overrides on the warm backends — counts/language/reid — plu
 pure `rename_speaker`) and `ArchivedMeeting` (rename always works; refinalize
 gated on `has_audio()`, rehydrating a per-channel store from the recorded WAV
 and delegating to `MeetingSession`; persists via `MeetingArchive.rewrite`).
-These are the interfaces Stage C's archive/reader/reverse-control views (C5–C7)
-consume.
+These are the interfaces the Stage C reverse-control CLI sits on (and, if it is
+ever built, the deferred web UI's archive/reader/reverse-control views W5–W7).
 
 **Stage D — meeting notes: SHIPPED** (`stenograf.notes` + `stenograf.settings`;
 verified against the real `claude` CLI via the `STENOGRAF_NOTES_E2E=1`-gated
@@ -669,19 +677,52 @@ headless CI), a CI matrix (macos-15 + ubuntu) and `release.yml` with
 clean-install smoke tests and Trusted-Publishing. Release procedure: bump the
 version, tag `vX.Y.Z`, push — release.yml does the rest.
 
-**Stage C — Web UI (`stenograf.web`). THE REMAINING PHASE 4 WORK.** The web view
-is "a new `LiveView` + a `serve()` twin, zero core changes" — confirmed against
-`view.py`/`tui.py`/`session.py`. Task sequence (independent, testable
-increments; interface names illustrative; ``[dep:…]`` marks a hard
-prerequisite):
-- **C1 — wire protocol + `WebLiveView` (start here; no server).** Pure event→JSON encoders
+**Stage C — reverse-control CLI (re-scoped 2026-07-10; was the web UI). THE
+REMAINING PHASE 4 WORK.** Rationale for the re-scope: most of the web UI's value
+already exists more cheaply — the Textual TUI covers live captions, and
+`steno meetings list/show` plus the Stage D combined-note export (the Obsidian
+vault) cover browsing and reading — while the one real functional gap is
+reverse control, whose interfaces (B3/B4 `MeetingSession`/`ArchivedMeeting`)
+are built and tested but unreachable from the CLI. The genuinely web-only
+feature, click-a-word audio scrubbing, applies only to `--record-audio`
+meetings — a niche within a niche. The browser view moves to the demand-driven
+deferral below. **Phase 4 is complete when this stage lands.**
+- **C1 — `steno meetings rename <id> <old> <new>`.** Wire
+  `ArchivedMeeting.rename_speaker` (works for every archived meeting, audio or
+  not): relabel the transcript, rewrite the managed formats, refresh the index
+  metadata. Acceptance: `CliRunner` over a seeded archive — the label changes in
+  every written format and in `meetings show`; an absent label → clean error,
+  not a traceback. `[dep: B4 (shipped)]`
+- **C2 — `steno meetings refinalize <id>`** with `--local N` / `--remote M` /
+  `--lang de|en` / `--reid/--no-reid` (unset = keep, per `FinalizeRequest`).
+  Wire `ArchivedMeeting.refinalize` over freshly loaded backends; a record
+  without a `--record-audio` WAV → the `AudioUnavailable` case becomes a clean
+  message naming the constraint, not a traceback. Prints the same
+  detected/given speaker summary as `transcribe`. Acceptance: fake-backend
+  `CliRunner` matrix (count / language / reid overrides, empty-request keep,
+  no-audio error) + one real-backend e2e — a `--record-audio` meeting
+  refinalized with a corrected count rewrites under the same id with provenance
+  DETECTED→EXPLICIT. `[dep: B4 (shipped)]`
+- **C3 — docs.** The README archive section gains both commands;
+  `steno meetings --help` text reviewed. `[dep: C1, C2]`
+
+**Deferred — local web UI (`stenograf.web`), demand-driven.** Build only if a
+browser view is actually wanted (e.g. colleagues installing from PyPI ask for
+one). When that happens, start with the archive-only surface — the server core
+(W2, minus the live wiring), W3 security, the W5/W6 archive + reader views, and
+W8's `steno serve` — and add the live-caption stack (W1, W4) only if wanted:
+live is what the TUI already covers best. The web view remains "a new `LiveView`
++ a `serve()` twin, zero core changes" — confirmed against
+`view.py`/`tui.py`/`session.py`. Original task sequence (renumbered C→W;
+interface names illustrative; ``[dep:…]`` marks a hard prerequisite):
+- **W1 — wire protocol + `WebLiveView` (no server).** Pure event→JSON encoders
   in `web/protocol.py` (`encode_commit`/…/`encode_finalized` reusing the `Transcript.to_json`
   shape); `web/live.py::WebLiveView(LiveView)` overriding each event, marshaling onto the
   server loop via `loop.call_soon_threadsafe` (the `TextualLiveView._marshal` analogue) into
   a `CaptionHub` (per-connection `asyncio.Queue`s + retained backlog for late joiners).
   Acceptance: unit-test encoders; drive `WebLiveView` from a fake worker thread → subscriber
   gets ordered frames; before-ready/after-close drops (marshal-gate parity). `[dep: none new]`
-- **C2 — server + `serve()` + `steno start --web`.** `starlette`+`uvicorn` deps;
+- **W2 — server + `serve()` + `steno start --web`.** `starlette`+`uvicorn` deps;
   `web/app.py::create_app(hub, controls, security)` (`GET /` live shell, `Mount(StaticFiles)`,
   `WebSocketRoute("/ws")` — subscribe + inbound `{type:"stop"}` → `controls.stop()` on a bg
   thread, the `tui._invoke_stop` discipline); `web/server.py::serve(...)` the `tui.serve`
@@ -689,38 +730,40 @@ prerequisite):
   `live.js`+`app.css`. CLI: `--web` as a 4th branch in `_run_meeting`, precedence
   `--web > --plain > TTY→TUI > non-TTY→plain`. **Post-finalize: server stays up** and hands
   off to the reader (adopted rec). Acceptance: headless `TestClient` WS end-to-end + real
-  `steno start --replay --web`. `[dep: C1]`
-- **C3 — security (token + Origin/Host guard).** `web/security.py::mint_token()`; ASGI
+  `steno start --replay --web`. `[dep: W1]`
+- **W3 — security (token + Origin/Host guard).** `web/security.py::mint_token()`; ASGI
   middleware / WS-accept hook enforcing the per-process token (header/query) + a
   `Host`/`Origin` ∈ {127.0.0.1, localhost}:port check (DNS-rebinding defense; token-in-header
   means classic CSRF doesn't apply). Bind `127.0.0.1` only; print the tokenized URL. Lands
   **before** any reverse-control POST. Acceptance: `TestClient` rejects missing-token /
-  foreign-Origin, accepts token+loopback. `[dep: C2]`
-- **C4 — live-view resilience + polish.** Late-join backlog replay, reconnect-on-drop,
+  foreign-Origin, accepts token+loopback. `[dep: W2]`
+- **W4 — live-view resilience + polish.** Late-join backlog replay, reconnect-on-drop,
   speaker colors, REC/elapsed header, animation-free finalize swap; **a browser disconnect
   must NOT stop the meeting** (a tab is detachable, unlike the TUI). Acceptance: `TestClient`
-  drops+reopens the WS and converges; disconnect doesn't call `controls.stop`. `[dep: C2]`
-- **C5 — archive list view.** `GET /meetings` + `GET /api/meetings` over the B1 index;
-  `archive.js`. Acceptance: `TestClient` lists a seeded index. `[dep: C2, B1]`
-- **C6 — transcript reader + click-to-jump (text).** `GET /meetings/{id}` +
+  drops+reopens the WS and converges; disconnect doesn't call `controls.stop`. `[dep: W2]`
+- **W5 — archive list view.** `GET /meetings` + `GET /api/meetings` over the B1 index;
+  `archive.js`. Acceptance: `TestClient` lists a seeded index. `[dep: W2, B1]`
+- **W6 — transcript reader + click-to-jump (text).** `GET /meetings/{id}` +
   `GET /api/meetings/{id}` via A1; `reader.js` renders `<span data-start>` per word (click
   highlights/scrolls); `GET …/audio` streams the WAV **only** when `has_audio()`. Text-jump
   ships regardless of the audio decision. Acceptance: word spans carry timestamps; audio
-  endpoint 404s cleanly with no recording. `[dep: C5, A1]`
-- **C7 — reverse-control POSTs.** `POST …/refinalize` and `POST …/speakers/{label}/rename`
-  consuming the B3/B4 interface; Task-C3 token+Origin applied; the "Detected: German, 2
-  remote — [edit]" affordance. Acceptance: `TestClient` POST-with-token refinalizes a fake
-  session; without token → 403. `[dep: C3, B3, B4]`
-- **C8 — `steno serve` (archive-only) + asset packaging + docs.** A standalone server for
-  Views 2/3 without starting a meeting (the everyday "browse my meetings"); package
-  `web/static`+`web/templates` into the wheel; `steno doctor` web check. Acceptance: boots
-  headless, `TestClient` lists+reads a seeded archive from the *installed* package. `[dep:
-  C5–C7]`
+  endpoint 404s cleanly with no recording. `[dep: W5, A1]`
+- **W7 — reverse-control POSTs.** `POST …/refinalize` and `POST …/speakers/{label}/rename`
+  consuming the B3/B4 interface (the same operations as the Stage C CLI); Task-W3
+  token+Origin applied; the "Detected: German, 2 remote — [edit]" affordance. Acceptance:
+  `TestClient` POST-with-token refinalizes a fake session; without token → 403.
+  `[dep: W3, B3, B4]`
+- **W8 — `steno serve` (archive-only) + asset packaging + docs.** A standalone server for
+  the archive/reader views without starting a meeting (the everyday "browse my meetings");
+  package `web/static`+`web/templates` into the wheel; `steno doctor` web check. Acceptance:
+  boots headless, `TestClient` lists+reads a seeded archive from the *installed* package.
+  `[dep: W5–W7]`
 
-**Ordering.** Stage C is all that remains: **C1 → C2 → C3 → C4**, with C5–C7
-gating on the shipped Stage B interfaces and C8 packaging the assets. C8
-re-touches packaging (the `web/static` assets), so re-run E4's clean-install
-smoke test after it; E1's build hook needs no change (assets are package data).
+**Ordering.** Stage C (C1 → C2 → C3, all sitting directly on the shipped B4
+interfaces) is all that remains of Phase 4. If the deferred web UI is ever
+built, W8 re-touches packaging (the `web/static` assets), so re-run E4's
+clean-install smoke test after it; E1's build hook needs no change (assets are
+package data).
 
 **Deferred to Phase 5 (Linux Track 2 — designed, not built).** A CPU/ONNX ASR backend
 `stenograf/asr/sherpa.py::SherpaOnnxASRBackend` (`name="parakeet-onnx"`) wrapping the *same*
