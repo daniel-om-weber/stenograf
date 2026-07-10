@@ -1368,7 +1368,9 @@ marks a hard prerequisite):
   `ArchivedMeeting` — that record still supports rename + playback. Unblocks C7 (web reverse-
   control POSTs consume `MeetingSession`/`ArchivedMeeting`).*
 
-**Stage E — macOS distribution (the shipping path). ← CURRENT PRIORITY: start here.**
+**Stage E — macOS distribution (the shipping path). E1–E3 shipped 2026-07-10; E4 (CI +
+PyPI) and E5 (README flip to the PyPI path) remain. `uv tool install git+<repo>` is the
+working install path today.**
 Ships the current Mac tool to colleagues via PyPI; the `stenocap` bundling is the one true
 shipping blocker. Promoted ahead of C and D on 2026-07-10 — Stages A+B built a real product
 that no one but this checkout can run.
@@ -1392,17 +1394,37 @@ verifiable, and repeatable.
   exists to kill). Acceptance: `uv build` emits the arm64 wheel carrying
   `stenograf/bin/stenocap`; clean-venv install → `find_helper` returns an executable
   site-packages path; the `any` wheel has no `bin/`. `[dep: none]`
+  *Status (2026-07-10): shipped (`hatch_build.py`, registered via
+  `[tool.hatch.build.targets.wheel.hooks.custom]`; `tests/test_build_hook.py`). Verified:
+  `uv build` emits the tagged arm64 wheel from the sdist (proving the Swift sources ship in
+  it) with the signed helper at 0755; a clean `uv tool install git+file://<repo>` → `steno
+  doctor` fully green, helper resolves to site-packages, and `steno setup` captures real
+  audio on both channels. Two resolver traps fixed along the way: `requires-python` capped
+  `<3.14` (the parakeet-mlx → librosa → numba chain has no 3.14 support, and a 3.14-default
+  machine otherwise backtracks into unbuildable sdists) and a marker-gated `numba>=0.60`
+  floor (else a fresh resolve keeps the newest numpy and backtracks numba into pre-metadata
+  sdists).*
 - **E2 — dep markers/matrix + atomic tar extract.** Confirm the wheel matrix
   (arm64-with-helper + pure `any`); keep `parakeet-mlx` marker-gated; reserve a `[ollama]`
   extra name only (no dep). Fold in the deferred **atomic model extraction (tar path)** fix
   (`models._extract_member` → temp+`os.replace`). Acceptance: `uv sync` resolves on both OSes;
   interrupted extraction leaves no truncated model. `[dep: none]`
+  *Status (2026-07-10): shipped (empty `[ollama]` extra reserved; atomic extract in
+  `models._extract_member` + truncated-archive test). Cross-OS resolution rides on the
+  existing lock; the Linux leg is re-checked by E4's CI matrix.*
 - **E3 — signing verified + `doctor`/`steno setup` permission UX.** Verify the ad-hoc
   signature survives the zip round-trip (`codesign -v`, no `com.apple.quarantine`) and the
   binary is launchable; extend `_capture_helper_check` (present + executable + signed) and
   add a `steno setup` that deliberately triggers the one-time TCC mic+system-audio prompt.
   Acceptance: `steno doctor` green on a clean install; honest limits documented (per-terminal
   grant, no headless system-audio). `[dep: E1]`
+  *Status (2026-07-10): shipped. Signature verified through the wheel zip round-trip
+  (`codesign -v` passes, no quarantine attr); `_capture_helper_check` now also requires
+  executable + valid signature; `steno setup` runs the helper until the first mic frame —
+  the helper requests mic permission, then creates the system tap, then starts the mic
+  engine, so one mic frame proves both TCC grants (the system channel is silent without
+  playback and can't be the signal). Per-terminal-app grant documented in README + the
+  command's output.*
 - **E4 — CI + release pipeline.** `.github/workflows/ci.yml` (matrix macos-14 + ubuntu-latest:
   `ruff` + `pytest`, model-gated + real-audio tests self-skip — the Linux job keeps the suite
   collecting, per the Tier-1 `scipy` fix) and `release.yml` (build the arm64 + `any` wheels +
