@@ -90,7 +90,7 @@ class LiveDecoder:
         endpoint_silence: float = 0.6,
         pre_roll: float = 0.25,
         match_tolerance: float = 0.15,
-        decode_interval: float = 0.75,
+        decode_interval: float | None = 0.75,
     ) -> None:
         self._asr = asr
         self._vad = vad
@@ -108,6 +108,9 @@ class LiveDecoder:
         # Minimum audio time between speculative window re-decodes. Frames arrive
         # ~5×/s and each decode re-runs the whole window, so this is the GPU duty
         # cycle; endpoint and overflow flushes bypass it (accuracy-critical).
+        # None = utterance mode: no speculative decodes at all — captions land
+        # once per utterance and each second of speech is decoded exactly once
+        # (the efficiency floor; needs a VAD to see any commits before flush).
         self.decode_interval = decode_interval
 
         self._buf = np.zeros(0, dtype=np.float32)
@@ -134,6 +137,7 @@ class LiveDecoder:
 
         audio_end = self._audio_end()
         speech = self._speech()
+        uncommitted_speech = True  # without a VAD, assume the tail is speech
         if speech is not None:
             committed_end = self._committed_end()
             last_speech = speech[-1].end if speech else self._buf_start
@@ -150,17 +154,20 @@ class LiveDecoder:
                 self._reset_buf()
                 return StreamingUpdate((), "")
 
-        # Bound the window: if LocalAgreement stalls through more than window_cap
-        # of unbroken speech, force the pending tail out (in order) rather than
-        # growing the buffer or dropping un-transcribed audio. Rare — the spike
-        # measured parakeet committing steadily (PLAN.md §2 Live ASR).
+        # Bound the window: past window_cap of unbroken speech, force the tail out
+        # (in order) rather than growing the buffer or dropping un-transcribed
+        # audio. In utterance mode this is the only mid-utterance decode, so it
+        # must fire on uncommitted *audio* — a pending LocalAgreement tail may
+        # never exist.
         keep_from = max(self._committed_end() - self.left_context, self._buf_start)
-        if audio_end - keep_from > self.window_cap and self._buffer:
+        if audio_end - keep_from > self.window_cap and (self._buffer or uncommitted_speech):
             return StreamingUpdate(tuple(self._finalize_utterance(speech)), "")
 
         # Throttle: a speculative re-decode within decode_interval of the last one
         # would mostly re-transcribe the same audio — skip it, keep the interim.
-        if audio_end - self._last_decode_end < self.decode_interval:
+        # In utterance mode (interval None) speculative decodes never run; the
+        # endpoint, overflow, and flush paths above do all the decoding.
+        if self.decode_interval is None or audio_end - self._last_decode_end < self.decode_interval:
             return StreamingUpdate((), self._interim_text())
 
         words = self._decode()

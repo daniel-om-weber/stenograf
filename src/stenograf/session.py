@@ -688,12 +688,20 @@ class MeetingRecorder:
         language: Language | None = None,
         glossary_threshold: float | None = None,
         dedup_echo: bool = True,
+        live_decode_interval: float | None = None,
     ) -> None:
         self.profile = profile
         self.asr = asr
         self.vad = vad
         self.diarizer = diarizer
         self.reid = reid
+        self.live_decode_interval = live_decode_interval
+        """Live pass decode cadence. None (the default) is utterance mode: captions
+        land once per VAD-closed utterance and each second of speech is decoded
+        exactly once — the efficiency floor, chosen because the live view runs in
+        the background (nobody trades watts for sub-second captions). A float
+        restores speculative LocalAgreement re-decodes at that interval for a
+        future low-latency mode."""
         self.dedup_echo = dedup_echo
         """Whether finalize may run :func:`drop_echo_duplicates` on the mic channel.
         The CLI ties this to ``--aec``: with cancellation off the user asked for
@@ -883,7 +891,13 @@ class MeetingRecorder:
         channels = [p.channel for p in plans]
         bus = AudioBus(channels)
         decoders = {
-            ch: LiveDecoder(self.asr, vad=self.vad, language=self.language) for ch in channels
+            ch: LiveDecoder(
+                self.asr,
+                vad=self.vad,
+                language=self.language,
+                decode_interval=self.live_decode_interval,
+            )
+            for ch in channels
         }
         inference_lock = threading.Lock()
 

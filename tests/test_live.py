@@ -338,6 +338,59 @@ class TestDecodeThrottle:
         assert [x.text for x in update.committed] == ["hallo", "welt"]
 
 
+class TestUtteranceMode:
+    """decode_interval=None: no speculative decodes — the efficiency floor."""
+
+    def test_one_decode_per_utterance_at_the_endpoint(self):
+        asr = ScriptedASR(
+            [
+                [w("hallo", 0.1, 0.5), w("welt", 0.6, 0.9)],
+            ]
+        )
+        vad = FakeVAD(
+            [
+                [SpeechSegment(0.0, 1.0)],  # speech runs to the live edge
+                [SpeechSegment(0.1, 0.9)],  # feed 2: the tail has gone quiet
+            ]
+        )
+        dec = LiveDecoder(asr, vad=vad, grey_zone=2.0, endpoint_silence=0.6, decode_interval=None)
+        held = dec.feed(pcm(1.0), 0.0)
+        assert dec.decodes == 0  # mid-utterance: no speculative decode at all
+        assert held.committed == () and held.interim == ""
+
+        update = dec.feed(pcm(1.0), 1.0)  # the pause closes the utterance
+        assert dec.decodes == 1  # the whole utterance cost exactly one decode
+        assert [x.text for x in update.committed] == ["hallo", "welt"]
+
+    def test_unbroken_speech_flushes_at_window_cap(self):
+        # No endpoint ever fires and no LocalAgreement tail exists, so the
+        # overflow bound must fire on uncommitted *speech* or a monologue would
+        # buffer without limit.
+        asr = ScriptedASR([[w("mono", 0.2, 3.5)]])
+        vad = FakeVAD(
+            [
+                [SpeechSegment(0.0, 1.0)],
+                [SpeechSegment(0.0, 2.0)],
+                [SpeechSegment(0.0, 3.0)],
+                [SpeechSegment(0.0, 4.0)],
+            ]
+        )
+        dec = LiveDecoder(asr, vad=vad, grey_zone=2.0, window_cap=3.0, decode_interval=None)
+        for i in range(3):
+            dec.feed(pcm(1.0), float(i))
+        assert dec.decodes == 0
+        update = dec.feed(pcm(1.0), 3.0)  # audio_end 4.0 > window_cap
+        assert dec.decodes == 1
+        assert [x.text for x in update.committed] == ["mono"]
+
+    def test_silence_still_decodes_nothing(self):
+        asr = ScriptedASR([[w("x", 0.1, 0.4)]])
+        dec = LiveDecoder(asr, vad=FakeVAD([[]]), decode_interval=None)
+        for i in range(5):
+            dec.feed(pcm(1.0), float(i))
+        assert asr.calls == 0 and dec.decodes == 0
+
+
 class TestVadGating:
     def test_no_decode_in_silence(self):
         asr = ScriptedASR([[w("x", 0.1, 0.4)]])
