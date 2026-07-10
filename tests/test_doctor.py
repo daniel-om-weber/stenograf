@@ -17,11 +17,48 @@ def test_capture_helper_check_reports_found(monkeypatch, tmp_path):
 
     helper = tmp_path / "stenocap"
     helper.write_bytes(b"\x00")
+    helper.chmod(0o755)
     monkeypatch.setattr(macos, "find_helper", lambda: helper)
+    monkeypatch.setattr(doctor, "_codesign_valid", lambda path: (True, ""))
     check = doctor._capture_helper_check()
     assert check.ok
     assert str(helper) in check.detail
     assert "permission" in check.detail  # first-run permission guidance surfaced
+
+
+def test_capture_helper_check_rejects_non_executable(monkeypatch, tmp_path):
+    from stenograf.capture import macos
+
+    helper = tmp_path / "stenocap"
+    helper.write_bytes(b"\x00")
+    helper.chmod(0o644)
+    monkeypatch.setattr(macos, "find_helper", lambda: helper)
+    check = doctor._capture_helper_check()
+    assert not check.ok
+    assert "executable" in check.detail
+
+
+def test_capture_helper_check_rejects_bad_signature(monkeypatch, tmp_path):
+    from stenograf.capture import macos
+
+    helper = tmp_path / "stenocap"
+    helper.write_bytes(b"\x00")
+    helper.chmod(0o755)
+    monkeypatch.setattr(macos, "find_helper", lambda: helper)
+    monkeypatch.setattr(doctor, "_codesign_valid", lambda path: (False, "code has no signature"))
+    check = doctor._capture_helper_check()
+    assert not check.ok
+    assert "signature" in check.detail
+    assert "build.sh" in check.detail  # points at the fix
+
+
+def test_codesign_valid_against_real_codesign(tmp_path):
+    # An arbitrary file is not validly signed; the real codesign must say so.
+    unsigned = tmp_path / "not-a-binary"
+    unsigned.write_bytes(b"\x00" * 16)
+    ok, why = doctor._codesign_valid(unsigned)
+    assert not ok
+    assert why  # carries codesign's reason (or its absence off-macOS)
 
 
 def test_capture_helper_check_reports_missing(monkeypatch):

@@ -103,3 +103,29 @@ def test_fetch_missing_member_raises(monkeypatch, tmp_path):
         models.fetch(asset)
     # The failed download left nothing behind the "already cached" check.
     assert models.cached_path(asset) is None
+    assert not list(tmp_path.glob("*.part"))  # no extraction temp left behind
+
+
+def test_interrupted_extraction_leaves_no_truncated_model(monkeypatch, tmp_path):
+    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
+    asset = models.PYANNOTE_SEGMENTATION
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:bz2") as tar:
+        info = tarfile.TarInfo(asset.archive_member)
+        payload = b"x" * (1 << 16)
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    # Cut the archive mid-stream: decompression dies while the member is being
+    # written out, exactly the crash window the atomic rename protects.
+    truncated = buffer.getvalue()[: buffer.tell() // 2]
+
+    monkeypatch.setattr(
+        models.urllib.request,
+        "urlretrieve",
+        lambda url, filename, reporthook=None: Path(filename).write_bytes(truncated),
+    )
+    with pytest.raises(Exception):  # noqa: B017 - bz2 raises OSError/EOFError variants
+        models.fetch(asset)
+    assert models.cached_path(asset) is None  # nothing behind the "already cached" check
+    assert not list(tmp_path.glob("*.part"))

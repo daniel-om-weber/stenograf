@@ -1033,6 +1033,51 @@ def doctor() -> None:
         raise SystemExit(1)
 
 
+@main.command()
+def setup() -> None:
+    """Grant the microphone and system-audio permissions (one-time).
+
+    Launches the capture helper so macOS shows both permission prompts now
+    instead of at the start of your first meeting. Nothing is recorded. macOS
+    scopes the grant to the app the helper was launched from, so re-run this
+    from each terminal app (or IDE) you will run meetings from.
+    """
+    if sys.platform != "darwin":
+        raise click.ClickException("setup is macOS-only — capture is not supported here yet")
+    from stenograf.capture.base import Channel
+    from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
+
+    try:
+        provider = MacOSCaptureProvider()
+    except HelperNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo("Starting the capture helper — answer the macOS permission prompts if they appear.")
+    provider.start({Channel.MIC, Channel.SYSTEM})
+    got_mic = False
+    try:
+        # The helper requests mic permission, then creates the system-audio tap
+        # (the second TCC prompt), then starts the mic engine — so one mic frame
+        # proves both grants. The system channel is silent while nothing plays,
+        # so it cannot be the signal. On a denial the helper exits with the
+        # reason on stderr and the frame stream ends without a mic frame.
+        for frame in provider.frames():
+            if frame.channel is Channel.MIC:
+                got_mic = True
+                break
+    finally:
+        provider.stop()
+    if not got_mic:
+        raise click.ClickException(
+            "the capture helper exited before delivering audio — a permission was denied "
+            "(see the message above). Re-enable it under System Settings → Privacy & "
+            "Security → Microphone / Screen & System Audio Recording, then re-run "
+            "`steno setup`."
+        )
+    click.echo(click.style("✓", fg="green") + " microphone and system-audio access granted.")
+    click.echo("  The grant is per launching app — a different terminal or IDE prompts again.")
+
+
 @main.group()
 def profiles() -> None:
     """Manage saved speaker voiceprints for cross-meeting re-identification.

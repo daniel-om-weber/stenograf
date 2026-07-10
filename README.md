@@ -9,11 +9,9 @@ in from the start.
 
 > **Status: pre-alpha, macOS only, not yet on PyPI.** The pipeline is complete
 > end to end: live system-audio + microphone capture, live captions, and the
-> high-accuracy speaker-labelled finalize pass. What is missing is the *shipping*
-> path — the wheel does not yet bundle the `stenocap` capture helper, so
-> `uv tool install` cannot capture audio. Install from source (below) until that
-> lands. The local web UI, meeting notes, and Linux capture are not built yet.
-> See [PLAN.md](PLAN.md).
+> high-accuracy speaker-labelled finalize pass. Installing straight from this
+> repository works (below); PyPI wheels, the local web UI, meeting notes, and
+> Linux capture are not built yet. See [PLAN.md](PLAN.md).
 
 ## Why another transcription tool?
 
@@ -33,23 +31,33 @@ in from the start.
 
 ## Install
 
-Requires macOS 14.4+ on Apple Silicon, [uv](https://docs.astral.sh/uv/), and a
-Swift toolchain (Xcode command-line tools) to build the capture helper.
+Requires macOS 14.4+ on Apple Silicon, [uv](https://docs.astral.sh/uv/), and —
+until wheels are on PyPI — the Xcode command-line tools (`xcode-select
+--install`), because installing from the repository compiles the `stenocap`
+capture helper on your machine.
+
+```sh
+uv tool install git+https://github.com/daniel-om-weber/stenograf
+steno doctor    # environment checks & model download
+steno setup     # one-time macOS mic + system-audio permission prompts
+```
+
+macOS scopes the permission grant to the app the prompt came from, so run
+`steno setup` once from each terminal app (or IDE) you'll start meetings from.
+`uv tool install stenograf` (no toolchain needed) becomes the install path once
+wheels are published to PyPI (PLAN.md Phase 4, Stage E4).
+
+### From a checkout
 
 ```sh
 git clone https://github.com/daniel-om-weber/stenograf
 cd stenograf
 uv sync
 sh native/helper/build.sh     # builds + ad-hoc signs native/helper/stenocap
-uv run steno doctor           # first-run checks & model download
+uv run steno doctor
 ```
 
-Every command below is then run as `uv run steno …` from the repo. On first
-capture, macOS asks once for microphone and system-audio permission.
-
-`uv tool install stenograf` will be the install path once the wheel bundles the
-helper (PLAN.md Phase 4, Stage E); today it installs a package that cannot
-capture live audio. Batch transcription of a file works anywhere.
+Every command below is then `uv run steno …` from the repo.
 
 ## Usage
 

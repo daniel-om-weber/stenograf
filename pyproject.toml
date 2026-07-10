@@ -34,6 +34,12 @@ dependencies = [
     "livekit>=1.1",
 ]
 
+[project.optional-dependencies]
+# Reserved for the Stage D note-enhancement layer. The Ollama client will be
+# stdlib-only, so the extra stays empty — naming it now keeps
+# `stenograf[ollama]` a valid requirement before and after Stage D lands.
+ollama = []
+
 [project.urls]
 Repository = "https://github.com/daniel-om-weber/stenograf"
 Issues = "https://github.com/daniel-om-weber/stenograf/issues"
@@ -46,6 +52,9 @@ steno = "stenograf.cli:main"
 dev = [
     "pytest>=8",
     "ruff>=0.4",
+    # tests/test_build_hook.py imports hatch_build.py (the wheel build hook),
+    # which imports the build backend.
+    "hatchling>=1.27",
     # eval/der.py + tests/test_eval_der.py (both in the default test suite) import
     # scipy. On macOS it resolves transitively via parakeet-mlx→librosa, but that
     # chain is macOS-arm64-only, so declare it here or `pytest` fails to collect the
@@ -86,6 +95,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stenograf"]
+
+# Bundles the compiled `stenocap` capture helper on macOS-arm64 and tags the
+# wheel platform-specific; a no-op (pure py3-none-any wheel) everywhere else.
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
 
 [tool.ruff]
 line-length = 100

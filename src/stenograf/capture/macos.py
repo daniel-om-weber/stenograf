@@ -55,7 +55,12 @@ def find_helper() -> Path:
 
     packaged = resources.files("stenograf") / "bin" / HELPER_NAME
     if packaged.is_file():
-        return Path(str(packaged))
+        path = Path(str(packaged))
+        # Some install paths drop the executable bit from wheel contents;
+        # restore it on our own binary rather than failing with EACCES.
+        if not os.access(path, os.X_OK):
+            path.chmod(path.stat().st_mode | 0o755)
+        return path
 
     # Dev fallback: native/helper/stenocap in the source tree.
     dev = Path(__file__).resolve().parents[3] / "native" / "helper" / HELPER_NAME

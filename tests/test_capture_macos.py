@@ -1,4 +1,5 @@
 import io
+import os
 import struct
 import sys
 from pathlib import Path
@@ -83,6 +84,21 @@ class TestFindHelper:
         target.write_text("")
         monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(target))
         assert find_helper() == target
+
+    def test_packaged_binary_regains_executable_bit(self, monkeypatch, tmp_path):
+        # A wheel-installed binary that lost its executable bit (some install
+        # paths drop it) must come back executable, not fail later with EACCES.
+        import stenograf.capture.macos as macos
+
+        monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)
+        packaged = tmp_path / "bin" / "stenocap"
+        packaged.parent.mkdir()
+        packaged.write_bytes(b"\x00")
+        packaged.chmod(0o644)
+        monkeypatch.setattr(macos.resources, "files", lambda package: tmp_path)
+        found = find_helper()
+        assert found == packaged
+        assert os.access(found, os.X_OK)
 
     def test_raises_when_absent(self, monkeypatch):
         monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 
@@ -62,11 +64,37 @@ def _capture_helper_check() -> Check:
         return Check(name="Capture helper", ok=False, detail=str(exc))
     if not path.is_file():
         return Check(name="Capture helper", ok=False, detail=f"{path} is set but missing")
+    if not os.access(path, os.X_OK):
+        return Check(
+            name="Capture helper", ok=False, detail=f"{path} is not executable — chmod +x it"
+        )
+    signed, why = _codesign_valid(path)
+    if not signed:
+        return Check(
+            name="Capture helper",
+            ok=False,
+            detail=f"{path} has no valid code signature ({why}) — macOS refuses audio "
+            "permissions to unsigned binaries; rebuild with native/helper/build.sh",
+        )
     return Check(
         name="Capture helper",
         ok=True,
-        detail=f"{path} — mic + system-audio permission is requested on first `steno start`",
+        detail=f"{path} — signed; grant the mic + system-audio permission once with `steno setup`",
     )
+
+
+def _codesign_valid(path) -> tuple[bool, str]:
+    """Whether ``codesign --verify`` accepts the binary (ad-hoc signatures pass)."""
+    try:
+        proc = subprocess.run(
+            ["codesign", "--verify", str(path)], capture_output=True, text=True, timeout=30
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, f"codesign unavailable: {exc}"
+    if proc.returncode == 0:
+        return True, ""
+    lines = proc.stderr.strip().splitlines()
+    return False, lines[-1] if lines else "invalid signature"
 
 
 def _asr_check() -> Check:

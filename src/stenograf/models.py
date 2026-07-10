@@ -98,13 +98,22 @@ def fetch(asset: ModelAsset, progress: ProgressHook | None = None) -> Path:
 
 
 def _extract_member(archive: Path, member: str, target: Path) -> None:
-    with tarfile.open(archive) as tar:
-        try:
-            src = tar.extractfile(member)  # KeyError if the name is absent
-        except KeyError:
-            src = None
-        if src is None:  # missing, or the name is a directory/link
-            raise RuntimeError(f"{archive.name}: no member {member!r}")
-        with src, open(target, "wb") as dst:
-            while chunk := src.read(1 << 20):
-                dst.write(chunk)
+    # Extract to a sibling temp file and rename, mirroring the download path:
+    # an interrupted extraction must never leave a truncated model where
+    # `cached_path` would report it as already downloaded.
+    with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".part", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        with tarfile.open(archive) as tar:
+            try:
+                src = tar.extractfile(member)  # KeyError if the name is absent
+            except KeyError:
+                src = None
+            if src is None:  # missing, or the name is a directory/link
+                raise RuntimeError(f"{archive.name}: no member {member!r}")
+            with src, open(tmp_path, "wb") as dst:
+                while chunk := src.read(1 << 20):
+                    dst.write(chunk)
+        tmp_path.replace(target)
+    finally:
+        tmp_path.unlink(missing_ok=True)

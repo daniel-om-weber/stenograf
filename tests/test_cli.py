@@ -1,5 +1,7 @@
 import json
+import sys
 import wave
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -643,3 +645,31 @@ def test_meetings_rm_keep_files_only_unregisters(tmp_path, monkeypatch):
     assert record.dir.exists()  # files left in place
     assert (record.dir / "transcript.json").exists()
     assert MeetingArchive.load().records() == []  # but unregistered
+
+
+def _helper_wrapper(tmp_path, *forced_args):
+    """An executable stand-in for stenocap; forced_args replace the real argv."""
+    fake = Path(__file__).parent / "fake_stenocap.py"
+    args = " ".join(forced_args) if forced_args else '"$@"'
+    script = tmp_path / "stenocap"
+    script.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{fake}" {args}\n')
+    script.chmod(0o755)
+    return script
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
+def test_setup_succeeds_when_mic_frames_flow(tmp_path, monkeypatch):
+    monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
+    result = CliRunner().invoke(cli.main, ["setup"])
+    assert result.exit_code == 0, result.output
+    assert "granted" in result.output
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
+def test_setup_fails_when_helper_dies_without_mic_frames(tmp_path, monkeypatch):
+    # A denied permission means the helper exits before its first mic frame;
+    # emitting only system frames then exiting reproduces that shape.
+    monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path, "--system")))
+    result = CliRunner().invoke(cli.main, ["setup"])
+    assert result.exit_code != 0
+    assert "denied" in result.output
