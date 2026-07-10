@@ -49,6 +49,17 @@ def test_padding_clamped_to_audio_bounds():
     assert windows == [(0.0, 30.0)]
 
 
+def test_long_silence_starts_a_new_window():
+    # max_gap: a run further than max_gap behind the window's last speech opens
+    # a new window even though the span would fit the budget — this is what lets
+    # the live window pass close (and decode) a window max_gap after speech
+    # stops, guaranteeing its windows equal this function's.
+    windows = pack_windows([seg(0, 5), seg(12, 20)], total_duration=60.0, max_gap=5.0)
+    assert len(windows) == 2
+    windows = pack_windows([seg(0, 5), seg(9, 20)], total_duration=60.0, max_gap=5.0)
+    assert len(windows) == 1
+
+
 @pytest.mark.skipif(
     models.cached_path(models.SILERO_VAD) is None or not _EVAL_WAV.exists(),
     reason="needs the cached silero model and the eval audio",

@@ -2,7 +2,7 @@ import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE
-from stenograf.live import LiveDecoder
+from stenograf.live import LiveDecoder, WindowedLiveDecoder
 from stenograf.vad import SpeechSegment
 
 
@@ -336,6 +336,127 @@ class TestDecodeThrottle:
         update = dec.feed(pcm(1.0), 1.0)
         assert dec.decodes == 2  # utterance finalize ran inside the interval
         assert [x.text for x in update.committed] == ["hallo", "welt"]
+
+
+class PackingVADStream:
+    """Scripted stream for the window pass: (completed, open) per feed/flush.
+
+    The script is owned by the fake VAD and consumed across stream rebuilds —
+    a real stream never re-emits runs it already delivered.
+    """
+
+    def __init__(self, owner: "PackingFakeVAD"):
+        self._owner = owner
+        self.pushed_samples = 0
+
+    def push(self, samples):
+        self.pushed_samples += len(samples)
+
+    def take_completed(self):
+        completed, _ = self._owner.current_step()
+        return list(completed)
+
+    def open_segment(self):
+        _, open_seg = self._owner.current_step()
+        self._owner.calls += 1  # called once per feed/flush, after take_completed
+        return open_seg
+
+
+class PackingFakeVAD:
+    def __init__(self, script: list[tuple[list[SpeechSegment], SpeechSegment | None]]):
+        self._script = script
+        self.calls = 0
+        self.streams: list[PackingVADStream] = []
+
+    def current_step(self):
+        return self._script[min(self.calls, len(self._script) - 1)]
+
+    def speech_segments(self, samples):
+        raise AssertionError("the window pass must not re-scan")
+
+    def stream(self, origin: float) -> PackingVADStream:
+        s = PackingVADStream(self)
+        self.streams.append(s)
+        return s
+
+
+class TestWindowedDecoder:
+    """The window pass: decode exactly the windows pack_windows would build."""
+
+    def test_window_closes_max_gap_after_speech(self):
+        asr = ScriptedASR([[w("hallo", 0.3, 0.9), w("welt", 1.0, 2.0)]])
+        vad = PackingFakeVAD(
+            [
+                ([SpeechSegment(1.0, 3.0)], None),  # run closed, silence follows
+                ([], None),
+                ([], None),
+            ]
+        )
+        dec = WindowedLiveDecoder(asr, vad=vad, max_gap=5.0)
+        dec.feed(pcm(4.0), 0.0)
+        assert dec.decodes == 0  # 4.0 - 3.0 = 1 s of silence: window still open
+        dec.feed(pcm(4.0), 4.0)
+        assert dec.decodes == 0  # 5 s: not yet beyond max_gap
+        update = dec.feed(pcm(1.0), 8.0)
+        assert dec.decodes == 1  # 6 s of silence closed the window
+        # The decode span starts at 1.0 - pad = 0.85; scripted times shift by it.
+        assert [x.text for x in update.committed] == ["hallo", "welt"]
+        assert abs(update.committed[0].start - (0.85 + 0.3)) < 1e-6
+
+    def test_budget_split_matches_pack_windows(self):
+        asr = ScriptedASR([[w("a", 1.0, 2.0)]])
+        vad = PackingFakeVAD(
+            [
+                ([SpeechSegment(0.0, 20.0)], None),
+                ([SpeechSegment(22.0, 35.0)], None),  # 35 - 0 > 30 → previous window closes
+                ([], None),
+            ]
+        )
+        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
+        dec.feed(pcm(21.0), 0.0)
+        assert dec.decodes == 0
+        dec.feed(pcm(15.0), 21.0)
+        assert dec.decodes == 1  # [0, 20] decoded; [22, 35] pends
+        flushed = dec.flush()
+        assert dec.decodes == 2  # the tail window decoded at end of stream
+        assert flushed.committed  # words from the second window
+
+    def test_open_run_past_budget_closes_the_window_early(self):
+        asr = ScriptedASR([[w("a", 1.0, 2.0)]])
+        vad = PackingFakeVAD(
+            [
+                ([SpeechSegment(0.0, 5.0)], None),
+                # An unbroken run is still open but already reaches past the shared
+                # budget: nothing can join the pending window any more, so waiting
+                # for the run to complete would only delay the caption.
+                ([], SpeechSegment(6.0, 31.0)),
+            ]
+        )
+        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
+        dec.feed(pcm(6.0), 0.0)
+        assert dec.decodes == 0
+        dec.feed(pcm(25.0), 6.0)
+        assert dec.decodes == 1  # [0, 5] decoded although the gap was only 1 s
+
+    def test_silence_costs_no_decodes_and_keeps_memory_bounded(self):
+        asr = ScriptedASR([[w("x", 0.1, 0.4)]])
+        dec = WindowedLiveDecoder(asr, vad=PackingFakeVAD([([], None)]))
+        for i in range(20):
+            dec.feed(pcm(1.0), float(i))
+        assert asr.calls == 0 and dec.decodes == 0
+        assert len(dec._buf) <= 2 * SAMPLE_RATE  # trimmed to the silence guard
+        assert dec.flush().committed == ()
+
+    def test_drop_window_abandons_the_pending_window(self):
+        asr = ScriptedASR([[w("x", 0.1, 0.4)]])
+        vad = PackingFakeVAD([([SpeechSegment(0.5, 1.5)], None), ([], None)])
+        dec = WindowedLiveDecoder(asr, vad=vad)
+        dec.feed(pcm(2.0), 0.0)
+        dec.drop_window()  # load-shed: the pending window is a caption gap now
+        dec.feed(pcm(1.0), 30.0)
+        assert dec.flush().committed == ()
+        assert dec.decodes == 0
+        assert len(vad.streams) == 2  # the stream was rebuilt at the new origin
 
 
 class TestUtteranceMode:

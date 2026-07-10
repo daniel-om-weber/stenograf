@@ -50,6 +50,7 @@ def finalize_channel(
     num_speakers: int | None = None,
     reid: SpeakerResolver | None = None,
     on_progress=None,
+    precomputed_words: tuple[Word, ...] | None = None,
 ) -> list[TranscriptEntry]:
     """Transcribe one channel; returns entries with raw ``S<n>`` speaker labels.
 
@@ -61,34 +62,46 @@ def finalize_channel(
     speaker-profile names; those entries carry the profile name instead of ``S<n>``
     (cross-meeting re-ID, PLAN.md §2). Unmatched clusters keep their ``S<n>`` label
     for the caller to template.
+
+    ``precomputed_words`` skips the VAD+ASR stage entirely: the words (absolute
+    session times) come from the live window pass, whose decodes are
+    finalize-identical (:class:`~stenograf.live.WindowedLiveDecoder`); only
+    diarization and merging run here. An empty tuple means the channel had no
+    speech. ``asr``/``vad``/``language`` are ignored in that case.
     """
-    duration = len(samples) / SAMPLE_RATE
-    if vad is not None:
-        windows = pack_windows(vad.speech_segments(samples), duration)
+    if precomputed_words is not None:
+        if diarizer is None or num_speakers == 1:
+            return group_words(sorted(precomputed_words, key=lambda w: w.start), "S0")
+        words = list(precomputed_words)
+        segments: list[Segment] = []
     else:
-        windows = [(0.0, duration)] if duration > 0 else []
+        duration = len(samples) / SAMPLE_RATE
+        if vad is not None:
+            windows = pack_windows(vad.speech_segments(samples), duration)
+        else:
+            windows = [(0.0, duration)] if duration > 0 else []
 
-    segments: list[Segment] = []
-    for i, (start, end) in enumerate(windows):
-        if on_progress is not None:
-            on_progress("asr", i, len(windows))
-        window = samples[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)]
-        segments.extend(_shift(seg, start) for seg in asr.transcribe(window, language))
-    segments.sort(key=lambda seg: seg.start)
+        segments = []
+        for i, (start, end) in enumerate(windows):
+            if on_progress is not None:
+                on_progress("asr", i, len(windows))
+            window = samples[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)]
+            segments.extend(_shift(seg, start) for seg in asr.transcribe(window, language))
+        segments.sort(key=lambda seg: seg.start)
 
-    if diarizer is None or num_speakers == 1:
-        return [
-            TranscriptEntry(
-                speaker="S0",
-                text=seg.text,
-                start=seg.start,
-                end=seg.end,
-                words=seg.words,
-            )
-            for seg in segments
-        ]
+        if diarizer is None or num_speakers == 1:
+            return [
+                TranscriptEntry(
+                    speaker="S0",
+                    text=seg.text,
+                    start=seg.start,
+                    end=seg.end,
+                    words=seg.words,
+                )
+                for seg in segments
+            ]
 
-    words = [word for seg in segments for word in seg.words]
+        words = [word for seg in segments for word in seg.words]
     if not words and segments:
         # A backend that emits text but no word timestamps (a contract
         # violation for diarized use — see ASRBackend) would otherwise drop the

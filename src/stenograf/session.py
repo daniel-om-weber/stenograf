@@ -52,7 +52,7 @@ from stenograf.config import (
 from stenograf.diarization.base import Diarizer
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
-from stenograf.live import LiveDecoder, StreamingUpdate
+from stenograf.live import LiveDecoder, StreamingUpdate, WindowedLiveDecoder
 from stenograf.pipeline import SpeakerResolver, finalize_channel, group_words, relabel_speakers
 from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD
@@ -533,6 +533,9 @@ class LiveWorker(threading.Thread):
         self._flush_interval = flush_interval
         self.error: BaseException | None = None
         self.shed_seconds = 0.0  # audio skipped by load-shedding (observability + tests)
+        # Per-channel shed audio: a channel with any shed has a live-caption gap,
+        # so the finalize pass must re-decode it instead of reusing live words.
+        self.shed_by_channel: dict[Channel, float] = dict.fromkeys(channels, 0.0)
 
     def run(self) -> None:
         seen: dict[Channel, float] = {ch: 0.0 for ch in self._channels}
@@ -577,7 +580,9 @@ class LiveWorker(threading.Thread):
         cap = self._decoders[channel].window_cap
         if mark - start <= cap:
             return start
-        self.shed_seconds += (mark - cap) - start
+        shed = (mark - cap) - start
+        self.shed_seconds += shed
+        self.shed_by_channel[channel] = self.shed_by_channel.get(channel, 0.0) + shed
         self._decoders[channel].drop_window()
         return mark - cap
 
@@ -696,12 +701,20 @@ class MeetingRecorder:
         self.diarizer = diarizer
         self.reid = reid
         self.live_decode_interval = live_decode_interval
-        """Live pass decode cadence. None (the default) is utterance mode: captions
-        land once per VAD-closed utterance and each second of speech is decoded
-        exactly once — the efficiency floor, chosen because the live view runs in
-        the background (nobody trades watts for sub-second captions). A float
-        restores speculative LocalAgreement re-decodes at that interval for a
-        future low-latency mode."""
+        """Live pass decode cadence. None (the default) selects the window pass
+        (:class:`~stenograf.live.WindowedLiveDecoder`): captions land a
+        finalize-sized window at a time, each second of speech is decoded exactly
+        once, and the on-stop finalize reuses those decodes verbatim (skipping
+        its own ASR pass) — the efficiency floor, chosen because the live view
+        runs in the background. A float restores speculative LocalAgreement
+        re-decodes at that interval for a future low-latency mode; the finalize
+        pass then re-decodes everything itself."""
+        self.reuse_live_finalize = True
+        """Whether the on-stop finalize may reuse the window pass's decodes.
+        ``--full-finalize`` clears it to force a from-scratch ASR pass at stop
+        (an A/B and paranoia escape hatch). Reuse also self-disables per channel
+        on any live load-shed, and entirely on a live-worker error or a non-None
+        :attr:`live_decode_interval`."""
         self.dedup_echo = dedup_echo
         """Whether finalize may run :func:`drop_echo_duplicates` on the mic channel.
         The CLI ties this to ``--aec``: with cancellation off the user asked for
@@ -890,15 +903,24 @@ class MeetingRecorder:
         """
         channels = [p.channel for p in plans]
         bus = AudioBus(channels)
-        decoders = {
-            ch: LiveDecoder(
-                self.asr,
-                vad=self.vad,
-                language=self.language,
-                decode_interval=self.live_decode_interval,
-            )
-            for ch in channels
-        }
+        # The window pass needs a streaming VAD; a duck-typed VAD without one
+        # (test fakes) falls back to the utterance-mode LiveDecoder, no reuse.
+        windowed = self.live_decode_interval is None and hasattr(self.vad, "stream")
+        if windowed:
+            decoders: dict[Channel, LiveDecoder] = {
+                ch: WindowedLiveDecoder(self.asr, vad=self.vad, language=self.language)
+                for ch in channels
+            }
+        else:
+            decoders = {
+                ch: LiveDecoder(
+                    self.asr,
+                    vad=self.vad,
+                    language=self.language,
+                    decode_interval=self.live_decode_interval,
+                )
+                for ch in channels
+            }
         inference_lock = threading.Lock()
 
         def flush_checkpoint() -> None:
@@ -948,11 +970,22 @@ class MeetingRecorder:
                 view.error(f"live pass stopped early: {worker.error}")
             view.finalizing()
             self._note_reference_gap(provider)
+            # The window pass produced finalize-identical decodes (same windows,
+            # same model — eval/live.py --mode window); reuse them so finalize
+            # skips its ASR pass. A load-shed channel has a caption gap and a
+            # worker error leaves unknown coverage — both re-decode classically.
+            live_words: dict[Channel, tuple[Word, ...]] | None = None
+            if windowed and self.reuse_live_finalize and worker.error is None:
+                live_words = {
+                    ch: decoders[ch].committed_words
+                    for ch in channels
+                    if worker.shed_by_channel.get(ch, 0.0) == 0.0
+                }
             # Single-flight: the worker is already joined, but taking the same lock it
             # held documents (and future-proofs) that finalize never runs alongside a
             # live decode.
             with inference_lock:
-                transcript = self.finalize(store, plans, view=view)
+                transcript = self.finalize(store, plans, view=view, live_words=live_words)
         view.finalized(transcript)
         return transcript
 
@@ -973,8 +1006,16 @@ class MeetingRecorder:
         plans: list[ChannelPlan] | None = None,
         *,
         view: LiveView | None = None,
+        live_words: dict[Channel, tuple[Word, ...]] | None = None,
     ) -> Transcript:
-        """Run the finalize pass on every stored channel and interleave them."""
+        """Run the finalize pass on every stored channel and interleave them.
+
+        ``live_words`` are a channel's window-pass decodes (finalize-identical
+        windows; see :class:`~stenograf.live.WindowedLiveDecoder`): a channel
+        present in the dict skips the VAD+ASR re-decode and goes straight to
+        diarization/merge. A channel missing from the dict (or the dict being
+        None — direct calls, batch mode, ``--full-finalize``) re-decodes.
+        """
         plans = plans or plan_channels(self.profile)
         view = view or _CallbackView()
         by_channel: dict[Channel, list[TranscriptEntry]] = {}
@@ -982,10 +1023,12 @@ class MeetingRecorder:
         for plan in plans:
             if plan.channel not in store.channels():
                 continue
-            view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)})")
+            reused = live_words.get(plan.channel) if live_words is not None else None
+            note = ", reusing live decodes" if reused is not None else ""
+            view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)}{note})")
             samples = store.samples(plan.channel)
             diarizer = None if plan.num_speakers == 1 else self.diarizer
-            raw = self._finalize_channel_safe(samples, diarizer, plan, view)
+            raw = self._finalize_channel_safe(samples, diarizer, plan, view, reused_words=reused)
             labeled = relabel_speakers(raw, plan.label_template)
             detected = len({e.speaker for e in labeled})
             counts.append(SpeakerCount(plan.channel, plan.num_speakers, detected))
@@ -1043,6 +1086,8 @@ class MeetingRecorder:
         diarizer: Diarizer | None,
         plan: ChannelPlan,
         view: LiveView,
+        *,
+        reused_words: tuple[Word, ...] | None = None,
     ) -> list[TranscriptEntry]:
         """Finalize one channel, never letting its failure lose another channel.
 
@@ -1061,6 +1106,7 @@ class MeetingRecorder:
                 diarizer=diarizer,
                 num_speakers=plan.num_speakers,
                 reid=self.reid,
+                precomputed_words=reused_words,
             )
         except Exception as exc:  # noqa: BLE001 — resilience across channels is the point
             if diarizer is None:
@@ -1077,6 +1123,7 @@ class MeetingRecorder:
                     vad=self.vad,
                     diarizer=None,
                     num_speakers=1,
+                    precomputed_words=reused_words,
                 )
             except Exception as exc2:  # noqa: BLE001
                 view.error(f"{plan.channel}: finalize failed ({exc2}); skipping channel")

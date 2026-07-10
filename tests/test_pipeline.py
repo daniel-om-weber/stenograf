@@ -243,6 +243,56 @@ class TestFinalizeChannel:
         entries = finalize_channel(np.zeros(0, dtype=np.float32), asr=FakeASR(), language=None)
         assert entries == []
 
+
+class TestFinalizeChannelReuse:
+    """precomputed_words: the live window pass already decoded this channel."""
+
+    def test_diarized_reuse_skips_asr(self):
+        asr = FakeASR()
+        diarizer = FakeDiarizer([turn("S1", 0.0, 2.0)])
+        words = (Word("hallo", 0.2, 0.6), Word("welt", 0.8, 1.2))
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            asr=asr,
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+            precomputed_words=words,
+        )
+        assert asr.calls == []  # no re-decode — the whole point of reuse
+        assert diarizer.seen_num_speakers == 2  # diarization still runs
+        assert [e.text for e in entries] == ["hallo welt"]
+        assert entries[0].speaker == "S1"
+
+    def test_single_speaker_reuse_groups_words(self):
+        asr = FakeASR()
+        words = (Word("a", 0.1, 0.4), Word("b", 5.0, 5.4))  # gap > MAX_ENTRY_GAP
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 6, dtype=np.float32),
+            asr=asr,
+            language=None,
+            num_speakers=1,
+            precomputed_words=words,
+        )
+        assert asr.calls == []
+        assert [(e.speaker, e.text) for e in entries] == [("S0", "a"), ("S0", "b")]
+
+    def test_empty_reuse_means_silent_channel(self):
+        # The live pass saw no speech: no ASR, no diarization, no entries — and
+        # crucially no fallback re-decode (empty tuple ≠ missing).
+        asr = FakeASR()
+        diarizer = FakeDiarizer([turn("S1", 0.0, 2.0)])
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            asr=asr,
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+            precomputed_words=(),
+        )
+        assert entries == []
+        assert asr.calls == [] and diarizer.seen_num_speakers is None
+
     def test_silent_channel_skips_diarization(self):
         # No speech → no words. Diarizing an empty channel is wasted work and can
         # throw (sherpa forced to num_clusters > 1 on near-silent input), which

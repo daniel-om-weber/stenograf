@@ -36,7 +36,7 @@ from stenograf import models
 from stenograf.asr.base import Word
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.audio import SAMPLE_RATE, load_audio
-from stenograf.live import LiveDecoder
+from stenograf.live import LiveDecoder, WindowedLiveDecoder
 from stenograf.pipeline import finalize_channel
 from stenograf.vad import SileroVAD
 
@@ -82,7 +82,8 @@ def count_monotonicity_violations(committed: list[Word]) -> int:
 
 
 def evaluate(source: Path, start: float, dur: float | None, feed_chunk: float,
-             asr: ParakeetMLXBackend, vad: SileroVAD) -> dict:
+             asr: ParakeetMLXBackend, vad: SileroVAD,
+             decode_interval: float | None, mode: str) -> dict:
     samples = load_audio(source)
     lo = int(start * SAMPLE_RATE)
     hi = len(samples) if dur is None else min(len(samples), lo + int(dur * SAMPLE_RATE))
@@ -97,7 +98,10 @@ def evaluate(source: Path, start: float, dur: float | None, feed_chunk: float,
     finalize_s = time.monotonic() - t0
 
     t0 = time.monotonic()
-    decoder = LiveDecoder(asr, vad=vad)
+    if mode == "window":
+        decoder = WindowedLiveDecoder(asr, vad=vad)
+    else:
+        decoder = LiveDecoder(asr, vad=vad, decode_interval=decode_interval)
     committed, latencies, flushed = stream(clip, decoder, feed_chunk)
     live_s = time.monotonic() - t0
     hypothesis = " ".join(w.text for w in committed)
@@ -124,7 +128,14 @@ def main() -> int:
     ap.add_argument("--dur", type=float, default=None, help="Clip duration (s); default: all.")
     ap.add_argument("--feed-chunk", type=float, default=1.0,
                     help="Simulated arrival chunk (s) — sets the caption cadence.")
+    ap.add_argument("--decode-interval", default="none",
+                    help="LiveDecoder decode_interval: seconds, or 'none' for utterance "
+                         "mode (decode only at VAD endpoints).")
+    ap.add_argument("--mode", choices=["live", "window"], default="window",
+                    help="'window' = WindowedLiveDecoder (the product default: finalize-"
+                         "identical windows); 'live' = LiveDecoder at --decode-interval.")
     args = ap.parse_args()
+    decode_interval = None if args.decode_interval == "none" else float(args.decode_interval)
 
     sources = args.source or DEFAULT_SOURCES
     missing = [s for s in sources if not s.exists()]
@@ -137,7 +148,10 @@ def main() -> int:
     asr.load()
     vad = SileroVAD(models.fetch(models.SILERO_VAD))
 
-    summary = [evaluate(s, args.start, args.dur, args.feed_chunk, asr, vad) for s in sources]
+    summary = [
+        evaluate(s, args.start, args.dur, args.feed_chunk, asr, vad, decode_interval, args.mode)
+        for s in sources
+    ]
 
     print("\n=== summary ===")
     for row in summary:

@@ -239,6 +239,9 @@ class TestLiveWorker:
         assert stub.offsets == [25.0]  # restarted at mark - window_cap
         assert len(stub.received[0]) == 15 * SAMPLE_RATE  # only a full window fed
         assert worker.shed_seconds == 25.0  # 0–25 s skipped
+        # Recorded per channel too: this channel's live words now have a gap, so
+        # the finalize pass must not reuse them.
+        assert worker.shed_by_channel == {Channel.MIC: 25.0}
 
     def test_normal_backlog_is_not_shed(self):
         # A backlog within window_cap feeds whole — no gap, no drop.
@@ -362,6 +365,36 @@ class _SilentVAD:
         return []
 
 
+class _OneRunStream:
+    """A streaming VAD stream that reports one speech run once 2 s were pushed."""
+
+    def __init__(self):
+        self.fed = 0
+        self.emitted = False
+
+    def push(self, samples):
+        self.fed += len(samples)
+
+    def take_completed(self):
+        if not self.emitted and self.fed >= 2 * SAMPLE_RATE:
+            self.emitted = True
+            return [SpeechSegment(0.2, 1.2)]
+        return []
+
+    def open_segment(self):
+        return None
+
+
+class _StreamingSpeechVAD:
+    """Stream-capable VAD (selects the window pass) with a batch scan to match."""
+
+    def stream(self, origin: float) -> _OneRunStream:
+        return _OneRunStream()
+
+    def speech_segments(self, samples):
+        return [SpeechSegment(0.2, 1.2)]  # what a classic finalize re-scan sees
+
+
 class _AlwaysSpeechVAD:
     """Reports the whole window as speech, so the gate never suppresses a decode."""
 
@@ -419,3 +452,36 @@ class TestLivePassCpuProxy:
         assert starts == sorted(starts)  # a committed word never moves back in time
         texts = [w.text for w in spy.committed]
         assert len(texts) == len(set(texts))  # each word committed exactly once
+
+
+class TestFinalizeReuse:
+    """The on-stop finalize reuses the window pass's decodes (PLAN: halve total ASR)."""
+
+    def _recorder(self, asr) -> MeetingRecorder:
+        return MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0),
+            asr=asr,
+            vad=_StreamingSpeechVAD(),
+        )
+
+    def test_finalize_runs_zero_asr_when_reusing(self):
+        asr = CountingASR()
+        spy = _SpyView(asr)
+        provider = ListProvider(_one_second_frames(4))
+        transcript = self._recorder(asr).run(provider, live=True, view=spy)
+        # Every decode happened in the live pass; the finalize added none.
+        assert spy.decodes_at_finalizing is not None
+        assert asr.calls == spy.decodes_at_finalizing
+        assert asr.calls >= 1  # ...and the live pass did decode the speech run
+        # The reused words still came out as a normal labeled transcript.
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]
+        assert transcript.entries[0].text
+
+    def test_full_finalize_opt_out_re_decodes(self):
+        asr = CountingASR()
+        spy = _SpyView(asr)
+        recorder = self._recorder(asr)
+        recorder.reuse_live_finalize = False  # the --full-finalize escape hatch
+        transcript = recorder.run(ListProvider(_one_second_frames(4)), live=True, view=spy)
+        assert asr.calls > spy.decodes_at_finalizing  # finalize decoded again
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]

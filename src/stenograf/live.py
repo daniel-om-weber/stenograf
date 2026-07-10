@@ -356,6 +356,142 @@ class LiveDecoder:
         return " ".join(w.text for w in self._buffer)
 
 
+class WindowedLiveDecoder(LiveDecoder):
+    """Live pass that decodes exactly the windows the finalize pass would build.
+
+    :func:`stenograf.vad.pack_windows` is a greedy left-to-right merge, so it
+    runs online: completed VAD runs accumulate into the current window, which
+    closes — and is decoded ONCE — when the next run cannot join it (budget
+    ``max_window`` exceeded, or silence beyond ``max_gap``). Same windows, same
+    deterministic ``generate()`` ⇒ the committed text equals a batch
+    ``finalize_channel`` ASR pass on the same audio (modulo streaming-VAD
+    boundary jitter, eval/live.py --mode window), so the on-stop finalize can
+    reuse it and skip its own ASR pass entirely.
+
+    Cost: each second of speech is decoded exactly once, in finalize-sized
+    windows — the same total ASR work the finalize pass alone would do.
+    Captions land a window at a time (up to ``max_window`` s of speech plus
+    ``max_gap`` of silence behind the live edge); there is no interim text.
+    Chosen as the product default because the live view runs in the background
+    (efficiency outranks caption latency).
+
+    Requires a streaming-capable VAD (``vad.stream``) — windows are VAD-defined.
+    """
+
+    def __init__(
+        self,
+        asr: ASRBackend,
+        *,
+        vad: SileroVAD,
+        language: Language | None = None,
+        max_window: float = 30.0,
+        max_gap: float = 5.0,
+        pad: float = 0.15,
+        silence_guard: float = 1.0,
+    ) -> None:
+        if not hasattr(vad, "stream"):
+            raise TypeError("WindowedLiveDecoder needs a streaming VAD (vad.stream)")
+        super().__init__(
+            asr, vad=vad, language=language, window_cap=max_window, decode_interval=None
+        )
+        # Window packing policy — MUST match pack_windows (the finalize pass
+        # reuses these decodes verbatim; a policy drift silently degrades it).
+        self.max_window = max_window
+        self.max_gap = max_gap
+        self.pad = pad
+        # Audio kept behind the live edge during silence, so a speech onset the
+        # VAD reports a beat late (plus the window pad) is still in the buffer.
+        self.silence_guard = silence_guard
+        self._pending: list[SpeechSegment] = []  # closed runs of the open window
+        self._decoded_to = 0.0  # padded end of the last decoded window
+
+    def feed(self, samples: np.ndarray, t_offset: float) -> StreamingUpdate:
+        """Add audio; decode (only) the windows that closed since the last feed."""
+        if len(samples):
+            self._append(samples, t_offset)
+        if len(self._buf) == 0 or self._vad_stream is None:
+            return StreamingUpdate((), "")
+        committed: list[Word] = []
+        for seg in self._vad_stream.take_completed():
+            committed.extend(self._absorb(seg))
+        open_seg = self._vad_stream.open_segment()
+        if self._pending:
+            # The window also closes once nothing can join it any more — exactly
+            # when pack_windows would split: the next run (open now, or anywhere
+            # in the future silence) starts more than max_gap after it, or the
+            # open run has already grown past the shared budget. Waiting longer
+            # only delays the caption; the packing cannot change.
+            next_start = open_seg.start if open_seg is not None else self._audio_end()
+            if next_start - self._pending[-1].end > self.max_gap or (
+                open_seg is not None and open_seg.end - self._pending[0].start > self.max_window
+            ):
+                committed.extend(self._decode_window())
+        self._retain(open_seg)
+        return StreamingUpdate(tuple(committed), "")
+
+    def flush(self) -> StreamingUpdate:
+        """End of stream: pack the tail (open run included) and decode it."""
+        if self._vad_stream is None or len(self._buf) == 0:
+            return StreamingUpdate((), "")
+        committed: list[Word] = []
+        for seg in self._vad_stream.take_completed():
+            committed.extend(self._absorb(seg))
+        open_seg = self._vad_stream.open_segment()
+        if open_seg is not None:
+            committed.extend(self._absorb(open_seg))
+        if self._pending:
+            committed.extend(self._decode_window())
+        self._reset_buf()
+        return StreamingUpdate(tuple(committed), "")
+
+    def drop_window(self) -> None:
+        super().drop_window()
+        self._pending = []
+
+    # -- online pack_windows -------------------------------------------------
+
+    def _absorb(self, seg: SpeechSegment) -> list[Word]:
+        """Add one speech run to the open window, closing it first if needed."""
+        committed: list[Word] = []
+        if self._pending and (
+            seg.end - self._pending[0].start > self.max_window
+            or seg.start - self._pending[-1].end > self.max_gap
+        ):
+            committed = self._decode_window()
+        self._pending.append(seg)
+        return committed
+
+    def _decode_window(self) -> list[Word]:
+        """Decode the open window over its padded span; commit every word."""
+        start, end = self._pending[0].start, self._pending[-1].end
+        self._pending = []
+        a = max(self._buf_start or 0.0, start - self.pad, self._decoded_to)
+        b = min(self._audio_end(), end + self.pad)
+        self._decoded_to = b
+        self.decodes += 1
+        lo = round((a - (self._buf_start or 0.0)) * SAMPLE_RATE)
+        hi = round((b - (self._buf_start or 0.0)) * SAMPLE_RATE)
+        words = [
+            Word(w.text, w.start + a, w.end + a, w.confidence)
+            for seg in self._asr.transcribe(self._buf[lo:hi], self._language)
+            for w in seg.words
+        ]
+        return self._extend_committed(words)
+
+    def _retain(self, open_seg: SpeechSegment | None) -> None:
+        """Trim decoded/silent audio; keep the open window (plus its pad)."""
+        if self._pending:
+            keep_from = self._pending[0].start - self.pad
+        elif open_seg is not None:
+            keep_from = open_seg.start - self.pad
+        else:
+            keep_from = self._audio_end() - self.silence_guard
+        drop = round((keep_from - (self._buf_start or 0.0)) * SAMPLE_RATE)
+        if drop > 0:
+            self._buf = self._buf[drop:]
+            self._buf_start = (self._buf_start or 0.0) + drop / SAMPLE_RATE
+
+
 def _key(word: Word) -> str:
     """Match key for LocalAgreement: case- and punctuation-insensitive."""
     stripped = _WORD_KEY.sub("", word.text.lower())

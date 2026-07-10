@@ -260,6 +260,14 @@ def main() -> None:
     "[default: md,json]. srt/vtt re-flow speaker turns into subtitle cues.",
 )
 @_vocab_options
+@click.option(
+    "--full-finalize",
+    is_flag=True,
+    help="Re-transcribe everything at stop instead of reusing the live window "
+    "pass's decodes. The live pass already decodes the exact windows the "
+    "finalize pass would (so reuse is the default); this forces the "
+    "from-scratch ASR pass for A/B comparison or paranoia.",
+)
 @click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
 def start(
     lang: str | None,
@@ -284,6 +292,7 @@ def start(
     attendee: tuple[str, ...],
     glossary_threshold: float | None,
     profile_store: Path | None,
+    full_finalize: bool,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
@@ -359,6 +368,7 @@ def start(
         glossary_threshold=glossary_threshold,
         dedup_echo=use_aec,
     )
+    recorder.reuse_live_finalize = not full_finalize
 
     tee = _make_tee(record_audio, audio_default, plans)
 

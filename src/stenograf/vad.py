@@ -118,12 +118,29 @@ class SileroVADStream:
         """
         self._segments = [s for s in self._segments if s.end > min_end]
         out = list(self._segments)
-        if self._vad.is_speech_detected():
-            start = self._origin + self._vad.current_segment.start / SAMPLE_RATE
-            open_seg = SpeechSegment(start, self._origin + self._fed / SAMPLE_RATE)
-            if open_seg.end > min_end:
-                out.append(open_seg)
+        open_seg = self.open_segment()
+        if open_seg is not None and open_seg.end > min_end:
+            out.append(open_seg)
         return out
+
+    def take_completed(self) -> list[SpeechSegment]:
+        """Consume and return the closed speech runs accumulated so far.
+
+        The window-mode consumer: each run is taken exactly once, in order, so
+        the caller can pack them incrementally. Don't mix with :meth:`segments`
+        on the same stream — that accessor keeps (and re-reports) its runs.
+        """
+        self._drain()
+        out = self._segments
+        self._segments = []
+        return out
+
+    def open_segment(self) -> SpeechSegment | None:
+        """The in-progress speech run up to the pushed edge, if inside one."""
+        if not self._vad.is_speech_detected():
+            return None
+        start = self._origin + self._vad.current_segment.start / SAMPLE_RATE
+        return SpeechSegment(start, self._origin + self._fed / SAMPLE_RATE)
 
     def _drain(self) -> None:
         while not self._vad.empty():
@@ -138,13 +155,20 @@ def pack_windows(
     total_duration: float,
     *,
     max_window: float = 30.0,
+    max_gap: float = 5.0,
     pad: float = 0.15,
 ) -> list[tuple[float, float]]:
     """Merge speech segments into ASR windows of at most ``max_window`` s.
 
-    Consecutive speech runs share a window while they fit; each window is
-    padded slightly into the surrounding silence so VAD onset jitter never
-    clips a word. Returned windows are disjoint and sorted.
+    Consecutive speech runs share a window while they fit and the silence
+    between them stays within ``max_gap``; each window is padded slightly into
+    the surrounding silence so VAD onset jitter never clips a word. Returned
+    windows are disjoint and sorted.
+
+    The ``max_gap`` bound exists for the live window pass: it lets an online
+    packer close a window ``max_gap`` after speech stops (nothing later can
+    join it), so live windows equal this function's output and the finalize
+    pass can reuse the live decodes verbatim.
     """
     windows: list[list[float]] = []
     for seg in segments:
@@ -154,7 +178,11 @@ def pack_windows(
             for cut in np.arange(seg.start, seg.end, max_window):
                 windows.append([cut, min(cut + max_window, seg.end)])
             continue
-        if windows and seg.end - windows[-1][0] <= max_window:
+        if (
+            windows
+            and seg.end - windows[-1][0] <= max_window
+            and seg.start - windows[-1][1] <= max_gap
+        ):
             windows[-1][1] = seg.end
         else:
             windows.append([seg.start, seg.end])
