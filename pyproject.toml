@@ -5,7 +5,10 @@ description = "Accuracy-first local meeting transcription for German and English
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+# <3.14: the ASR chain (parakeet-mlx → librosa → numba) has no 3.14 support
+# yet; without the cap `uv tool install` on a 3.14-default machine backtracks
+# to ancient numba sdists and fails to build. The cap makes uv pick 3.12/3.13.
+requires-python = ">=3.12,<3.14"
 authors = [{ name = "Daniel Weber", email = "danielusweber@gmail.com" }]
 keywords = ["transcription", "meetings", "speech-to-text", "diarization", "local", "privacy"]
 classifiers = [
