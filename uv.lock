@@ -1766,13 +1766,13 @@ name = "mlx-lm"
 version = "0.29.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2" },
-    { name = "mlx", marker = "sys_platform == 'darwin'" },
-    { name = "numpy" },
-    { name = "protobuf" },
-    { name = "pyyaml" },
-    { name = "sentencepiece" },
-    { name = "transformers" },
+    { name = "jinja2", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "mlx", marker = "sys_platform == 'darwin' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "protobuf", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "pyyaml", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "sentencepiece", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "transformers", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e3/62/f46e1355256a114808517947f8e83ad6be310c7288c551db0fa678f47923/mlx_lm-0.29.1.tar.gz", hash = "sha256:b99180d8f33d33a077b814e550bfb2d8a59ae003d668fd1f4b3fff62a381d34b", size = 232302, upload-time = "2025-12-16T16:58:27.959Z" }
 wheels = [
@@ -3697,12 +3697,14 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "livekit" },
+    { name = "mlx-lm", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "numba", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "numpy" },
     { name = "parakeet-mlx", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
     { name = "textual" },
+    { name = "transformers", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
 ]
 
 [package.dev-dependencies]
@@ -3730,12 +3732,14 @@ eval-canary = [
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
     { name = "livekit", specifier = ">=1.1" },
+    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.29.1,<0.30" },
     { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.60" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.2" },
     { name = "sherpa-onnx", specifier = ">=1.12.40,<1.13" },
     { name = "sherpa-onnx-core", specifier = ">=1.12.40,<1.13" },
     { name = "textual", specifier = ">=8.2.8" },
+    { name = "transformers", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=4.55.2,<5" },
 ]
 provides-extras = ["ollama"]
 
@@ -4008,7 +4012,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval-canary'" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
     { name = "pyyaml" },
     { name = "regex" },
     { name = "requests" },

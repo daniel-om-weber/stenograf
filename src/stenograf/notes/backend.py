@@ -9,7 +9,8 @@ rewrite. Imports stay lazy: choosing one backend never imports another's module.
 
 from __future__ import annotations
 
-import importlib
+import dataclasses
+import importlib.util
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -60,7 +61,6 @@ class NotesBackendSpec:
 
 
 _ENV_OVERRIDE = "STENOGRAF_NOTES_BACKEND"
-_DEFAULT = "ollama"
 
 _REGISTRY: dict[str, NotesBackendSpec] = {}
 
@@ -70,6 +70,14 @@ def register_backend(spec: NotesBackendSpec) -> None:
     _REGISTRY[spec.name] = spec
 
 
+register_backend(
+    NotesBackendSpec(
+        name="mlx",
+        module="stenograf.notes.mlx",
+        cls="MlxBackend",
+        label="MLX (local, in-process)",
+    )
+)
 register_backend(
     NotesBackendSpec(
         name="ollama",
@@ -96,8 +104,17 @@ def available_backends() -> list[str]:
 def default_backend_name(configured: str | None = None) -> str:
     """The backend used when none is named on the CLI: the
     ``STENOGRAF_NOTES_BACKEND`` override, else the settings.toml choice, else
-    the built-in local default."""
-    return os.environ.get(_ENV_OVERRIDE) or configured or _DEFAULT
+    the built-in local default — in-process MLX where its runtime is installed
+    (Apple Silicon), Ollama everywhere else."""
+    return os.environ.get(_ENV_OVERRIDE) or configured or _builtin_default()
+
+
+def _builtin_default() -> str:
+    try:
+        mlx_installed = importlib.util.find_spec("mlx_lm") is not None
+    except (ImportError, ValueError):
+        mlx_installed = False
+    return "mlx" if mlx_installed else "ollama"
 
 
 def get_spec(name: str) -> NotesBackendSpec:
@@ -116,8 +133,15 @@ def create_backend(name: str | None, settings: NotesSettings) -> NotesBackend:
     Every backend class exposes ``from_settings(settings)`` so machine-specific
     configuration (the command argv, the Ollama URL, the model) flows from one
     place — ``settings.toml``'s ``[notes]`` table — regardless of provider.
+
+    ``[notes] model`` names a model *for the configured backend* (an HF repo
+    id, an Ollama tag, a provenance label — different vocabularies). When a
+    CLI flag or the env var selects a different backend, that model must not
+    ride along: mlx would try to fetch an Ollama tag from HuggingFace.
     """
     spec = get_spec(default_backend_name(settings.backend) if name is None else name)
+    if settings.backend is not None and spec.name != settings.backend:
+        settings = dataclasses.replace(settings, model=None)
     module = importlib.import_module(spec.module)
     backend_cls = getattr(module, spec.cls)
     return backend_cls.from_settings(settings)

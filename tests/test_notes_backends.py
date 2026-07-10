@@ -30,8 +30,8 @@ SCHEMA = {"type": "object", "required": ["title"]}
 # ---- registry ---------------------------------------------------------------
 
 
-def test_both_backends_registered():
-    assert set(available_backends()) >= {"ollama", "command"}
+def test_builtin_backends_registered():
+    assert set(available_backends()) >= {"mlx", "ollama", "command"}
 
 
 def test_get_spec_unknown_name_lists_choices():
@@ -40,7 +40,14 @@ def test_get_spec_unknown_name_lists_choices():
 
 
 def test_default_backend_precedence(monkeypatch):
+    import importlib.util
+
     monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    # The built-in default is platform-conditional: in-process MLX where its
+    # runtime is installed (Apple Silicon), Ollama everywhere else.
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    assert default_backend_name() == "mlx"
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
     assert default_backend_name() == "ollama"
     assert default_backend_name("command") == "command"
     monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "ollama")
@@ -53,6 +60,24 @@ def test_create_backend_from_settings(monkeypatch):
     assert isinstance(backend, CommandBackend)
     backend = create_backend("ollama", NotesSettings())
     assert isinstance(backend, OllamaBackend)
+
+
+def test_configured_model_does_not_leak_into_another_backend(monkeypatch):
+    from stenograf.notes.mlx import DEFAULT_MODEL as MLX_DEFAULT
+    from stenograf.notes.mlx import MlxBackend
+
+    # settings.toml written for the command backend; its model is a claude
+    # label, meaningless (and harmful) as an HF repo id for mlx.
+    settings = NotesSettings(backend="command", command=("claude", "-p"), model="claude-opus-4-8")
+    assert create_backend("mlx", settings).model == MLX_DEFAULT
+    monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "mlx")
+    assert create_backend(None, settings).model == MLX_DEFAULT
+    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND")
+    # For the backend the table was written for, the model applies.
+    assert create_backend(None, settings).model == "claude-opus-4-8"
+    assert isinstance(create_backend(None, settings), CommandBackend)
+    # An explicit model for an explicit backend is honored (the CLI path).
+    assert MlxBackend.from_settings(NotesSettings(backend="mlx", model="x/y")).model == "x/y"
 
 
 def test_register_backend_makes_it_creatable():
@@ -170,6 +195,118 @@ def test_input_budget_is_backend_dependent_and_overridable():
     override = NotesSettings(command=("claude", "-p"), max_input_chars=9000)
     assert CommandBackend.from_settings(override).max_input_chars == 9000
     assert OllamaBackend.from_settings(override).max_input_chars == 9000
+
+
+# ---- mlx backend ---------------------------------------------------------------
+
+
+class FakeMlxLm:
+    """Stands in for the ``mlx_lm`` module: canned load()/generate()."""
+
+    def __init__(self, response='{"title": "T"}'):
+        self.response = response
+        self.loaded_repos = []
+        self.generate_calls = []
+        self.tokenizer = FakeTokenizer()
+
+    def load(self, repo):
+        self.loaded_repos.append(repo)
+        return ("fake-model", self.tokenizer)
+
+    def generate(self, model, tokenizer, prompt, max_tokens):
+        self.generate_calls.append({"prompt": prompt, "max_tokens": max_tokens})
+        return self.response
+
+
+class FakeTokenizer:
+    def __init__(self):
+        self.template_calls = []
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.template_calls.append({"messages": messages, **kwargs})
+        return [1, 2, 3]  # token ids
+
+
+@pytest.fixture
+def fake_mlx_lm(monkeypatch):
+    from stenograf.notes.mlx import MlxBackend
+
+    fake = FakeMlxLm()
+    monkeypatch.setitem(sys.modules, "mlx_lm", fake)
+    return fake, MlxBackend()
+
+
+def test_mlx_complete_renders_template_without_thinking(fake_mlx_lm):
+    fake, backend = fake_mlx_lm
+    assert backend.complete(MESSAGES, SCHEMA) == '{"title": "T"}'
+    assert fake.loaded_repos == [backend.model]
+    call = fake.tokenizer.template_calls[0]
+    assert call["add_generation_prompt"] is True
+    assert call["enable_thinking"] is False
+    # The schema instruction rides in the last message (no decode-time grammar)
+    # and the caller's message list is not mutated.
+    assert '"required": ["title"]' in call["messages"][-1]["content"]
+    assert MESSAGES[-1]["content"] == "The transcript."
+    assert fake.generate_calls[0]["prompt"] == [1, 2, 3]
+
+
+def test_mlx_strips_a_stray_think_block(fake_mlx_lm):
+    fake, backend = fake_mlx_lm
+    fake.response = '<think>\nhmm {not json}\n</think>\n{"title": "T"}'
+    assert backend.complete(MESSAGES, SCHEMA) == '\n{"title": "T"}'
+
+
+def test_mlx_model_stays_loaded_across_completions(fake_mlx_lm):
+    fake, backend = fake_mlx_lm
+    backend.complete(MESSAGES, SCHEMA)
+    backend.complete(MESSAGES, SCHEMA)
+    assert fake.loaded_repos == [backend.model]  # one load, two generates
+    assert len(fake.generate_calls) == 2
+
+
+def test_mlx_completions_are_bound_to_one_thread(fake_mlx_lm):
+    import threading
+
+    fake, backend = fake_mlx_lm
+    backend.complete(MESSAGES, SCHEMA)
+    caught = []
+
+    def other_thread():
+        try:
+            backend.complete(MESSAGES, SCHEMA)
+        except NotesGenerationError as exc:
+            caught.append(str(exc))
+
+    t = threading.Thread(target=other_thread)
+    t.start()
+    t.join()
+    assert caught and "thread" in caught[0]
+
+
+def test_mlx_load_failure_is_unavailable_not_a_crash(monkeypatch):
+    from stenograf.notes.mlx import MlxBackend
+
+    fake = FakeMlxLm()
+    fake.load = lambda repo: (_ for _ in ()).throw(OSError("no space left on device"))
+    monkeypatch.setitem(sys.modules, "mlx_lm", fake)
+    with pytest.raises(NotesBackendUnavailableError, match="no space left"):
+        MlxBackend().complete(MESSAGES, SCHEMA)
+
+
+def test_mlx_from_settings_and_env(monkeypatch):
+    from stenograf.notes import mlx as mlx_mod
+    from stenograf.notes.mlx import MlxBackend
+
+    backend = MlxBackend.from_settings(
+        NotesSettings(model="mlx-community/Qwen3-4B-4bit", max_input_chars=9000)
+    )
+    assert backend.model == "mlx-community/Qwen3-4B-4bit"
+    assert backend.max_input_chars == 9000
+    assert MlxBackend().model == mlx_mod.DEFAULT_MODEL
+    monkeypatch.setenv("STENOGRAF_NOTES_MODEL", "mlx-community/other")
+    assert MlxBackend().model == "mlx-community/other"
+    # A local 8B takes less in one pass than a hosted frontier model.
+    assert MlxBackend().max_input_chars < CommandBackend(("claude",)).max_input_chars
 
 
 # ---- command backend ---------------------------------------------------------

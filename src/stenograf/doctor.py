@@ -183,8 +183,22 @@ def _notes_check() -> Check:
     except (SettingsError, NotesBackendError, ValueError) as exc:
         return Check(name=name, ok=False, detail=str(exc), optional=True)
 
+    from stenograf.notes.mlx import MlxBackend
     from stenograf.notes.ollama import OllamaBackend
 
+    if isinstance(backend, MlxBackend):
+        if not backend.is_available():
+            return Check(
+                name=name,
+                ok=False,
+                detail="mlx-lm is not installed here — reinstall stenograf, or configure "
+                "another backend under [notes] in settings.toml",
+                optional=True,
+            )
+        hint = "cached" if backend.weights_cached() else "downloads on first notes run"
+        return Check(
+            name=name, ok=True, detail=f"MLX in-process, model {backend.model} ({hint})"
+        )
     if isinstance(backend, OllamaBackend):
         if not backend.is_available():
             return Check(

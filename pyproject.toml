@@ -31,6 +31,17 @@ dependencies = [
     "sherpa-onnx-core>=1.12.40,<1.13",
     # Default ASR backend (PLAN.md Phase 0 verdict); MLX is Apple-Silicon-only.
     "parakeet-mlx>=0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # In-process notes LLM (Stage D) — the zero-setup default backend on Apple
+    # Silicon. Pinned to the 0.29 line (verified 2026-07-10): mlx-lm >=0.30
+    # requires transformers>=5, but the current transformers 5.13 crashes
+    # mlx-lm's import (AutoTokenizer.register signature) and mlx-voxtral (eval
+    # group) needs the 4.x line — no consistent resolve exists. The cost of
+    # 0.29 is that generation is bound to the thread that imported mlx_lm
+    # ("no Stream(gpu, 0)" elsewhere; fixed upstream only in the 0.31 line) —
+    # notes/mlx.py guards this at runtime. transformers cap: without it a
+    # fresh resolve picks 5.x and mlx-lm 0.29 breaks at import.
+    "mlx-lm>=0.29.1,<0.30; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "transformers>=4.55.2,<5; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Resolver guard, not a direct import: numba (via parakeet-mlx → librosa)
     # caps numpy (0.66: <2.5), and without a numba floor a fresh resolve keeps
     # the newest numpy and backtracks numba into ancient sdists that no longer

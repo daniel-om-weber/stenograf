@@ -110,8 +110,8 @@ def test_models_check_reflects_cache(monkeypatch):
 
 
 def test_notes_check_ollama_down_is_optional_not_ok(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))  # no settings.toml → ollama default
-    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+    monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "ollama")  # force the branch under test
     from stenograf.notes.ollama import OllamaBackend
 
     monkeypatch.setattr(OllamaBackend, "is_available", lambda self: False)
@@ -123,7 +123,7 @@ def test_notes_check_ollama_down_is_optional_not_ok(monkeypatch, tmp_path):
 
 def test_notes_check_ollama_up_but_model_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
-    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "ollama")  # force the branch under test
     from stenograf.notes.ollama import OllamaBackend
 
     monkeypatch.setattr(OllamaBackend, "is_available", lambda self: True)
@@ -132,6 +132,24 @@ def test_notes_check_ollama_up_but_model_missing(monkeypatch, tmp_path):
     assert not check.ok
     assert check.optional
     assert "ollama pull" in check.detail
+
+
+def test_notes_check_mlx_reports_cache_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+    monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "mlx")
+    from stenograf.notes.mlx import MlxBackend
+
+    monkeypatch.setattr(MlxBackend, "is_available", lambda self: True)
+    monkeypatch.setattr(MlxBackend, "weights_cached", lambda self: False)
+    check = doctor._notes_check()
+    assert check.ok
+    assert "downloads on first" in check.detail
+
+    monkeypatch.setattr(MlxBackend, "is_available", lambda self: False)
+    check = doctor._notes_check()
+    assert not check.ok
+    assert check.optional
+    assert "mlx-lm" in check.detail
 
 
 def test_notes_check_command_backend_reports_path_presence(monkeypatch, tmp_path):

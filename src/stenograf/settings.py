@@ -6,8 +6,9 @@ would leak into shared files). First consumer is the ``[notes]`` table
 (PLAN.md §5 Stage D5)::
 
     [notes]
-    backend = "command"            # "ollama" (default) or "command"
-    model = "claude-opus-4-8"      # provenance label; the Ollama model to run
+    backend = "command"            # "mlx" (default on Apple Silicon), "ollama"
+                                   # (default elsewhere), or "command"
+    model = "claude-opus-4-8"      # HF repo id (mlx) / Ollama tag / provenance label
     command = ["claude", "-p", "Summarize the meeting transcript on stdin."]
     timeout_s = 600
     instructions = "~/notes-style.md"   # appended to the built-in system prompt

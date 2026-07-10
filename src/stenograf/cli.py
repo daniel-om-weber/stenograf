@@ -1755,13 +1755,14 @@ def meetings_rm(meeting_id: str, yes: bool, keep_files: bool) -> None:
     "backend_name",
     default=None,
     metavar="NAME",
-    help="Notes backend: ollama (local) or command (any CLI, e.g. claude) "
-    "[default: settings.toml, else ollama].",
+    help="Notes backend: mlx (local, in-process), ollama (local server), or command "
+    "(any CLI, e.g. claude) [default: settings.toml, else mlx where installed, else ollama].",
 )
 @click.option(
     "--model",
     default=None,
-    help="Model to use (Ollama model tag; a provenance label for command backends).",
+    help="Model to use (HF repo id for mlx, Ollama model tag for ollama; "
+    "a provenance label for command backends).",
 )
 @click.option("--ollama-url", default=None, metavar="URL", help="Ollama server URL.")
 @click.option(
@@ -1865,6 +1866,11 @@ def _generate_and_write_notes(
     from stenograf.settings import load_settings
 
     settings = load_settings().notes
+    if backend_name and settings.backend and backend_name != settings.backend:
+        # [notes] model in settings.toml was written for the configured
+        # backend and must not ride along to an explicitly chosen other one
+        # (--model below still wins).
+        settings = dataclasses.replace(settings, backend=backend_name, model=None)
     if model or ollama_url:
         settings = dataclasses.replace(
             settings,

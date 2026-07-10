@@ -1,0 +1,147 @@
+"""Fully local, in-process notes backend: mlx-lm on Apple Silicon.
+
+The zero-install default on macOS (PLAN.md §5 Stage D): mlx-lm ships with
+stenograf under the same platform marker as the parakeet ASR backend, and the
+model downloads into the Hugging Face cache on first use — no server, no
+daemon, no ``ollama pull``.
+
+Thread constraint (verified empirically, 2026-07-10): on the mlx-lm 0.29 line
+the GPU generation stream is created when ``mlx_lm`` is imported and is only
+valid on that thread — ``generate()`` anywhere else dies with "There is no
+Stream(gpu, 0)", even when load and generate share a worker thread. Fixed
+upstream only in mlx-lm >= 0.31, which we cannot ship (see the pyproject
+comment: its transformers>=5 floor is broken against current transformers and
+collides with the eval group's 4.x pin). So this backend imports mlx_lm
+lazily — the first ``complete()`` call's thread becomes the generation
+thread — and raises a clear error if a later call comes from another thread.
+The CLI always satisfies this (notes run synchronously on the main thread).
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import re
+import threading
+from typing import TYPE_CHECKING
+
+from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
+
+if TYPE_CHECKING:
+    from stenograf.settings import NotesSettings
+
+DEFAULT_MODEL = "Qwen/Qwen3-8B-MLX-4bit"
+"""Official Qwen MLX quant: 4.35 GB on disk, Apache-2.0, 32k context —
+comfortable next to desktop apps on a 16 GB machine and the best-verified
+quality-per-GB in the 3-9B range as of July 2026."""
+
+DEFAULT_MAX_INPUT_CHARS = 100_000
+"""~25k tokens — inside Qwen3's 32k window with room for the chat template
+and the JSON response. Longer meetings map-reduce (see :mod:`.generate`)."""
+
+_MAX_OUTPUT_TOKENS = 4096
+"""Hard stop for one completion. Notes are 1-2k tokens of JSON; a model that
+runs past this is looping, and an unbounded generate would spin forever."""
+
+_THINK_BLOCK = re.compile(r"\A\s*<think>.*?</think>", re.DOTALL)
+
+
+class MlxBackend:
+    """Runs the notes model in-process via mlx-lm, weights from the HF cache.
+
+    The model stays loaded across ``complete()`` calls so a map-reduced
+    meeting pays the load once; the CLI process exits right after notes, so
+    nothing lingers."""
+
+    name = "mlx"
+
+    def __init__(self, model: str | None = None, max_input_chars: int | None = None) -> None:
+        self.model = model or os.environ.get("STENOGRAF_NOTES_MODEL") or DEFAULT_MODEL
+        self.max_input_chars = max_input_chars or DEFAULT_MAX_INPUT_CHARS
+        self._loaded: tuple[object, object] | None = None
+        self._generation_thread: int | None = None
+
+    @classmethod
+    def from_settings(cls, settings: NotesSettings) -> MlxBackend:
+        return cls(model=settings.model, max_input_chars=settings.max_input_chars)
+
+    def is_available(self) -> bool:
+        try:
+            return importlib.util.find_spec("mlx_lm") is not None
+        except (ImportError, ValueError):
+            return False
+
+    def weights_cached(self) -> bool:
+        """Whether the model is already in the local HF cache (doctor's hint
+        that the first ``--notes`` run will download several GB)."""
+        try:
+            from huggingface_hub import snapshot_download
+
+            snapshot_download(self.model, local_files_only=True)
+        except Exception:
+            return False
+        return True
+
+    def complete(self, messages: list[dict[str, str]], schema: dict) -> str:
+        if self._generation_thread is None:
+            self._generation_thread = threading.get_ident()
+        elif threading.get_ident() != self._generation_thread:
+            # See the module docstring: fail with a message instead of
+            # mlx-lm 0.29's opaque "There is no Stream(gpu, 0)" RuntimeError.
+            raise NotesGenerationError(
+                "the mlx notes backend is bound to the thread of its first "
+                "completion (mlx-lm 0.29 generation streams are per-thread); "
+                "run all completions for one backend instance on one thread"
+            )
+        from mlx_lm import generate
+
+        model, tokenizer = self._load()
+        prompt = self._render(tokenizer, messages, schema)
+        text = generate(model, tokenizer, prompt=prompt, max_tokens=_MAX_OUTPUT_TOKENS)
+        # enable_thinking=False should suppress reasoning, but a stray think
+        # block would put its prose (possibly with braces) before the JSON.
+        return _THINK_BLOCK.sub("", text)
+
+    def _load(self) -> tuple[object, object]:
+        if self._loaded is None:
+            try:
+                from mlx_lm import load
+            except ImportError as exc:
+                raise NotesBackendUnavailableError(
+                    "mlx-lm is not installed here — reinstall stenograf, or configure "
+                    "another backend under [notes] in settings.toml"
+                ) from exc
+            try:
+                self._loaded = load(self.model)
+            except Exception as exc:
+                # One typed error for the whole fetch+load chain (HF download,
+                # missing repo, corrupt weights) — the CLI catches it and the
+                # transcript stands.
+                raise NotesBackendUnavailableError(
+                    f"could not load notes model {self.model!r} via mlx-lm: {exc}"
+                ) from exc
+        return self._loaded
+
+    def _render(self, tokenizer, messages: list[dict[str, str]], schema: dict) -> list[int]:
+        """Token ids for the chat, schema instruction in the last message.
+
+        mlx-lm has no decode-time grammar (Ollama's ``format=``), so like the
+        command backend the schema rides along as an instruction and the
+        tolerant JSON extraction in :mod:`.generate` does the rest.
+        ``enable_thinking=False`` keeps Qwen3's reasoning mode from spending
+        the token budget before the JSON; templates without that variable
+        simply ignore it."""
+        messages = [*messages[:-1], dict(messages[-1])]
+        messages[-1]["content"] += (
+            "\n\nRespond with exactly one JSON object matching this JSON Schema — "
+            "no other text before or after it:\n" + json.dumps(schema, ensure_ascii=False)
+        )
+        try:
+            return tokenizer.apply_chat_template(
+                messages, add_generation_prompt=True, enable_thinking=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise NotesGenerationError(
+                f"model {self.model!r} has no usable chat template: {exc}"
+            ) from exc
