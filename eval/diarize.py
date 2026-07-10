@@ -43,6 +43,26 @@ from stenograf.pipeline import finalize_channel
 from stenograf.vad import SileroVAD
 
 
+def _build_diarizer(*, sherpa_only: bool):
+    """The production stack (stenodiar for estimated counts when built) unless
+    ``--sherpa-only`` pins the baseline — mirrors ``cli._load_diarizer``."""
+    from stenograf.diarization.speakrs import (
+        DiarizerHelperNotFoundError,
+        SpeakrsCliDiarizer,
+        find_stenodiar,
+    )
+
+    sherpa = SherpaOnnxDiarizer()
+    if sherpa_only:
+        return sherpa
+    try:
+        find_stenodiar()
+    except DiarizerHelperNotFoundError:
+        print("stenodiar not built — falling back to sherpa estimate mode", file=sys.stderr)
+        return sherpa
+    return SpeakrsCliDiarizer(sherpa)
+
+
 def _load_pcm(path) -> np.ndarray:
     with wave.open(str(path), "rb") as wv:
         return np.frombuffer(wv.readframes(wv.getnframes()), dtype=np.int16)
@@ -75,6 +95,11 @@ def main() -> int:
         action="store_true",
         help="write diarizer turns to refs/<id>.draft.rttm to hand-correct, not hypotheses",
     )
+    parser.add_argument(
+        "--sherpa-only",
+        action="store_true",
+        help="skip the stenodiar helper even if built (measure the sherpa baseline)",
+    )
     args = parser.parse_args()
 
     wanted = set(args.segments.split(",")) if args.segments else None
@@ -87,7 +112,7 @@ def main() -> int:
         print("no extracted segments — run eval/extract.py first", file=sys.stderr)
         return 1
 
-    diarizer = SherpaOnnxDiarizer()
+    diarizer = _build_diarizer(sherpa_only=args.sherpa_only)
     asr = vad = None
     if not args.bootstrap:  # the transcript (word attribution) is only needed for hypotheses
         asr = ParakeetMLXBackend()

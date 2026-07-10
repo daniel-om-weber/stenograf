@@ -9,6 +9,7 @@ this on Mac in a later step, behind the same ``Diarizer`` interface.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -85,33 +86,14 @@ class SherpaOnnxDiarizer(Diarizer):
         sherpa's ``OfflineSpeakerDiarization`` result carries no embeddings
         (verified against the installed package), so a separate
         ``SpeakerEmbeddingExtractor`` — the same ``models.SPEAKER_EMBEDDING`` file
-        the clustering uses — embeds each cluster's turn slices. Slices shorter
-        than :data:`MIN_EMBED_SECONDS` are skipped unless they are all a cluster
-        has; each embedding is L2-normalized, duration-weighted, and averaged, and
-        the mean re-normalized. A cluster with no embeddable audio is omitted."""
+        the clustering uses — embeds each cluster's turn slices via
+        :func:`cluster_embeddings`."""
         turns = self.diarize(samples, num_speakers)
-        audio = to_float32(samples)
-        by_cluster: dict[str, list[SpeakerTurn]] = {}
-        for turn in turns:
-            by_cluster.setdefault(turn.speaker, []).append(turn)
+        return DiarizationResult(
+            turns=turns, embeddings=cluster_embeddings(turns, samples, self.embed)
+        )
 
-        embeddings: dict[str, np.ndarray] = {}
-        for speaker, cluster_turns in by_cluster.items():
-            long = [t for t in cluster_turns if t.end - t.start >= MIN_EMBED_SECONDS]
-            selected = long or cluster_turns  # fall back to short turns if that's all there is
-            vectors, weights = [], []
-            for turn in selected:
-                slice_ = audio[int(turn.start * SAMPLE_RATE) : int(turn.end * SAMPLE_RATE)]
-                vector = self._embed(slice_)
-                if vector is not None:
-                    vectors.append(vector)
-                    weights.append(turn.end - turn.start)
-            if vectors:
-                mean = np.average(vectors, axis=0, weights=weights)
-                embeddings[speaker] = _l2_normalize(mean)
-        return DiarizationResult(turns=turns, embeddings=embeddings)
-
-    def _embed(self, audio: np.ndarray) -> np.ndarray | None:
+    def embed(self, audio: np.ndarray) -> np.ndarray | None:
         """L2-normalized voice embedding of a mono 16 kHz float32 slice, or None
         when the slice is empty or the extractor cannot form an embedding."""
         if len(audio) == 0:
@@ -135,6 +117,42 @@ class SherpaOnnxDiarizer(Diarizer):
                 sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding))
             )
         return self._extractor
+
+
+def cluster_embeddings(
+    turns: list[SpeakerTurn],
+    samples: np.ndarray,
+    embed: Callable[[np.ndarray], np.ndarray | None],
+) -> dict[str, np.ndarray]:
+    """A duration-weighted mean voice embedding per cluster of ``turns``.
+
+    Shared by every diarization backend that pairs its turns with sherpa's
+    ``SpeakerEmbeddingExtractor`` (the ``embed`` callable) — re-ID voiceprints
+    must come from one embedding model regardless of which backend produced
+    the turns. Slices shorter than :data:`MIN_EMBED_SECONDS` are skipped
+    unless they are all a cluster has; each embedding is L2-normalized,
+    duration-weighted, and averaged, and the mean re-normalized. A cluster
+    with no embeddable audio is omitted."""
+    audio = to_float32(samples)
+    by_cluster: dict[str, list[SpeakerTurn]] = {}
+    for turn in turns:
+        by_cluster.setdefault(turn.speaker, []).append(turn)
+
+    embeddings: dict[str, np.ndarray] = {}
+    for speaker, cluster_turns in by_cluster.items():
+        long = [t for t in cluster_turns if t.end - t.start >= MIN_EMBED_SECONDS]
+        selected = long or cluster_turns  # fall back to short turns if that's all there is
+        vectors, weights = [], []
+        for turn in selected:
+            slice_ = audio[int(turn.start * SAMPLE_RATE) : int(turn.end * SAMPLE_RATE)]
+            vector = embed(slice_)
+            if vector is not None:
+                vectors.append(vector)
+                weights.append(turn.end - turn.start)
+        if vectors:
+            mean = np.average(vectors, axis=0, weights=weights)
+            embeddings[speaker] = _l2_normalize(mean)
+    return embeddings
 
 
 def _l2_normalize(vector: np.ndarray) -> np.ndarray:

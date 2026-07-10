@@ -1,0 +1,13 @@
+[package]
+name = "stenodiar"
+version = "0.1.0"
+edition = "2021"
+description = "Diarization helper: speakrs (pyannote community-1-class pipeline, VBx auto speaker count) behind a JSON CLI"
+license = "MIT"
+publish = false
+
+[dependencies]
+speakrs = { version = "0.5", features = ["coreml"] }
+
+[profile.release]
+lto = true

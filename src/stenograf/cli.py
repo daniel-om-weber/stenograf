@@ -881,7 +881,12 @@ def _load_backends(*, need_diarizer: bool):
 
 
 def _load_diarizer(*, need: bool = True):
-    """Build the sherpa-onnx diarizer (or ``None`` when a channel is single-speaker).
+    """Build the diarizer (or ``None`` when a channel is single-speaker).
+
+    When the stenodiar helper is present, unknown speaker counts go through
+    speakrs' VBx estimation and explicit counts through sherpa; without it,
+    sherpa handles both (its estimate mode over-splits badly — the helper is
+    what makes "don't specify a count" usable).
 
     A seam of its own so ``steno profiles enroll`` computes its voiceprints with
     the exact same embedding path the finalize pass uses at match time (the two
@@ -891,8 +896,18 @@ def _load_diarizer(*, need: bool = True):
     if not need:
         return None
     from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.speakrs import (
+        DiarizerHelperNotFoundError,
+        SpeakrsCliDiarizer,
+        find_stenodiar,
+    )
 
-    return SherpaOnnxDiarizer(progress=_model_progress)
+    sherpa = SherpaOnnxDiarizer(progress=_model_progress)
+    try:
+        find_stenodiar()
+    except DiarizerHelperNotFoundError:
+        return sherpa
+    return SpeakrsCliDiarizer(sherpa)
 
 
 def _load_reid(*, enabled: bool, threshold: float | None, store_path: Path | None = None):

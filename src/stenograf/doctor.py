@@ -32,6 +32,7 @@ def run_checks() -> list[Check]:
     if sys.platform == "darwin":
         checks.append(_macos_version_check())
         checks.append(_capture_helper_check())
+        checks.append(_diarizer_helper_check())
     else:
         checks.append(
             Check(
@@ -80,6 +81,29 @@ def _capture_helper_check() -> Check:
         name="Capture helper",
         ok=True,
         detail=f"{path} — signed; grant the mic + system-audio permission once with `steno setup`",
+    )
+
+
+def _diarizer_helper_check() -> Check:
+    """stenodiar is optional: without it, an *estimated* speaker count falls back
+    to sherpa's threshold clustering, which badly over-splits — explicit counts
+    are unaffected. Report it missing without failing the doctor run."""
+    from stenograf.diarization.speakrs import DiarizerHelperNotFoundError, find_stenodiar
+
+    try:
+        path = find_stenodiar()
+    except DiarizerHelperNotFoundError as exc:
+        return Check(name="Diarization helper (optional)", ok=True, detail=str(exc))
+    if not os.access(path, os.X_OK):
+        return Check(
+            name="Diarization helper (optional)",
+            ok=False,
+            detail=f"{path} is not executable — chmod +x it",
+        )
+    return Check(
+        name="Diarization helper (optional)",
+        ok=True,
+        detail=f"{path} — speaker counts are estimated with speakrs (VBx)",
     )
 
 
