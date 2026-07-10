@@ -7,11 +7,13 @@ Accuracy-first, fully local meeting transcription for **German** and **English**
 Built for Apple Silicon (M-series) first; Linux and Windows support is designed
 in from the start.
 
-> **Status: pre-alpha.** The transcription pipeline works today — batch
-> transcription of recorded files (`steno transcribe`) and the two-pass live
-> captions (`steno start --replay`, driving the real streaming + finalize
-> passes). Native macOS system-audio capture still needs its Core Audio helper,
-> so live capture of a real meeting isn't wired up yet. See [PLAN.md](PLAN.md).
+> **Status: pre-alpha, macOS only, not yet on PyPI.** The pipeline is complete
+> end to end: live system-audio + microphone capture, live captions, and the
+> high-accuracy speaker-labelled finalize pass. What is missing is the *shipping*
+> path — the wheel does not yet bundle the `stenocap` capture helper, so
+> `uv tool install` cannot capture audio. Install from source (below) until that
+> lands. The local web UI, meeting notes, and Linux capture are not built yet.
+> See [PLAN.md](PLAN.md).
 
 ## Why another transcription tool?
 
@@ -24,16 +26,37 @@ in from the start.
 - **Channel-aware speakers.** Microphone and system audio are captured as
   separate streams, so local and remote voices never get confused; diarization
   handles the rest (2–8 speakers).
+- **Speakers, not headphones.** Remote voices leaving your laptop speakers and
+  re-entering the mic are cancelled in the audio domain (WebRTC AEC3, with the
+  system channel as the far-end reference), so they are never transcribed as a
+  local speaker.
+
+## Install
+
+Requires macOS 14.4+ on Apple Silicon, [uv](https://docs.astral.sh/uv/), and a
+Swift toolchain (Xcode command-line tools) to build the capture helper.
+
+```sh
+git clone https://github.com/daniel-om-weber/stenograf
+cd stenograf
+uv sync
+sh native/helper/build.sh     # builds + ad-hoc signs native/helper/stenocap
+uv run steno doctor           # first-run checks & model download
+```
+
+Every command below is then run as `uv run steno …` from the repo. On first
+capture, macOS asks once for microphone and system-audio permission.
+
+`uv tool install stenograf` will be the install path once the wheel bundles the
+helper (PLAN.md Phase 4, Stage E); today it installs a package that cannot
+capture live audio. Batch transcription of a file works anywhere.
 
 ## Usage
 
 ```sh
-uv tool install stenograf
-
-steno doctor                                # first-run checks & model download
-steno start                                 # live captions, everything auto-detected
-steno start --lang de --local 3 --remote 2  # hybrid meeting, German
-steno transcribe recording.mov              # batch-transcribe an existing file
+uv run steno start                                 # live captions, everything auto-detected
+uv run steno start --lang de --local 3 --remote 2  # hybrid meeting, German
+uv run steno transcribe recording.mov              # batch-transcribe an existing file
 ```
 
 `steno start` streams **live captions** while the meeting runs — a full-screen
@@ -46,11 +69,33 @@ Useful flags:
 ```sh
 steno start --plain                 # plain caption stream instead of the TUI
 steno start --no-live               # skip live captions; just finalize on stop
+steno start --title "Weekly sync"   # name the meeting in the archive
 steno start --flush-interval 60     # crash-checkpoint the captions every 60s
+steno start --no-aec                # disable echo cancellation (headphones)
+steno start --record-audio          # opt in to keeping a WAV (off by default)
 steno start --replay mic.wav        # dev: drive the live pass from a file
 ```
 
-### Naming speakers across meetings
+Both `start` and `transcribe` accept `--format md,json,srt,vtt` (default
+`md,json`), `--lang de|en`, and `--print` to echo the transcript to stdout.
+
+## Your meeting archive
+
+Transcripts are filed automatically into a managed archive at
+`~/Library/Application Support/stenograf/meetings/<id>/`. Use `--out DIR` to
+write somewhere else (still archived), or `--no-archive` to write loose files
+next to the source and register nothing.
+
+```sh
+steno meetings list                 # every transcript, newest first
+steno meetings show meeting-20260710-091500
+steno meetings rm meeting-20260710-091500
+```
+
+Audio is stored only when you passed `--record-audio`; without it the archive
+holds text alone.
+
+## Naming speakers across meetings
 
 Enroll a voice once and every later meeting relabels that speaker automatically
 (cross-meeting re-identification):
@@ -75,6 +120,19 @@ you enroll someone; disable it with `--no-reid`, or adjust the match strictness
 with `--reid-threshold` (0–1, default 0.5). Voiceprints live in the platform data
 dir (not the model cache) and are never uploaded.
 
+## Vocabulary
+
+Domain terms and attendee names are corrected in the finalized transcript
+(the ASR has no decode-time biasing, so this is a post-correction pass):
+
+```sh
+steno transcribe rec.mov --attendee "Anja Müller" --glossary Kubernetes,gRPC
+steno transcribe rec.mov --glossary-file terms.txt
+```
+
+A term and its transcription must share a word count — `gRPC` can fix `G R P C`
+spoken as one word, but not a term split across word boundaries.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.
@@ -85,7 +143,13 @@ uv run pytest
 uv run steno doctor
 ```
 
-See [PLAN.md](PLAN.md) for the full architecture, model choices, and roadmap.
+The test suite is label-free and runs without a meeting: model-gated and
+real-audio tests self-skip when their assets are absent.
+
+See [PLAN.md](PLAN.md) for the full architecture, model choices, and roadmap;
+[PLAN-AEC.md](PLAN-AEC.md) for the echo-cancellation design and its measurements;
+`native/README.md` for the capture helper and its wire protocol; `eval/README.md`
+for the model-evaluation and AEC-scoring harnesses.
 
 ## License
 

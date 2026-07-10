@@ -256,12 +256,16 @@ Speaker-bleed caveats: (a) remote audio played through speakers bleeds into the
 mic — echo cancellation is mandatory whenever both channels are captured without
 headphones, which is the *default* way of sitting in an online meeting, not just a
 hybrid-mode concern. `stenograf.aec` feeds the system channel to WebRTC AEC3 as the
-far-end reference (36 dB measured on synthetic echo; end-to-end, six duplicated
-`Local-1` lines drop to zero while genuine local speech survives double-talk).
-Voice Processing IO was evaluated and rejected — it ducks the remote audio we
-transcribe, see native/README.md. A cross-channel dedup at merge time (near-identical
-text at the same timestamps on both channels → keep the system-channel copy) remains
-the backstop for residual echo; (b) the reverse direction is safe —
+far-end reference. **Settled by PLAN-AEC.md (complete 2026-07-10):** across the full
+scenario matrix (quiet/loud, batch/live, built-in/Bluetooth, double-talk) a canceller
+with a live reference leaks *zero* transcript lines — 37.6 dB ERLE live, −65 dBFS
+residual, AECMOS echo 4.73. No energy gate or neural residual suppressor is needed.
+The one real leak mechanism is *losing* the reference (a stalled or mis-clocked tap),
+so the cross-channel text dedup at merge time is now an **armed backstop**: it runs
+only when `far_end_missing_ticks > 0` (or no canceller was observed), and the CLI
+warns with cause and drop count when it fires. Voice Processing IO was evaluated and
+rejected — it ducks the remote audio we transcribe, see native/README.md;
+(b) the reverse direction is safe —
 meeting apps send only remote voices, so the system channel stays clean. In-room
 mode is the acoustically hardest case (far-field mic, 2–8 speakers, more overlap):
 transcription and diarization quality depend heavily on the mic — recommend an
@@ -481,7 +485,7 @@ tee (streaming, crash-safe, mic-left/system-right) and incremental text checkpoi
 on clean stop). A `FileCaptureProvider` (`--replay mic[,system]`) also drives the whole
 orchestrator over recorded files for dev/test. The production Swift capture
 helper (`native/helper/`, **stenocap**) is shipped: Core Audio process tap
-(system) + AVAudioEngine (mic, optional `--aec`) → AVAudioConverter to mono
+(system) + AVAudioEngine (mic) → AVAudioConverter to mono
 16 kHz int16 → framed PCM on stdout, clean SIGINT/SIGTERM stop; consumed by
 `MacOSCaptureProvider` behind the same `CaptureProvider` interface. Verified
 end-to-end (July 2026): live mic capture is non-silent and real-time; German
@@ -489,8 +493,8 @@ speech played to the system output is captured through the tap and transcribed
 accurately (`steno start --local 0 --remote 1`). Automatic de/en language
 detection ships as a text vote over the finalized transcript (`stenograf.lid`),
 auto-filling the transcript language and locking it for the session. **Phase 1
-is complete** — a usable, legally-clean meeting transcriber. Deferred to later
-phases: cross-channel text dedup (the backstop for echo AEC3 leaves behind),
+is complete** — a usable, legally-clean meeting transcriber. Cross-channel text
+dedup shipped later, in the PLAN-AEC pass, as an armed backstop. Still deferred:
 moving checkpoint finalize off the consume thread (needs real-time
 backpressure tuning), and acoustic first-segment LID for the live pass.*
 
@@ -526,6 +530,13 @@ Phase 5 so Phase 4 ships a tangible Mac-native product first; `steno start` writ
 a managed meeting archive by default; the in-RAM-only privacy guarantee is preserved
 (archive audio playback / archived re-diarize are opt-in, gated on `--record-audio`).
 Detailed build plan below.*
+*Status (2026-07-10): Stage A (A1 `from_json`, A2 `title`) and Stage B (B1 archive,
+B2 CLI wiring + `meetings` group, B3 `MeetingSession`, B4 `ArchivedMeeting`) are
+**shipped**. **Re-prioritized 2026-07-10 (Daniel): Stage E — distribution — moves
+first**, ahead of the web UI and notes. Rationale: everything built so far is
+unreachable on any machine but this repo checkout (`uv tool install` → the wheel
+carries no `stenocap`), so shipping is worth more than another feature. Stages C
+(web UI) and D (notes) follow E, unchanged in scope.*
 
 **Phase 5 — Linux + cross-platform ASR.**
 Linux in-process capture (PipeWire/PulseAudio monitor via SoundCard/`pactl`, no helper)
@@ -1116,16 +1127,25 @@ not even collect on Linux — so a focused pre-Phase-4 hardening pass is warrant
 **Known deferrals (acknowledged, not surprises).**
 - **Wheel build hook + CI to bundle/sign ``stenocap``** — the one true *distribution*
   blocker (today only ``uv run`` in-repo captures audio; ``uv tool install`` / ``uvx``
-  → ``HelperNotFoundError``). Blocks *shipping* Phase 4, not *building* it; already
-  flagged above as a Phase-4 distribution blocker.
+  → ``HelperNotFoundError``). **Now the current priority: Phase 4 Stage E**, promoted
+  ahead of the web UI and notes on 2026-07-10.
 - **0d hand-labelled RTTM references** — the DER/word-attribution scorer is built and
   tested, but no references exist, so diarization/re-ID quality and any Phase-4
-  backend swap stay unmeasurable (Daniel's call not to hand-label).
+  backend swap stay unmeasurable (Daniel's call not to hand-label). Consequences: the
+  re-ID threshold stays at an untuned 0.5, and far-field local-speaker-count estimation
+  is known to over-split (a small group measured as 8).
+- **Capture-tap fragility (two open defects, see PLAN-AEC.md §5).** (1) Any Python-side
+  stall over ~1 s permanently kills the Core Audio tap with no recovery — a drain thread
+  in ``MacOSCaptureProvider`` would decouple it; two separate bugs have already been
+  traced to this. (2) A tap that keeps delivering **all-zero** PCM is undetected:
+  ``far_end_missing_ticks`` counts only *absent* far-end frames, so the armed text
+  backstop never arms and no warning fires while the canceller runs blind.
 - **Lower-priority, independent:** greedy re-ID → optimal (Hungarian) assignment;
   SRT/VTT dropping text not covered by ``words`` (latent — Parakeet emits full-or-none);
-  README missing ``--format``/SRT-VTT and the whole glossary family; helper-stderr
-  piping; atomic model extraction (tar path); meeting-mode auto-detect; hybrid
-  cross-channel dedup.
+  helper-stderr piping; atomic model extraction (tar path — folded into Stage E2);
+  meeting-mode auto-detect; hybrid cross-channel dedup.
+  *(The README gap — missing ``--format``/SRT-VTT and the glossary family — was closed
+  on 2026-07-10 along with the stale "capture isn't wired up" status note.)*
 
 ---
 
@@ -1348,8 +1368,55 @@ marks a hard prerequisite):
   `ArchivedMeeting` — that record still supports rename + playback. Unblocks C7 (web reverse-
   control POSTs consume `MeetingSession`/`ArchivedMeeting`).*
 
-**Stage C — Web UI (`stenograf.web`).** The web view is "a new `LiveView` + a `serve()`
-twin, zero core changes" — confirmed against `view.py`/`tui.py`/`session.py`.
+**Stage E — macOS distribution (the shipping path). ← CURRENT PRIORITY: start here.**
+Ships the current Mac tool to colleagues via PyPI; the `stenocap` bundling is the one true
+shipping blocker. Promoted ahead of C and D on 2026-07-10 — Stages A+B built a real product
+that no one but this checkout can run.
+
+*Verified repo state at the start of this stage (2026-07-10):* there is no `hatch_build.py`,
+no `src/stenograf/bin/`, and no `.github/`; `native/helper/stenocap` is a **gitignored build
+artifact**, built by `sh native/helper/build.sh`. A wheel built today is therefore a pure
+`py3-none-any` wheel carrying no helper, and `uv tool install stenograf` yields a package
+whose `capture.macos.find_helper` raises `HelperNotFoundError` the moment `steno start` runs.
+Only `uv run` in-repo captures audio. E1 closes exactly that gap; the rest make it safe,
+verifiable, and repeatable.
+
+- **E1 — `hatch_build.py` build hook + `find_helper` hardening.** A hatchling custom build
+  hook that, **only on macOS-arm64**, shells `native/helper/build.sh` (reuses the one
+  `swiftc` + `codesign -s -` line), force-includes the binary at `stenograf/bin/stenocap`
+  (mode `0o755`), and stamps `build_data["pure_python"]=False` + `tag=
+  "py3-none-macosx_14_0_arm64"`; no-op elsewhere → pure `py3-none-any` wheel. Register it via
+  `[tool.hatch.build.targets.wheel.hooks.custom]` in `pyproject.toml`. `find_helper` gains an
+  `os.access(X_OK)` guard that `chmod +x`es its own binary. Note the build hook must fail
+  loudly if `swiftc` is absent on an arm64 Mac (a silently pure wheel is the bug this stage
+  exists to kill). Acceptance: `uv build` emits the arm64 wheel carrying
+  `stenograf/bin/stenocap`; clean-venv install → `find_helper` returns an executable
+  site-packages path; the `any` wheel has no `bin/`. `[dep: none]`
+- **E2 — dep markers/matrix + atomic tar extract.** Confirm the wheel matrix
+  (arm64-with-helper + pure `any`); keep `parakeet-mlx` marker-gated; reserve a `[ollama]`
+  extra name only (no dep). Fold in the deferred **atomic model extraction (tar path)** fix
+  (`models._extract_member` → temp+`os.replace`). Acceptance: `uv sync` resolves on both OSes;
+  interrupted extraction leaves no truncated model. `[dep: none]`
+- **E3 — signing verified + `doctor`/`steno setup` permission UX.** Verify the ad-hoc
+  signature survives the zip round-trip (`codesign -v`, no `com.apple.quarantine`) and the
+  binary is launchable; extend `_capture_helper_check` (present + executable + signed) and
+  add a `steno setup` that deliberately triggers the one-time TCC mic+system-audio prompt.
+  Acceptance: `steno doctor` green on a clean install; honest limits documented (per-terminal
+  grant, no headless system-audio). `[dep: E1]`
+- **E4 — CI + release pipeline.** `.github/workflows/ci.yml` (matrix macos-14 + ubuntu-latest:
+  `ruff` + `pytest`, model-gated + real-audio tests self-skip — the Linux job keeps the suite
+  collecting, per the Tier-1 `scipy` fix) and `release.yml` (build the arm64 + `any` wheels +
+  sdist, clean-env `uv tool install ./dist/…` smoke → `steno doctor` green + `steno start
+  --replay` pipeline smoke on a synthetic WAV, publish to PyPI via Trusted Publishing/OIDC).
+  Acceptance: green both OSes; on a tag, a *different* clean Mac's `uv tool install stenograf`
+  captures. `[dep: E1, E2]`
+- **E5 — README install path.** Once E1–E4 land, the README's "Install from source" section
+  reverts to `uv tool install stenograf`, and the pre-alpha status note drops the shipping
+  caveat. (Written down because the README currently documents the source install *as* the
+  install path, and that must not silently outlive the blocker.) `[dep: E4]`
+
+**Stage C — Web UI (`stenograf.web`).** *Follows Stage E.* The web view is "a new `LiveView`
++ a `serve()` twin, zero core changes" — confirmed against `view.py`/`tui.py`/`session.py`.
 - **C1 — wire protocol + `WebLiveView` (start here; no server).** Pure event→JSON encoders
   in `web/protocol.py` (`encode_commit`/…/`encode_finalized` reusing the `Transcript.to_json`
   shape); `web/live.py::WebLiveView(LiveView)` overriding each event, marshaling onto the
@@ -1393,8 +1460,8 @@ twin, zero core changes" — confirmed against `view.py`/`tui.py`/`session.py`.
   headless, `TestClient` lists+reads a seeded archive from the *installed* package. `[dep:
   C5–C7]`
 
-**Stage D — Ollama note-enhancement (`stenograf.notes`).** Opt-in, fully local, stdlib-only.
-Nearly independent — only `steno notes` needs A1.
+**Stage D — Ollama note-enhancement (`stenograf.notes`).** *Follows Stage E; parallel to C.*
+Opt-in, fully local, stdlib-only. Nearly independent — only `steno notes` needs A1.
 - **D1 — notes model + Ollama client.** `notes/model.py::MeetingNotes` (summary, decisions,
   `ActionItem{task,owner,due,timestamp}`, `SpeakerHighlight`, open_questions + provenance
   model/strategy/language) with `to_markdown`/`to_json`; `notes/ollama.py::OllamaClient`
@@ -1419,39 +1486,17 @@ Nearly independent — only `steno notes` needs A1.
   `Check.optional` field so an absent Ollama doesn't fail the overall `doctor` exit gate.
   Acceptance: monkeypatched client; not-running → not-ok but exit 0. `[dep: D1]`
 
-**Stage E — macOS distribution (the shipping path).** Ships the current + Phase-4 Mac tool
-to colleagues via PyPI; the `stenocap` bundling is the one true shipping blocker.
-- **E1 — `hatch_build.py` build hook + `find_helper` hardening.** A hatchling custom build
-  hook that, **only on macOS-arm64**, shells `native/helper/build.sh` (reuses the one
-  `swiftc` + `codesign -s -` line), force-includes the binary at `stenograf/bin/stenocap`
-  (mode `0o755`), and stamps `build_data["pure_python"]=False` + `tag=
-  "py3-none-macosx_14_0_arm64"`; no-op elsewhere → pure `py3-none-any` wheel. `find_helper`
-  gains an `os.access(X_OK)` guard that `chmod +x`es its own binary. Acceptance: `uv build`
-  emits the arm64 wheel carrying `stenograf/bin/stenocap`; clean-venv install → `find_helper`
-  returns an executable site-packages path; the `any` wheel has no `bin/`. `[dep: none]`
-- **E2 — dep markers/matrix + atomic tar extract.** Confirm the wheel matrix
-  (arm64-with-helper + pure `any`); keep `parakeet-mlx` marker-gated; reserve a `[ollama]`
-  extra name only (no dep). Fold in the deferred **atomic model extraction (tar path)** fix
-  (`models._extract_member` → temp+`os.replace`). Acceptance: `uv sync` resolves on both OSes;
-  interrupted extraction leaves no truncated model. `[dep: none]`
-- **E3 — signing verified + `doctor`/`steno setup` permission UX.** Verify the ad-hoc
-  signature survives the zip round-trip (`codesign -v`, no `com.apple.quarantine`) and the
-  binary is launchable; extend `_capture_helper_check` (present + executable + signed) and
-  add a `steno setup` that deliberately triggers the one-time TCC mic+system-audio prompt.
-  Acceptance: `steno doctor` green on a clean install; honest limits documented (per-terminal
-  grant, no headless system-audio). `[dep: E1]`
-- **E4 — CI + release pipeline.** `.github/workflows/ci.yml` (matrix macos-14 + ubuntu-latest:
-  `ruff` + `pytest`, model-gated + real-audio tests self-skip — the Linux job keeps the suite
-  collecting, per the Tier-1 `scipy` fix) and `release.yml` (build the arm64 + `any` wheels +
-  sdist, clean-env `uv tool install ./dist/…` smoke → `steno doctor` green + `steno start
-  --replay` pipeline smoke on a synthetic WAV, publish to PyPI via Trusted Publishing/OIDC).
-  Acceptance: green both OSes; on a tag, a *different* clean Mac's `uv tool install stenograf`
-  captures. `[dep: E1, E2]`
+**Ordering (revised 2026-07-10).** ~~A → (B ∥ C-live ∥ D) → C-consumers → E.~~
+A and B are shipped. The remaining order is **E → (C ∥ D)**:
 
-**Ordering.** A → (B ∥ C-live ∥ D) → C-consumers → E. Concretely: A1/A2 first; then the web
-live view (C1–C4), the archive/reverse-control (B1–B4), and notes (D) proceed in parallel;
-the web archive/reader/reverse views (C5–C7) gate on B; C8 packages the UI; E ships it. E1
-and E2 can start immediately in parallel (they don't touch runtime features).
+1. **E1 → E2 → E3 → E4** — the shipping path, in that order (E3 gates on E1; E4 on
+   E1+E2). This is the current priority: it touches no runtime feature, and until it
+   lands the tool cannot leave this checkout.
+2. Then **C (web UI)** and **D (notes)** in parallel — both independent of each other.
+   Within C: C1 → C2 → C3 → C4, with C5–C7 gating on the shipped Stage B and C8
+   packaging the assets. D1 → D2 → D3, D4 alongside.
+3. C8 re-touches packaging (the `web/static` assets), so re-run E4's clean-install
+   smoke test after it; E1's build hook needs no change (assets are package data).
 
 **Deferred to Phase 5 (Linux Track 2 — designed, not built).** A CPU/ONNX ASR backend
 `stenograf/asr/sherpa.py::SherpaOnnxASRBackend` (`name="parakeet-onnx"`) wrapping the *same*

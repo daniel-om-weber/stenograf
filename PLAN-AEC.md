@@ -1,11 +1,17 @@
 # Echo cancellation: evaluation & improvement plan
 
+> **Status: complete (2026-07-10). All four tasks closed.** Tasks 1–2 shipped
+> (measurement rig; dedup data-loss fix); Tasks 3–4 (energy gate, neural residual
+> suppressor) were **closed as unnecessary** — a canceller with a live reference
+> leaks nothing the ASR decodes. What remains open is capture-tap robustness, in
+> §5 below. Read §1 for the measurements, §4 for how each task resolved.
+
 Speakers + built-in mic is the default way to sit in a meeting, so remote voices
 re-enter the mic and, untreated, get transcribed as `Local-N`. This document
-plans the next iteration of the echo path: replace the text-dedup backstop with
+planned the next iteration of the echo path: replace the text-dedup backstop with
 an audio-domain gate, and build the measurement rig that every future change is
 judged against. It extends PLAN.md §2 ("Hybrid-mode caveats"); the shipped state
-it revises is `stenograf/aec.py` + `session.drop_echo_duplicates`.
+it revised is `stenograf/aec.py` + `session.drop_echo_duplicates`.
 
 ## 1. Where we stand, and what the numbers mean
 
@@ -166,7 +172,32 @@ which would silently blind the canceller.
    with (3)**: no decodeable residual to suppress. LocalVQE/DTLN-aec remain in
    §5 as the escalation path if a future device class measures differently.
 
-## 5. Sources
+## 5. Open items (the echo path is settled; the tap that feeds it is not)
+
+Both tasks 3 and 4 closed on the same finding: **a canceller with a live reference
+does not leak.** Every measured leak came from *losing* the reference. That makes
+tap robustness — not suppression — the remaining work. Neither item below is
+scheduled; both are cheap, and either would silently reintroduce echo lines.
+
+1. **The tap dies on any Python-side stall >~1 s, permanently, with no recovery.**
+   `stenocap`'s 64 KB stdout pipe fills, Core Audio kills the tap, and nothing
+   restarts it. Two separate bugs have already reached production through this
+   path (the tail-checkpointer busy-spin, `ebf660a`; the aggregate-rate mismatch,
+   `7dd1510`). A **drain thread in `MacOSCaptureProvider`** — reading the pipe
+   into a queue independently of the consumer — decouples capture from every
+   downstream stall. Highest-value hardening in the capture layer.
+
+2. **An all-zero tap is undetected.** `far_end_missing_ticks` (`aec.py:235`)
+   increments only when a far-end frame is **absent**. The known long-session
+   failure where the tap keeps delivering frames of silent PCM therefore leaves
+   the counter at 0: the armed text backstop never arms, the CLI never warns, and
+   AEC3 adapts against silence while echo passes straight through to the ASR —
+   the exact failure the backstop exists to catch, in its quietest form. Fix: an
+   energy check on the far-end tick (a reference that is bit-exact zero for many
+   consecutive seconds *while the near end is not* is a dead tap, not a quiet
+   meeting), feeding the same `reference_gap_s` signal.
+
+## 6. Sources
 
 - livekit APM surface: `livekit-rtc` `apm.py` (four booleans; no config/stats).
 - AEC3 suppressor internals & config: `api/audio/echo_canceller3_config.h`;
