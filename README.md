@@ -117,9 +117,10 @@ Every run writes its own date-named folder into `~/Documents/Meetings`:
 That's it — there is no separate library or index to manage. Browse with
 Finder or `ls`, read with anything that opens markdown, delete with `rm`.
 Change the standing location with `[output] dir` in settings.toml, or give one
-run its own folder with `--out DIR` (files land directly in it). Audio is
-stored only when you passed `--record-audio`; without it a meeting folder
-holds text alone.
+run its own folder with `--out DIR` (files land directly in it; if DIR already
+holds a transcript, stenograf refuses to replace it unless you add `--force`).
+Audio is stored only when you passed `--record-audio`; without it a meeting
+folder holds text alone.
 
 ## Meeting notes (LLM summaries)
 

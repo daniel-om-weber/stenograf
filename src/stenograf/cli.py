@@ -254,7 +254,13 @@ def main() -> None:
     default=None,
     help="Use this directory as the meeting's folder instead of creating a "
     "date-named one under the output home ([output] dir in settings.toml, "
-    "else ~/Documents/Meetings).",
+    "else ~/Documents/Meetings). Refuses a directory that already holds a "
+    "transcript unless --force.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Let --out overwrite an existing transcript (e.g. re-processing the same meeting).",
 )
 @click.option(
     "--title",
@@ -374,6 +380,7 @@ def start(
     no_diarization: bool,
     replay: str | None,
     out: Path | None,
+    force: bool,
     title: str | None,
     record_audio: str | None,
     flush_interval: float | None,
@@ -453,7 +460,7 @@ def start(
     # (or --out as the folder), holding transcript.{md,json,…} + optional
     # audio.wav — self-describing files, no index (PLAN.md §5 Stage C).
     created_at = datetime.now()
-    out_dir, basename, audio_default = _prepare_output(out, created_at, settings)
+    out_dir, basename, audio_default = _prepare_output(out, created_at, settings, force=force)
 
     started = time.monotonic()
     asr, vad, diarizer = _load_backends(
@@ -968,7 +975,14 @@ def _transcribe_split_channels(
     default=None,
     help="Use this directory as the transcription's folder instead of creating "
     "a date-named one under the output home ([output] dir in settings.toml, "
-    "else ~/Documents/Meetings).",
+    "else ~/Documents/Meetings). Refuses a directory that already holds a "
+    "transcript unless --force.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Let --out overwrite an existing transcript (e.g. re-transcribing the "
+    "same meeting with a corrected speaker count).",
 )
 @click.option(
     "--title",
@@ -1020,6 +1034,7 @@ def transcribe(
     remote_speakers: int | None,
     no_diarization: bool,
     out: Path | None,
+    force: bool,
     title: str | None,
     use_reid: bool,
     reid_threshold: float | None,
@@ -1062,6 +1077,11 @@ def transcribe(
     reid_store = profile_store or settings.speakers.profile_store
     given_language = Language(lang) if lang else None
     language = given_language
+
+    # Resolve (and overwrite-guard) the output folder before the transcription
+    # work, so a refusal costs nothing — not minutes of ASR.
+    created_at = datetime.now()
+    out_dir, basename, _ = _prepare_output(out, created_at, settings, force=force)
 
     split_pcms, correlation = _resolve_split_channels(audio_file, channels_mode)
     if split_pcms is not None and speakers is not None:
@@ -1191,8 +1211,6 @@ def transcribe(
             language=language, profile=profile, entries=entries, parameters=parameters
         )
 
-    created_at = datetime.now()
-    out_dir, basename, _ = _prepare_output(out, created_at, settings)
     paths = _write_transcript(transcript, out_dir, basename, write_formats)
     elapsed = time.monotonic() - started
     speed = duration / elapsed if elapsed else 0.0
@@ -1300,14 +1318,23 @@ def _load_reid(*, enabled: bool, threshold: float | None, store_path: Path | Non
     return SpeakerReID(store, model, threshold=threshold)
 
 
-def _prepare_output(out: Path | None, created_at: datetime, settings) -> tuple[Path, str, Path]:
+def _prepare_output(
+    out: Path | None, created_at: datetime, settings, *, force: bool = False
+) -> tuple[Path, str, Path]:
     """Resolve the directory this run's files land in.
 
     Returns ``(out_dir, basename, audio_default)``. By default the meeting gets
     a fresh date-named folder under the visible output home (``[output] dir``
     in settings.toml, else ``~/Documents/Meetings``); ``--out`` uses that path
     itself as the meeting's folder. Either way the files inside are plainly
-    named — ``transcript.{fmt}``, ``audio.wav`` (PLAN.md §5 Stage C1)."""
+    named — ``transcript.{fmt}``, ``audio.wav`` (PLAN.md §5 Stage C1).
+
+    File names inside a meeting folder are fixed, so pointing ``--out`` at a
+    folder that already holds a transcript would silently replace that meeting;
+    refuse unless ``--force`` says overwriting is the point (a re-run over the
+    same recording). The default path allocates a fresh name and cannot collide;
+    ``.partial`` checkpoints don't count — resuming after a crash must not
+    demand ``--force``."""
     from stenograf.output import (
         AUDIO_NAME,
         TRANSCRIPT_STEM,
@@ -1316,6 +1343,20 @@ def _prepare_output(out: Path | None, created_at: datetime, settings) -> tuple[P
     )
 
     if out is not None:
+        if not force:
+            existing = next(
+                (
+                    f"{TRANSCRIPT_STEM}.{ext}"
+                    for ext in FORMATS
+                    if (out / f"{TRANSCRIPT_STEM}.{ext}").exists()
+                ),
+                None,
+            )
+            if existing is not None:
+                raise click.ClickException(
+                    f"{out} already holds {existing} — pass --force to overwrite "
+                    "this meeting's files, or drop --out for a fresh folder"
+                )
         out_dir = out
     else:
         out_dir = allocate_meeting_dir(settings.output.dir or default_output_home(), created_at)

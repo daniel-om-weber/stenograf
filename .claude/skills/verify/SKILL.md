@@ -21,7 +21,8 @@ uv run steno start --local 1 --remote 1 --no-aec \
   `transcript.{md,json,txt}`. Without it, a `meeting-YYYYMMDD-HHMMSS/` folder
   is created under the output home (`[output] dir` in settings.toml, else
   `~/Documents/Meetings`) — always pass `--out` when testing to stay out of
-  the user's real meetings.
+  the user's real meetings. Re-running into the same `--out` needs `--force`
+  (an existing transcript is refused); fresh tmpdir per run avoids it.
 - `--replay MIC[,SYSTEM]` replays wav files as the two channels. With the live
   pass on (default), replay is **paced to wall-clock**, so a 2-minute file takes
   2 minutes — that is the point: it exercises the LiveWorker at meeting cadence.

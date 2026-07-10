@@ -562,7 +562,7 @@ def test_flush_interval_and_checkpoint_interval_are_aliases(tmp_path, monkeypatc
                 flag,
                 "0",
                 "--out",
-                str(tmp_path),
+                str(tmp_path / flag.lstrip("-")),
             ],
         )
         assert result.exit_code == 0, result.output
@@ -623,7 +623,17 @@ def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
 
     tui_run = CliRunner().invoke(
         cli.main,
-        ["start", "--local", "1", "--remote", "0", "--replay", str(mic), "--out", str(tmp_path)],
+        [
+            "start",
+            "--local",
+            "1",
+            "--remote",
+            "0",
+            "--replay",
+            str(mic),
+            "--out",
+            str(tmp_path / "tui"),
+        ],
     )
     assert tui_run.exit_code == 0, tui_run.output
     assert served, "on a TTY the default live run should pick the Textual view"
@@ -642,7 +652,7 @@ def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
             "--replay",
             str(mic),
             "--out",
-            str(tmp_path),
+            str(tmp_path / "plain"),
         ],
     )
     assert plain_run.exit_code == 0, plain_run.output
@@ -770,8 +780,19 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     assert "re-ID: 1 profile(s) active" in reid.output
     assert "Daniel" in (tmp_path / "transcript.md").read_text()
 
+    # The --no-reid re-run replaces the transcript in place — the --force flow.
     no_reid = CliRunner().invoke(
-        cli.main, ["transcribe", str(audio), "--speakers", "2", "--no-reid", "--out", str(tmp_path)]
+        cli.main,
+        [
+            "transcribe",
+            str(audio),
+            "--speakers",
+            "2",
+            "--no-reid",
+            "--out",
+            str(tmp_path),
+            "--force",
+        ],
     )
     assert no_reid.exit_code == 0, no_reid.output
     assert "re-ID:" not in no_reid.output
@@ -864,6 +885,48 @@ def test_start_out_is_the_meetings_own_folder(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert (out / "transcript.json").exists()  # files land directly in --out
     assert not (tmp_path / "meetings-home").exists()  # the home is untouched
+
+
+def test_out_refuses_an_existing_transcript_unless_forced(tmp_path, monkeypatch):
+    # Fixed file names mean a reused --out would silently replace the previous
+    # meeting — refuse, and let --force say overwriting is the point.
+    out = tmp_path / "custom"
+    assert _start_batch(tmp_path, monkeypatch, "--out", str(out)).exit_code == 0
+    first = (out / "transcript.md").read_text(encoding="utf-8")
+
+    refused = _start_batch(tmp_path, monkeypatch, "--out", str(out), "--title", "Second")
+    assert refused.exit_code != 0
+    assert "--force" in refused.output
+    assert (out / "transcript.md").read_text(encoding="utf-8") == first  # untouched
+
+    forced = _start_batch(tmp_path, monkeypatch, "--out", str(out), "--force")
+    assert forced.exit_code == 0, forced.output
+
+
+def test_out_overwrite_guard_ignores_partial_checkpoints(tmp_path, monkeypatch):
+    # A crashed run leaves only .partial files; recovering into the same folder
+    # must not demand --force.
+    out = tmp_path / "custom"
+    out.mkdir()
+    (out / "transcript.partial.md").write_text("crashed", encoding="utf-8")
+    result = _start_batch(tmp_path, monkeypatch, "--out", str(out))
+    assert result.exit_code == 0, result.output
+
+
+def test_transcribe_out_refusal_happens_before_any_transcription(tmp_path, monkeypatch):
+    def explode(*, need_diarizer, asr_backend=None):
+        raise AssertionError("backends must not load when --out is refused")
+
+    monkeypatch.setattr(cli, "_load_backends", explode)
+    out = tmp_path / "custom"
+    out.mkdir()
+    (out / "transcript.md").write_text("previous meeting", encoding="utf-8")
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(out)])
+    assert result.exit_code != 0
+    assert "--force" in result.output
 
 
 def test_transcribe_writes_into_the_output_home_by_default(tmp_path, monkeypatch):
