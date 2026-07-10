@@ -5,10 +5,13 @@ reproduces on real hardware (MLX GPU + a worker thread), so it is asserted here
 at the mechanism level rather than by running the real model.
 """
 
-import mlx.core as mx
-import parakeet_mlx
+import pytest
 
-from stenograf.asr.parakeet import ParakeetMLXBackend
+# The MLX stack only exists on macOS-arm64; keep the suite collecting elsewhere.
+mx = pytest.importorskip("mlx.core")
+parakeet_mlx = pytest.importorskip("parakeet_mlx")
+
+from stenograf.asr.parakeet import ParakeetMLXBackend  # noqa: E402
 
 
 class _FakeModel:

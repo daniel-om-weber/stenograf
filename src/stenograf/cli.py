@@ -1034,7 +1034,12 @@ def doctor() -> None:
 
 
 @main.command()
-def setup() -> None:
+@click.option(
+    "--models-only",
+    is_flag=True,
+    help="Skip the permission prompts and only download the models (headless machines, CI).",
+)
+def setup(models_only: bool) -> None:
     """One-time setup: permission prompts, then model downloads.
 
     Launches the capture helper so macOS shows both permission prompts (mic +
@@ -1044,8 +1049,26 @@ def setup() -> None:
     from, so re-run this from each terminal app (or IDE) you will run meetings
     from; the models are cached machine-wide.
     """
+    if not models_only:
+        _grant_capture_permissions()
+
+    # Permissions first (they need the user at the keyboard), then the long
+    # unattended part: everything a first meeting would otherwise stop to fetch.
+    try:
+        _prefetch_models()
+    except Exception as exc:
+        raise click.ClickException(
+            f"model download failed: {exc} — re-run `steno setup`, or let the models "
+            "download on first use."
+        ) from exc
+    click.echo(click.style("✓", fg="green") + " setup complete.")
+
+
+def _grant_capture_permissions() -> None:
     if sys.platform != "darwin":
-        raise click.ClickException("setup is macOS-only — capture is not supported here yet")
+        raise click.ClickException(
+            "the permission prompts are macOS-only — use `steno setup --models-only` here"
+        )
     from stenograf.capture.base import Channel
     from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
 
@@ -1079,22 +1102,12 @@ def setup() -> None:
     click.echo(click.style("✓", fg="green") + " microphone and system-audio access granted.")
     click.echo("  The grant is per launching app — a different terminal or IDE prompts again.")
 
-    # Permissions first (they need the user at the keyboard), then the long
-    # unattended part: everything a first meeting would otherwise stop to fetch.
-    try:
-        _prefetch_models()
-    except Exception as exc:
-        raise click.ClickException(
-            f"model download failed: {exc} — re-run `steno setup`, or let the models "
-            "download on first use."
-        ) from exc
-    click.echo(click.style("✓", fg="green") + " setup complete.")
-
 
 def _prefetch_models() -> None:
     """Download the VAD/diarization assets and the ASR weights now, not mid-meeting."""
     from stenograf import models
     from stenograf.asr import backend_model_id, create_backend, get_spec
+    from stenograf.doctor import _installed
 
     for asset in (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING):
         if models.cached_path(asset) is not None:
@@ -1102,13 +1115,15 @@ def _prefetch_models() -> None:
         else:
             models.fetch(asset, _model_progress)
 
+    # Gate on the backend's runtime deps the way doctor does: the backend
+    # *module* imports fine everywhere (its heavy imports live inside load()),
+    # so a try/except around create_backend() would not catch a missing MLX.
     spec = get_spec()
-    try:
-        backend = create_backend()
-    except ImportError:
+    if not all(_installed(module) for module in spec.requires):
         click.echo(f"ASR backend {spec.label} is not installed here; skipping its weights")
         return
     click.echo(f"model: fetching + loading ASR weights ({backend_model_id(spec)})")
+    backend = create_backend()
     backend.load()  # pulls from HuggingFace on first run, then verifies it loads
     backend.unload()
 

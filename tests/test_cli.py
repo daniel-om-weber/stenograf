@@ -682,6 +682,18 @@ def test_setup_fails_when_helper_dies_without_mic_frames(tmp_path, monkeypatch):
     assert not fetched  # no downloads on a failed permission grant
 
 
+def test_setup_models_only_skips_the_permission_step(monkeypatch):
+    # No STENOGRAF_CAPTURE_HELPER and no fake helper: reaching the permission
+    # code would fail loudly, so success proves it was skipped. Runs on any OS.
+    monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)
+    fetched = []
+    monkeypatch.setattr(cli, "_prefetch_models", lambda: fetched.append(True))
+    result = CliRunner().invoke(cli.main, ["setup", "--models-only"])
+    assert result.exit_code == 0, result.output
+    assert fetched
+    assert "granted" not in result.output
+
+
 def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):
     from stenograf import models
     from stenograf.asr.base import ASRBackend
@@ -707,8 +719,26 @@ def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):
             self.calls.append("unload")
 
     import stenograf.asr as asr
+    from stenograf import doctor
 
+    monkeypatch.setattr(doctor, "_installed", lambda module: True)  # deps "present" (any OS)
     monkeypatch.setattr(asr, "create_backend", lambda name=None, **kw: PrefetchASR())
     cli._prefetch_models()
     assert set(fetched) == {models.PYANNOTE_SEGMENTATION.name, models.SPEAKER_EMBEDDING.name}
     assert PrefetchASR.calls == ["load", "unload"]  # weights pulled and released
+
+
+def test_prefetch_models_skips_asr_when_backend_deps_absent(monkeypatch, tmp_path, capsys):
+    from stenograf import doctor, models
+
+    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
+    monkeypatch.setattr(models, "fetch", lambda asset, progress=None: None)
+    monkeypatch.setattr(doctor, "_installed", lambda module: False)  # the Linux shape
+    import stenograf.asr as asr
+
+    def boom(name=None, **kw):
+        raise AssertionError("create_backend must not run without its deps")
+
+    monkeypatch.setattr(asr, "create_backend", boom)
+    cli._prefetch_models()  # must not raise
+    assert "skipping its weights" in capsys.readouterr().out
