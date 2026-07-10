@@ -36,6 +36,25 @@ _DEFAULT_FORMATS = ("md", "json")
 _MEETING_MAX_SPEAKERS = 8
 _FILE_MAX_SPEAKERS = 16
 
+# --flush-interval defaults, sized to what one checkpoint costs per mode.
+_LIVE_FLUSH_INTERVAL_S = 15.0
+_BATCH_FLUSH_INTERVAL_S = 180.0
+
+
+def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
+    """The ``--flush-interval`` default is sized to what a checkpoint costs.
+
+    A live checkpoint is zero-inference — it snapshots the captions the live
+    pass already committed, a few KB of atomic file I/O — so it can afford to
+    be tight (a crash loses seconds of text, not minutes). A batch
+    (``--no-live``) checkpoint runs VAD+ASR over the new tail, so it stays
+    sparse to keep that mode's near-zero-power promise. An explicit value
+    (including 0 = disabled) wins in both modes.
+    """
+    if value is not None:
+        return value
+    return _LIVE_FLUSH_INTERVAL_S if live else _BATCH_FLUSH_INTERVAL_S
+
 
 def _parse_formats(spec: str) -> list[str]:
     """Parse a ``--format`` value (comma-separated) into an ordered, de-duped list."""
@@ -193,11 +212,12 @@ def main() -> None:
     "--checkpoint-interval",
     "flush_interval",
     type=click.FloatRange(0),
-    default=180.0,
+    default=None,
     metavar="SECONDS",
     help="Flush a <transcript>.partial crash checkpoint every N seconds of capture "
-    "(live: the already-committed captions, zero extra inference; batch: only the "
-    "newest tail is finalized, off the capture thread); 0 disables it.",
+    "(live: the already-committed captions, zero extra inference — default 15; "
+    "batch: only the newest tail is finalized, off the capture thread — "
+    "default 180); 0 disables it.",
 )
 @click.option(
     "--max-seconds",
@@ -278,7 +298,7 @@ def start(
     title: str | None,
     no_archive: bool,
     record_audio: str | None,
-    flush_interval: float,
+    flush_interval: float | None,
     max_seconds: float | None,
     live: bool,
     plain: bool,
@@ -371,6 +391,26 @@ def start(
     recorder.reuse_live_finalize = not full_finalize
 
     tee = _make_tee(record_audio, audio_default, plans)
+    flush_interval = _resolve_flush_interval(flush_interval, live=live)
+
+    def _persist_files(transcript: Transcript) -> list[Path]:
+        """Write the transcript files, drop the ``.partial``, register the meeting."""
+        paths = _write_transcript(transcript, out_dir, basename, write_formats)
+        _cleanup_checkpoints(out_dir, basename)
+        if archive is not None:
+            archive.add(
+                _meeting_record(
+                    meeting_id,
+                    created_at,
+                    transcript,
+                    write_formats,
+                    out_dir,
+                    audio_path=tee.path if tee is not None else None,
+                )
+            )
+        return paths
+
+    persist = _PersistOnce(_persist_files)
 
     # The full-screen TUI owns the terminal, so it can only run on a real TTY and
     # unless the user forced the plain stream (or turned live off entirely).
@@ -394,6 +434,7 @@ def start(
             basename=basename,
             flush_interval=flush_interval,
             max_seconds=max_seconds,
+            persist=persist,
         )
     finally:
         if tee is not None:
@@ -428,22 +469,15 @@ def start(
             "meeting ended before a transcript was produced; any .partial checkpoint is kept"
         )
 
-    paths = _write_transcript(transcript, out_dir, basename, write_formats)
-    _cleanup_checkpoints(out_dir, basename)  # the final transcript supersedes them
+    # Usually already persisted at the ``finalized`` event (the TUI path writes
+    # while the app still shows the "done" screen); this is the no-op replay
+    # then, and the write for the plain/batch paths — or the retry if the
+    # event-time write failed, surfacing the error as a normal CLI error here.
+    paths = persist(transcript)
     elapsed = time.monotonic() - started
     _report_speaker_counts(recorder.speaker_counts)
     click.echo(f"wrote {', '.join(p.name for p in paths)} ({elapsed:.1f}s)")
     if archive is not None:
-        archive.add(
-            _meeting_record(
-                meeting_id,
-                created_at,
-                transcript,
-                write_formats,
-                out_dir,
-                audio_path=tee.path if tee is not None else None,
-            )
-        )
         click.echo(f"archived as {meeting_id} — see `steno meetings show {meeting_id}`")
     if print_markdown:
         click.echo()
@@ -515,6 +549,7 @@ def _run_meeting(
     basename: str,
     flush_interval: float,
     max_seconds: float | None,
+    persist: Callable[[Transcript], object] | None = None,
 ) -> Transcript:
     """Run the capture session through the right live view and return the transcript.
 
@@ -523,7 +558,10 @@ def _run_meeting(
     - **TUI** (live, on a TTY, not ``--plain``): the Textual view runs the app on
       this thread while the meeting runs on a background thread; its quit binding
       crosses to ``provider.stop`` to end capture. Checkpoints are written silently
-      (the TUI owns the screen).
+      (the TUI owns the screen). ``persist`` is wired into the view's ``finalized``
+      event, so the transcript reaches disk while the app still shows the "done"
+      screen — only the TUI has a gap between finalize and return worth closing;
+      the other two shapes return immediately and the caller persists then.
     - **Plain live** (live, no TTY or ``--plain``): the meeting runs on this thread
       and streams committed captions to stdout; checkpoints written silently.
     - **Batch** (``--no-live``): no live pass; status and checkpoint notices echo
@@ -532,7 +570,9 @@ def _run_meeting(
     if use_tui:
         from stenograf.tui import TextualLiveView
 
-        view = TextualLiveView(profile, language=profile.language, stop=provider.stop)
+        view = TextualLiveView(
+            profile, language=profile.language, stop=provider.stop, persist=persist
+        )
         return view.serve(
             lambda: recorder.run(
                 provider,
@@ -572,6 +612,29 @@ def _run_meeting(
 def _stdout_is_tty() -> bool:
     """Whether stdout is an interactive terminal (a seam so the view choice is testable)."""
     return sys.stdout.isatty()
+
+
+class _PersistOnce:
+    """Persist the finalized transcript exactly once, wherever that fires first.
+
+    The TUI wires this into the ``finalized`` event — the moment the
+    authoritative transcript exists, while the app still sits on the "done"
+    screen — so a crash or force-quit before the user presses ``q`` no longer
+    loses the meeting. Every path also calls it after the meeting returns;
+    that second call is a no-op returning the already-written paths. A failure
+    at the event leaves ``paths`` unset, so the exit-path call retries and a
+    raise there surfaces as a normal CLI error. Calls are sequential (the
+    meeting thread is joined before the CLI tail runs), so no lock is needed.
+    """
+
+    def __init__(self, write: Callable[[Transcript], list[Path]]) -> None:
+        self._write = write
+        self.paths: list[Path] | None = None
+
+    def __call__(self, transcript: Transcript) -> list[Path]:
+        if self.paths is None:
+            self.paths = self._write(transcript)
+        return self.paths
 
 
 def _checkpoint_writer(

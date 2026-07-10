@@ -279,6 +279,33 @@ class TestQuitBinding:
         _run(body)
 
 
+class TestPersistAtFinalize:
+    def test_finalized_persists_before_the_ui_swap(self):
+        # The persist hook runs on the meeting thread at the finalized event —
+        # even with no app mounted (the UI hop is dropped, the write is not),
+        # so a force-quit "done" screen can never lose the transcript.
+        calls = []
+        view = TextualLiveView(
+            MeetingProfile(local_speakers=1, remote_speakers=0), persist=calls.append
+        )
+        transcript = Transcript(language=None, profile=view.app._profile, entries=[])
+        view.finalized(transcript)
+        assert calls == [transcript]
+
+    def test_persist_failure_is_surfaced_not_raised(self):
+        # A failed write must not sink the meeting result: the view reports it
+        # and the CLI retries after serve() returns.
+        errors = []
+
+        def boom(transcript):
+            raise OSError("disk full")
+
+        view = TextualLiveView(MeetingProfile(local_speakers=1, remote_speakers=0), persist=boom)
+        view.error = errors.append  # capture the surfaced notice
+        view.finalized(Transcript(language=None, profile=view.app._profile, entries=[]))
+        assert errors and "disk full" in errors[0]
+
+
 class TestViewMarshalling:
     def test_events_cross_from_a_worker_thread_onto_the_ui(self):
         async def body():

@@ -300,12 +300,48 @@ def test_flush_interval_and_checkpoint_interval_are_aliases(tmp_path, monkeypatc
         assert result.exit_code == 0, result.output
 
 
+def test_resolve_flush_interval_defaults_are_mode_aware():
+    # The live checkpoint is zero-inference file I/O → tight default; the batch
+    # checkpoint runs VAD+ASR over the tail → sparse default. Explicit values
+    # (including 0 = disabled) win in both modes.
+    assert cli._resolve_flush_interval(None, live=True) == 15.0
+    assert cli._resolve_flush_interval(None, live=False) == 180.0
+    assert cli._resolve_flush_interval(45.0, live=True) == 45.0
+    assert cli._resolve_flush_interval(0.0, live=True) == 0.0
+
+
+def test_persist_once_writes_once_and_replays_paths():
+    sentinel = object()
+    calls = []
+    persist = cli._PersistOnce(lambda t: calls.append(t) or [Path("t.md")])
+    assert persist(sentinel) == [Path("t.md")]
+    assert persist(sentinel) == [Path("t.md")]  # second call replays, no rewrite
+    assert calls == [sentinel]
+
+
+def test_persist_once_retries_after_a_failed_write():
+    attempts = []
+
+    def flaky(transcript):
+        attempts.append(transcript)
+        if len(attempts) == 1:
+            raise OSError("disk full")
+        return [Path("t.md")]
+
+    persist = cli._PersistOnce(flaky)
+    with pytest.raises(OSError):
+        persist(object())  # the event-time write fails...
+    assert persist.paths is None  # ...and is not marked done
+    assert persist(object()) == [Path("t.md")]  # the exit-path call retries
+
+
 def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
     served = []
 
     class FakeTUI(LiveView):  # records if the TUI was chosen; never opens a terminal
-        def __init__(self, profile, *, language=None, stop=None):
+        def __init__(self, profile, *, language=None, stop=None, persist=None):
             self.stop = stop
+            self.persist = persist
 
         def serve(self, meeting):
             served.append(self)
@@ -323,6 +359,7 @@ def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
     )
     assert tui_run.exit_code == 0, tui_run.output
     assert served, "on a TTY the default live run should pick the Textual view"
+    assert served[0].persist is not None, "the TUI should get the write-at-finalize hook"
 
     served.clear()
     plain_run = CliRunner().invoke(

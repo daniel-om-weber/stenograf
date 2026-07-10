@@ -361,8 +361,16 @@ class TextualLiveView(LiveView):
         *,
         language: Language | None = None,
         stop: Callable[[], None] | None = None,
+        persist: Callable[[Transcript], object] | None = None,
     ) -> None:
+        # ``persist`` runs on the meeting thread at the ``finalized`` event,
+        # before the UI swap: the CLI wires its write-transcript-files closure
+        # here so the meeting is on disk while the app still shows the "done"
+        # screen (crash/force-quit there must not lose it). Exceptions are
+        # surfaced via :meth:`error`, never raised — the caller retries after
+        # :meth:`serve` returns.
         self._app = LiveApp(profile=profile, language=language, stop=stop)
+        self._persist = persist
         self._meeting_thread: threading.Thread | None = None
 
     @property
@@ -390,6 +398,11 @@ class TextualLiveView(LiveView):
         self._marshal(self._app.push_finalizing)
 
     def finalized(self, transcript: Transcript) -> None:
+        if self._persist is not None:
+            try:
+                self._persist(transcript)
+            except Exception as exc:  # noqa: BLE001 — persistence must not sink the result
+                self.error(f"could not write the transcript yet ({exc}); retrying on exit")
         self._marshal(self._app.push_finalized, transcript)
 
     def error(self, message: str) -> None:
