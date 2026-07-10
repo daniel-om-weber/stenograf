@@ -36,7 +36,7 @@ FRAME = SAMPLE_RATE // 100  # 10 ms, the AEC tick
 FAR_ACTIVE_DBFS = -50.0
 """A 10 ms lpb frame above this counts as 'the speakers were playing'."""
 
-AECMOS_WINDOW_S = 20.0  # the model's hard input limit
+AECMOS_WINDOW_S = 19.99  # the model truncates (and warns) at >= 20 s, so stay just under
 AECMOS_MIN_TAIL_S = 5.0  # a shorter leftover window scores noise, drop it
 
 TRIPLE = ("mic", "lpb", "enh")
