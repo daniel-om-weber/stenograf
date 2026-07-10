@@ -14,7 +14,7 @@ from typing import Protocol
 import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.audio import SAMPLE_RATE
+from stenograf.audio import SAMPLE_RATE, sample_index
 from stenograf.config import Language
 from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.transcript import TranscriptEntry
@@ -85,7 +85,7 @@ def finalize_channel(
         for i, (start, end) in enumerate(windows):
             if on_progress is not None:
                 on_progress("asr", i, len(windows))
-            window = samples[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)]
+            window = samples[sample_index(start) : sample_index(end)]
             segments.extend(_shift(seg, start) for seg in asr.transcribe(window, language))
         segments.sort(key=lambda seg: seg.start)
 

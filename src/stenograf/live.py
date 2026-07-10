@@ -40,7 +40,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from stenograf.asr.base import ASRBackend, Word
-from stenograf.audio import SAMPLE_RATE, to_float32
+from stenograf.audio import SAMPLE_RATE, sample_index, to_float32
 from stenograf.config import Language
 from stenograf.vad import SileroVAD, SpeechSegment
 
@@ -404,11 +404,20 @@ class WindowedLiveDecoder(LiveDecoder):
         self.silence_guard = silence_guard
         self._pending: list[SpeechSegment] = []  # closed runs of the open window
         self._decoded_to = 0.0  # padded end of the last decoded window
+        # Exact sample index of _buf[0]. The finalize pass slices its windows
+        # with sample_index() over absolute times; reuse is byte-identical only
+        # if this pass extracts the very same samples, so the buffer origin is
+        # tracked as an integer (float accumulation would drift by ±1 sample)
+        # and _buf_start is always derived from it by a single division.
+        self._buf_start_idx: int | None = None
 
     def feed(self, samples: np.ndarray, t_offset: float) -> StreamingUpdate:
         """Add audio; decode (only) the windows that closed since the last feed."""
         if len(samples):
             self._append(samples, t_offset)
+            if self._buf_start_idx is None and self._buf_start is not None:
+                self._buf_start_idx = round(self._buf_start * SAMPLE_RATE)
+                self._buf_start = self._buf_start_idx / SAMPLE_RATE
         if len(self._buf) == 0 or self._vad_stream is None:
             return StreamingUpdate((), "")
         committed: list[Word] = []
@@ -430,15 +439,19 @@ class WindowedLiveDecoder(LiveDecoder):
         return StreamingUpdate(tuple(committed), "")
 
     def flush(self) -> StreamingUpdate:
-        """End of stream: pack the tail (open run included) and decode it."""
+        """End of stream: close the VAD like the batch scan does, pack, decode."""
         if self._vad_stream is None or len(self._buf) == 0:
             return StreamingUpdate((), "")
         committed: list[Word] = []
+        finish = getattr(self._vad_stream, "finish", None)
+        if finish is not None:
+            finish()  # remainder + detector flush → the open run completes
         for seg in self._vad_stream.take_completed():
             committed.extend(self._absorb(seg))
-        open_seg = self._vad_stream.open_segment()
-        if open_seg is not None:
-            committed.extend(self._absorb(open_seg))
+        if finish is None:
+            open_seg = self._vad_stream.open_segment()
+            if open_seg is not None:
+                committed.extend(self._absorb(open_seg))
         if self._pending:
             committed.extend(self._decode_window())
         self._reset_buf()
@@ -447,12 +460,51 @@ class WindowedLiveDecoder(LiveDecoder):
     def drop_window(self) -> None:
         super().drop_window()
         self._pending = []
+        self._buf_start_idx = None
+
+    def _reset_buf(self) -> None:
+        """Keep the base pre-roll trim on the integer origin (end of stream)."""
+        if self._buf_start_idx is None:
+            super()._reset_buf()
+            return
+        keep = round(self.pre_roll * SAMPLE_RATE)
+        if len(self._buf) > keep:
+            self._buf_start_idx += len(self._buf) - keep
+            self._buf = self._buf[-keep:]
+            self._buf_start = self._buf_start_idx / SAMPLE_RATE
+
+    def _audio_end(self) -> float:
+        """The live edge, from the integer origin — the batch pass's exact float.
+
+        The last window's padded end is ``min(audio_end, …)``; the batch pass
+        computes ``len(samples) / SAMPLE_RATE`` there, and (origin + buffered)
+        equals the total sample count, so this single division reproduces its
+        float bit-for-bit (the base class's accumulated float would not).
+        """
+        if self._buf_start_idx is None:
+            return super()._audio_end()
+        return (self._buf_start_idx + len(self._buf)) / SAMPLE_RATE
 
     # -- online pack_windows -------------------------------------------------
 
     def _absorb(self, seg: SpeechSegment) -> list[Word]:
         """Add one speech run to the open window, closing it first if needed."""
         committed: list[Word] = []
+        if seg.end - seg.start > self.max_window:
+            # Oversized run (sherpa's max_speech_duration is a soft bound —
+            # 31 s runs happen): replicate pack_windows' hard split exactly.
+            # Each cut is its own window; the previous window never absorbs the
+            # run, and only the last piece stays open for later runs to join.
+            if self._pending:
+                committed.extend(self._decode_window())
+            cuts = np.arange(seg.start, seg.end, self.max_window)
+            for i, cut in enumerate(cuts):
+                self._pending = [
+                    SpeechSegment(float(cut), float(min(cut + self.max_window, seg.end)))
+                ]
+                if i < len(cuts) - 1:
+                    committed.extend(self._decode_window())
+            return committed
         if self._pending and (
             seg.end - self._pending[0].start > self.max_window
             or seg.start - self._pending[-1].end > self.max_gap
@@ -462,15 +514,21 @@ class WindowedLiveDecoder(LiveDecoder):
         return committed
 
     def _decode_window(self) -> list[Word]:
-        """Decode the open window over its padded span; commit every word."""
+        """Decode the open window over its padded span; commit every word.
+
+        The span floats and their sample_index() conversion mirror pack_windows
+        + finalize_channel operation for operation, so the extracted slice is
+        byte-identical to the batch pass's — the reuse guarantee.
+        """
         start, end = self._pending[0].start, self._pending[-1].end
         self._pending = []
         a = max(self._buf_start or 0.0, start - self.pad, self._decoded_to)
         b = min(self._audio_end(), end + self.pad)
         self._decoded_to = b
         self.decodes += 1
-        lo = round((a - (self._buf_start or 0.0)) * SAMPLE_RATE)
-        hi = round((b - (self._buf_start or 0.0)) * SAMPLE_RATE)
+        origin = self._buf_start_idx or 0
+        lo = max(0, sample_index(a) - origin)
+        hi = sample_index(b) - origin
         words = [
             Word(w.text, w.start + a, w.end + a, w.confidence)
             for seg in self._asr.transcribe(self._buf[lo:hi], self._language)
@@ -479,17 +537,26 @@ class WindowedLiveDecoder(LiveDecoder):
         return self._extend_committed(words)
 
     def _retain(self, open_seg: SpeechSegment | None) -> None:
-        """Trim decoded/silent audio; keep the open window (plus its pad)."""
+        """Trim decoded/silent audio; keep the open window (plus its pad).
+
+        Trims land on the same sample_index() grid the decode slices use, so a
+        window's padded start is never trimmed past (truncation only rounds
+        down, and keep_from is a lower bound on every future span start).
+        """
         if self._pending:
             keep_from = self._pending[0].start - self.pad
         elif open_seg is not None:
             keep_from = open_seg.start - self.pad
         else:
             keep_from = self._audio_end() - self.silence_guard
-        drop = round((keep_from - (self._buf_start or 0.0)) * SAMPLE_RATE)
+        if self._buf_start_idx is None:
+            return
+        keep_idx = max(self._buf_start_idx, sample_index(keep_from))
+        drop = keep_idx - self._buf_start_idx
         if drop > 0:
             self._buf = self._buf[drop:]
-            self._buf_start = (self._buf_start or 0.0) + drop / SAMPLE_RATE
+            self._buf_start_idx = keep_idx
+            self._buf_start = keep_idx / SAMPLE_RATE
 
 
 def _key(word: Word) -> str:

@@ -142,6 +142,22 @@ class SileroVADStream:
         start = self._origin + self._vad.current_segment.start / SAMPLE_RATE
         return SpeechSegment(start, self._origin + self._fed / SAMPLE_RATE)
 
+    def finish(self) -> None:
+        """End of stream: feed the sub-window remainder and flush the detector.
+
+        This mirrors the batch scan's tail handling (partial final chunk +
+        ``flush``), closing an in-progress run at the true last sample — the
+        batch pass would otherwise see up to one window (32 ms) more trailing
+        speech than the stream did. The run lands in :meth:`take_completed`;
+        the stream accepts no more pushes afterwards.
+        """
+        if len(self._pending):
+            self._vad.accept_waveform(self._pending)
+            self._fed += len(self._pending)
+            self._pending = np.zeros(0, dtype=np.float32)
+        self._vad.flush()
+        self._drain()
+
     def _drain(self) -> None:
         while not self._vad.empty():
             seg = self._vad.front

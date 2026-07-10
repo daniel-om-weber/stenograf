@@ -94,7 +94,11 @@ def evaluate(source: Path, start: float, dur: float | None, feed_chunk: float,
 
     t0 = time.monotonic()
     ref_entries = finalize_channel(clip, asr=asr, language=None, vad=vad, diarizer=None)
-    reference = " ".join(e.text for e in ref_entries)
+    # Compare word stream to word stream: entry.text is the segment-level
+    # rendering, which spaces number-adjacent tokens differently from the word
+    # tokens ("und 15.7." vs "und15.7.") — a rendering artifact, not a decode
+    # difference, and the reuse path consumes words.
+    reference = " ".join(w.text for e in ref_entries for w in e.words)
     finalize_s = time.monotonic() - t0
 
     t0 = time.monotonic()

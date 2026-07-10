@@ -1,9 +1,18 @@
-import numpy as np
+import wave
+from pathlib import Path
 
+import numpy as np
+import pytest
+
+from stenograf import models
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.audio import SAMPLE_RATE
+from stenograf.audio import SAMPLE_RATE, sample_index
 from stenograf.live import LiveDecoder, WindowedLiveDecoder
-from stenograf.vad import SpeechSegment
+from stenograf.vad import SileroVAD, SpeechSegment, pack_windows
+
+# en-2 on purpose: it contains a >30 s unbroken speech run, so it exercises the
+# oversized hard-split path on top of ordinary gap/budget packing.
+_EVAL_WAV = Path(__file__).resolve().parent.parent / "eval" / "audio" / "en-2.wav"
 
 
 def w(text: str, start: float, end: float) -> Word:
@@ -438,6 +447,26 @@ class TestWindowedDecoder:
         dec.feed(pcm(25.0), 6.0)
         assert dec.decodes == 1  # [0, 5] decoded although the gap was only 1 s
 
+    def test_oversized_run_is_hard_split_like_pack_windows(self):
+        # sherpa's max_speech_duration is a soft bound; a 31 s unbroken run must
+        # split at the max_window grid exactly as pack_windows would, with the
+        # last (short) piece staying open for later runs to join.
+        asr = ScriptedASR([[w("a", 1.0, 2.0)]])
+        vad = PackingFakeVAD(
+            [
+                ([SpeechSegment(0.0, 31.0)], None),
+                ([SpeechSegment(33.0, 34.0)], None),  # joins the 1 s tail piece
+                ([], None),
+            ]
+        )
+        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
+        dec.feed(pcm(32.0), 0.0)
+        assert dec.decodes == 1  # the [0, 30] piece decoded immediately
+        dec.feed(pcm(3.0), 32.0)
+        assert dec.decodes == 1  # [30, 31] + [33, 34] still pending together
+        dec.flush()
+        assert dec.decodes == 2
+
     def test_silence_costs_no_decodes_and_keeps_memory_bounded(self):
         asr = ScriptedASR([[w("x", 0.1, 0.4)]])
         dec = WindowedLiveDecoder(asr, vad=PackingFakeVAD([([], None)]))
@@ -457,6 +486,58 @@ class TestWindowedDecoder:
         assert dec.flush().committed == ()
         assert dec.decodes == 0
         assert len(vad.streams) == 2  # the stream was rebuilt at the new origin
+
+
+class SliceRecorder(ASRBackend):
+    """Records the exact sample arrays it is asked to decode; emits no words."""
+
+    name = "slice-recorder"
+
+    def __init__(self):
+        self.slices: list[np.ndarray] = []
+
+    def load(self) -> None:
+        pass
+
+    def unload(self) -> None:
+        pass
+
+    def transcribe(self, samples, language):
+        self.slices.append(np.asarray(samples).copy())
+        return []
+
+
+@pytest.mark.skipif(
+    models.cached_path(models.SILERO_VAD) is None or not _EVAL_WAV.exists(),
+    reason="needs the cached silero model and the eval audio",
+)
+def test_windowed_slices_are_byte_identical_to_the_batch_pass():
+    # The finalize pass reuses the window pass's decodes verbatim, which is only
+    # sound if both passes hand the model the very same bytes. This pins the
+    # whole chain — streaming VAD, online packing, sample_index() slicing —
+    # against pack_windows + the batch slice arithmetic on real speech.
+    with wave.open(str(_EVAL_WAV)) as wv:
+        raw = np.frombuffer(wv.readframes(wv.getnframes()), dtype=np.int16)
+        if wv.getnchannels() == 2:
+            raw = raw[::2]
+    audio = raw[: 160 * SAMPLE_RATE].astype(np.float32) / 32768.0
+
+    vad = SileroVAD(models.cached_path(models.SILERO_VAD))
+    batch = pack_windows(vad.speech_segments(audio), len(audio) / SAMPLE_RATE)
+    batch_slices = [audio[sample_index(a) : sample_index(b)] for a, b in batch]
+    assert len(batch_slices) >= 3, "the clip should pack several windows"
+
+    asr = SliceRecorder()
+    dec = WindowedLiveDecoder(asr, vad=vad)
+    step = SAMPLE_RATE // 5  # ~200 ms live frames
+    for pos in range(0, len(audio), step):
+        dec.feed(audio[pos : pos + step], pos / SAMPLE_RATE)
+    dec.flush()
+
+    assert len(asr.slices) == len(batch_slices)
+    for i, (live, ref) in enumerate(zip(asr.slices, batch_slices, strict=True)):
+        assert live.shape == ref.shape, f"window {i} length differs"
+        assert np.array_equal(live, ref), f"window {i} bytes differ"
 
 
 class TestUtteranceMode:

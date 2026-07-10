@@ -24,6 +24,18 @@ def to_float32(samples: np.ndarray) -> np.ndarray:
     return np.asarray(samples, dtype=np.float32)
 
 
+def sample_index(seconds: float) -> int:
+    """Seconds → sample index, the ONE conversion for ASR window boundaries.
+
+    The live window pass and the batch finalize pass slice the same windows
+    from the same audio; using any other conversion (``round``, a different
+    epsilon) in one of them shifts a slice by one sample, which is enough to
+    flip a marginal word in the decode. Keep them byte-identical: every
+    boundary goes through this truncation.
+    """
+    return int(seconds * SAMPLE_RATE)
+
+
 def load_audio(path: Path | str) -> np.ndarray:
     """Load any audio/video file as mono 16 kHz float32."""
     path = Path(path)
