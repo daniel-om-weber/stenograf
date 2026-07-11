@@ -37,11 +37,15 @@ def run_checks() -> list[Check]:
         checks.append(_capture_helper_check())
         checks.append(_diarizer_helper_check())
     else:
+        # Optional: `steno transcribe` is fully supported off macOS (Phase 5's
+        # ONNX backend), so a Linux box missing only live capture is healthy.
         checks.append(
             Check(
                 name="Platform",
                 ok=False,
-                detail=f"{sys.platform}: only macOS is supported so far (Linux planned)",
+                detail=f"{sys.platform}: `steno transcribe` works here; live capture "
+                "(`steno start`) is macOS-only so far (Linux capture planned)",
+                optional=True,
             )
         )
 
@@ -165,10 +169,13 @@ def _asr_check() -> Check:
 
 def _ffmpeg_check() -> Check:
     path = shutil.which("ffmpeg")
+    hint = (
+        "brew install ffmpeg" if sys.platform == "darwin" else "install it via your package manager"
+    )
     return Check(
         name="ffmpeg",
         ok=path is not None,
-        detail=path or "not on PATH — needed to read anything but 16 kHz WAV (brew install ffmpeg)",
+        detail=path or f"not on PATH — needed to read anything but 16 kHz WAV ({hint})",
     )
 
 

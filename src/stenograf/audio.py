@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import wave
 from pathlib import Path
 
@@ -172,9 +173,14 @@ def channels_look_independent(left: np.ndarray, right: np.ndarray) -> tuple[bool
 
 def _load_via_ffmpeg(path: Path, *, channels: int = 1) -> np.ndarray:
     if shutil.which("ffmpeg") is None:
+        hint = (
+            "brew install ffmpeg"
+            if sys.platform == "darwin"
+            else "install it via your package manager"
+        )
         raise RuntimeError(
             f"reading {path.suffix or 'this'} files requires ffmpeg on PATH "
-            "(brew install ffmpeg); only mono 16 kHz 16-bit WAV works without it"
+            f"({hint}); only mono 16 kHz 16-bit WAV works without it"
         )
     cmd = [
         "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",

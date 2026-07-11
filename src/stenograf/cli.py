@@ -874,8 +874,10 @@ def _transcribe_split_channels(
     and diarization with the channel's speaker count, cross-channel echo-text
     dedup (armed conservatively: the recording's canceller state is unknown),
     glossary, one interleaved Local-N/Remote-N transcript — just fed from a
-    file instead of a capture session. Returns ``(transcript, recorder)``; the
-    recorder carries the per-channel speaker counts for reporting.
+    file instead of a capture session. Returns ``(transcript, recorder,
+    elapsed)``; the recorder carries the per-channel speaker counts for
+    reporting, ``elapsed`` the processing seconds (clocked after model load,
+    so a first-run weight download never masquerades as transcription speed).
     """
     from stenograf.audio import to_int16
     from stenograf.capture.base import AudioFrame, Channel
@@ -915,7 +917,9 @@ def _transcribe_split_channels(
     store = SessionStore({Channel.MIC, Channel.SYSTEM})
     store.append(AudioFrame(Channel.MIC, 0.0, to_int16(left)))
     store.append(AudioFrame(Channel.SYSTEM, 0.0, to_int16(right)))
-    return recorder.finalize(store, plans, view=_StatusEcho()), recorder
+    started = time.monotonic()
+    transcript = recorder.finalize(store, plans, view=_StatusEcho())
+    return transcript, recorder, time.monotonic() - started
 
 
 @main.command()
@@ -1062,7 +1066,6 @@ def transcribe(
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
 
-    started = time.monotonic()
     settings = _cli_settings()
     write_formats = _resolve_formats(formats, settings)
     glossary_terms, attendee_names = _collect_terms(
@@ -1083,7 +1086,10 @@ def transcribe(
     created_at = datetime.now()
     out_dir, basename, _ = _prepare_output(out, created_at, settings, force=force)
 
-    split_pcms, correlation = _resolve_split_channels(audio_file, channels_mode)
+    try:
+        split_pcms, correlation = _resolve_split_channels(audio_file, channels_mode)
+    except RuntimeError as exc:  # unreadable input / ffmpeg missing or failed
+        raise click.ClickException(str(exc)) from exc
     if split_pcms is not None and speakers is not None:
         raise click.ClickException(
             "--speakers applies to one mixed stream; with split voice channels "
@@ -1127,7 +1133,7 @@ def transcribe(
             speaker_profile_store=profile_store,
             title=title,
         )
-        transcript, recorder = _transcribe_split_channels(
+        transcript, recorder, elapsed = _transcribe_split_channels(
             *split_pcms,
             profile=profile,
             use_reid=use_reid,
@@ -1144,7 +1150,10 @@ def transcribe(
         from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
         from stenograf.pipeline import finalize_channel, relabel_speakers
 
-        samples = load_audio(audio_file)
+        try:
+            samples = load_audio(audio_file)
+        except RuntimeError as exc:  # unreadable input / ffmpeg missing or failed
+            raise click.ClickException(str(exc)) from exc
         duration = len(samples) / SAMPLE_RATE
         click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)})")
         if correlation is not None:  # auto looked at 2 channels and declined
@@ -1156,6 +1165,7 @@ def transcribe(
         asr, vad, diarizer = _load_backends(
             need_diarizer=speakers != 1, asr_backend=settings.asr.backend
         )
+        started = time.monotonic()  # post-load: the speed stat must not count a model download
         reid = (
             _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
             if diarizer is not None
@@ -1210,9 +1220,9 @@ def transcribe(
         transcript = Transcript(
             language=language, profile=profile, entries=entries, parameters=parameters
         )
+        elapsed = time.monotonic() - started
 
     paths = _write_transcript(transcript, out_dir, basename, write_formats)
-    elapsed = time.monotonic() - started
     speed = duration / elapsed if elapsed else 0.0
     if split_pcms is not None:
         _report_speaker_counts(recorder.speaker_counts)
@@ -1254,11 +1264,26 @@ def _load_backends(*, need_diarizer: bool, asr_backend: str | None = None):
     """
     from stenograf import models
     from stenograf.asr import create_backend
-    from stenograf.asr.registry import default_backend_name
+    from stenograf.asr.registry import default_backend_name, get_spec
+    from stenograf.doctor import _installed
     from stenograf.vad import SileroVAD
 
-    # The selection seam; a Linux backend registers alongside.
-    asr = create_backend(default_backend_name(asr_backend))
+    # The selection seam; a Linux backend registers alongside. Gate on the
+    # spec's requires (as doctor and the model prefetch already do) so an
+    # unknown or uninstalled backend is a CLI error, not an import traceback.
+    name = default_backend_name(asr_backend)
+    try:
+        spec = get_spec(name)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    missing = [module for module in spec.requires if not _installed(module)]
+    if missing:
+        raise click.ClickException(
+            f"ASR backend {spec.label} is not installed here (missing: "
+            f"{', '.join(missing)}) — reinstall stenograf, or select another backend "
+            "via [asr] backend in settings.toml or STENOGRAF_ASR_BACKEND"
+        )
+    asr = create_backend(name)
     click.echo(f"asr: loading {getattr(asr, 'model_id', None) or asr.name}")
     asr.load()
     vad = SileroVAD(models.fetch(models.SILERO_VAD, _model_progress))

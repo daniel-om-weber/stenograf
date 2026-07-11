@@ -74,12 +74,24 @@ def test_capture_helper_check_reports_missing(monkeypatch):
 
 
 def test_asr_check_present_and_absent(monkeypatch):
+    # Pin the backend under test: the built-in default is capability-based,
+    # so the bare default names a different backend per machine.
+    monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
     monkeypatch.setattr(doctor, "_installed", lambda module: True)
     assert doctor._asr_check().ok
     monkeypatch.setattr(doctor, "_installed", lambda module: False)
     absent = doctor._asr_check()
     assert not absent.ok
     assert "parakeet-mlx" in absent.detail
+    assert "parakeet_mlx" in absent.detail  # the missing modules are named
+
+
+def test_non_darwin_platform_check_is_optional(monkeypatch):
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    platform_check = next(c for c in doctor.run_checks() if c.name == "Platform")
+    assert not platform_check.ok
+    assert platform_check.optional  # transcribe is supported; only live capture is missing
+    assert "transcribe" in platform_check.detail
 
 
 def test_macos_version_check_parses_and_compares(monkeypatch):

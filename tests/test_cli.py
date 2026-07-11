@@ -1056,6 +1056,27 @@ def test_prefetch_models_skips_asr_when_backend_deps_absent(monkeypatch, tmp_pat
     assert "skipping its weights" in capsys.readouterr().out
 
 
+def test_load_backends_refuses_uninstalled_backend(monkeypatch):
+    """A selected backend whose runtime is absent must be a CLI error, not an
+    import traceback from deep inside ``asr.load()``."""
+    import click
+
+    from stenograf import doctor
+
+    monkeypatch.setattr(doctor, "_installed", lambda module: False)
+    monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
+    with pytest.raises(click.ClickException, match="parakeet-mlx is not installed"):
+        cli._load_backends(need_diarizer=False)
+
+
+def test_load_backends_refuses_unknown_backend(monkeypatch):
+    import click
+
+    monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "no-such-backend")
+    with pytest.raises(click.ClickException, match="unknown ASR backend"):
+        cli._load_backends(need_diarizer=False)
+
+
 # ---------------------------------------------------------------------------
 # settings.toml wiring — one test per *mechanism* (the resolution helpers are
 # shared, so file-beats-default / flag-beats-file / tri-state / merge each need
