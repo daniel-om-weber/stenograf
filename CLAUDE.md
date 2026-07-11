@@ -3,7 +3,8 @@
 Meeting transcription pipeline: capture → live captions (TUI) → finalize
 (diarized transcript) → notes. Shipped on PyPI as `stenograf` 0.1.0. Full
 history, current state, and the active plan live in `PLAN.md` (§5 = phase
-plan); echo-cancellation deep-dive in `PLAN-AEC.md`. Use the `verify` skill
+plan); echo-cancellation deep-dive in `PLAN-AEC.md`; code-cleanup backlog
+(behavior-preserving refactors, worked pass by pass) in `PLAN-CLEANUP.md`. Use the `verify` skill
 to run/observe the tool without live capture hardware.
 
 ## Product philosophy (LOCKED — don't re-litigate)
