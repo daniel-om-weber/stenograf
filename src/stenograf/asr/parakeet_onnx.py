@@ -41,21 +41,64 @@ _SENTENCE_END = (".", "!", "?", "…")
 class ParakeetOnnxBackend(ASRBackend):
     name = "parakeet-onnx"
 
-    def __init__(self, model_id: str = MODEL_ID, *, quantization: str | None = None) -> None:
+    def __init__(
+        self,
+        model_id: str = MODEL_ID,
+        *,
+        quantization: str | None = None,
+        provider: str | None = None,
+    ) -> None:
         self.model_id = model_id
         self._quantization = quantization
         self._model = None
+        self.provider = provider or "cpu"
+        """Requested provider name (``cpu``/``dml``/``cuda``/``auto``); the CLI
+        sets it from ``[asr] provider`` / ``STENOGRAF_ASR_PROVIDER``."""
+        self.active_provider: str | None = None
+        """The provider actually running after :meth:`load` (post-fallback)."""
+        self.provider_fallback: str | None = None
+        """Why an accelerated provider was abandoned for CPU, or ``None``."""
 
     def load(self) -> None:
+        from stenograf.asr.providers import ort_providers, resolve, unavailable_reason
+
+        # Never let onnx-asr default to "all available providers": ORT's CoreML
+        # provider fails on this model (verified 2026-07-11), and acceleration
+        # must be an explicit request so CPU stays the zero-surprise default.
+        requested = resolve(self.provider)
+        if requested != "cpu":
+            # Pre-check the build: ORT does not raise on an unlisted provider,
+            # it warns and silently runs on what remains — the canary would
+            # pass on CPU and the run would claim acceleration it isn't getting.
+            reason = unavailable_reason(requested)
+            if reason is not None:
+                self.provider_fallback = f"{requested}: {reason}"
+            else:
+                try:
+                    model = self._load_with(ort_providers(requested))
+                    # Canary: session creation succeeding does not mean
+                    # inference works (CoreML initialized, then died decoding) —
+                    # commit only after the provider survives a second of silence.
+                    model.recognize(
+                        np.zeros(SAMPLE_RATE, dtype=np.float32), sample_rate=SAMPLE_RATE
+                    )
+                    self._model = model
+                    self.active_provider = requested
+                    return
+                except Exception as exc:  # noqa: BLE001 — any init/run failure means CPU
+                    text = str(exc).strip()
+                    first_line = text.splitlines()[0] if text else repr(exc)
+                    self.provider_fallback = f"{requested}: {first_line}"
+        self._model = self._load_with(ort_providers("cpu"))
+        self.active_provider = "cpu"
+
+    def _load_with(self, providers: list[str]):
         import onnx_asr
 
-        # CPU explicitly: ORT's CoreML provider fails to initialize on this
-        # model (verified 2026-07-11), and GPU providers stay a deliberate
-        # later opt-in (Phase 5 targets CPU finalize first).
-        self._model = onnx_asr.load_model(
+        return onnx_asr.load_model(
             self.model_id,
             quantization=self._quantization,
-            providers=["CPUExecutionProvider"],
+            providers=providers,
         ).with_timestamps()
 
     def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:

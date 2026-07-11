@@ -474,6 +474,7 @@ def start(
     asr, vad, diarizer = _load_backends(
         need_diarizer=any(p.num_speakers != 1 for p in plans),
         asr_backend=settings.asr.backend,
+        asr_provider=settings.asr.provider,
     )
     reid = (
         _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
@@ -913,6 +914,7 @@ def _transcribe_split_channels(
     reid_threshold: float | None,
     glossary_threshold: float | None,
     asr_backend: str | None = None,
+    asr_provider: str | None = None,
     profile_store: Path | None = None,
 ):
     """Transcribe two voice channels through the meeting finalize.
@@ -940,7 +942,9 @@ def _transcribe_split_channels(
 
     plans = plan_channels(profile)
     asr, vad, diarizer = _load_backends(
-        need_diarizer=any(p.num_speakers != 1 for p in plans), asr_backend=asr_backend
+        need_diarizer=any(p.num_speakers != 1 for p in plans),
+        asr_backend=asr_backend,
+        asr_provider=asr_provider,
     )
     reid = (
         _load_reid(
@@ -1187,6 +1191,7 @@ def transcribe(
             reid_threshold=reid_threshold,
             glossary_threshold=glossary_threshold,
             asr_backend=settings.asr.backend,
+            asr_provider=settings.asr.provider,
             profile_store=reid_store,
         )
         entries = transcript.entries
@@ -1210,7 +1215,9 @@ def transcribe(
             )
 
         asr, vad, diarizer = _load_backends(
-            need_diarizer=speakers != 1, asr_backend=settings.asr.backend
+            need_diarizer=speakers != 1,
+            asr_backend=settings.asr.backend,
+            asr_provider=settings.asr.provider,
         )
         started = time.monotonic()  # post-load: the speed stat must not count a model download
         reid = (
@@ -1302,15 +1309,23 @@ def transcribe(
         click.echo(transcript.to_markdown(), nl=False)
 
 
-def _load_backends(*, need_diarizer: bool, asr_backend: str | None = None):
+def _load_backends(
+    *, need_diarizer: bool, asr_backend: str | None = None, asr_provider: str | None = None
+):
     """Load the finalize backends (ASR, VAD, and optionally the diarizer).
 
     Shared by ``start`` and ``transcribe`` so both use the same committed
     defaults (parakeet-mlx, Silero VAD, sherpa-onnx diarization). ``asr_backend``
-    is the ``[asr] backend`` setting; ``STENOGRAF_ASR_BACKEND`` still overrides it.
+    and ``asr_provider`` are the ``[asr]`` settings; ``STENOGRAF_ASR_BACKEND`` /
+    ``STENOGRAF_ASR_PROVIDER`` still override them.
     """
     from stenograf import models
     from stenograf.asr import create_backend
+    from stenograf.asr.providers import (
+        PROVIDER_LABELS,
+        default_provider_name,
+        validate_provider_name,
+    )
     from stenograf.asr.registry import default_backend_name, get_spec
     from stenograf.doctor import _installed
     from stenograf.vad import SileroVAD
@@ -1321,6 +1336,7 @@ def _load_backends(*, need_diarizer: bool, asr_backend: str | None = None):
     name = default_backend_name(asr_backend)
     try:
         spec = get_spec(name)
+        provider = validate_provider_name(default_provider_name(asr_provider))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     missing = [module for module in spec.requires if not _installed(module)]
@@ -1331,8 +1347,21 @@ def _load_backends(*, need_diarizer: bool, asr_backend: str | None = None):
             "via [asr] backend in settings.toml or STENOGRAF_ASR_BACKEND"
         )
     asr = create_backend(name)
+    # Duck-typed: only the ORT-backed backend carries a provider; a configured
+    # provider on a backend with its own runtime (MLX) is noted, not an error,
+    # so one settings file can serve a mac and a Windows box.
+    if hasattr(asr, "provider"):
+        asr.provider = provider
+    elif provider != "cpu":
+        click.echo(f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
     click.echo(f"asr: loading {getattr(asr, 'model_id', None) or asr.name}")
     asr.load()
+    if fallback := getattr(asr, "provider_fallback", None):
+        click.secho(
+            f"asr: acceleration unavailable ({fallback}) — using CPU", fg="yellow", err=True
+        )
+    elif (active := getattr(asr, "active_provider", None)) not in (None, "cpu"):
+        click.echo(f"asr: accelerated ({PROVIDER_LABELS[active]})")
     vad = SileroVAD(models.fetch(models.SILERO_VAD, _model_progress))
     diarizer = _load_diarizer(need=need_diarizer)
     return asr, vad, diarizer
@@ -1874,7 +1903,10 @@ def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
         ),
         (
             "asr",
-            [("backend", *pick(settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"))],
+            [
+                ("backend", *pick(settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND")),
+                ("provider", *pick(settings.asr.provider, "cpu", "STENOGRAF_ASR_PROVIDER")),
+            ],
         ),
         (
             "notes",

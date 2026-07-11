@@ -71,7 +71,7 @@ class FakeDiarizer(Diarizer):
         return DiarizationResult(turns=list(self._turns), embeddings=dict(self._embeddings))
 
 
-def fake_load_backends(*, need_diarizer, asr_backend=None):
+def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
     # No VAD (whole buffer is one window) and no diarizer (single speaker).
     return FakeASR(), None, None
 
@@ -152,7 +152,7 @@ def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch
 def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None):
+    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -257,7 +257,7 @@ class ChannelASR(ASRBackend):
         return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
 
 
-def fake_channel_backends(*, need_diarizer, asr_backend=None):
+def fake_channel_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
     return ChannelASR(), None, None
 
 
@@ -432,7 +432,7 @@ def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
 def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None):
+    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -771,7 +771,9 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
 
     monkeypatch.setattr(
-        cli, "_load_backends", lambda *, need_diarizer, asr_backend=None: (FakeASR(), None, diar)
+        cli,
+        "_load_backends",
+        lambda *, need_diarizer, asr_backend=None, asr_provider=None: (FakeASR(), None, diar),
     )
     reid = CliRunner().invoke(
         cli.main, ["transcribe", str(audio), "--speakers", "2", "--out", str(tmp_path)]
@@ -914,7 +916,7 @@ def test_out_overwrite_guard_ignores_partial_checkpoints(tmp_path, monkeypatch):
 
 
 def test_transcribe_out_refusal_happens_before_any_transcription(tmp_path, monkeypatch):
-    def explode(*, need_diarizer, asr_backend=None):
+    def explode(*, need_diarizer, asr_backend=None, asr_provider=None):
         raise AssertionError("backends must not load when --out is refused")
 
     monkeypatch.setattr(cli, "_load_backends", explode)
@@ -1184,12 +1186,13 @@ def test_broken_settings_fail_fast_with_a_clean_error(tmp_path, monkeypatch):
 def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
     calls = {}
 
-    def recording(*, need_diarizer, asr_backend=None):
+    def recording(*, need_diarizer, asr_backend=None, asr_provider=None):
         calls["asr_backend"] = asr_backend
+        calls["asr_provider"] = asr_provider
         return fake_load_backends(need_diarizer=need_diarizer)
 
     monkeypatch.setattr(cli, "_load_backends", recording)
-    _write_settings(tmp_path, '[asr]\nbackend = "parakeet"\n')
+    _write_settings(tmp_path, '[asr]\nbackend = "parakeet"\nprovider = "dml"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1197,6 +1200,7 @@ def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls["asr_backend"] == "parakeet"
+    assert calls["asr_provider"] == "dml"
 
 
 def test_settings_profile_store_stays_off_the_transcript(tmp_path, monkeypatch):
@@ -1230,7 +1234,8 @@ def test_settings_show_reports_values_and_sources(tmp_path, monkeypatch):
     # An env override wins over the file and is attributed to the variable.
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
     result = CliRunner().invoke(cli.main, ["settings", "show"])
-    assert "backend = parakeet  ($STENOGRAF_ASR_BACKEND)" in result.output
+    assert "backend  = parakeet  ($STENOGRAF_ASR_BACKEND)" in result.output
+    assert "provider = cpu  (default)" in result.output
 
 
 def test_settings_show_names_a_missing_file(tmp_path):

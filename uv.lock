@@ -2410,9 +2410,6 @@ wheels = [
 ]
 
 [package.optional-dependencies]
-cpu = [
-    { name = "onnxruntime" },
-]
 hub = [
     { name = "huggingface-hub" },
 ]
@@ -2422,11 +2419,11 @@ name = "onnxruntime"
 version = "1.27.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval-canary'" },
+    { name = "flatbuffers", marker = "sys_platform != 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "numpy", marker = "sys_platform != 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'win32' and extra == 'group-9-stenograf-eval-canary') or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
-    { name = "protobuf" },
+    { name = "protobuf", marker = "sys_platform != 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c3/b7/dd3a524ed93a820dff1af902d0412957ab12499953333e9daa01af5bc480/onnxruntime-1.27.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:a14c2ce45312def86b77aea651f46565e45960cf5f0721bfdff449165086ab76", size = 18433506, upload-time = "2026-06-15T22:43:47.026Z" },
@@ -2441,6 +2438,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/79/51/d1ec60ec7b1e2ae2d7340ba52b8a13529140039cd4407ba8dddbbc046582/onnxruntime-1.27.0-cp313-cp313-win_arm64.whl", hash = "sha256:2fdfa9df40a0ded0028ce6f9cd863264237f3970559dea2b81456e9ac4622b94", size = 13104412, upload-time = "2026-06-15T22:43:27.457Z" },
     { url = "https://files.pythonhosted.org/packages/5e/7d/e6bb1c6445c94f708c38cd8fbb7bf0264108c33498b9445c93e60fe6d329/onnxruntime-1.27.0-cp313-cp313t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:54c0c4e9202c36c4ecdb1f3443f5dfbfd5ee3b54d1362c4b4c6134110e74fb32", size = 16443331, upload-time = "2026-06-15T22:42:45.649Z" },
     { url = "https://files.pythonhosted.org/packages/72/1b/b18b31e806eabc41077810199fbbb36fbc2d5f19912416e5ccfbf73053d1/onnxruntime-1.27.0-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:1b215aa662c8f983f7d6dedafe65a9be72c26e5338e0fe98b3e0422c32c85428", size = 18670967, upload-time = "2026-06-15T22:43:10.621Z" },
+]
+
+[[package]]
+name = "onnxruntime-directml"
+version = "1.24.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flatbuffers", marker = "sys_platform == 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "numpy", marker = "sys_platform == 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'win32' and extra == 'group-9-stenograf-eval-canary') or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "protobuf", marker = "sys_platform == 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "sympy", marker = "sys_platform == 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/ea/33814eb0ec96775eda4c1d30b0d86e91d7d2cd0d84c66d3915aef0e06fa3/onnxruntime_directml-1.24.4-cp312-cp312-win_amd64.whl", hash = "sha256:f2ecb68b7b7b259d2ef3112ae760149f9b5a1e7c0fbb73d539da6250a648a614", size = 25111930, upload-time = "2026-03-17T21:47:18.419Z" },
+    { url = "https://files.pythonhosted.org/packages/60/53/2bd2696fac19cf8ca55496a0bcfe431f3aff9579eabbb0e231dc238acf6f/onnxruntime_directml-1.24.4-cp313-cp313-win_amd64.whl", hash = "sha256:2f1031cb2281e5b27cca9efe0b9399317c7286e4d226f7a79d4ab79bbd94d19e", size = 25112253, upload-time = "2026-03-17T21:47:22.043Z" },
 ]
 
 [[package]]
@@ -3749,7 +3763,9 @@ dependencies = [
     { name = "mlx-lm", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "numba", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "numpy" },
-    { name = "onnx-asr", extra = ["cpu", "hub"] },
+    { name = "onnx-asr", extra = ["hub"] },
+    { name = "onnxruntime", marker = "sys_platform != 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "onnxruntime-directml", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "parakeet-mlx", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
@@ -3787,7 +3803,9 @@ requires-dist = [
     { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.29.1,<0.30" },
     { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.60" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "onnx-asr", extras = ["cpu", "hub"], specifier = ">=0.11" },
+    { name = "onnx-asr", extras = ["hub"], specifier = ">=0.11" },
+    { name = "onnxruntime", marker = "sys_platform != 'win32'", specifier = ">=1.18.1" },
+    { name = "onnxruntime-directml", marker = "sys_platform == 'win32'", specifier = ">=1.24" },
     { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.2" },
     { name = "sherpa-onnx", specifier = ">=1.12.40,<1.13" },
     { name = "sherpa-onnx-core", specifier = ">=1.12.40,<1.13" },

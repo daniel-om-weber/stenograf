@@ -25,6 +25,11 @@ optional; a missing file is simply all defaults. The full schema::
 
     [asr]
     backend = "parakeet"                # ASR backend for finalize + live
+    provider = "cpu"                    # ONNX Runtime execution provider for the
+                                        # parakeet-onnx backend: cpu (default) |
+                                        # dml (any DX12 GPU, Windows) | cuda |
+                                        # auto; falls back to cpu with a warning
+                                        # if the provider can't run the model
 
     [notes]
     backend = "command"                 # "mlx" (default on Apple Silicon),
@@ -41,8 +46,8 @@ optional; a missing file is simply all defaults. The full schema::
     dir = "~/Obsidian/Meetings"         # combined-note export target (unset = off)
 
 Precedence everywhere a value is consumed: CLI flag > environment variable
-(``STENOGRAF_ASR_BACKEND``, ``STENOGRAF_NOTES_BACKEND``, ``STENOGRAF_NOTES_MODEL``,
-``OLLAMA_HOST``) > this file > built-in default. Almost every value is a
+(``STENOGRAF_ASR_BACKEND``, ``STENOGRAF_ASR_PROVIDER``, ``STENOGRAF_NOTES_BACKEND``,
+``STENOGRAF_NOTES_MODEL``, ``OLLAMA_HOST``) > this file > built-in default. Almost every value is a
 *default the flag replaces*; the one exception is ``[vocab]``, whose glossary
 terms and attendee names *merge* with per-run ``--glossary``/``--attendee``
 values — the configured vocabulary is a standing baseline, not an either/or.
@@ -100,6 +105,7 @@ SETTINGS_TEMPLATE = """\
 
 [asr]
 # backend = "parakeet"
+# provider = "cpu"                         # cpu | dml (Windows GPU) | cuda | auto
 
 [notes]
 # backend = "mlx"                          # mlx | ollama | command
@@ -149,6 +155,9 @@ class SpeakerSettings:
 @dataclass(frozen=True)
 class AsrSettings:
     backend: str | None = None
+    provider: str | None = None
+    """ONNX Runtime execution provider for the ORT-backed backend; ``None`` =
+    CPU. Backends with their own runtime (MLX) ignore it."""
 
 
 @dataclass(frozen=True)
@@ -347,8 +356,13 @@ def _asr_from_table(data: dict) -> AsrSettings:
             raise ValueError(
                 f"unknown ASR backend {backend!r} (choose from {', '.join(available_backends())})"
             )
+    provider = t.str_("provider")
+    if provider is not None:
+        from stenograf.asr.providers import validate_provider_name
+
+        validate_provider_name(provider)
     t.reject_unknown()
-    return AsrSettings(backend=backend)
+    return AsrSettings(backend=backend, provider=provider)
 
 
 def _notes_from_table(data: dict) -> NotesSettings:

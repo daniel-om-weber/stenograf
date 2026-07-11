@@ -36,9 +36,22 @@ dependencies = [
     # on CPU. Decision A resolved to onnx-asr over sherpa's export on accuracy —
     # sherpa ships v3 only as int8, and int8 measurably degrades German (see
     # asr/parakeet_onnx.py). Unmarked: on macOS it is the parity reference the
-    # eval harness compares MLX against. [cpu] pins onnxruntime, [hub] the
-    # HuggingFace download path.
-    "onnx-asr[cpu,hub]>=0.11",
+    # eval harness compares MLX against. [hub] pins the HuggingFace download
+    # path; the onnxruntime flavor is declared below, not via [cpu].
+    "onnx-asr[hub]>=0.11",
+    # Exactly ONE onnxruntime flavor per platform: every flavor (-directml,
+    # -gpu, -openvino, …) installs the same `onnxruntime/` package directory and
+    # silently clobbers the others (verified 2026-07-11) — extras can't express
+    # "replace the base package", so the flavor is a platform marker instead.
+    # Windows gets the DirectML build: it contains the CPU EP (CPU stays the
+    # default provider) and makes any DX12 GPU — NVIDIA/AMD/Intel — an opt-in
+    # accelerator via `[asr] provider = "dml"` (measured 2026-07-11: transcripts
+    # byte-identical to CPU, finalize 107x vs 16x realtime on an RTX 4080
+    # SUPER). DirectML is in maintenance mode upstream but its wheels track ORT
+    # patch releases; if they ever stop, swap the marker back to plain
+    # onnxruntime and the provider setting degrades to CPU with a warning.
+    "onnxruntime>=1.18.1; sys_platform != 'win32'",
+    "onnxruntime-directml>=1.24; sys_platform == 'win32'",
     # In-process notes LLM (Stage D) — the zero-setup default backend on Apple
     # Silicon. Pinned to the 0.29 line (verified 2026-07-10): mlx-lm >=0.30
     # requires transformers>=5, but the current transformers 5.13 crashes
