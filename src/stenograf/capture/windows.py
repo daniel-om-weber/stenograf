@@ -61,8 +61,16 @@ trips it; tight enough that a mis-estimated silence gap cannot skew the AEC's
 far-end alignment or the transcript for the rest of the meeting."""
 
 
+_SILENT_MIC_WARN_S = 5.0
+"""Seconds of *exact-zero* mic PCM before the pump warns once. Real
+microphones have a noise floor well above one int16 step, so a run of digital
+zeros this long means the stream is dead (hardware mute, a privacy toggle the
+consent-store check missed, a broken device) — never a quiet room."""
+
+
 class CaptureUnavailableError(RuntimeError):
-    """Live capture cannot run here (no soundcard package, no default device)."""
+    """Live capture cannot run here (no soundcard package, no default device,
+    or Windows privacy settings deny microphone access)."""
 
 
 def _import_soundcard():
@@ -85,17 +93,68 @@ def default_devices(channels: set[Channel]) -> dict[Channel, str]:
     """What each channel would record from right now.
 
     Resolves the default devices the same way the pumps will at start, so a
-    missing package or an absent default device fails *before* capture (and
-    models) start, and so the CLI can name what the meeting will record —
-    the loopback-of-default-output choice is invisible otherwise.
+    missing package, an absent default device, or a denied microphone privacy
+    toggle fails *before* capture (and models) start, and so the CLI can name
+    what the meeting will record — the loopback-of-default-output choice is
+    invisible otherwise.
     """
     soundcard = _import_soundcard()
     devices = {}
     for channel in sorted(channels):
+        if channel is Channel.MIC and (blocked := mic_access_blocked()):
+            raise CaptureUnavailableError(blocked)
         device = _default_device(soundcard, channel)
         suffix = " (loopback)" if channel is Channel.SYSTEM else ""
         devices[channel] = f"{device.name}{suffix}"
     return devices
+
+
+_CONSENT_STORE = (
+    r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone"
+)
+
+
+def mic_access_blocked() -> str | None:
+    """A user-facing reason when Windows privacy settings deny mic capture.
+
+    Windows never *prompts* desktop apps for the microphone (unlike macOS TCC)
+    — a denied toggle silently makes the stream deliver zeros — so the consent
+    store behind Settings > Privacy & security > Microphone is read up front.
+    Three switches can deny: the user's master toggle, the "let desktop apps
+    access" toggle (``NonPackaged``), and the machine-wide/policy toggle.
+    Returns ``None`` when allowed or undeterminable (missing keys mean the
+    default, which is allowed); loopback capture is not privacy-gated.
+    """
+    denied = None
+    if _consent_value("", machine=False) == "deny":
+        denied = "microphone access is turned off"
+    elif _consent_value("NonPackaged", machine=False) == "deny":
+        denied = "microphone access for desktop apps is turned off"
+    elif _consent_value("", machine=True) == "deny":
+        denied = "microphone access is turned off machine-wide"
+    if denied is None:
+        return None
+    return (
+        f"{denied} in Windows privacy settings — enable it under "
+        "Settings > Privacy & security > Microphone "
+        "(including 'Let desktop apps access your microphone')"
+    )
+
+
+def _consent_value(subkey: str, *, machine: bool) -> str | None:
+    """A consent-store key's ``Value`` ("allow"/"deny", lowered), or ``None``."""
+    try:
+        import winreg
+    except ImportError:  # not Windows
+        return None
+    hive = winreg.HKEY_LOCAL_MACHINE if machine else winreg.HKEY_CURRENT_USER
+    path = f"{_CONSENT_STORE}\\{subkey}" if subkey else _CONSENT_STORE
+    try:
+        with winreg.OpenKey(hive, path) as key:
+            value, _ = winreg.QueryValueEx(key, "Value")
+    except OSError:
+        return None
+    return value.lower() if isinstance(value, str) else None
 
 
 def _default_device(soundcard, channel: Channel):
@@ -193,6 +252,8 @@ class WindowsCaptureProvider(CaptureProvider):
         """
         anchor: float | None = None
         delivered = 0
+        zero_run = 0
+        warned_silent = False
         try:
             device = _default_device(self._soundcard, channel)
             with device.recorder(samplerate=SAMPLE_RATE) as recorder:
@@ -201,6 +262,20 @@ class WindowsCaptureProvider(CaptureProvider):
                     samples = _to_mono_int16(block)
                     if not len(samples):
                         continue
+                    # Silent-mic watchdog (mic only: a quiet *system* channel is
+                    # normal). Exact zeros this long are a dead stream, not a
+                    # quiet room — see _SILENT_MIC_WARN_S.
+                    if channel is Channel.MIC:
+                        zero_run = zero_run + len(samples) if not samples.any() else 0
+                        if not warned_silent and zero_run >= _SILENT_MIC_WARN_S * SAMPLE_RATE:
+                            warned_silent = True
+                            print(
+                                f"stenograf: the microphone has delivered only silence for "
+                                f"{_SILENT_MIC_WARN_S:.0f}s — check the input volume and "
+                                "Windows privacy settings "
+                                "(Settings > Privacy & security > Microphone)",
+                                file=sys.stderr,
+                            )
                     elapsed = self._clock() - (self._t0 or 0.0)
                     started_at = max(0.0, elapsed - len(samples) / SAMPLE_RATE)
                     if anchor is None:

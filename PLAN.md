@@ -893,7 +893,16 @@ more than 0.5 s behind arrival-derived time, because soundcard's silence zero-fi
 wall-clock-estimated (`SessionStore` pads the skipped span; monotonicity preserved).
 Idempotent thread-safe `stop()` via an Event; one stream dying tears down the whole
 capture. Both devices pin to meeting-start defaults (WASAPI has no
-`@DEFAULT_MONITOR@`-style following alias — accepted asymmetry vs Linux). Wired:
+`@DEFAULT_MONITOR@`-style following alias — accepted asymmetry vs Linux).
+**Silent-failure detection** (Windows never prompts desktop apps for the mic — a
+denied privacy toggle just yields zeros): `mic_access_blocked()` reads the
+CapabilityAccessManager consent store (master / `NonPackaged` / machine-wide keys)
+and `default_devices` raises before capture starts, naming the exact settings page —
+so `steno doctor` and meeting start both fail loud; loopback is not privacy-gated, so
+a system-only capture still passes. Backstop for causes the registry can't see
+(hardware mute, dead device): the mic pump warns once on stderr after 5 s of
+*exact-zero* PCM — real mics have a noise floor, so a zero run that long is a dead
+stream, never a quiet room; a quiet *system* channel is normal and never warns. Wired:
 `_base_provider` win32 branch, `doctor` capture check (names both devices),
 `soundcard` win32 dep marker, `data_dir()`/`cache_dir()` win32 branches (`%APPDATA%` /
 `%LOCALAPPDATA%`, landed *before* any Windows users per the audit). Verified: 24

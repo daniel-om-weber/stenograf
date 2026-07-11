@@ -180,6 +180,26 @@ class TestWindowsCaptureProvider:
         assert any(f.channel is Channel.MIC for f in frames)
         assert all(not t.is_alive() for t in provider._threads.values())
 
+    def test_silent_mic_warns_once(self, capsys):
+        # >5 s of exact-zero mic PCM is a dead stream (mute, denied privacy
+        # toggle) — the pump must say so on stderr, once, and keep running.
+        provider = WindowsCaptureProvider(backend=fake_backend(mic_script=[0.0] * 30), frame_ms=200)
+        provider.start({Channel.MIC})
+        frames = list(provider.frames())
+        provider.stop()
+        assert len(frames) == 30  # the stream keeps flowing; only a warning
+        assert capsys.readouterr().err.count("only silence") == 1
+
+    def test_silent_system_channel_is_normal(self, capsys):
+        # Loopback delivers zeros whenever nothing plays; never warn there.
+        provider = WindowsCaptureProvider(
+            backend=fake_backend(system_script=[0.0] * 30), frame_ms=200
+        )
+        provider.start({Channel.SYSTEM})
+        list(provider.frames())
+        provider.stop()
+        assert "only silence" not in capsys.readouterr().err
+
     def test_frames_before_start_raises(self):
         provider = WindowsCaptureProvider(backend=fake_backend())
         with pytest.raises(RuntimeError):
@@ -192,10 +212,12 @@ class TestWindowsCaptureProvider:
 
 
 class TestDefaultDevices:
-    def _patch_backend(self, monkeypatch, backend):
+    def _patch_backend(self, monkeypatch, backend, mic_blocked=None):
         import stenograf.capture.windows as windows
 
         monkeypatch.setattr(windows, "_import_soundcard", lambda: backend)
+        # Hermetic: don't let the host machine's real privacy settings leak in.
+        monkeypatch.setattr(windows, "mic_access_blocked", lambda: mic_blocked)
 
     def test_resolves_mic_and_loopback_names(self, monkeypatch):
         self._patch_backend(monkeypatch, fake_backend())
@@ -220,3 +242,58 @@ class TestDefaultDevices:
         self._patch_backend(monkeypatch, FakeSoundcard(mic=None, loopback=None))
         with pytest.raises(CaptureUnavailableError, match="output"):
             default_devices({Channel.SYSTEM})
+
+    def test_denied_mic_privacy_fails_before_capture(self, monkeypatch):
+        self._patch_backend(monkeypatch, fake_backend(), mic_blocked="privacy settings say no")
+        with pytest.raises(CaptureUnavailableError, match="privacy settings"):
+            default_devices({Channel.MIC, Channel.SYSTEM})
+
+    def test_denied_mic_privacy_does_not_gate_loopback(self, monkeypatch):
+        # System audio is not privacy-gated; a remote-only capture must pass.
+        self._patch_backend(monkeypatch, fake_backend(), mic_blocked="privacy settings say no")
+        devices = default_devices({Channel.SYSTEM})
+        assert devices == {Channel.SYSTEM: "Fake Speakers (loopback)"}
+
+
+class TestMicAccessBlocked:
+    def _patch_consent(self, monkeypatch, values):
+        """values maps (subkey, machine) -> 'allow' | 'deny'; absent means None."""
+        import stenograf.capture.windows as windows
+
+        monkeypatch.setattr(
+            windows,
+            "_consent_value",
+            lambda subkey, *, machine: values.get((subkey, machine)),
+        )
+
+    def test_missing_keys_mean_allowed(self, monkeypatch):
+        from stenograf.capture.windows import mic_access_blocked
+
+        self._patch_consent(monkeypatch, {})
+        assert mic_access_blocked() is None
+
+    def test_explicit_allow_everywhere(self, monkeypatch):
+        from stenograf.capture.windows import mic_access_blocked
+
+        self._patch_consent(
+            monkeypatch,
+            {("", False): "allow", ("NonPackaged", False): "allow", ("", True): "allow"},
+        )
+        assert mic_access_blocked() is None
+
+    @pytest.mark.parametrize(
+        "denied_key,expected",
+        [
+            (("", False), "turned off in Windows"),
+            (("NonPackaged", False), "desktop apps"),
+            (("", True), "machine-wide"),
+        ],
+    )
+    def test_any_deny_names_the_toggle_and_the_fix(self, monkeypatch, denied_key, expected):
+        from stenograf.capture.windows import mic_access_blocked
+
+        self._patch_consent(monkeypatch, {denied_key: "deny"})
+        blocked = mic_access_blocked()
+        assert blocked is not None
+        assert expected in blocked
+        assert "Privacy & security" in blocked  # points at the settings page
