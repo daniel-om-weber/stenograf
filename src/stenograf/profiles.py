@@ -273,18 +273,17 @@ def _unit(vector: np.ndarray) -> np.ndarray:
 
 
 def data_dir() -> Path:
-    """Directory for precious user data (speaker profiles), distinct from the
-    model cache: ``$STENOGRAF_DATA`` if set, else the platform data dir.
-
-    No ``win32`` branch yet: Windows falls through to the XDG default, so data
-    lands at ``C:\\Users\\<name>\\.local\\share\\stenograf`` — functional (and
-    ``$STENOGRAF_DATA`` overrides it) but not the idiomatic ``%APPDATA%``.
-    Add the branch when Windows becomes a supported platform (Phase 5); that
-    is a data migration for anyone who ran there before."""
+    """Directory for precious user data (speaker profiles, settings), distinct
+    from the model cache: ``$STENOGRAF_DATA`` if set, else the platform data
+    dir (``%APPDATA%`` on Windows — added with Phase 6, before any Windows
+    release, so no pre-existing installs need migrating)."""
     if override := os.environ.get("STENOGRAF_DATA"):
         return Path(override).expanduser()
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "stenograf"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+        return Path(appdata) / "stenograf"
     xdg = os.environ.get("XDG_DATA_HOME", "~/.local/share")
     return Path(xdg).expanduser() / "stenograf"
 

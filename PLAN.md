@@ -493,7 +493,9 @@ pipeline**) — shipped the same day: outputs moved to a visible folder and the
 meeting-management layer (index, `meetings` group, archived reverse control)
 was retired; the web UI is dropped outright. Phase 5 (Linux) is designed and
 active as of 2026-07-10 (ONNX backend on the Mac first, then capture on the
-CachyOS notebook — dev-environment plan in §5). The per-task build logs of the completed phases were removed from
+CachyOS notebook — dev-environment plan in §5). Phase 6 (Windows) was scoped
+2026-07-11 on a Windows 11 notebook and its capture track shipped the same day
+— portability audit + build summary at the end of this section. The per-task build logs of the completed phases were removed from
 this file on 2026-07-10; they live in its git history (and in PLAN-AEC.md for
 echo cancellation).
 
@@ -822,6 +824,91 @@ Windows too) — so Phase 5 inherits it as-is. Two small follow-ups when Windows
 instead of `%APPDATA%`; adding the branch implies a migration for early Windows users), and
 backend-name validation is deliberately registry-level, not platform-aware (`backend = "mlx"`
 validates anywhere; runnability is the backend's own check at use).
+
+### Phase 6 plan — Windows (scoped 2026-07-11; capture track SHIPPED same day)
+
+**Portability audit (2026-07-11, on the Windows 11 notebook).** Most of the stack is
+already cross-platform by construction, so Windows is one big item (a capture provider)
+plus small platform branches:
+
+- **Already works / installable today:** the wheel installs cleanly (every MLX dep sits
+  behind `sys_platform == 'darwin'` markers; the `hatch_build.py` hook is a no-op off
+  macOS-arm64, so the Windows wheel is pure Python). `parakeet-onnx` is the unmarked
+  cross-platform ASR default off-mac; VAD + known-count diarization are sherpa
+  (ONNX/CPU); decoding is the bundled `imageio-ffmpeg` (ships win wheels); settings are
+  audited portable (see above); the TUI is textual (Windows Terminal is supported);
+  notes run via the `ollama`/`command` backends. `steno transcribe` and
+  `steno start --replay` are expected to work unmodified — verifying that (pytest + a
+  real transcribe) is step zero of the build.
+- **The one big item — capture provider (`capture/windows.py`):** pure Python,
+  in-process, mic from the default input + system audio via **WASAPI loopback** on the
+  default output, behind the unchanged `CaptureProvider` ABC (mono 16 kHz int16, ~200 ms
+  frames). Two design constraints settled by reading the core: (1) *shared clock* —
+  both channels stamp against one session t=0 (the AEC aligns its far-end reference on
+  it), same anchor-at-first-frame pattern as parec/stenocap. (2) *Silence gaps* —
+  WASAPI loopback delivers **no packets while nothing renders**, making this the first
+  gap-producing provider; that is safe because `SessionStore` places frames by
+  timestamp and pads gaps with silence, so the provider must **re-anchor after a
+  delivery gap** (arrival-time-based) instead of trusting sample-count-derived
+  timestamps across the gap. The AEC side is already accounted for
+  (`far_end_missing_ticks` + the armed-backstop warning), and a silent far end has no
+  echo to cancel.
+- **Decision D — loopback library: resolved to `soundcard`** (spiked on real hardware
+  2026-07-11). One API covers mic + loopback, and it initializes WASAPI with
+  `AUTOCONVERTPCM | SRC_DEFAULT_QUALITY`, so Windows resamples server-side to 16 kHz
+  (parec-style — no Python resampler dep); pyaudiowpatch would have left native-rate
+  resampling to us. Measured: recorder open 15–80 ms, first frame < 300 ms, exact
+  200 ms delivery cadence, 440 Hz test tone recovered bit-clean through loopback —
+  the ~1 s startup gap SoundCard showed under PipeWire (Decision B) is a Pulse-backend
+  artifact and does not occur on its native Windows backend. Also verified in the
+  spike: soundcard zero-fills loopback silence itself (wall-clock-estimated, hence
+  the provider's re-anchor guard), recorders work from worker threads (COM), and
+  `record(n)` returns within ~4 device periods even during silence, so `stop()` stays
+  responsive.
+- **Small platform branches:** `profiles.data_dir()` win32 branch (`%APPDATA%`) and
+  `models.cache_dir()` (`%LOCALAPPDATA%`) — do these **before** Windows users exist
+  (their docstrings already flag the migration cost of adding them late); `steno setup`
+  messaging (no TCC equivalent — mic consent is a Windows privacy toggle / first-use
+  prompt); the `Operating System :: Microsoft :: Windows` classifier; a
+  `windows-latest` CI job running the unit suite (no null-sink equivalent exists, so
+  live capture stays manually verified); confirm `livekit` win_amd64 wheels (the AEC
+  wraps its APM — matters more on Windows, where laptop mics genuinely hear the
+  speakers).
+- **Deferred:** the on-device notes backend (decision on record:
+  onnxruntime-genai-directml + Phi-4-mini) — Ollama/`command` cover Windows meanwhile;
+  the stenodiar port (same speakrs CPU-throughput blocker as Linux, see §2).
+
+**Sequencing:** baseline on the Windows box (pytest + real `steno transcribe`) →
+data/cache dir branches → capture spike (Decision D) → `capture/windows.py` +
+doctor/CLI wiring + fake-backed tests → CI job + classifier → DirectML notes backend
+if Ollama proves not enough.
+
+**Capture track — SHIPPED 2026-07-11** (on the Windows 11 notebook).
+`WindowsCaptureProvider` (`stenograf/capture/windows.py`, in-process, no helper): one
+pump thread per channel owning its device end to end (COM apartments are per-thread),
+mic + default-output loopback downmixed to mono int16, ~200 ms frames on the shared
+session clock (anchor at first delivered frame, sample-count-derived after — the
+stenocap/parec pattern) **plus a forward-only re-anchor** when the derived clock falls
+more than 0.5 s behind arrival-derived time, because soundcard's silence zero-fill is
+wall-clock-estimated (`SessionStore` pads the skipped span; monotonicity preserved).
+Idempotent thread-safe `stop()` via an Event; one stream dying tears down the whole
+capture. Both devices pin to meeting-start defaults (WASAPI has no
+`@DEFAULT_MONITOR@`-style following alias — accepted asymmetry vs Linux). Wired:
+`_base_provider` win32 branch, `doctor` capture check (names both devices),
+`soundcard` win32 dep marker, `data_dir()`/`cache_dir()` win32 branches (`%APPDATA%` /
+`%LOCALAPPDATA%`, landed *before* any Windows users per the audit). Verified: 24
+fake-backed unit tests (mirroring the linux suite, incl. a fake-clock re-anchor test)
++ a real-hardware smoke (3 s mic+loopback with a 440 Hz tone: exact cadence, tone
+recovered, 81 ms anchor skew between channels). The baseline sweep made the full suite
+green on Windows — **555 passed** — by fixing POSIX assumptions *in tests* (raw
+Windows paths inside TOML fixtures, locale-encoded `read_text`, exec-bit asserts,
+SIGINT-based macOS-provider teardown now skipped on win32) and **one real product
+bug**: on Windows, piped/redirected output uses the legacy code page and `click.echo`
+crashed on ✓/← — the CLI entry now reconfigures stdout/stderr with
+`errors="replace"` on win32. `livekit` win_amd64 wheels confirmed (1.1.13 installs;
+AEC behaviour on Windows hardware still to be exercised). Still open in Phase 6: real
+`steno transcribe`/`steno start` with downloaded models, the `windows-latest` CI job +
+Windows classifier, setup messaging, the DirectML notes backend, the stenodiar port.
 
 ---
 

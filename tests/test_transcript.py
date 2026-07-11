@@ -115,7 +115,8 @@ def test_json_handles_a_path_valued_profile_field():
     )
     data = json.loads(transcript.to_json())
     assert data["profile"]["glossary"] == ["Kubernetes"]
-    assert data["profile"]["speaker_profile_store"] == "/tmp/store.json"
+    # str(Path(...)): the separator is platform-native ("\\tmp\\..." on Windows).
+    assert data["profile"]["speaker_profile_store"] == str(Path("/tmp/store.json"))
 
 
 def _long_turn(speaker: str, n: int, *, step: float = 0.6, dur: float = 0.5, t0: float = 0.0):

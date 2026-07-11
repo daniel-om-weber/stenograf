@@ -50,6 +50,10 @@ class TestReadFrame:
             read_frame(io.BytesIO(_HEADER.pack(0, 0.0, 10_000_000)))
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="MacOSCaptureProvider.stop() delivers SIGINT, which Windows cannot send",
+)
 class TestMacOSCaptureProvider:
     def test_reads_both_channels_until_eof(self):
         provider = MacOSCaptureProvider(command=FAKE)

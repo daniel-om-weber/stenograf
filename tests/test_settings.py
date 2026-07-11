@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -49,7 +50,7 @@ def test_settings_path_honors_data_dir(monkeypatch, tmp_path):
 def test_malformed_toml_names_the_file(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text("[notes\nbackend = ", encoding="utf-8")
-    with pytest.raises(SettingsError, match=str(path)):
+    with pytest.raises(SettingsError, match=re.escape(str(path))):
         load_settings(path)
 
 

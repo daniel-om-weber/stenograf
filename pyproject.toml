@@ -56,6 +56,11 @@ dependencies = [
     # build. The floor makes the resolver downgrade numpy instead, and the
     # effective numpy cap tracks numba's own metadata as it advances.
     "numba>=0.60; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Windows live capture (Phase 6): WASAPI mic + loopback streams. Decision D
+    # resolved to soundcard over pyaudiowpatch — one API for both channels, and
+    # its AUTOCONVERTPCM init makes Windows resample server-side to 16 kHz
+    # (parec-style, no Python resampler dep). See capture/windows.py.
+    "soundcard>=0.4.4; sys_platform == 'win32'",
     # Live-caption TUI (stenograf.tui). Imported lazily, only when the TUI runs —
     # the plain stdout view (stenograf.view) stays textual-free.
     "textual>=8.2.8",

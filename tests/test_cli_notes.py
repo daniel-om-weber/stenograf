@@ -197,7 +197,8 @@ def test_notes_export_defaults_from_settings_and_no_export_disables(tmp_path, fa
     vault = tmp_path / "vault"
     settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
     settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(f'[notes.export]\ndir = "{vault}"\n', encoding="utf-8")
+    # as_posix(): a raw Windows path in a TOML basic string is invalid (\U…).
+    settings.write_text(f'[notes.export]\ndir = "{vault.as_posix()}"\n', encoding="utf-8")
     path = tmp_path / "transcript.json"
     write_transcript_json(path)
 

@@ -5,6 +5,7 @@ code), so it is loaded by path rather than imported.
 """
 
 import importlib.util
+import os
 import subprocess
 from pathlib import Path
 
@@ -73,8 +74,9 @@ def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch)
     stenodiar = tmp_path / "native" / "stenodiar" / "stenodiar"
     assert data["force_include"][str(helper)] == "stenograf/bin/stenocap"
     assert data["force_include"][str(stenodiar)] == "stenograf/bin/stenodiar"
-    for binary in (helper, stenodiar):
-        assert binary.stat().st_mode & 0o111 == 0o111
+    if os.name == "posix":  # exec bits don't exist on Windows
+        for binary in (helper, stenodiar):
+            assert binary.stat().st_mode & 0o111 == 0o111
 
 
 def test_missing_cargo_skips_stenodiar_but_still_ships(hook_module, tmp_path, monkeypatch):

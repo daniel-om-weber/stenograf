@@ -61,6 +61,9 @@ def cache_dir() -> Path:
         return Path(override).expanduser()
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Caches" / "stenograf"
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+        return Path(local) / "stenograf" / "cache"
     xdg = os.environ.get("XDG_CACHE_HOME", "~/.cache")
     return Path(xdg).expanduser() / "stenograf"
 

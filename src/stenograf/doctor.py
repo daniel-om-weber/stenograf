@@ -38,6 +38,9 @@ def run_checks() -> list[Check]:
     elif sys.platform.startswith("linux"):
         checks.append(_linux_capture_check())
         checks.append(_diarizer_helper_check())
+    elif sys.platform == "win32":
+        checks.append(_windows_capture_check())
+        checks.append(_diarizer_helper_check())
     else:
         # Optional: `steno transcribe` is fully supported everywhere (Phase 5's
         # ONNX backend), so a box missing only live capture is healthy.
@@ -46,7 +49,7 @@ def run_checks() -> list[Check]:
                 name="Platform",
                 ok=False,
                 detail=f"{sys.platform}: `steno transcribe` works here; live capture "
-                "(`steno start`) is macOS/Linux-only so far",
+                "(`steno start`) is macOS/Linux/Windows-only so far",
                 optional=True,
             )
         )
@@ -133,6 +136,29 @@ def _linux_capture_check() -> Check:
         return Check(name="Capture", ok=False, detail=str(exc))
     listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))
     return Check(name="Capture", ok=True, detail=f"parec via PipeWire/PulseAudio ({listing})")
+
+
+def _windows_capture_check() -> Check:
+    """Whether `steno start` can capture here: soundcard importable, defaults set.
+
+    Uses the same resolution the provider uses at meeting start, so an OK here
+    means a meeting would actually record — and names the devices it would
+    record from (the loopback-of-default-output choice is invisible otherwise).
+    """
+    from stenograf.capture.base import Channel
+    from stenograf.capture.windows import (
+        CaptureUnavailableError,
+        WindowsCaptureProvider,
+        default_devices,
+    )
+
+    try:
+        WindowsCaptureProvider()  # fails fast when soundcard is missing
+        devices = default_devices({Channel.MIC, Channel.SYSTEM})
+    except CaptureUnavailableError as exc:
+        return Check(name="Capture", ok=False, detail=str(exc))
+    listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))
+    return Check(name="Capture", ok=True, detail=f"WASAPI via soundcard ({listing})")
 
 
 def _diarizer_helper_check() -> Check:

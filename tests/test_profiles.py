@@ -146,6 +146,14 @@ class TestPersistence:
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
         assert default_store_path() == tmp_path / "profiles.json"
 
+    def test_data_dir_windows_default(self, tmp_path, monkeypatch):
+        from stenograf import profiles
+
+        monkeypatch.delenv("STENOGRAF_DATA", raising=False)
+        monkeypatch.setattr(profiles.sys, "platform", "win32")
+        monkeypatch.setenv("APPDATA", str(tmp_path))
+        assert profiles.data_dir() == tmp_path / "stenograf"
+
 
 class TestSpeakerReID:
     def _store(self) -> ProfileStore:

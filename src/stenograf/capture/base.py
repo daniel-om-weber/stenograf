@@ -6,8 +6,8 @@ Providers are platform-specific:
 
 - macOS: a signed Swift helper subprocess (Core Audio process tap + mic),
   speaking a framed protocol over a Unix socket / stdio.
-- Linux: in-process via sounddevice reading PipeWire/PulseAudio monitors.
-- Windows: in-process via WASAPI loopback.
+- Linux: one ``parec`` subprocess per channel (PipeWire/PulseAudio sources).
+- Windows: in-process via WASAPI (mic + loopback, the soundcard package).
 
 The core never learns where the audio came from; it only consumes
 ``AudioFrame`` objects. No provider may ever write audio to disk.

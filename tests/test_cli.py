@@ -223,7 +223,7 @@ def test_transcribe_glossary_corrects_the_transcript(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "glossary: 1 term(s), 0 name(s)" in result.output
-    md = (tmp_path / "transcript.md").read_text()
+    md = (tmp_path / "transcript.md").read_text(encoding="utf-8")
     assert "gute Idee für" in md
 
 
@@ -1114,7 +1114,8 @@ def test_settings_formats_are_the_default_but_format_flag_wins(tmp_path, monkeyp
 def test_settings_output_dir_replaces_the_home_and_out_flag_wins(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
     home = tmp_path / "configured-home"
-    _write_settings(tmp_path, f'[output]\ndir = "{home}"\n')
+    # as_posix(): a raw Windows path in a TOML basic string is invalid (\U…).
+    _write_settings(tmp_path, f'[output]\ndir = "{home.as_posix()}"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1136,7 +1137,9 @@ def test_settings_vocab_merges_with_flags(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
     glossary_file = tmp_path / "glossary.txt"
     glossary_file.write_text("Idee\n", encoding="utf-8")
-    _write_settings(tmp_path, f'[vocab]\nglossary_file = "{glossary_file}"\nattendees = ["Ada"]\n')
+    _write_settings(
+        tmp_path, f'[vocab]\nglossary_file = "{glossary_file.as_posix()}"\nattendees = ["Ada"]\n'
+    )
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1147,7 +1150,7 @@ def test_settings_vocab_merges_with_flags(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     # Configured file + inline flag merge (2 terms), attendees ride along (1 name).
     assert "glossary: 2 term(s), 1 name(s)" in result.output
-    md = (tmp_path / "transcript.md").read_text()
+    md = (tmp_path / "transcript.md").read_text(encoding="utf-8")
     assert "gute Idee für" in md  # the settings-file term corrected the transcript
 
 
@@ -1201,7 +1204,9 @@ def test_settings_profile_store_stays_off_the_transcript(tmp_path, monkeypatch):
     # into every transcript, and keeping machine-local paths out of shared files
     # is the settings file's founding rule.
     monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
-    _write_settings(tmp_path, f'[speakers]\nprofile_store = "{tmp_path}/profiles.json"\n')
+    _write_settings(
+        tmp_path, f'[speakers]\nprofile_store = "{tmp_path.as_posix()}/profiles.json"\n'
+    )
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 

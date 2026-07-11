@@ -208,6 +208,14 @@ def _read_glossary_lines(path: Path, *, source: str | None = None) -> list[str]:
 @click.version_option(__version__, prog_name="stenograf")
 def main() -> None:
     """Accuracy-first local meeting transcription. Audio never touches disk."""
+    # Windows pipes/redirects default to the legacy code page (cp1252), and a
+    # single ✓/← in our output would then crash click.echo with a
+    # UnicodeEncodeError. Degrade unencodable glyphs to "?" instead; the
+    # interactive console is unaffected (it is UTF-16 under the hood), as are
+    # the output files (written encoding="utf-8" throughout).
+    for stream in (sys.stdout, sys.stderr):
+        if sys.platform == "win32" and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
 
 
 @main.command()
@@ -840,9 +848,28 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False):
             click.echo(f"capture: {channel.value} ← {device}")
         return provider
 
+    if sys.platform == "win32":
+        from stenograf.capture.windows import (
+            CaptureUnavailableError,
+            WindowsCaptureProvider,
+            default_devices,
+        )
+
+        try:
+            provider = WindowsCaptureProvider()
+            # Resolve the default devices now so a broken audio setup fails
+            # before capture (and models) start, and say what will be recorded —
+            # the loopback-of-default-output choice is invisible otherwise.
+            devices = default_devices({p.channel for p in plans})
+        except CaptureUnavailableError as exc:
+            raise click.ClickException(str(exc)) from exc
+        for channel, device in devices.items():
+            click.echo(f"capture: {channel.value} ← {device}")
+        return provider
+
     raise click.ClickException(
-        "live capture is supported on macOS and Linux; here, transcribe a "
-        "recorded file with `steno transcribe`, or use `steno start --replay`."
+        "live capture is supported on macOS, Linux, and Windows; here, transcribe "
+        "a recorded file with `steno transcribe`, or use `steno start --replay`."
     )
 
 

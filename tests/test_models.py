@@ -25,6 +25,13 @@ def test_cache_dir_xdg_default(monkeypatch, tmp_path):
     assert models.cache_dir() == tmp_path / "stenograf"
 
 
+def test_cache_dir_windows_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("STENOGRAF_CACHE", raising=False)
+    monkeypatch.setattr(models.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert models.cache_dir() == tmp_path / "stenograf" / "cache"
+
+
 def test_cached_path_none_when_absent(monkeypatch, tmp_path):
     monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
     assert models.cached_path(models.SILERO_VAD) is None

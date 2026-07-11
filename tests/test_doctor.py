@@ -1,5 +1,8 @@
 import platform
+import sys
 from pathlib import Path
+
+import pytest
 
 from stenograf import doctor
 
@@ -26,6 +29,7 @@ def test_capture_helper_check_reports_found(monkeypatch, tmp_path):
     assert "permission" in check.detail  # first-run permission guidance surfaced
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no executable bit")
 def test_capture_helper_check_rejects_non_executable(monkeypatch, tmp_path):
     from stenograf.capture import macos
 
@@ -87,7 +91,7 @@ def test_asr_check_present_and_absent(monkeypatch):
 
 
 def test_unsupported_platform_check_is_optional(monkeypatch):
-    monkeypatch.setattr(doctor.sys, "platform", "win32")
+    monkeypatch.setattr(doctor.sys, "platform", "freebsd14")
     platform_check = next(c for c in doctor.run_checks() if c.name == "Platform")
     assert not platform_check.ok
     assert platform_check.optional  # transcribe is supported; only live capture is missing
@@ -119,6 +123,32 @@ def test_linux_capture_check_fails_without_parec(monkeypatch):
     check = doctor._linux_capture_check()
     assert not check.ok
     assert "parec" in check.detail
+
+
+def test_windows_capture_check_names_the_devices(monkeypatch):
+    from stenograf.capture import windows
+    from stenograf.capture.base import Channel
+
+    monkeypatch.setattr(windows, "_import_soundcard", lambda: object())
+    monkeypatch.setattr(
+        windows,
+        "default_devices",
+        lambda channels: {Channel.MIC: "Headset Mic", Channel.SYSTEM: "Speakers (loopback)"},
+    )
+    monkeypatch.setattr(doctor.sys, "platform", "win32")
+    check = next(c for c in doctor.run_checks() if c.name == "Capture")
+    assert check.ok
+    assert not check.optional  # live capture is first-class on Windows
+    assert "mic ← Headset Mic" in check.detail
+    assert "system ← Speakers (loopback)" in check.detail
+
+
+def test_windows_capture_check_fails_without_soundcard(monkeypatch):
+    monkeypatch.setitem(sys.modules, "soundcard", None)
+    monkeypatch.setattr(doctor.sys, "platform", "win32")
+    check = doctor._windows_capture_check()
+    assert not check.ok
+    assert "soundcard" in check.detail
 
 
 def test_macos_version_check_parses_and_compares(monkeypatch):
@@ -202,13 +232,13 @@ def test_notes_check_mlx_reports_cache_state(monkeypatch, tmp_path):
 
 
 def test_notes_check_command_backend_reports_path_presence(monkeypatch, tmp_path):
-    import sys
-
     monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
     monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
     settings = tmp_path / "settings.toml"
+    # Forward slashes: a raw Windows path in a TOML basic string is invalid (\U…).
+    executable = sys.executable.replace("\\", "/")
     settings.write_text(
-        f'[notes]\nbackend = "command"\ncommand = ["{sys.executable}", "-c", "pass"]\n',
+        f'[notes]\nbackend = "command"\ncommand = ["{executable}", "-c", "pass"]\n',
         encoding="utf-8",
     )
     check = doctor._notes_check()

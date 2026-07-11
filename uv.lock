@@ -3595,6 +3595,19 @@ wheels = [
 ]
 
 [[package]]
+name = "soundcard"
+version = "0.4.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi", marker = "sys_platform == 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "numpy", marker = "sys_platform == 'win32' or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f5/ef/85322a77399b19b23bd741ad57d86677687cdf9c9d9bc01997bc6bf9d30d/soundcard-0.4.6.tar.gz", hash = "sha256:9b46d64a26f97cd7d88bcfc385c97c069f97c5ec3404e4e7c23771598a8cf47b", size = 40830, upload-time = "2026-04-12T13:46:24.743Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/be/eb381e700a61b4ce899e14850d7ae78f9600fd2f8b58b4c52b8714e81917/soundcard-0.4.6-py3-none-any.whl", hash = "sha256:ab44b8c1033ac6ec49c5d618ce096dab9b60c7d7a427c92bef15856e5ebb3e09", size = 43939, upload-time = "2026-04-12T13:46:23.224Z" },
+]
+
+[[package]]
 name = "soundfile"
 version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3740,6 +3753,7 @@ dependencies = [
     { name = "parakeet-mlx", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
+    { name = "soundcard", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
     { name = "textual" },
     { name = "transformers", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
 ]
@@ -3777,6 +3791,7 @@ requires-dist = [
     { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.2" },
     { name = "sherpa-onnx", specifier = ">=1.12.40,<1.13" },
     { name = "sherpa-onnx-core", specifier = ">=1.12.40,<1.13" },
+    { name = "soundcard", marker = "sys_platform == 'win32'", specifier = ">=0.4.4" },
     { name = "textual", specifier = ">=8.2.8" },
     { name = "transformers", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=4.55.2,<5" },
 ]
