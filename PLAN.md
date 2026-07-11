@@ -830,9 +830,10 @@ agreement harness). Distribution: the wheel dep markers shipped with Track 2; th
 functional-transcription CI job (null sink + piper TTS + live `steno start`, sentinel-word
 assertion) shipped with Track 1.
 
-**stenodiar port (estimated speaker counts on Linux) — SHIPPED 2026-07-11.** The
-`coreml` speakrs feature became a macOS-only target dependency; off-mac the helper defaults
-to `--mode cpu` and `stenograf.diarization.speakrs.DEFAULT_MODE` follows the platform (the
+**stenodiar port (estimated speaker counts on Linux) — SHIPPED 2026-07-11.** Acceleration
+became build-time cargo features (`coreml`/`cuda`, default ORT CPU; `build.sh` passes
+`coreml` on macOS, and the binary defaults to the best compiled-in backend); off-mac the
+helper defaults to `--mode cpu` and `stenograf.diarization.speakrs.DEFAULT_MODE` follows the platform (the
 only Python change — discovery, doctor, and the estimate/known-count split were already
 platform-neutral). The advertised CPU throughput blocker was **diagnosed as two upstream
 speakrs gaps and fixed by vendoring speakrs 0.5.0 with two single-hunk patches**
