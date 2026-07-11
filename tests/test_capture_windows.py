@@ -9,6 +9,7 @@ clock. Mirrors test_capture_linux.py.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 
 import numpy as np
@@ -25,6 +26,30 @@ ONE = 1 / 32767  # float32 amplitude that lands on int16 value 1
 TWO = 2 / 32767
 
 
+class FakeGate:
+    """Holds each recorder's death until ``expected`` of them have delivered
+    their whole script.
+
+    One stream dying tears down *all* channels (by design — the meeting must
+    end visibly), and the fakes deliver instantly, so without this a fast
+    channel's death can set the stop event before the other pump has even
+    opened its recorder, dropping that channel's frames nondeterministically
+    (recorders are created inside their pump threads, hence the fixed
+    up-front count rather than registration).
+    """
+
+    def __init__(self, expected):
+        self._expected = expected
+        self._done = 0
+        self._cond = threading.Condition()
+
+    def exhausted(self):
+        with self._cond:
+            self._done += 1
+            self._cond.notify_all()
+            self._cond.wait_for(lambda: self._done >= self._expected, timeout=5)
+
+
 class FakeRecorder:
     """Yields one scripted block per record() call, then dies like a stream.
 
@@ -34,10 +59,11 @@ class FakeRecorder:
     moves a fake clock by the paired amount before each delivery.
     """
 
-    def __init__(self, script, clock=None, advance=None):
+    def __init__(self, script, clock=None, advance=None, gate=None):
         self._script = list(script)
         self._clock = clock
         self._advance = list(advance) if advance else []
+        self._gate = gate
 
     def __enter__(self):
         return self
@@ -49,6 +75,9 @@ class FakeRecorder:
         if self._advance and self._clock is not None:
             self._clock.t += self._advance.pop(0)
         if not self._script:
+            if self._gate is not None:
+                self._gate.exhausted()
+                self._gate = None
             raise RuntimeError("stream ended")
         step = self._script[0]
         if step == "forever":
@@ -96,15 +125,26 @@ class FakeSoundcard:
         return self._loopback
 
 
-def fake_backend(mic_script=(ONE, ONE), system_script=(TWO, TWO), clock=None, advance=None):
-    mic = FakeDevice("Fake Mic", lambda: FakeRecorder(mic_script, clock, advance))
-    loopback = FakeDevice("Fake Speakers", lambda: FakeRecorder(system_script, clock, advance))
+def fake_backend(
+    mic_script=(ONE, ONE),
+    system_script=(TWO, TWO),
+    clock=None,
+    advance=None,
+    die_together=False,
+):
+    # die_together: for two-channel tests where *both* scripts must be fully
+    # delivered — neither stream may die (tearing down the other) earlier.
+    gate = FakeGate(expected=2) if die_together else None
+    mic = FakeDevice("Fake Mic", lambda: FakeRecorder(mic_script, clock, advance, gate))
+    loopback = FakeDevice(
+        "Fake Speakers", lambda: FakeRecorder(system_script, clock, advance, gate)
+    )
     return FakeSoundcard(mic=mic, loopback=loopback)
 
 
 class TestWindowsCaptureProvider:
     def test_reads_both_channels_until_stream_end(self):
-        provider = WindowsCaptureProvider(backend=fake_backend(), frame_ms=50)
+        provider = WindowsCaptureProvider(backend=fake_backend(die_together=True), frame_ms=50)
         provider.start({Channel.MIC, Channel.SYSTEM})
         frames = list(provider.frames())
         provider.stop()
