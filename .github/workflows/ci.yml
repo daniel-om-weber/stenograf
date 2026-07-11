@@ -15,9 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         # macos-15 = arm64 (the shipping target); ubuntu keeps the suite
-        # collecting and passing on Linux ahead of the Phase 5 backends
-        # (model-gated + real-audio tests self-skip on both).
-        os: [macos-15, ubuntu-latest]
+        # collecting and passing on Linux ahead of the Phase 5 backends;
+        # windows covers the Phase 6 capture/provider work (model-gated +
+        # real-audio tests self-skip everywhere).
+        os: [macos-15, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -28,6 +29,34 @@ jobs:
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run pytest -q
+
+  # Type-check the stenodiar helper (vendored speakrs) in the default CPU
+  # config plus each platform's acceleration feature — coreml is macOS-only,
+  # cuda is the Linux/Windows GPU opt-in. cargo check only: building or
+  # running the models in CI is not worth the minutes.
+  stenodiar:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            features: coreml
+          - os: ubuntu-latest
+            features: cuda
+          - os: windows-latest
+            features: cuda
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: native/stenodiar
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/stenodiar
+      - run: cargo check --locked
+      - run: cargo check --locked --features ${{ matrix.features }}
 
   # Functional live capture on the stable-distro reference (PLAN.md §5
   # dev-environment plan): a real PulseAudio server, a null sink as the
