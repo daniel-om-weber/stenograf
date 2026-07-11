@@ -6,7 +6,9 @@
 set -e
 cd "$(dirname "$0")"
 
-cargo build --release
+# CoreML is a cargo feature, not the default: this script is the macOS build
+# (Windows/Linux build with --no-default-features or --features cuda directly).
+cargo build --release --features coreml
 cp target/release/stenodiar stenodiar
 
 echo "built: $(pwd)/stenodiar"

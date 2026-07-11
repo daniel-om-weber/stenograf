@@ -9,9 +9,13 @@
 //! per machine) — `--warmup` does both without diarizing anything.
 //!
 //! Usage:
-//!   stenodiar [--mode coreml|coreml-fast|cpu] <audio.wav>
-//!   stenodiar [--mode ...] --stdin     # raw mono 16 kHz s16le PCM on stdin
-//!   stenodiar [--mode ...] --warmup
+//!   stenodiar [--mode MODE] <audio.wav>
+//!   stenodiar [--mode MODE] --stdin    # raw mono 16 kHz s16le PCM on stdin
+//!   stenodiar [--mode MODE] --warmup
+//!
+//! MODE is `cpu` everywhere, plus `coreml`/`coreml-fast` or `cuda`/`cuda-fast`
+//! when the matching cargo feature was compiled in; the default is the best
+//! compiled-in backend (coreml > cuda > cpu).
 //!
 //! stenograf itself always pipes PCM via ``--stdin``: meeting audio must
 //! never touch disk (see native/README.md); the WAV path exists for
@@ -32,8 +36,40 @@ fn main() -> ExitCode {
     }
 }
 
+fn default_mode() -> ExecutionMode {
+    #[cfg(feature = "coreml")]
+    return ExecutionMode::CoreMl;
+    #[cfg(all(feature = "cuda", not(feature = "coreml")))]
+    return ExecutionMode::Cuda;
+    #[cfg(not(any(feature = "coreml", feature = "cuda")))]
+    ExecutionMode::Cpu
+}
+
+fn parse_mode(value: &str) -> Result<ExecutionMode, String> {
+    match value {
+        "cpu" => Ok(ExecutionMode::Cpu),
+        #[cfg(feature = "coreml")]
+        "coreml" => Ok(ExecutionMode::CoreMl),
+        #[cfg(feature = "coreml")]
+        "coreml-fast" => Ok(ExecutionMode::CoreMlFast),
+        #[cfg(feature = "cuda")]
+        "cuda" => Ok(ExecutionMode::Cuda),
+        #[cfg(feature = "cuda")]
+        "cuda-fast" => Ok(ExecutionMode::CudaFast),
+        #[cfg(not(feature = "coreml"))]
+        "coreml" | "coreml-fast" => {
+            Err(format!("mode '{value}' was not compiled into this binary"))
+        }
+        #[cfg(not(feature = "cuda"))]
+        "cuda" | "cuda-fast" => {
+            Err(format!("mode '{value}' was not compiled into this binary"))
+        }
+        other => Err(format!("unknown mode '{other}'")),
+    }
+}
+
 fn run() -> Result<(), String> {
-    let mut mode = ExecutionMode::CoreMl;
+    let mut mode = default_mode();
     let mut warmup = false;
     let mut stdin_pcm = false;
     let mut wav_path: Option<String> = None;
@@ -43,18 +79,13 @@ fn run() -> Result<(), String> {
         match arg.as_str() {
             "--mode" => {
                 let value = args.next().ok_or("--mode needs a value")?;
-                mode = match value.as_str() {
-                    "coreml" => ExecutionMode::CoreMl,
-                    "coreml-fast" => ExecutionMode::CoreMlFast,
-                    "cpu" => ExecutionMode::Cpu,
-                    other => return Err(format!("unknown mode '{other}'")),
-                };
+                mode = parse_mode(&value)?;
             }
             "--warmup" => warmup = true,
             "--stdin" => stdin_pcm = true,
             "--help" | "-h" => {
                 eprintln!(
-                    "usage: stenodiar [--mode coreml|coreml-fast|cpu] (--warmup | --stdin | <audio.wav>)"
+                    "usage: stenodiar [--mode cpu|coreml|coreml-fast|cuda|cuda-fast] (--warmup | --stdin | <audio.wav>)"
                 );
                 return Ok(());
             }
