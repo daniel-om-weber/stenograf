@@ -7,11 +7,9 @@ Accuracy-first, fully local meeting transcription for **German** and **English**
 Built for Apple Silicon (M-series) first; Linux and Windows support is designed
 in from the start.
 
-> **Status: pre-alpha.** On macOS the pipeline is complete end to end: live
-> system-audio + microphone capture, live captions, and the high-accuracy
-> speaker-labelled finalize pass, plus meeting notes. On Linux, transcribing
-> recorded files (`steno transcribe`, ONNX on CPU) works — including
-> diarization and notes — but live capture is not built yet. See
+> **Status: pre-alpha.** On macOS and Linux the pipeline is complete end to
+> end: live system-audio + microphone capture, live captions, and the
+> high-accuracy speaker-labelled finalize pass, plus meeting notes. See
 > [PLAN.md](PLAN.md).
 
 ## Why another transcription tool?
@@ -32,10 +30,11 @@ in from the start.
 
 ## Install
 
-Requires macOS 14.4+ on Apple Silicon and [uv](https://docs.astral.sh/uv/).
-The wheel ships the signed capture helper — no toolchain needed. (Linux
-installs work too and get `steno transcribe`; live capture is macOS-only
-for now.)
+Requires [uv](https://docs.astral.sh/uv/) and either macOS 14.4+ on Apple
+Silicon (the wheel ships the signed capture helper — no toolchain needed) or
+Linux with PipeWire or PulseAudio (capture uses `parec`, shipped with
+pipewire-pulse / pulseaudio-utils on every desktop distro; ASR runs ONNX on
+CPU).
 
 ```sh
 uv tool install stenograf

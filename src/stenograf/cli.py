@@ -813,17 +813,37 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False):
             {ch: p for ch, p in sources.items() if ch in planned}, paced=paced
         )
 
-    if sys.platform != "darwin":
-        raise click.ClickException(
-            "live capture is macOS-only for now; on other platforms transcribe a "
-            "recorded file with `steno transcribe`, or use `steno start --replay`."
-        )
-    from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
+    if sys.platform == "darwin":
+        from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
 
-    try:
-        return MacOSCaptureProvider()
-    except HelperNotFoundError as exc:
-        raise click.ClickException(str(exc)) from exc
+        try:
+            return MacOSCaptureProvider()
+        except HelperNotFoundError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+    if sys.platform.startswith("linux"):
+        from stenograf.capture.linux import (
+            CaptureUnavailableError,
+            LinuxCaptureProvider,
+            default_devices,
+        )
+
+        try:
+            provider = LinuxCaptureProvider()
+            # Resolve the default devices now so a broken audio stack fails
+            # before capture (and models) start, and say what will be recorded —
+            # the monitor-of-default-sink choice is invisible otherwise.
+            devices = default_devices({p.channel for p in plans})
+        except CaptureUnavailableError as exc:
+            raise click.ClickException(str(exc)) from exc
+        for channel, device in devices.items():
+            click.echo(f"capture: {channel.value} ← {device}")
+        return provider
+
+    raise click.ClickException(
+        "live capture is supported on macOS and Linux; here, transcribe a "
+        "recorded file with `steno transcribe`, or use `steno start --replay`."
+    )
 
 
 def _resolve_split_channels(
@@ -1472,8 +1492,8 @@ def setup(models_only: bool) -> None:
     from, so re-run this from each terminal app (or IDE) you will run meetings
     from; the models are cached machine-wide.
     """
-    if not models_only:
-        _grant_capture_permissions()
+    if not models_only and sys.platform == "darwin":
+        _grant_capture_permissions()  # only macOS gates capture behind TCC prompts
 
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.

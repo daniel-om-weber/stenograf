@@ -86,12 +86,39 @@ def test_asr_check_present_and_absent(monkeypatch):
     assert "parakeet_mlx" in absent.detail  # the missing modules are named
 
 
-def test_non_darwin_platform_check_is_optional(monkeypatch):
-    monkeypatch.setattr(doctor.sys, "platform", "linux")
+def test_unsupported_platform_check_is_optional(monkeypatch):
+    monkeypatch.setattr(doctor.sys, "platform", "win32")
     platform_check = next(c for c in doctor.run_checks() if c.name == "Platform")
     assert not platform_check.ok
     assert platform_check.optional  # transcribe is supported; only live capture is missing
     assert "transcribe" in platform_check.detail
+
+
+def test_linux_capture_check_names_the_devices(monkeypatch):
+    from stenograf.capture import linux
+    from stenograf.capture.base import Channel
+
+    monkeypatch.setattr(linux.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        linux,
+        "default_devices",
+        lambda channels: {Channel.MIC: "mymic", Channel.SYSTEM: "mysink.monitor"},
+    )
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    check = next(c for c in doctor.run_checks() if c.name == "Capture")
+    assert check.ok
+    assert not check.optional  # live capture is first-class on Linux
+    assert "mic ← mymic" in check.detail
+    assert "system ← mysink.monitor" in check.detail
+
+
+def test_linux_capture_check_fails_without_parec(monkeypatch):
+    from stenograf.capture import linux
+
+    monkeypatch.setattr(linux.shutil, "which", lambda name: None)
+    check = doctor._linux_capture_check()
+    assert not check.ok
+    assert "parec" in check.detail
 
 
 def test_macos_version_check_parses_and_compares(monkeypatch):

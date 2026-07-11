@@ -350,8 +350,11 @@ swappable without touching the core:
      Required because no Python package exposes the tap API (pyobjc doesn't wrap the
      CoreAudio HAL C functions; miniaudio support is an open issue). BlackHole would
      be the pure-Python route and stays a documented fallback only.
-   - **Linux: pure Python** (`sounddevice` reading PipeWire/PulseAudio monitor
-     sources — system capture is easier there than on macOS).
+   - **Linux: `parec` subprocesses** (shipped 2026-07-11) — one per channel
+     against the PulseAudio layer every desktop ships (pipewire-pulse or
+     PulseAudio itself): mic from ``@DEFAULT_SOURCE@``, system audio from
+     ``@DEFAULT_MONITOR@``. No Python audio dependency; same
+     subprocess-streaming shape as the macOS helper.
    - **Windows: pure Python** (WASAPI loopback via `soundcard`/`pyaudiowpatch`).
    On Linux/Windows the provider may run in-process behind the same interface.
 2. **Inference backends = Python ABCs.** ASR: MLX backends on Mac ↔
@@ -559,10 +562,14 @@ writes for every transcript/checkpoint artifact, and the small web-UI landmines
 
 **Phase 4 Stages A, B, D, E — SHIPPED** (summaries under the build plan below).
 
-**Phase 5 — Linux + cross-platform ASR. ACTIVE (started 2026-07-10).** Linux
-in-process capture (PipeWire/PulseAudio monitor) + a CPU/ONNX Parakeet backend
-through the already-shipped `stenograf.asr` factory; full technical sub-plan
-under "Deferred to Phase 5" at the end of the Phase 4 build plan.
+**Phase 5 — Linux + cross-platform ASR. Tracks 1 + 2 SHIPPED (2026-07-11).**
+Track 2 (the `parakeet-onnx` CPU backend) shipped on the Mac; Track 1 (Linux
+capture via `parec`, `steno start` end-to-end with live captions) shipped the
+next day on the CachyOS notebook, with the Ubuntu null-sink functional CI job.
+Full technical sub-plan (Decision A/B/C verdicts included) at the end of the
+Phase 4 build plan. Still open in Phase 5: the stenodiar port (blocked on
+speakrs' CPU throughput; its x86 measurement is pending) — until then Linux
+estimates speaker counts through sherpa only, which over-splits.
 
 **Development-environment plan (decided 2026-07-10).** Two machines, sequenced:
 
@@ -772,18 +779,41 @@ ends are approximated (next token's start, capped at TDT's 4-frame/0.32 s durati
 — can't move a word across a turn boundary farther than real durations could). Verification
 (label-free, eval/parity.py): timestamp parity MLX↔ONNX median |Δstart| 0.00 s / p95 0.08 s
 (one TDT frame); cross-WER within the fp32 band above. ORT's CoreML provider fails to
-initialize on this model — the backend pins CPUExecutionProvider (GPU EPs a later opt-in). A `LinuxCaptureProvider` (`stenograf/capture/linux.py`, in-process,
-no helper): monitor discovery via `pactl`, capture via **SoundCard** (`include_loopback`) or
-`parec`/`pw-record` subprocess (**Decision B** — prototype both; macOS is already
-subprocess-based), 16 kHz mono direct (PipeWire resamples → no resampler dep), idempotent
-thread-safe `stop()` like `MacOSCaptureProvider`. Known-count diarization already runs
-ONNX/CPU via sherpa (Task = verification); *estimated* counts need the **stenodiar
-port** — build speakrs without the `coreml` feature (ORT CPU/CUDA) and fix its
-single-core ~1×-realtime CPU throughput first (details in §2 "Deferred task — stenodiar
-on Windows/Linux"). **Decision C** (settled): finalize-first is first-class, live captions
-best-effort with a CPU-RTF probe. Verification is label-free throughout (parakeet-onnx↔MLX
-parity + timestamp sanity, reusing the Phase-2 agreement harness). Distribution then gains
-the Linux pure-`any` wheel's dep markers and a Linux functional-transcription CI step.
+initialize on this model — the backend pins CPUExecutionProvider (GPU EPs a later opt-in).
+
+**Track 1 — Linux capture: SHIPPED 2026-07-11** (on the CachyOS notebook, per the
+dev-environment plan). `LinuxCaptureProvider` (`stenograf/capture/linux.py`, in-process, no
+helper): one `parec` subprocess per channel, 16 kHz mono s16le resampled server-side (no
+resampler dep), ~200 ms frames stamped per channel against a shared session clock (anchor at
+first delivered frame, sample-count-derived after — the stenocap pattern), reader threads
+that decouple the pipes from a stalled consumer, idempotent thread-safe `stop()`, and an
+unexpected single-stream death tearing down the whole capture so the meeting ends visibly
+and finalizes. **Decision B — resolved to `parec`** over SoundCard (`include_loopback`)
+after prototyping both against the real PipeWire 1.6.7 session: parec adds zero Python
+dependencies, mirrors the macOS subprocess architecture, and measured a clean ~86 ms
+delivery cadence where SoundCard showed a ~1 s startup gap (`pw-record` was also ruled out:
+it doesn't accept pulse monitor names). Device selection uses the pulse aliases, and they
+are load-bearing, not convenience — measured: `@DEFAULT_MONITOR@` **follows** a
+default-sink switch mid-capture (headset plugged in → WirePlumber moves the meeting app's
+stream → capture follows), `@DEFAULT_SOURCE@` pins to the start-of-meeting mic, and a
+*deviceless* parec does NOT track the pulse default under pipewire-pulse (WirePlumber
+auto-routes it, never to a monitor). `pactl` resolves the aliases at provider construction
+(fail-fast + the CLI names what will be recorded); `steno doctor` runs the same check.
+Verified end-to-end on real capture (TTS meeting into a null sink → live captions →
+verbatim finalize; dual-channel run exercised two streams + AEC on the shared clock).
+Test-rig gotcha: a fresh `module-null-sink` loads **muted** here, and a muted sink's
+monitor delivers silence. **Decision C** (settled): finalize-first is first-class, live
+captions best-effort — measured on the notebook the window pass keeps up (finalize reused
+live decodes, zero shed), so no separate CPU-RTF probe was built; `LiveWorker`
+load-shedding already degrades an under-powered box to caption gaps the finalize fills.
+Known-count diarization already runs ONNX/CPU via sherpa; *estimated* counts still need the
+**stenodiar port** — build speakrs without the `coreml` feature (ORT CPU/CUDA) and fix its
+single-core ~1×-realtime CPU throughput first (details in §2 "Deferred task — stenodiar on
+Windows/Linux"; the x86 throughput measurement is still pending). Verification is
+label-free throughout (parakeet-onnx↔MLX parity + timestamp sanity, reusing the Phase-2
+agreement harness). Distribution: the wheel dep markers shipped with Track 2; the Ubuntu
+functional-transcription CI job (null sink + piper TTS + live `steno start`, sentinel-word
+assertion) shipped with Track 1.
 
 *Settings portability (audited 2026-07-10):* `settings.toml` load/validate/show/edit is
 already fully cross-platform — pure stdlib `tomllib`, `click.edit`, `os.replace` (atomic on

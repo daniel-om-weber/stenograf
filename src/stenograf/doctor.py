@@ -35,15 +35,18 @@ def run_checks() -> list[Check]:
         checks.append(_macos_version_check())
         checks.append(_capture_helper_check())
         checks.append(_diarizer_helper_check())
+    elif sys.platform.startswith("linux"):
+        checks.append(_linux_capture_check())
+        checks.append(_diarizer_helper_check())
     else:
-        # Optional: `steno transcribe` is fully supported off macOS (Phase 5's
-        # ONNX backend), so a Linux box missing only live capture is healthy.
+        # Optional: `steno transcribe` is fully supported everywhere (Phase 5's
+        # ONNX backend), so a box missing only live capture is healthy.
         checks.append(
             Check(
                 name="Platform",
                 ok=False,
                 detail=f"{sys.platform}: `steno transcribe` works here; live capture "
-                "(`steno start`) is macOS-only so far (Linux capture planned)",
+                "(`steno start`) is macOS/Linux-only so far",
                 optional=True,
             )
         )
@@ -107,6 +110,29 @@ def _capture_helper_check() -> Check:
         ok=True,
         detail=f"{path} — signed; grant the mic + system-audio permission once with `steno setup`",
     )
+
+
+def _linux_capture_check() -> Check:
+    """Whether `steno start` can capture here: parec present, server up, defaults set.
+
+    Uses the same resolution the provider uses at meeting start, so an OK here
+    means a meeting would actually record — and names the devices it would
+    record from (the monitor-of-default-sink choice is invisible otherwise).
+    """
+    from stenograf.capture.base import Channel
+    from stenograf.capture.linux import (
+        CaptureUnavailableError,
+        LinuxCaptureProvider,
+        default_devices,
+    )
+
+    try:
+        LinuxCaptureProvider()  # fails fast when parec is missing
+        devices = default_devices({Channel.MIC, Channel.SYSTEM})
+    except CaptureUnavailableError as exc:
+        return Check(name="Capture", ok=False, detail=str(exc))
+    listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))
+    return Check(name="Capture", ok=True, detail=f"parec via PipeWire/PulseAudio ({listing})")
 
 
 def _diarizer_helper_check() -> Check:

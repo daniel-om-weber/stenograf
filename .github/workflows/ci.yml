@@ -28,3 +28,57 @@ jobs:
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run pytest -q
+
+  # Functional live capture on the stable-distro reference (PLAN.md §5
+  # dev-environment plan): a real PulseAudio server, a null sink as the
+  # default output, TTS speech played into it, `steno start` capturing the
+  # monitor through LinuxCaptureProvider, and the transcript asserted on
+  # sentinel words. CachyOS (rolling) is covered by development itself;
+  # this brackets the old end of the version range users actually run.
+  capture-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+      - name: Start a sound server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio pulseaudio-utils
+          pulseaudio --start --exit-idle-time=-1
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: asr-weights-${{ runner.os }}
+      - run: uv sync
+      - name: Prefetch models
+        run: uv run steno setup --models-only
+      - name: Synthesize meeting speech
+        run: |
+          uv run --no-project --with piper-tts python -m piper.download_voices en_US-lessac-medium
+          uv run --no-project --with piper-tts python -m piper -m en_US-lessac-medium \
+            --data-dir . --output_file speech.wav -- \
+            "Good morning everyone, and welcome to the quarterly planning meeting. Today we will discuss the provisioning pipeline, the October release schedule, and the migration of the transcription backend. Thank you all for joining, and let us get started with the first agenda item."
+      - name: Live-capture a meeting from the null sink
+        run: |
+          pactl load-module module-null-sink sink_name=steno_ci
+          pactl set-sink-mute steno_ci 0
+          pactl set-default-sink steno_ci
+          uv run steno doctor
+          uv run steno start --local 0 --remote 1 --max-seconds 40 --out meeting --plain \
+            > live.log 2>&1 &
+          # generous: the fp32 ONNX model can take minutes to load on 2 CI cores
+          for i in $(seq 1 600); do
+            grep -q "capturing:" live.log && break
+            sleep 0.5
+          done
+          paplay --device=steno_ci speech.wav
+          wait
+          cat live.log
+      - name: Assert transcript content
+        run: |
+          cat meeting/transcript.txt
+          grep -qi "provisioning" meeting/transcript.txt
+          grep -qi "october" meeting/transcript.txt
