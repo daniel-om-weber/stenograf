@@ -18,3 +18,8 @@ speakrs = "0.5"
 
 [profile.release]
 lto = true
+
+# Vendored speakrs 0.5.0 with two CPU-throughput patches (see vendor/VENDOR.md);
+# drop this section once they land upstream.
+[patch.crates-io]
+speakrs = { path = "vendor/speakrs" }

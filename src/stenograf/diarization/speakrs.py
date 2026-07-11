@@ -1,4 +1,4 @@
-"""Speaker diarization via the ``stenodiar`` helper (speakrs, CoreML).
+"""Speaker diarization via the ``stenodiar`` helper (speakrs).
 
 speakrs reimplements the pyannote community-1 pipeline (segmentation →
 embeddings → PLDA → VBx clustering) in Rust; VBx is what makes its *automatic*
@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from importlib import resources
 from pathlib import Path
 
@@ -35,6 +36,10 @@ _TIMEOUT_S = 1800
 """Hard cap on one helper run. Warm runs take under a second per meeting-hour;
 the first run ever also downloads the models and compiles them for CoreML
 (minutes, then cached per machine), so the cap is generous, not tight."""
+
+DEFAULT_MODE = "coreml" if sys.platform == "darwin" else "cpu"
+"""stenodiar execution mode: CoreML on macOS, ONNX Runtime CPU elsewhere
+(GPU execution providers are a later opt-in, mirroring the ASR backend)."""
 
 
 class DiarizerHelperNotFoundError(RuntimeError):
@@ -76,7 +81,7 @@ class SpeakrsCliDiarizer(Diarizer):
         sherpa: SherpaOnnxDiarizer,
         *,
         command: list[str] | None = None,
-        mode: str = "coreml",
+        mode: str = DEFAULT_MODE,
     ) -> None:
         self._sherpa = sherpa
         self._command = command
