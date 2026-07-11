@@ -13,6 +13,9 @@
 //!   stenodiar [--mode ...] --stdin     # raw mono 16 kHz s16le PCM on stdin
 //!   stenodiar [--mode ...] --warmup
 //!
+//! The default mode is coreml on macOS and cpu everywhere else (the coreml
+//! modes exist only on macOS builds; requesting them elsewhere fails at load).
+//!
 //! stenograf itself always pipes PCM via ``--stdin``: meeting audio must
 //! never touch disk (see native/README.md); the WAV path exists for
 //! debugging against files.
@@ -33,7 +36,11 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<(), String> {
-    let mut mode = ExecutionMode::CoreMl;
+    let mut mode = if cfg!(target_os = "macos") {
+        ExecutionMode::CoreMl
+    } else {
+        ExecutionMode::Cpu
+    };
     let mut warmup = false;
     let mut stdin_pcm = false;
     let mut wav_path: Option<String> = None;

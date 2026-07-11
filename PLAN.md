@@ -226,17 +226,28 @@ Voxtral/Qwen streaming remain documented fallbacks only.*
   Rust toolchain), falls back to sherpa-only otherwise; `steno doctor`
   reports it; `eval/diarize.py --sherpa-only` pins the baseline.
 
-**Deferred task — stenodiar on Windows/Linux:** speakrs itself is
-cross-platform (ONNX Runtime CPU/CUDA/MIGraphX backends; the CoreML feature is
-macOS-only), so the port is "build without the `coreml` feature + package the
-binary". The blocker is performance, not correctness: **speakrs' ORT CPU path
-measured ~1× realtime pinned to a single core** (407 s per 300 s segment on
-the M4 Max; counts matched CoreML on every file). Before shipping it anywhere
-without a GPU: investigate threading (ORT intra-op/session thread settings,
-speakrs `RuntimeConfig.chunk_emb_workers`, possibly an upstream issue — the
-project is v0.5.0 and publishes no CPU numbers); acceptance is multi-core
-scaling to well above realtime for a 1-h finalize. CUDA on Linux is already
-fast (50–121× RT per speakrs' benchmarks). Fallbacks if CPU can't be fixed:
+**stenodiar on Linux — SHIPPED 2026-07-11** (Windows still deferred, below).
+The ~1× realtime CPU blocker was diagnosed on the CachyOS notebook as two
+upstream speakrs gaps, not a hardware limit: (1) pure-CPU embedding ORT
+sessions are built with **one intra-op thread** (`RuntimeConfig.
+chunk_emb_workers` turned out to be CoreML-only machinery — the whole chunked
+worker module is `#[cfg(feature = "coreml")]`), and (2) the CPU model
+download list omits the batched/split/multi-mask ONNX exports that the HF
+repo carries, silently forcing the slowest single-item code path. Fixed by
+**vendoring speakrs 0.5.0 with two single-hunk patches**
+(`native/stenodiar/vendor/`, see VENDOR.md; both are upstream-worthy).
+Measured on the 307 s three-speaker piper fixture (Ryzen AI 9 HX 370,
+12C/24T): stock 215 s (1.4× RT, ~1 core) → threads patch alone 76 s (4.1×)
+→ model-list patch alone 107 s (2.9×) → **both 38 s (8.2× RT, ~6.5 cores;
+embedding threads capped at 8 — past that ORT burns >50 % more CPU for ~5 %
+wall)**. Turns and speaker counts are byte-identical across all four
+configs (3/3 speakers). A 1-h channel diarizes in ~7 min; acceptable as the
+estimate-only path, and `_TIMEOUT_S=1800` still clears a 2-h meeting.
+
+**Deferred task — stenodiar on Windows:** same patched build without the
+`coreml` feature should carry over (ORT CPU), but the throughput is
+unmeasured there. CUDA on Linux is already fast (50–121× RT per speakrs'
+benchmarks) and remains an opt-in. Fallbacks if a platform can't be fixed:
 NME-SC k-estimation (`spectralcluster`, numpy/scipy) feeding sherpa's
 known-count path, or pyannote community-1 direct (torch-CPU, HF-gated).
 Ruled out: **DiariZen** (best DER but CC-BY-**NC** weights — not shippable,
@@ -567,9 +578,13 @@ Track 2 (the `parakeet-onnx` CPU backend) shipped on the Mac; Track 1 (Linux
 capture via `parec`, `steno start` end-to-end with live captions) shipped the
 next day on the CachyOS notebook, with the Ubuntu null-sink functional CI job.
 Full technical sub-plan (Decision A/B/C verdicts included) at the end of the
-Phase 4 build plan. Still open in Phase 5: the stenodiar port (blocked on
-speakrs' CPU throughput; its x86 measurement is pending) — until then Linux
-estimates speaker counts through sherpa only, which over-splits.
+Phase 4 build plan. **The stenodiar port SHIPPED 2026-07-11** — the CPU
+throughput blocker fell to two vendored speakrs patches (measurement and
+diagnosis in §2 "stenodiar on Linux"), so Linux now estimates speaker counts
+through speakrs' VBx exactly like macOS (verified end-to-end: 3/3 speakers on
+a three-voice fixture, `steno transcribe` at 5.0× realtime overall). Phase 5
+has no open items; the Windows stenodiar throughput measurement stays
+deferred with Windows itself.
 
 **Development-environment plan (decided 2026-07-10).** Two machines, sequenced:
 
@@ -613,9 +628,10 @@ stable-distro; nothing in the design touches ALSA directly, so these suffice.
   delivering **all-zero** PCM is undetected: `far_end_missing_ticks` counts only
   *absent* far-end frames, so the armed text backstop never arms and no warning
   fires while the canceller runs blind.
-- **stenodiar on Windows/Linux** — blocked on speakrs' single-core ~1×-realtime
-  ORT CPU throughput; details in §2 "Deferred task — stenodiar on
-  Windows/Linux".
+- **stenodiar on Windows** — the Linux port shipped 2026-07-11 (§2 "stenodiar
+  on Linux"); Windows should inherit the same patched CPU build but its
+  throughput is unmeasured; details in §2 "Deferred task — stenodiar on
+  Windows".
 - **Lower-priority, independent:** greedy re-ID → optimal (Hungarian)
   assignment; SRT/VTT dropping text not covered by `words` (latent — Parakeet
   emits full-or-none); helper-stderr piping; meeting-mode auto-detect; hybrid
@@ -806,14 +822,25 @@ monitor delivers silence. **Decision C** (settled): finalize-first is first-clas
 captions best-effort — measured on the notebook the window pass keeps up (finalize reused
 live decodes, zero shed), so no separate CPU-RTF probe was built; `LiveWorker`
 load-shedding already degrades an under-powered box to caption gaps the finalize fills.
-Known-count diarization already runs ONNX/CPU via sherpa; *estimated* counts still need the
-**stenodiar port** — build speakrs without the `coreml` feature (ORT CPU/CUDA) and fix its
-single-core ~1×-realtime CPU throughput first (details in §2 "Deferred task — stenodiar on
-Windows/Linux"; the x86 throughput measurement is still pending). Verification is
+Known-count diarization already runs ONNX/CPU via sherpa. Verification is
 label-free throughout (parakeet-onnx↔MLX parity + timestamp sanity, reusing the Phase-2
 agreement harness). Distribution: the wheel dep markers shipped with Track 2; the Ubuntu
 functional-transcription CI job (null sink + piper TTS + live `steno start`, sentinel-word
 assertion) shipped with Track 1.
+
+**stenodiar port (estimated speaker counts on Linux) — SHIPPED 2026-07-11.** The
+`coreml` speakrs feature became a macOS-only target dependency; off-mac the helper defaults
+to `--mode cpu` and `stenograf.diarization.speakrs.DEFAULT_MODE` follows the platform (the
+only Python change — discovery, doctor, and the estimate/known-count split were already
+platform-neutral). The advertised CPU throughput blocker was **diagnosed as two upstream
+speakrs gaps and fixed by vendoring speakrs 0.5.0 with two single-hunk patches**
+(`native/stenodiar/vendor/`, VENDOR.md; measurement matrix in §2 "stenodiar on Linux":
+1.4× → 8.2× RT). Verified label-free on a synthesized three-voice piper meeting (307 s):
+identical turns across all four patch configs, and end-to-end
+`steno transcribe` (no `--speakers`) detected 3/3 speakers with correct attribution at
+5.0× realtime overall, surfacing "3 detected — estimated" with the lock/correct hint.
+First `--mode cpu` run downloads ~120 MB extra ONNX exports (the fast-path models) into
+the HF cache; `--warmup` covers it.
 
 *Settings portability (audited 2026-07-10):* `settings.toml` load/validate/show/edit is
 already fully cross-platform — pure stdlib `tomllib`, `click.edit`, `os.replace` (atomic on

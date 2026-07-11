@@ -6,8 +6,18 @@ description = "Diarization helper: speakrs (pyannote community-1-class pipeline,
 license = "MIT"
 publish = false
 
-[dependencies]
+# CoreML is a macOS-only speakrs feature; elsewhere the pipeline runs on
+# ONNX Runtime's CPU provider (GPU providers are a later opt-in).
+[target.'cfg(target_os = "macos")'.dependencies]
 speakrs = { version = "0.5", features = ["coreml"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+speakrs = { version = "0.5" }
 
 [profile.release]
 lto = true
+
+# Vendored speakrs 0.5.0 with two CPU-throughput patches (see vendor/VENDOR.md);
+# drop this section once they land upstream.
+[patch.crates-io]
+speakrs = { path = "vendor/speakrs" }

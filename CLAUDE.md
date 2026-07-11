@@ -44,4 +44,6 @@ real PipeWire); GitHub Actions Ubuntu is the stable-distro CI reference.
   against the real backend, not mocks.
 - **Diarization licensing**: DiariZen is CC-BY-NC — unshippable here.
   speakrs (cross-platform: CoreML on mac, ORT elsewhere) is the chosen
-  auto-count estimator, still immature at v0.5.0.
+  auto-count estimator, still immature at v0.5.0 — **vendored with two
+  CPU-throughput patches** in `native/stenodiar/vendor/` (see VENDOR.md;
+  upstream candidates, re-check on every speakrs release).
