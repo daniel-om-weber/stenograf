@@ -87,6 +87,45 @@ def test_audio_channel_count_reads_the_wav_header(tmp_path):
     assert audio_channel_count(stereo) == 2
 
 
+def test_parse_channel_count_from_ffmpeg_banner():
+    from stenograf.audio import _parse_channel_count
+
+    aac = (
+        "  Stream #0:0[0x1](und): Audio: aac (LC) (mp4a / 0x6134706D), "
+        "44100 Hz, stereo, fltp, 128 kb/s"
+    )
+    assert _parse_channel_count(aac) == 2
+    assert _parse_channel_count("  Stream #0:0: Audio: pcm_s16le, 16000 Hz, mono, s16") == 1
+    assert _parse_channel_count("  Stream #0:0: Audio: pcm_s24le, 48000 Hz, 6 channels, s32") == 6
+    # Deliberate fallbacks — both take the mono decode path.
+    assert _parse_channel_count("  Stream #0:0: Audio: ac3, 48000 Hz, 5.1(side), fltp") == 1
+    assert _parse_channel_count("Input #0, mov, from 'video-only.mov':") == 1
+
+
+def test_bundled_ffmpeg_decodes_without_a_system_install(tmp_path, monkeypatch):
+    """End to end against the wheel's ffmpeg: encode an m4a, read its channel
+    count from the stream banner, decode it — all with an empty PATH, proving
+    no system ffmpeg/ffprobe is involved."""
+    import subprocess
+
+    from stenograf.audio import ffmpeg_exe
+
+    tone = (np.sin(np.linspace(0, 400, SAMPLE_RATE)) * 10000).astype(np.int16)
+    stereo = tmp_path / "stereo.wav"
+    write_wav(stereo, np.column_stack([tone, tone]).ravel(), channels=2)
+    m4a = tmp_path / "call.m4a"
+    subprocess.run(
+        [ffmpeg_exe(), "-nostdin", "-loglevel", "error", "-i", str(stereo), str(m4a)],
+        check=True,
+    )
+
+    monkeypatch.setenv("PATH", "")
+    assert audio_channel_count(m4a) == 2
+    loaded = load_audio(m4a)
+    assert loaded.dtype == np.float32
+    assert len(loaded) > 0
+
+
 def _bursts(spans, seconds=6, amplitude=0.3):
     pcm = np.zeros(seconds * SAMPLE_RATE, dtype=np.float32)
     for start, end in spans:

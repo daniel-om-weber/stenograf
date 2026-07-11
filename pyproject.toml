@@ -59,6 +59,11 @@ dependencies = [
     # the plain stdout view (stenograf.view) stays textual-free.
     "textual>=8.2.8",
     "livekit>=1.1",
+    # Bundled static ffmpeg (per-platform wheels), resolved via
+    # imageio_ffmpeg.get_ffmpeg_exe(): `steno transcribe` decodes .mov/.m4a/…
+    # with no system ffmpeg install, and every platform decodes with the same
+    # ffmpeg build. IMAGEIO_FFMPEG_EXE overrides the binary if ever needed.
+    "imageio-ffmpeg>=0.6",
 ]
 
 [project.optional-dependencies]

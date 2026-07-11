@@ -2,14 +2,14 @@
 
 Everything downstream of capture works on one format: mono 16 kHz float32
 in [-1, 1]. Plain 16-bit WAV files are read natively; everything else
-(.mov, .m4a, other rates/channel counts) goes through ffmpeg.
+(.mov, .m4a, other rates/channel counts) goes through the bundled ffmpeg
+(imageio-ffmpeg ships a static binary in the wheel — no system install).
 """
 
 from __future__ import annotations
 
-import shutil
+import re
 import subprocess
-import sys
 import wave
 from pathlib import Path
 
@@ -105,8 +105,10 @@ def load_audio_channels(path: Path | str) -> list[np.ndarray]:
 def audio_channel_count(path: Path | str) -> int:
     """Channel count from the container header — no PCM decode.
 
-    Falls back to 1 when it cannot tell (no ffprobe, unreadable header): those
-    files then take the mono decode path exactly as before.
+    Non-WAV headers come from the bundled ffmpeg's stream banner (imageio-ffmpeg
+    ships no ffprobe, and one binary is enough). Falls back to 1 when it cannot
+    tell (unreadable header, an exotic surround layout): those files then take
+    the mono decode path exactly as before.
     """
     path = Path(path)
     if path.suffix.lower() == ".wav":
@@ -114,21 +116,34 @@ def audio_channel_count(path: Path | str) -> int:
             with wave.open(str(path), "rb") as w:
                 return w.getnchannels()
         except (wave.Error, EOFError):
-            pass  # not a readable RIFF — fall through to ffprobe
-    if shutil.which("ffprobe") is None:
+            pass  # not a readable RIFF — fall through to ffmpeg
+    # `-i` with no output exits non-zero after printing the stream banner;
+    # that banner is all we want.
+    proc = subprocess.run(
+        [ffmpeg_exe(), "-nostdin", "-hide_banner", "-i", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    return _parse_channel_count(proc.stderr)
+
+
+def _parse_channel_count(banner: str) -> int:
+    """Channel count from an ffmpeg stream banner, 1 when it cannot tell.
+
+    The banner names the layout (``mono``/``stereo``) for standard cases and
+    falls back to ``N channels`` for headerless counts; surround layouts
+    (``5.1`` …) don't occur in voice recordings and land on the mono path.
+    """
+    line = next((ln for ln in banner.splitlines() if "Audio:" in ln), None)
+    if line is None:
         return 1
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-select_streams", "a:0",
-        "-show_entries", "stream=channels",
-        "-of", "csv=p=0",
-        str(path),
-    ]  # fmt: skip
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    try:
-        return int(proc.stdout.strip()) if proc.returncode == 0 else 1
-    except ValueError:
+    if match := re.search(r"(\d+) channels", line):
+        return int(match.group(1))
+    if re.search(r"\bmono\b", line):
         return 1
+    if re.search(r"\bstereo\b", line):
+        return 2
+    return 1
 
 
 _ENVELOPE_BLOCK_S = 0.1
@@ -171,19 +186,19 @@ def channels_look_independent(left: np.ndarray, right: np.ndarray) -> tuple[bool
     return correlation < INDEPENDENT_MAX_CORRELATION, correlation
 
 
+def ffmpeg_exe() -> str:
+    """Path to the ffmpeg binary bundled in the imageio-ffmpeg wheel.
+
+    Every platform decodes with the same static build (``IMAGEIO_FFMPEG_EXE``
+    overrides it); the import is lazy so WAV-only paths never pay for it."""
+    import imageio_ffmpeg
+
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
 def _load_via_ffmpeg(path: Path, *, channels: int = 1) -> np.ndarray:
-    if shutil.which("ffmpeg") is None:
-        hint = (
-            "brew install ffmpeg"
-            if sys.platform == "darwin"
-            else "install it via your package manager"
-        )
-        raise RuntimeError(
-            f"reading {path.suffix or 'this'} files requires ffmpeg on PATH "
-            f"({hint}); only mono 16 kHz 16-bit WAV works without it"
-        )
     cmd = [
-        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error",
         "-i", str(path),
         "-f", "f32le", "-acodec", "pcm_f32le",
         "-ac", str(channels), "-ar", str(SAMPLE_RATE),

@@ -103,11 +103,21 @@ def test_macos_version_check_parses_and_compares(monkeypatch):
     assert not doctor._macos_version_check().ok  # unparseable → not ok
 
 
-def test_ffmpeg_check_follows_path(monkeypatch):
-    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/ffmpeg")
-    assert doctor._ffmpeg_check().ok
-    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
-    assert not doctor._ffmpeg_check().ok
+def test_ffmpeg_check_reports_the_bundled_binary(monkeypatch):
+    from stenograf import audio
+
+    monkeypatch.setattr(audio, "ffmpeg_exe", lambda: "/bundled/ffmpeg")
+    check = doctor._ffmpeg_check()
+    assert check.ok
+    assert "/bundled/ffmpeg" in check.detail
+
+    def boom():
+        raise RuntimeError("no binary for this platform")
+
+    monkeypatch.setattr(audio, "ffmpeg_exe", boom)
+    check = doctor._ffmpeg_check()
+    assert not check.ok
+    assert "IMAGEIO_FFMPEG_EXE" in check.detail  # the escape hatch is named
 
 
 def test_models_check_reflects_cache(monkeypatch):

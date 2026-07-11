@@ -1088,7 +1088,7 @@ def transcribe(
 
     try:
         split_pcms, correlation = _resolve_split_channels(audio_file, channels_mode)
-    except RuntimeError as exc:  # unreadable input / ffmpeg missing or failed
+    except RuntimeError as exc:  # unreadable input (ffmpeg could not decode it)
         raise click.ClickException(str(exc)) from exc
     if split_pcms is not None and speakers is not None:
         raise click.ClickException(
@@ -1152,7 +1152,7 @@ def transcribe(
 
         try:
             samples = load_audio(audio_file)
-        except RuntimeError as exc:  # unreadable input / ffmpeg missing or failed
+        except RuntimeError as exc:  # unreadable input (ffmpeg could not decode it)
             raise click.ClickException(str(exc)) from exc
         duration = len(samples) / SAMPLE_RATE
         click.echo(f"audio: {audio_file.name} ({_fmt_duration(duration)})")

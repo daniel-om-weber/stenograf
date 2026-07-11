@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import platform
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -168,15 +167,20 @@ def _asr_check() -> Check:
 
 
 def _ffmpeg_check() -> Check:
-    path = shutil.which("ffmpeg")
-    hint = (
-        "brew install ffmpeg" if sys.platform == "darwin" else "install it via your package manager"
-    )
-    return Check(
-        name="ffmpeg",
-        ok=path is not None,
-        detail=path or f"not on PATH — needed to read anything but 16 kHz WAV ({hint})",
-    )
+    """The decoder ships in the wheel (imageio-ffmpeg); failure here means a
+    broken install (or an unsupported platform), not a missing system tool."""
+    from stenograf.audio import ffmpeg_exe
+
+    try:
+        path = ffmpeg_exe()
+    except Exception as exc:
+        return Check(
+            name="ffmpeg",
+            ok=False,
+            detail=f"bundled ffmpeg unavailable ({exc}) — reinstall stenograf, or "
+            "point IMAGEIO_FFMPEG_EXE at an ffmpeg binary",
+        )
+    return Check(name="ffmpeg", ok=True, detail=path)
 
 
 def _models_check() -> Check:
