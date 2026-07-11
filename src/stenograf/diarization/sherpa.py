@@ -9,6 +9,7 @@ this on Mac in a later step, behind the same ``Diarizer`` interface.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -21,6 +22,17 @@ from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 MIN_EMBED_SECONDS = 0.5
 """Turns shorter than this are too brief for a reliable voice embedding; they are
 skipped when a cluster has any longer turn, and used only as a last resort."""
+
+_MAX_THREADS = 8
+"""sherpa defaults every model to a single ORT intra-op thread, which makes
+diarization the finalize bottleneck (measured 2026-07-12 on a 12-core box,
+2.3-min clip: 48.7s at 1 thread vs 17.9s at 8, identical turns). Scaling
+plateaus around 8 threads, so cap there and leave the rest of the machine to
+the ASR and the UI."""
+
+
+def _num_threads() -> int:
+    return min(_MAX_THREADS, os.cpu_count() or 1)
 
 
 class SherpaOnnxDiarizer(Diarizer):
@@ -52,8 +64,11 @@ class SherpaOnnxDiarizer(Diarizer):
                 pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
                     model=str(segmentation)
                 ),
+                num_threads=_num_threads(),
             ),
-            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding)),
+            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                model=str(embedding), num_threads=_num_threads()
+            ),
             clustering=sherpa_onnx.FastClusteringConfig(
                 num_clusters=num_clusters, threshold=self._threshold
             ),
@@ -112,7 +127,9 @@ class SherpaOnnxDiarizer(Diarizer):
                 models.SPEAKER_EMBEDDING, self._progress
             )
             self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
-                sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding))
+                sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                    model=str(embedding), num_threads=_num_threads()
+                )
             )
         return self._extractor
 
