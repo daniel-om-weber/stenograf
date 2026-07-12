@@ -1,11 +1,10 @@
 # Code cleanup & maintainability plan
 
-> **Status: §2 bugs (B1–B5) and Pass 1 (§3, T1–T10) COMPLETE 2026-07-12.**
-> Produced by a six-subsystem deep review (CLI, live orchestration,
-> audio/capture, ML pipeline, notes/config, eval/native/tests). Next: Pass 2
-> (§4, dismantle cli.py), then §5 capture (ideally before the Phase 5
-> CachyOS capture work), then §6. Tick checkboxes and update this
-> blockquote as tasks land.
+> **Status: §2 bugs (B1–B5), Pass 1 (§3, T1–T10), and Pass 2 (§4, C1–C8)
+> COMPLETE 2026-07-12.** Produced by a six-subsystem deep review (CLI, live
+> orchestration, audio/capture, ML pipeline, notes/config, eval/native/tests).
+> Next: Pass 3 (§5 capture — do it before the Phase 5 CachyOS capture work),
+> then §6. Tick checkboxes and update this blockquote as tasks land.
 
 This document is the backlog for making the codebase clean and maintainable.
 It is **behavior-preserving by charter**: no task here changes what stenograf
@@ -246,10 +245,12 @@ Order matters; each step is committable alone.
   `_atomic_write_text` → gone via T3, `_cleanup_checkpoints`,
   `_checkpoint_writer`, `_prepare_output`) move to `output.py`. Keep entry
   point `stenograf.cli:main` working (`pyproject.toml`).
-- [ ] **C8 — re-seam the CLI tests.** With C1–C7 done, replace the ~15 tests
+- [x] **C8 — re-seam the CLI tests.** With C1–C7 done, replace the ~15 tests
   patching `cli._load_backends` / `cli._load_diarizer` / `cli._prefetch_models`
   with fakes injected via the new loaders/factory seams. Tests should get
-  simpler, not just move.
+  simpler, not just move. *(tests patch `stenograf.loaders` directly — the
+  `cli.loaders` re-export is gone; a `stub_backends` fixture replaced the
+  20 copy-pasted stub lines.)*
 
 Low/cosmetic (fold into whichever commit touches the line): ~~map
 `transcript.FORMATS` to callables~~ (done, C7); ~~stale "archiving"

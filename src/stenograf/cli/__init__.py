@@ -13,9 +13,7 @@ import sys
 
 import click
 
-# Re-exported so tests reach the backend-factory seam as ``cli.loaders``
-# (C8 re-seams them onto injected fakes).
-from stenograf import __version__, loaders  # noqa: F401
+from stenograf import __version__
 
 # format and run carry no commands but are bound here so every cli submodule
 # is reachable as an attribute of the package (tests patch through them).
