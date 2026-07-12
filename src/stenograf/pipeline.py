@@ -8,6 +8,7 @@ interleaves the results. ``steno transcribe`` runs it on a file.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import replace
 from typing import Protocol
@@ -242,7 +243,8 @@ def merge_words_turns(
     provisional; words outside every turn take the nearest turn's speaker.
     """
     ordered = sorted(words, key=lambda w: w.start)
-    return _group_runs(ordered, lambda word: _assign(word, turns), max_gap)
+    index = _TurnIndex(turns)
+    return _group_runs(ordered, lambda word: _assign(word, index), max_gap)
 
 
 def group_words(
@@ -304,17 +306,69 @@ def _group_runs(
     return entries
 
 
-def _assign(word: Word, turns: list[SpeakerTurn]) -> tuple[str, bool]:
-    if not turns:
-        return "S0", False
+class _TurnIndex:
+    """Turn lookup by word midpoint for :func:`merge_words_turns`.
+
+    Assigning every word by scanning the full turn list is O(words × turns) —
+    quadratic in meeting length. Sorting the turns by start once, with a
+    running max of end, bounds each lookup to the few turns that can still
+    reach the midpoint.
+    """
+
+    def __init__(self, turns: list[SpeakerTurn]) -> None:
+        self._turns = sorted(turns, key=lambda t: t.start)
+        self._starts = [t.start for t in self._turns]
+        # Running max of end over the sorted prefix (and the turn holding it):
+        # once it drops to the midpoint no earlier turn can cover it, and when
+        # nothing covers, that turn is the nearest one ending at or before it.
+        self._max_end: list[float] = []
+        self._max_end_turn: list[SpeakerTurn] = []
+        for t in self._turns:
+            if not self._max_end or t.end > self._max_end[-1]:
+                self._max_end.append(t.end)
+                self._max_end_turn.append(t)
+            else:
+                self._max_end.append(self._max_end[-1])
+                self._max_end_turn.append(self._max_end_turn[-1])
+
+    def covering(self, midpoint: float) -> list[SpeakerTurn]:
+        """All turns with ``start <= midpoint < end``, in start order."""
+        found = []
+        i = bisect_right(self._starts, midpoint) - 1
+        while i >= 0 and self._max_end[i] > midpoint:
+            if self._turns[i].end > midpoint:
+                found.append(self._turns[i])
+            i -= 1
+        found.reverse()
+        return found
+
+    def nearest(self, midpoint: float) -> SpeakerTurn | None:
+        """The turn closest to an uncovered midpoint (``None`` with no turns).
+
+        With nothing covering the midpoint, every turn starting at or before
+        it also ends at or before it — the candidate is the latest such end —
+        and every other turn starts after it — the candidate is the earliest
+        such start.
+        """
+        hi = bisect_right(self._starts, midpoint)
+        before = self._max_end_turn[hi - 1] if hi else None
+        after = self._turns[hi] if hi < len(self._turns) else None
+        if before is None or after is None:
+            return before or after
+        return before if midpoint - before.end <= after.start - midpoint else after
+
+
+def _assign(word: Word, turns: _TurnIndex) -> tuple[str, bool]:
     midpoint = (word.start + word.end) / 2
-    covering = [t for t in turns if t.start <= midpoint < t.end]
+    covering = turns.covering(midpoint)
     if len(covering) == 1:
         return covering[0].speaker, False
     if covering:  # overlapping speech
         best = max(covering, key=lambda t: min(t.end, word.end) - max(t.start, word.start))
         return best.speaker, True
-    nearest = min(turns, key=lambda t: max(t.start - midpoint, midpoint - t.end))
+    nearest = turns.nearest(midpoint)
+    if nearest is None:
+        return "S0", False
     return nearest.speaker, False
 
 

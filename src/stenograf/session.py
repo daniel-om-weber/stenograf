@@ -712,6 +712,39 @@ class _TailCheckpointer(threading.Thread):
             self.error = exc
 
 
+class _LiveCheckpointer:
+    """Groups the live pass's committed words into checkpoint entries, tail-only.
+
+    ``committed_words`` is append-only and time-ordered, and :func:`group_words`
+    closes an entry on the silence gap to its successor — a gap later words can
+    only confirm, never reopen. Entries once closed are therefore final: each
+    flush regroups only the words from the newest (still-open) run on, keeping
+    the flush stream O(new words) — the same tail-only discipline as
+    :class:`_TailCheckpointer` — instead of regrouping the whole meeting every
+    interval.
+    """
+
+    def __init__(self, wrap: Callable[[list[TranscriptEntry]], Transcript]) -> None:
+        self._wrap = wrap
+        self._closed: dict[Channel, list[TranscriptEntry]] = {}
+        self._grouped: dict[Channel, int] = {}  # words already inside closed entries
+
+    def transcript(self, decoders: dict[Channel, StreamingDecoder]) -> Transcript:
+        entries: list[TranscriptEntry] = []
+        for channel, decoder in decoders.items():
+            closed = self._closed.setdefault(channel, [])
+            grouped = self._grouped.get(channel, 0)
+            fresh = group_words(list(decoder.committed_words[grouped:]), _CHANNEL_COARSE[channel])
+            for entry in fresh[:-1]:  # every run but the newest is final
+                closed.append(entry)
+                grouped += len(entry.words)
+            self._grouped[channel] = grouped
+            entries.extend(closed)
+            if fresh:
+                entries.append(fresh[-1])
+        return self._wrap(entries)
+
+
 class MeetingRecorder:
     """Drives a capture session and produces the merged, labelled transcript.
 
@@ -940,8 +973,10 @@ class MeetingRecorder:
             }
         inference_lock = threading.Lock()
 
+        checkpointer = _LiveCheckpointer(self.checkpoint_transcript)
+
         def flush_checkpoint() -> None:
-            transcript = self.live_checkpoint(decoders)
+            transcript = checkpointer.transcript(decoders)
             if transcript.entries:
                 checkpoint.write(transcript)  # type: ignore[union-attr]  # None-guarded below
 
@@ -1077,8 +1112,13 @@ class MeetingRecorder:
             reused = live_words.get(plan.channel) if live_words is not None else None
             note = ", reusing live decodes" if reused is not None else ""
             view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)}{note})")
-            samples = store.samples(plan.channel)
             diarizer = None if plan.num_speakers == 1 else self.diarizer
+            # Audio is read only by a re-decode (no live words to reuse) or by
+            # a diarization pass over actual speech; the common single-speaker
+            # reuse path regroups the words alone. Don't concatenate a
+            # full-meeting buffer it would just discard.
+            needs_audio = reused is None or (diarizer is not None and bool(reused))
+            samples = store.samples(plan.channel) if needs_audio else np.zeros(0, np.float32)
             raw = self._finalize_channel_safe(samples, diarizer, plan, view, reused_words=reused)
             labeled = relabel_speakers(raw, plan.label_template)
             detected = len({e.speaker for e in labeled})
@@ -1123,8 +1163,7 @@ class MeetingRecorder:
                 else ""
             )
             view.status(
-                f"echo backstop: dropped {dropped} mic line(s) "
-                f"duplicating remote speech{cause}"
+                f"echo backstop: dropped {dropped} mic line(s) duplicating remote speech{cause}"
             )
         by_channel[Channel.MIC] = kept
         return dropped
@@ -1211,11 +1250,12 @@ class MeetingRecorder:
         Zero inference: the words are read straight off each channel's decoder and
         grouped into entries under a channel-coarse label (the live pass has no
         diarization). The on-stop :meth:`finalize` replaces this entirely.
+
+        One-shot form: a fresh :class:`_LiveCheckpointer` groups the full
+        history. The live run keeps a single instance across flushes instead,
+        so each flush regroups only the new tail.
         """
-        entries: list[TranscriptEntry] = []
-        for channel, decoder in decoders.items():
-            entries.extend(group_words(list(decoder.committed_words), _CHANNEL_COARSE[channel]))
-        return self.checkpoint_transcript(entries)
+        return _LiveCheckpointer(self.checkpoint_transcript).transcript(decoders)
 
     def tail_entries(
         self, store: SessionStore, plan: ChannelPlan, start_s: float, end_s: float
