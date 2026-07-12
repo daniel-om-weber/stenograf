@@ -1009,6 +1009,14 @@ and the notebook re-run stay open.** Measured on a 56.4 s piper-TTS clip
   **silent-mic watchdog stayed quiet** (no false-positive). With headphones
   output the mic heard nothing intelligible and all content arrived via the
   system channel — expected on this box.
+- **Launcher meeting start was broken on Windows — found by the by-eye check,
+  fixed 2026-07-12:** every meeting died instantly with `[Errno 9] Bad file
+  descriptor` — click.echo under Textual's redirected stdio trips click's
+  Windows-only console probe (`msvcrt.get_osfhandle` on the proxy fd → EBADF)
+  at `make_provider`'s capture-device line. The loader seams now take
+  `announce=` (None = click CLI behavior; the TUIs pass their status sinks),
+  which also surfaces real loader progress in the meeting header. Verified by
+  driving the real launcher headlessly: capture → finalize → saved.
 - **Still open (needs the notebook, real speakers):** the ≥30-min
   **speakers-not-headphones** AEC meeting (far-end re-anchor / echo-leak across
   long system-silence gaps — item 3's AEC bullet and item 4's long run); the
