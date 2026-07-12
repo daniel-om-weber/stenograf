@@ -134,7 +134,7 @@ Real defects found during review. Each is a standalone commit with a test.
 Each bullet: create/choose the one canonical home, port all call sites,
 delete the copies, keep behavior identical.
 
-- [ ] **T3 — `atomic_write_text(path, text)`** in a small shared util (or
+- [x] **T3 — `atomic_write_text(path, text)`** *(home: `output.py`; models.py keeps its streaming `.part` dance — binary downloads, not text)* in a small shared util (or
   `output.py`). Currently 4 implementations in 2 idioms:
   `notes/export.py:121-124` and `cli.py:1490-1499` (byte-identical `.tmp` +
   `os.replace`, no parent mkdir) vs `profiles.py:134-139` and

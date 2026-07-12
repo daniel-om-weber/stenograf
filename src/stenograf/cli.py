@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 from stenograf import __version__
 from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
 from stenograf.doctor import run_checks
+from stenograf.output import atomic_write_text
 from stenograf.transcript import DEFAULT_FORMATS, FORMATS, Transcript
 
 # Sentinel for --record-audio given without a value (write next to the transcript).
@@ -1482,22 +1483,9 @@ def _write_transcript(
     paths = []
     for fmt in formats:
         path = out_dir / f"{basename}.{fmt}"
-        _atomic_write_text(path, getattr(transcript, FORMATS[fmt])())
+        atomic_write_text(path, getattr(transcript, FORMATS[fmt])())
         paths.append(path)
     return paths
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` via a temp file + ``os.replace`` (atomic on POSIX/Windows).
-
-    A plain ``write_text`` truncates in place, so a crash mid-write leaves a
-    corrupt file — and for the ``.partial`` crash-recovery checkpoint that also
-    destroys the previous good copy, defeating the artifact meant to survive the
-    crash. Writing a sibling temp then atomically renaming means a reader only ever
-    sees the whole old file or the whole new one (PLAN.md §5 Phase 3→4 audit)."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _cleanup_checkpoints(out_dir: Path, basename: str) -> None:
@@ -1830,7 +1818,7 @@ def settings_edit() -> None:
     path = settings_path()
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_text(path, SETTINGS_TEMPLATE)
+        atomic_write_text(path, SETTINGS_TEMPLATE)
         click.echo(f"created {path}")
     click.edit(filename=str(path))
     try:
@@ -2124,8 +2112,8 @@ def _generate_and_write_notes(
 
     md_path = out_dir / f"{basename}.notes.md"
     json_path = out_dir / f"{basename}.notes.json"
-    _atomic_write_text(md_path, notes.to_markdown())
-    _atomic_write_text(json_path, notes.to_json())
+    atomic_write_text(md_path, notes.to_markdown())
+    atomic_write_text(json_path, notes.to_json())
     written = [md_path, json_path]
 
     target = None if no_export else (export_dir or settings.export_dir)

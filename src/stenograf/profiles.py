@@ -29,12 +29,13 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
+
+from stenograf.output import atomic_write_text
 
 DEFAULT_THRESHOLD = 0.5
 """Cosine similarity at or above which a cluster is deemed the same speaker as a
@@ -125,18 +126,12 @@ class ProfileStore:
 
     def save(self) -> None:
         """Write the store to ``self.path`` atomically (temp file + replace)."""
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
             {"version": _STORE_VERSION, "profiles": [p._to_json() for p in self._profiles]},
             ensure_ascii=False,
             indent=2,
         )
-        with tempfile.NamedTemporaryFile(
-            "w", dir=self.path.parent, suffix=".part", delete=False, encoding="utf-8"
-        ) as tmp:
-            tmp.write(payload)
-            tmp_path = Path(tmp.name)
-        tmp_path.replace(self.path)
+        atomic_write_text(self.path, payload)
 
     # ---- reads ------------------------------------------------------------
 

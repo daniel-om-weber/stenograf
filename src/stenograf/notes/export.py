@@ -9,12 +9,12 @@ dir`` at any directory and every summarized meeting lands there as
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import datetime
 from pathlib import Path
 
 from stenograf.notes.model import ActionItem, MeetingNotes
+from stenograf.output import atomic_write_text
 from stenograf.transcript import Transcript
 
 _SLUG_MAX_CHARS = 80
@@ -41,7 +41,7 @@ def export_note(
     while path.exists():
         path = directory / f"{base} ({n}).md"
         n += 1
-    _atomic_write_text(path, render_note(transcript, notes, created_at=created_at))
+    atomic_write_text(path, render_note(transcript, notes, created_at=created_at))
     return path
 
 
@@ -116,12 +116,6 @@ def _slug(title: str) -> str:
     slug = _REPLACE.sub(" ", slug)
     slug = " ".join(slug.split())
     return slug[:_SLUG_MAX_CHARS].rstrip() or "Meeting"
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def _fmt(seconds: float) -> str:
