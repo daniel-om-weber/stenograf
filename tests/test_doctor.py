@@ -81,9 +81,9 @@ def test_asr_check_present_and_absent(monkeypatch):
     # Pin the backend under test: the built-in default is capability-based,
     # so the bare default names a different backend per machine.
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
-    monkeypatch.setattr(doctor, "_installed", lambda module: True)
+    monkeypatch.setattr(doctor, "installed", lambda module: True)
     assert doctor._asr_check().ok
-    monkeypatch.setattr(doctor, "_installed", lambda module: False)
+    monkeypatch.setattr(doctor, "installed", lambda module: False)
     absent = doctor._asr_check()
     assert not absent.ok
     assert "parakeet-mlx" in absent.detail

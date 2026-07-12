@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from stenograf.settings import Settings
 
-from stenograf import __version__
+from stenograf import __version__, loaders
 from stenograf.config import Language, MeetingProfile
 from stenograf.doctor import run_checks
 from stenograf.output import atomic_write_text
@@ -547,13 +547,13 @@ def start(
     out_dir, basename, audio_default = _prepare_output(out, created_at, settings, force=force)
 
     started = time.monotonic()
-    asr, vad, diarizer = _load_backends(
+    asr, vad, diarizer = loaders.load_backends(
         need_diarizer=any(p.num_speakers != 1 for p in plans),
         asr_backend=settings.asr.backend,
         asr_provider=settings.asr.provider,
     )
     reid = (
-        _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
+        loaders.load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
         if diarizer is not None
         else None
     )
@@ -1015,13 +1015,13 @@ def _transcribe_split_channels(
             click.echo(f"warning: {message}", err=True)
 
     plans = plan_channels(profile)
-    asr, vad, diarizer = _load_backends(
+    asr, vad, diarizer = loaders.load_backends(
         need_diarizer=any(p.num_speakers != 1 for p in plans),
         asr_backend=asr_backend,
         asr_provider=asr_provider,
     )
     reid = (
-        _load_reid(
+        loaders.load_reid(
             enabled=use_reid,
             threshold=reid_threshold,
             store_path=profile_store or profile.speaker_profile_store,
@@ -1285,14 +1285,14 @@ def transcribe(
                 " — downmixed to mono; --channels split to treat them as separate voices"
             )
 
-        asr, vad, diarizer = _load_backends(
+        asr, vad, diarizer = loaders.load_backends(
             need_diarizer=speakers != 1,
             asr_backend=settings.asr.backend,
             asr_provider=settings.asr.provider,
         )
         started = time.monotonic()  # post-load: the speed stat must not count a model download
         reid = (
-            _load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
+            loaders.load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
             if diarizer is not None
             else None
         )
@@ -1362,116 +1362,6 @@ def transcribe(
         notes_flag=notes_flag,
         print_markdown=print_markdown,
     )
-
-
-def _load_backends(
-    *, need_diarizer: bool, asr_backend: str | None = None, asr_provider: str | None = None
-):
-    """Load the finalize backends (ASR, VAD, and optionally the diarizer).
-
-    Shared by ``start`` and ``transcribe`` so both use the same committed
-    defaults (parakeet-mlx, Silero VAD, sherpa-onnx diarization). ``asr_backend``
-    and ``asr_provider`` are the ``[asr]`` settings; ``STENOGRAF_ASR_BACKEND`` /
-    ``STENOGRAF_ASR_PROVIDER`` still override them.
-    """
-    from stenograf import models
-    from stenograf.asr import create_backend
-    from stenograf.asr.providers import (
-        PROVIDER_LABELS,
-        default_provider_name,
-        validate_provider_name,
-    )
-    from stenograf.asr.registry import default_backend_name, get_spec
-    from stenograf.doctor import _installed
-    from stenograf.vad import SileroVAD
-
-    # The selection seam; a Linux backend registers alongside. Gate on the
-    # spec's requires (as doctor and the model prefetch already do) so an
-    # unknown or uninstalled backend is a CLI error, not an import traceback.
-    name = default_backend_name(asr_backend)
-    try:
-        spec = get_spec(name)
-        provider = validate_provider_name(default_provider_name(asr_provider))
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-    missing = [module for module in spec.requires if not _installed(module)]
-    if missing:
-        raise click.ClickException(
-            f"ASR backend {spec.label} is not installed here (missing: "
-            f"{', '.join(missing)}) — reinstall stenograf, or select another backend "
-            "via [asr] backend in settings.toml or STENOGRAF_ASR_BACKEND"
-        )
-    asr = create_backend(name)
-    # Duck-typed: only the ORT-backed backend carries a provider; a configured
-    # provider on a backend with its own runtime (MLX) is noted, not an error,
-    # so one settings file can serve a mac and a Windows box.
-    if hasattr(asr, "provider"):
-        asr.provider = provider  # pyright: ignore[reportAttributeAccessIssue] — PLAN-CLEANUP.md C4
-    elif provider != "cpu":
-        click.echo(f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
-    click.echo(f"asr: loading {getattr(asr, 'model_id', None) or asr.name}")
-    asr.load()
-    if fallback := getattr(asr, "provider_fallback", None):
-        click.secho(
-            f"asr: acceleration unavailable ({fallback}) — using CPU", fg="yellow", err=True
-        )
-    elif (active := getattr(asr, "active_provider", None)) not in (None, "cpu"):
-        click.echo(f"asr: accelerated ({PROVIDER_LABELS[active]})")
-    vad = SileroVAD(models.fetch(models.SILERO_VAD, _model_progress))
-    diarizer = _load_diarizer(need=need_diarizer)
-    return asr, vad, diarizer
-
-
-def _load_diarizer(*, need: bool = True):
-    """Build the diarizer (or ``None`` when a channel is single-speaker).
-
-    When the stenodiar helper is present, unknown speaker counts go through
-    speakrs' VBx estimation and explicit counts through sherpa; without it,
-    sherpa handles both (its estimate mode over-splits badly — the helper is
-    what makes "don't specify a count" usable).
-
-    A seam of its own so ``steno profiles enroll`` computes its voiceprints with
-    the exact same embedding path the finalize pass uses at match time (the two
-    must agree for the cosine match to mean anything), and so tests can inject a
-    fake without a real ONNX model.
-    """
-    if not need:
-        return None
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
-    from stenograf.diarization.speakrs import (
-        DiarizerHelperNotFoundError,
-        SpeakrsCliDiarizer,
-        find_stenodiar,
-    )
-
-    sherpa = SherpaOnnxDiarizer(progress=_model_progress)
-    try:
-        find_stenodiar()
-    except DiarizerHelperNotFoundError:
-        return sherpa
-    return SpeakrsCliDiarizer(sherpa)
-
-
-def _load_reid(*, enabled: bool, threshold: float | None, store_path: Path | None = None):
-    """Build the cross-meeting re-ID resolver from the saved profile store, or ``None``.
-
-    Returns ``None`` when re-ID is turned off or the store holds no profiles for
-    the active embedding model — so the finalize pass is byte-for-byte unchanged
-    without enrolled profiles (match-only, zero behaviour change; PLAN.md Phase 3
-    Task 1b/1c). ``threshold=None`` uses the store default (0.5). ``store_path``
-    (``--profile-store`` / ``MeetingProfile.speaker_profile_store``) overrides the
-    default store location.
-    """
-    if not enabled:
-        return None
-    from stenograf import models
-    from stenograf.profiles import ProfileStore, SpeakerReID
-
-    store = ProfileStore.load(store_path)
-    model = models.SPEAKER_EMBEDDING.name
-    if not store.for_model(model):
-        return None
-    return SpeakerReID(store, model, threshold=threshold)
 
 
 def _prepare_output(
@@ -1547,11 +1437,6 @@ def _cleanup_checkpoints(out_dir: Path, basename: str) -> None:
         (out_dir / f"{basename}.partial.{fmt}").unlink(missing_ok=True)
 
 
-def _model_progress(name: str, done: int, total: int) -> None:
-    if total and done == 0:
-        click.echo(f"model: downloading {name} ({total >> 20} MB)")
-
-
 def _fmt_duration(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
@@ -1596,7 +1481,7 @@ def setup(models_only: bool) -> None:
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.
     try:
-        _prefetch_models()
+        loaders.prefetch_models()
     except Exception as exc:
         raise click.ClickException(
             f"model download failed: {exc} — re-run `steno setup`, or let the models "
@@ -1642,31 +1527,6 @@ def _grant_capture_permissions() -> None:
         )
     click.echo(click.style("✓", fg="green") + " microphone and system-audio access granted.")
     click.echo("  The grant is per launching app — a different terminal or IDE prompts again.")
-
-
-def _prefetch_models() -> None:
-    """Download the VAD/diarization assets and the ASR weights now, not mid-meeting."""
-    from stenograf import models
-    from stenograf.asr import backend_model_id, create_backend, get_spec
-    from stenograf.doctor import _installed
-
-    for asset in (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING):
-        if models.cached_path(asset) is not None:
-            click.echo(f"model: {asset.name} already cached")
-        else:
-            models.fetch(asset, _model_progress)
-
-    # Gate on the backend's runtime deps the way doctor does: the backend
-    # *module* imports fine everywhere (its heavy imports live inside load()),
-    # so a try/except around create_backend() would not catch a missing MLX.
-    spec = get_spec()
-    if not all(_installed(module) for module in spec.requires):
-        click.echo(f"ASR backend {spec.label} is not installed here; skipping its weights")
-        return
-    click.echo(f"model: fetching + loading ASR weights ({backend_model_id(spec)})")
-    backend = create_backend()
-    backend.load()  # pulls from HuggingFace on first run, then verifies it loads
-    backend.unload()
 
 
 @main.group()
@@ -1740,8 +1600,7 @@ def profiles_enroll(
     from stenograf.profiles import ProfileStore
 
     samples = load_audio(audio_file)
-    diarizer = _load_diarizer(need=True)
-    assert diarizer is not None  # need=True exits instead of returning None
+    diarizer = loaders.load_diarizer()
     result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers)
     if not result.embeddings:
         raise click.ClickException(

@@ -79,8 +79,11 @@ def _settings_check() -> Check:
     return Check(name="Settings", ok=True, detail=f"{path} OK")
 
 
-def _installed(module: str) -> bool:
-    """Whether ``module`` is importable, without importing it."""
+def installed(module: str) -> bool:
+    """Whether ``module`` is importable, without importing it.
+
+    Public: the backend loaders gate on a spec's ``requires`` with the same
+    check doctor uses, so "is it installed" can never disagree between them."""
     try:
         return importlib.util.find_spec(module) is not None
     except (ImportError, ValueError):
@@ -202,7 +205,7 @@ def _asr_check() -> Check:
     from stenograf.asr import backend_model_id, get_spec
 
     spec = get_spec()  # the default backend (STENOGRAF_ASR_BACKEND override applies)
-    missing = [module for module in spec.requires if not _installed(module)]
+    missing = [module for module in spec.requires if not installed(module)]
     if not missing:
         model = backend_model_id(spec)
         detail = f"{spec.label} ready"

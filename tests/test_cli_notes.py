@@ -233,7 +233,7 @@ def test_notes_export_defaults_from_settings_and_no_export_disables(tmp_path, fa
 
 
 def test_transcribe_with_notes_flag_writes_notes(tmp_path, monkeypatch, fake_backend):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -247,7 +247,7 @@ def test_transcribe_with_notes_flag_writes_notes(tmp_path, monkeypatch, fake_bac
 
 
 def test_transcribe_notes_failure_is_nonfatal(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     monkeypatch.setattr(
         notes_pkg, "create_backend", lambda name, settings: FakeBackend(available=False)
     )
@@ -269,7 +269,7 @@ def test_transcribe_without_notes_flag_never_touches_a_backend(tmp_path, monkeyp
     def explode(name, settings):
         raise AssertionError("--notes was not given; no backend may be created")
 
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     monkeypatch.setattr(notes_pkg, "create_backend", explode)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)

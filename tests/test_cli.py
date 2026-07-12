@@ -72,7 +72,7 @@ def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
 
 
 def test_transcribe_writes_outputs_and_detects_language(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -88,7 +88,7 @@ def test_transcribe_writes_outputs_and_detects_language(tmp_path, monkeypatch):
 def test_transcribe_records_parameter_provenance_in_json(tmp_path, monkeypatch):
     # No --lang and no --speakers: both are auto, so the JSON must record them as
     # detected (language via LID, count via the finalize), not as user-set (3b).
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -101,7 +101,7 @@ def test_transcribe_records_parameter_provenance_in_json(tmp_path, monkeypatch):
 
 
 def test_transcribe_explicit_language_is_recorded_as_explicit(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -117,7 +117,7 @@ def test_transcribe_explicit_language_is_recorded_as_explicit(tmp_path, monkeypa
 
 
 def test_transcribe_format_writes_requested_subtitle_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -143,7 +143,7 @@ def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
-    monkeypatch.setattr(cli, "_load_backends", recording_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", recording_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -158,7 +158,7 @@ def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
 
 
 def test_transcribe_no_diarization_conflicts_with_a_speaker_count(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -185,7 +185,7 @@ def test_cleanup_checkpoints_removes_every_checkpoint_format(tmp_path):
 
 
 def test_transcribe_rejects_unknown_format(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -200,7 +200,7 @@ def test_transcribe_rejects_unknown_format(tmp_path, monkeypatch):
 def test_transcribe_glossary_corrects_the_transcript(tmp_path, monkeypatch):
     # FakeASR emits "...eine gute idee für uns alle"; the glossary snaps "idee"
     # to its canonical spelling in the written transcript.
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -260,7 +260,7 @@ def _voice_channel_pcms(seconds: int = 4) -> tuple[np.ndarray, np.ndarray]:
 
 
 def test_transcribe_auto_splits_independent_voice_channels(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
     write_stereo_wav(audio, *_voice_channel_pcms())
 
@@ -280,7 +280,7 @@ def test_transcribe_auto_splits_independent_voice_channels(tmp_path, monkeypatch
 
 
 def test_transcribe_channels_mix_forces_the_downmix(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
     write_stereo_wav(audio, *_voice_channel_pcms())
 
@@ -297,7 +297,7 @@ def test_transcribe_channels_mix_forces_the_downmix(tmp_path, monkeypatch):
 def test_transcribe_auto_downmixes_a_stereo_image(tmp_path, monkeypatch):
     # The same programme on both channels (panned): every voice would be
     # transcribed twice if split, so auto must keep the classic downmix.
-    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_channel_backends)
     left, _ = _voice_channel_pcms()
     audio = tmp_path / "meeting.wav"
     write_stereo_wav(audio, left, (left * 0.5).astype(np.int16))
@@ -312,7 +312,7 @@ def test_transcribe_auto_downmixes_a_stereo_image(tmp_path, monkeypatch):
 
 
 def test_transcribe_split_needs_two_channels(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -325,7 +325,7 @@ def test_transcribe_split_needs_two_channels(tmp_path, monkeypatch):
 
 
 def test_transcribe_split_conflicts_with_speakers(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
     write_stereo_wav(audio, *_voice_channel_pcms())
 
@@ -338,7 +338,7 @@ def test_transcribe_split_conflicts_with_speakers(tmp_path, monkeypatch):
 
 
 def test_transcribe_local_remote_require_split_channels(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -355,7 +355,7 @@ def test_transcribe_split_matches_start_replay(tmp_path, monkeypatch):
     # pipeline, so it must produce the same transcript as replaying the two
     # channels through `steno start` (batch mode; --no-aec because a recording
     # is past capture-time cancellation).
-    monkeypatch.setattr(cli, "_load_backends", fake_channel_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_channel_backends)
     left, right = _voice_channel_pcms()
     stereo = tmp_path / "stereo.wav"
     write_stereo_wav(stereo, left, right)
@@ -394,7 +394,7 @@ def test_transcribe_split_matches_start_replay(tmp_path, monkeypatch):
 def test_start_replay_streams_live_captions_by_default(tmp_path, monkeypatch):
     # Default is live: a non-TTY runner gets the plain caption stream, then the
     # on-stop finalize swap. The whole live path runs through the real orchestrator.
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -417,7 +417,7 @@ def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
-    monkeypatch.setattr(cli, "_load_backends", recording_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", recording_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -442,7 +442,7 @@ def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
 
 
 def test_start_no_live_uses_the_batch_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -471,7 +471,7 @@ def test_start_no_live_uses_the_batch_path(tmp_path, monkeypatch):
 def test_start_surfaces_estimated_local_count_as_editable(tmp_path, monkeypatch):
     # Omitting --local estimates the mic count (Stage 3a); the summary shows the
     # detected count and the exact flag to lock or correct it by re-running.
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -486,7 +486,7 @@ def test_start_surfaces_estimated_local_count_as_editable(tmp_path, monkeypatch)
 
 
 def test_start_reports_given_counts_without_a_correction_hint(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -512,7 +512,7 @@ def test_start_reports_given_counts_without_a_correction_hint(tmp_path, monkeypa
 
 
 def test_transcribe_surfaces_estimated_count_as_editable(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -524,7 +524,7 @@ def test_transcribe_surfaces_estimated_count_as_editable(tmp_path, monkeypatch):
 
 
 def test_flush_interval_and_checkpoint_interval_are_aliases(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -596,7 +596,7 @@ def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
             served.append(self)
             return meeting()
 
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     monkeypatch.setattr(cli, "_stdout_is_tty", lambda: True)  # pretend we're on a terminal
     monkeypatch.setattr("stenograf.tui.TextualLiveView", FakeTUI)
     mic = tmp_path / "mic.wav"
@@ -659,7 +659,7 @@ def _isolate_store(tmp_path, monkeypatch):
 
 
 def _patch_diarizer(monkeypatch, diarizer):
-    monkeypatch.setattr(cli, "_load_diarizer", lambda *, need=True: diarizer)
+    monkeypatch.setattr(cli.loaders, "load_diarizer", lambda: diarizer)
 
 
 def test_profiles_list_empty(tmp_path, monkeypatch):
@@ -752,8 +752,8 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
 
     monkeypatch.setattr(
-        cli,
-        "_load_backends",
+        cli.loaders,
+        "load_backends",
         lambda *, need_diarizer, asr_backend=None, asr_provider=None: (FakeASR(), None, diar),
     )
     reid = CliRunner().invoke(
@@ -820,7 +820,7 @@ class TestSpeakerCountHints:
 def test_start_with_no_speakers_errors_cleanly(tmp_path, monkeypatch):
     # --local 0 --remote 0 violates MeetingProfile; the CLI must report it as a
     # clean error, not leak the ValueError traceback (a web UI feeds form values in).
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
     result = CliRunner().invoke(
@@ -837,7 +837,7 @@ def test_start_with_no_speakers_errors_cleanly(tmp_path, monkeypatch):
 
 def _start_batch(tmp_path, monkeypatch, *extra):
     """Run a minimal, deterministic ``steno start`` (batch replay) and return the result."""
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
     return CliRunner().invoke(
@@ -900,7 +900,7 @@ def test_transcribe_out_refusal_happens_before_any_transcription(tmp_path, monke
     def explode(*, need_diarizer, asr_backend=None, asr_provider=None):
         raise AssertionError("backends must not load when --out is refused")
 
-    monkeypatch.setattr(cli, "_load_backends", explode)
+    monkeypatch.setattr(cli.loaders, "load_backends", explode)
     out = tmp_path / "custom"
     out.mkdir()
     (out / "transcript.md").write_text("previous meeting", encoding="utf-8")
@@ -913,7 +913,7 @@ def test_transcribe_out_refusal_happens_before_any_transcription(tmp_path, monke
 
 
 def test_transcribe_writes_into_the_output_home_by_default(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -956,7 +956,7 @@ def _helper_wrapper(tmp_path, *forced_args):
 def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
     fetched = []
-    monkeypatch.setattr(cli, "_prefetch_models", lambda: fetched.append(True))
+    monkeypatch.setattr(cli.loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
     assert result.exit_code == 0, result.output
     assert "granted" in result.output
@@ -970,7 +970,7 @@ def test_setup_fails_when_helper_dies_without_mic_frames(tmp_path, monkeypatch):
     # emitting only system frames then exiting reproduces that shape.
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path, "--system")))
     fetched = []
-    monkeypatch.setattr(cli, "_prefetch_models", lambda: fetched.append(True))
+    monkeypatch.setattr(cli.loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
     assert result.exit_code != 0
     assert "denied" in result.output
@@ -982,7 +982,7 @@ def test_setup_models_only_skips_the_permission_step(monkeypatch):
     # code would fail loudly, so success proves it was skipped. Runs on any OS.
     monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)
     fetched = []
-    monkeypatch.setattr(cli, "_prefetch_models", lambda: fetched.append(True))
+    monkeypatch.setattr(cli.loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup", "--models-only"])
     assert result.exit_code == 0, result.output
     assert fetched
@@ -1016,9 +1016,9 @@ def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):
     import stenograf.asr as asr
     from stenograf import doctor
 
-    monkeypatch.setattr(doctor, "_installed", lambda module: True)  # deps "present" (any OS)
+    monkeypatch.setattr(doctor, "installed", lambda module: True)  # deps "present" (any OS)
     monkeypatch.setattr(asr, "create_backend", lambda name=None, **kw: PrefetchASR())
-    cli._prefetch_models()
+    cli.loaders.prefetch_models()
     assert set(fetched) == {models.PYANNOTE_SEGMENTATION.name, models.SPEAKER_EMBEDDING.name}
     assert PrefetchASR.calls == ["load", "unload"]  # weights pulled and released
 
@@ -1028,14 +1028,14 @@ def test_prefetch_models_skips_asr_when_backend_deps_absent(monkeypatch, tmp_pat
 
     monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
     monkeypatch.setattr(models, "fetch", lambda asset, progress=None: None)
-    monkeypatch.setattr(doctor, "_installed", lambda module: False)  # the Linux shape
+    monkeypatch.setattr(doctor, "installed", lambda module: False)  # the Linux shape
     import stenograf.asr as asr
 
     def boom(name=None, **kw):
         raise AssertionError("create_backend must not run without its deps")
 
     monkeypatch.setattr(asr, "create_backend", boom)
-    cli._prefetch_models()  # must not raise
+    cli.loaders.prefetch_models()  # must not raise
     assert "skipping its weights" in capsys.readouterr().out
 
 
@@ -1046,10 +1046,10 @@ def test_load_backends_refuses_uninstalled_backend(monkeypatch):
 
     from stenograf import doctor
 
-    monkeypatch.setattr(doctor, "_installed", lambda module: False)
+    monkeypatch.setattr(doctor, "installed", lambda module: False)
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
     with pytest.raises(click.ClickException, match="parakeet-mlx is not installed"):
-        cli._load_backends(need_diarizer=False)
+        cli.loaders.load_backends(need_diarizer=False)
 
 
 def test_load_backends_refuses_unknown_backend(monkeypatch):
@@ -1057,7 +1057,7 @@ def test_load_backends_refuses_unknown_backend(monkeypatch):
 
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "no-such-backend")
     with pytest.raises(click.ClickException, match="unknown ASR backend"):
-        cli._load_backends(need_diarizer=False)
+        cli.loaders.load_backends(need_diarizer=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1074,7 +1074,7 @@ def _write_settings(tmp_path, text):
 
 
 def test_settings_formats_are_the_default_but_format_flag_wins(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     _write_settings(tmp_path, '[transcript]\nformats = ["srt"]\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -1095,7 +1095,7 @@ def test_settings_formats_are_the_default_but_format_flag_wins(tmp_path, monkeyp
 
 
 def test_settings_output_dir_replaces_the_home_and_out_flag_wins(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     home = tmp_path / "configured-home"
     # as_posix(): a raw Windows path in a TOML basic string is invalid (\U…).
     _write_settings(tmp_path, f'[output]\ndir = "{home.as_posix()}"\n')
@@ -1117,7 +1117,7 @@ def test_settings_output_dir_replaces_the_home_and_out_flag_wins(tmp_path, monke
 
 
 def test_settings_vocab_merges_with_flags(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     glossary_file = tmp_path / "glossary.txt"
     glossary_file.write_text("Idee\n", encoding="utf-8")
     _write_settings(
@@ -1138,7 +1138,7 @@ def test_settings_vocab_merges_with_flags(tmp_path, monkeypatch):
 
 
 def test_settings_missing_glossary_file_is_a_clean_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     _write_settings(tmp_path, '[vocab]\nglossary_file = "/nonexistent/glossary.txt"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -1151,7 +1151,7 @@ def test_settings_missing_glossary_file_is_a_clean_error(tmp_path, monkeypatch):
 
 
 def test_broken_settings_fail_fast_with_a_clean_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     _write_settings(tmp_path, '[vocab]\nglossry_file = "x"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -1172,7 +1172,7 @@ def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
         calls["asr_provider"] = asr_provider
         return fake_load_backends(need_diarizer=need_diarizer)
 
-    monkeypatch.setattr(cli, "_load_backends", recording)
+    monkeypatch.setattr(cli.loaders, "load_backends", recording)
     _write_settings(tmp_path, '[asr]\nbackend = "parakeet"\nprovider = "dml"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -1188,7 +1188,7 @@ def test_settings_profile_store_stays_off_the_transcript(tmp_path, monkeypatch):
     # The configured store must feed re-ID loading only: MeetingProfile serializes
     # into every transcript, and keeping machine-local paths out of shared files
     # is the settings file's founding rule.
-    monkeypatch.setattr(cli, "_load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
     _write_settings(
         tmp_path, f'[speakers]\nprofile_store = "{tmp_path.as_posix()}/profiles.json"\n'
     )

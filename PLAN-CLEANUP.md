@@ -210,7 +210,7 @@ Order matters; each step is committable alone.
   `_transcribe_split_channels`. One dataclass, one
   `resolve_run_config(settings, ...)` builder. Also dedupe the
   `_notes_after_run(...)` tail (`cli.py:576-583` / `1299-1306`).
-- [ ] **C3 — extract the backend factory to `stenograf/loaders.py`.**
+- [x] **C3 — extract the backend factory to `stenograf/loaders.py`.**
   Move `_load_backends`, `_load_diarizer`, `_load_reid`,
   `_prefetch_models`. While moving: promote `doctor._installed` to a public
   util (CLI currently imports a sibling's private helper at `cli.py:1330`
