@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,6 +15,8 @@ import click
 
 if TYPE_CHECKING:
     import numpy as np
+
+    from stenograf.settings import Settings
 
 from stenograf import __version__
 from stenograf.config import Language, MeetingProfile
@@ -89,6 +92,79 @@ def _resolve_formats(spec: str | None, settings) -> list[str]:
     if spec is not None:
         return _parse_formats(spec)
     return list(settings.transcript.formats or DEFAULT_FORMATS)
+
+
+@dataclass(frozen=True)
+class _RunConfig:
+    """Flag+settings resolution shared by ``start`` and ``transcribe``.
+
+    One place applies the standard order (flag beats settings.toml beats
+    built-in default) to everything both commands consume. The settings-derived
+    ``reid_store`` feeds re-ID loading only — never the MeetingProfile, which
+    serializes into every transcript, and the settings file's whole point is
+    keeping machine-local paths out of shared files. An explicit
+    ``--profile-store`` is recorded on the profile by the caller, as before."""
+
+    settings: Settings
+    write_formats: list[str]
+    glossary_terms: tuple[str, ...]
+    attendee_names: tuple[str, ...]
+    glossary_threshold: float | None
+    reid_threshold: float | None
+    reid_store: Path | None
+
+
+def _resolve_run_config(
+    *,
+    formats: str | None,
+    glossary: tuple[str, ...],
+    glossary_file: Path | None,
+    attendee: tuple[str, ...],
+    glossary_threshold: float | None,
+    reid_threshold: float | None,
+    profile_store: Path | None,
+) -> _RunConfig:
+    settings = _cli_settings()
+    glossary_terms, attendee_names = _collect_terms(
+        glossary, glossary_file, attendee, vocab=settings.vocab
+    )
+    return _RunConfig(
+        settings=settings,
+        write_formats=_resolve_formats(formats, settings),
+        glossary_terms=glossary_terms,
+        attendee_names=attendee_names,
+        glossary_threshold=(
+            settings.vocab.glossary_threshold if glossary_threshold is None else glossary_threshold
+        ),
+        reid_threshold=(
+            settings.speakers.reid_threshold if reid_threshold is None else reid_threshold
+        ),
+        reid_store=profile_store or settings.speakers.profile_store,
+    )
+
+
+def _finish_run(
+    transcript: Transcript,
+    out_dir: Path,
+    basename: str,
+    *,
+    created_at: datetime,
+    settings,
+    notes_flag: bool,
+    print_markdown: bool,
+) -> None:
+    """The tail both commands share: optional notes, optional stdout print."""
+    if notes_flag:
+        _notes_after_run(
+            transcript,
+            out_dir,
+            basename,
+            created_at=created_at,
+            notes_settings=settings.notes,
+        )
+    if print_markdown:
+        click.echo()
+        click.echo(transcript.to_markdown(), nl=False)
 
 
 def _parse_formats(spec: str) -> list[str]:
@@ -413,20 +489,19 @@ def start(
     """Start transcribing a meeting (capture → finalize on stop)."""
     from stenograf.session import MeetingRecorder, plan_channels
 
-    settings = _cli_settings()
-    write_formats = _resolve_formats(formats, settings)
-    glossary_terms, attendee_names = _collect_terms(
-        glossary, glossary_file, attendee, vocab=settings.vocab
+    cfg = _resolve_run_config(
+        formats=formats,
+        glossary=glossary,
+        glossary_file=glossary_file,
+        attendee=attendee,
+        glossary_threshold=glossary_threshold,
+        reid_threshold=reid_threshold,
+        profile_store=profile_store,
     )
-    if glossary_threshold is None:
-        glossary_threshold = settings.vocab.glossary_threshold
-    if reid_threshold is None:
-        reid_threshold = settings.speakers.reid_threshold
-    # The [speakers] profile_store default feeds re-ID loading only — never the
-    # MeetingProfile, which serializes into every transcript (the settings file's
-    # whole point is keeping machine-local paths out of shared files). An explicit
-    # --profile-store is recorded on the profile, as before.
-    reid_store = profile_store or settings.speakers.profile_store
+    settings, write_formats = cfg.settings, cfg.write_formats
+    glossary_terms, attendee_names = cfg.glossary_terms, cfg.attendee_names
+    glossary_threshold, reid_threshold = cfg.glossary_threshold, cfg.reid_threshold
+    reid_store = cfg.reid_store
 
     local_speakers, remote_speakers = _apply_no_diarization(
         no_diarization, local_speakers, remote_speakers
@@ -574,17 +649,15 @@ def start(
     elapsed = time.monotonic() - started
     _report_speaker_counts(recorder.speaker_counts)
     click.echo(f"wrote {', '.join(p.name for p in paths)} → {out_dir} ({elapsed:.1f}s)")
-    if notes_flag:
-        _notes_after_run(
-            transcript,
-            out_dir,
-            basename,
-            created_at=created_at,
-            notes_settings=settings.notes,
-        )
-    if print_markdown:
-        click.echo()
-        click.echo(transcript.to_markdown(), nl=False)
+    _finish_run(
+        transcript,
+        out_dir,
+        basename,
+        created_at=created_at,
+        settings=settings,
+        notes_flag=notes_flag,
+        print_markdown=print_markdown,
+    )
 
 
 def _describe_channel(channel) -> tuple[str, str]:
@@ -1118,18 +1191,19 @@ def transcribe(
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
 
-    settings = _cli_settings()
-    write_formats = _resolve_formats(formats, settings)
-    glossary_terms, attendee_names = _collect_terms(
-        glossary, glossary_file, attendee, vocab=settings.vocab
+    cfg = _resolve_run_config(
+        formats=formats,
+        glossary=glossary,
+        glossary_file=glossary_file,
+        attendee=attendee,
+        glossary_threshold=glossary_threshold,
+        reid_threshold=reid_threshold,
+        profile_store=profile_store,
     )
-    if glossary_threshold is None:
-        glossary_threshold = settings.vocab.glossary_threshold
-    if reid_threshold is None:
-        reid_threshold = settings.speakers.reid_threshold
-    # Settings-derived store path stays off the MeetingProfile (it serializes
-    # into the transcript); see the matching comment in ``start``.
-    reid_store = profile_store or settings.speakers.profile_store
+    settings, write_formats = cfg.settings, cfg.write_formats
+    glossary_terms, attendee_names = cfg.glossary_terms, cfg.attendee_names
+    glossary_threshold, reid_threshold = cfg.glossary_threshold, cfg.reid_threshold
+    reid_store = cfg.reid_store
     given_language = Language(lang) if lang else None
     language = given_language
 
@@ -1279,17 +1353,15 @@ def transcribe(
         f"wrote {', '.join(p.name for p in paths)} → {out_dir} "
         f"({elapsed:.1f}s, {speed:.1f}x realtime)"
     )
-    if notes_flag:
-        _notes_after_run(
-            transcript,
-            out_dir,
-            basename,
-            created_at=created_at,
-            notes_settings=settings.notes,
-        )
-    if print_markdown:
-        click.echo()
-        click.echo(transcript.to_markdown(), nl=False)
+    _finish_run(
+        transcript,
+        out_dir,
+        basename,
+        created_at=created_at,
+        settings=settings,
+        notes_flag=notes_flag,
+        print_markdown=print_markdown,
+    )
 
 
 def _load_backends(

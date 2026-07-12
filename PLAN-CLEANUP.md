@@ -202,7 +202,7 @@ Order matters; each step is committable alone.
   `MeetingRecorder.finalize_samples`) so **both** branches collapse to
   "load backends → one library call → write". Deletes the CLI's shadow
   pipeline; glossary/LID/provenance return to the library layer.
-- [ ] **C2 — `ResolvedRunConfig` + one resolution helper.** The identical
+- [x] **C2 — `ResolvedRunConfig` + one resolution helper.** The identical
   settings preamble — `_cli_settings()`, `_resolve_formats`,
   `_collect_terms(vocab=...)`, `glossary_threshold` default,
   `reid_threshold` default, `reid_store` fallback — is copy-pasted at
