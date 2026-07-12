@@ -506,7 +506,9 @@ was retired; the web UI is dropped outright. Phase 5 (Linux) is designed and
 active as of 2026-07-10 (ONNX backend on the Mac first, then capture on the
 CachyOS notebook — dev-environment plan in §5). Phase 6 (Windows) was scoped
 2026-07-11 on a Windows 11 notebook and its capture track shipped the same day
-— portability audit + build summary at the end of this section. The per-task build logs of the completed phases were removed from
+— portability audit + build summary at the end of this section. Phase 7 (the
+`steno` launcher TUI — a mouse-driven Textual home screen for non-terminal
+users) was planned 2026-07-12; plan at the end of this section. The per-task build logs of the completed phases were removed from
 this file on 2026-07-10; they live in its git history (and in PLAN-AEC.md for
 echo cancellation).
 
@@ -946,6 +948,115 @@ crashed on ✓/← — the CLI entry now reconfigures stdout/stderr with
 AEC behaviour on Windows hardware still to be exercised). Still open in Phase 6: real
 `steno transcribe`/`steno start` with downloaded models, the `windows-latest` CI job +
 Windows classifier, setup messaging, the DirectML notes backend, the stenodiar port.
+
+---
+
+### Phase 7 plan — `steno` launcher TUI (planned 2026-07-12)
+
+**Goal.** Make the tool usable by people who don't live in a terminal: one
+command — bare `steno` — opens a mouse-driven, button-based Textual app that
+walks the user through *start a live meeting → transcribe a recording →
+generate notes*, plus a double-clickable launcher so they never type the
+command at all. The CLI subcommands stay the primary scripting interface and
+are untouched.
+
+**Scope decision (recorded 2026-07-12).** Two tiers were considered for the
+non-terminal audience. **Tier 1 — this phase**: the Textual launcher +
+auto-generated desktop shortcuts (`.command` on macOS, `.desktop` with
+`Terminal=true` on Linux, `.lnk` on Windows). **Tier 2 — deliberately
+deferred, not designed**: a system-tray app (`pystray`/`rumps`) with packaged
+signed installers (PyInstaller/Briefcase). Tier 2 is a phase-sized project
+(bundling the ONNX/MLX stacks; on macOS the capture TCC permission would
+attach to the new app bundle, reworking the `doctor`/`setup` permission flow)
+and is not worth building before real non-terminal users ask to double-click
+an installer. A browser UI is off the table regardless — the no-web-UI
+philosophy lock (§ product philosophy) is load-bearing here.
+
+**Library decision: Textual** — already a dependency (the live-caption view),
+full mouse support (buttons, focus-follows-click, scroll, hover) in every
+terminal we target, real widgets (`Button`, `Input`, `Select`, `DirectoryTree`,
+`ProgressBar`, modal screens), and one codebase across all three platforms.
+No alternatives owed a spike: `prompt_toolkit` is a widget layer we'd have to
+build ourselves, `urwid` is dated, Rich alone isn't interactive.
+
+**Architecture.** One long-lived `StenografApp`; each workflow is a `Screen`
+pushed onto its stack, one module per screen in a new `stenograf/ui/` package
+(mirroring `cli/`'s one-module-per-command layout):
+
+- `HomeScreen` — large labeled buttons: Start meeting / Transcribe a
+  recording / Generate notes / Settings / Doctor.
+- `MeetingSetupScreen` — the few choices that matter (profile, language,
+  notes on/off), defaults resolved from settings.toml through the same
+  resolution helpers the CLI uses (`cli/run.py`).
+- `MeetingScreen` — **today's `LiveApp` converted from `App` to
+  `Screen[Transcript]`** (see below). Its DONE phase becomes a results view
+  with next actions ("Open folder", "Generate notes") instead of "q to exit".
+- `TranscribeScreen` — `DirectoryTree` file picker → pipeline in a
+  `@work(thread=True)` worker → `ProgressBar` driven by the existing
+  `transcribe` progress callback.
+- `NotesScreen` — "last meeting" default (the `notes --last` semantics) plus
+  a plain file dialog. **Guardrail:** this screen stays a dumb file picker —
+  never a meeting list with metadata; that would be the meeting browser the
+  product philosophy forbids, and keeping the screen dumb enforces the lock
+  structurally.
+- `SettingsScreen` / `DoctorScreen` — read-only rendering of `settings show`
+  with an "open in $EDITOR" button; doctor output in a scrollable log. A
+  settings *form* is where TUI effort balloons — explicitly out of scope.
+
+**The one structurally risky piece — `LiveApp` → `MeetingScreen`.** The
+`compose()`, CSS, `push_*` methods, bindings, and the 1 Hz tick move nearly
+verbatim (Screens support all of them). What changes is lifecycle: instead of
+the meeting thread exiting the app, the screen `dismiss(transcript)`es back to
+Home via Textual's typed screen results. `steno start` keeps working unchanged
+by running the *same* app with `MeetingScreen` as the initial screen and
+exiting on its dismissal — one codepath, two entries; no CLI-TUI/launcher-TUI
+fork. This conversion is done **early** (Task 2), while it's small.
+
+**What deliberately does not change** (these seams are why the launcher is
+cheap):
+
+- **`LiveView` stays the only live-event channel.** `TextualLiveView` keeps
+  marshalling worker-thread events via `call_from_thread`; it just targets the
+  screen instead of the app. `PlainLiveView`, the batch echoes, and the
+  orchestrator are untouched. No new event paths.
+- **The UI is a fourth thin client of the library** (same C7 rule as the CLI):
+  screens gather inputs and call library entry points; logic a screen needs
+  that the CLI lacks goes into the library, never the screen.
+- **The minimal-redraw budget** (TEXTUAL_FPS pinning, `animation_level =
+  "none"`, one 1 Hz timer) moves up to `StenografApp` and covers every screen.
+  The import-order-sensitive FPS pinning lives in one module both `tui` and
+  `ui` import first.
+- **Lazy imports:** bare `steno` reaches `ui` through the click group
+  (`invoke_without_command=True`) the same way `start` imports `tui` today —
+  pipes and scripts never pay the Textual import.
+
+**Maintainability rules.**
+
+1. Screens never run domain work inline: anything slow (transcribe, finalize,
+   notes, doctor) runs in a `@work(thread=True)` worker; blocking the loop
+   freezes rendering *and* deadens bindings (the `action_stop` lesson).
+2. Exception to rule 1: notes generation goes through the existing notes entry
+   point only — the MLX backend is bound to its import thread
+   ([[mlx-weights-thread-local-streams]]); never a fresh worker calling
+   `mlx_lm`.
+3. Every screen keeps plain-text mirrors of what it renders (the
+   `committed_lines` / `header_text()` pattern), so tests under Textual's
+   `run_test()` pilot assert behavior without scraping widget internals.
+4. Screens start dumb and grow only on demand (read-only settings, plain file
+   dialogs).
+
+**Sequencing** (each task ships working; none blocks Phase 5/6 work):
+
+1. `stenograf/ui/` package + `StenografApp` + `HomeScreen`; bare `steno`
+   launches it (buttons may be stubs).
+2. `LiveApp` → `MeetingScreen` conversion + its tests; `steno start` runs the
+   same screen directly (the risky bit, done early).
+3. `MeetingSetupScreen` with settings-backed defaults; Home → Setup → Meeting
+   → results end to end.
+4. `TranscribeScreen` (picker + worker + progress).
+5. `NotesScreen` + read-only `SettingsScreen`/`DoctorScreen`.
+6. `steno setup` drops the platform launcher (`.command` / `.desktop` /
+   `.lnk`) and the README gains the "for non-terminal users" paragraph.
 
 ---
 
