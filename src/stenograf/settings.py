@@ -101,9 +101,11 @@ class SettingsError(Exception):
 
 SETTINGS_TEMPLATE = """\
 # stenograf settings — every key is optional; a missing key keeps its built-in
-# default. Uncomment what you want to change, then save; the file is validated
-# on the way out. `steno settings show` prints the effective configuration and
-# where each value comes from. A CLI flag always beats this file.
+# default. The commented values below *are* those defaults (a key that has no
+# default shows an example instead), so a line you have not uncommented tells you
+# what the tool is already doing. Uncomment what you want to change, then save;
+# the file is validated on the way out. `steno settings show` prints the effective
+# configuration and where each value comes from. A CLI flag always beats this file.
 
 [transcript]
 # formats = ["md", "json", "txt"]          # any of: md, json, txt, srt, vtt
@@ -117,9 +119,9 @@ SETTINGS_TEMPLATE = """\
 # dir = "~/Documents/Meetings"             # where meeting folders are created
 
 [speakers]
-# diarization = true                       # true = separate speakers within a channel
-#                                          # (off by default; a per-run flag or a
-#                                          # speaker count above 1 also enables it)
+# diarization = false                      # true = separate speakers within a channel
+#                                          # (a per-run --diarization flag or a speaker
+#                                          # count above 1 also turns it on)
 # reid_threshold = 0.5                     # voice-match strictness 0-1
 # profile_store = "~/steno/profiles.json"  # re-ID voiceprint store location
 
@@ -128,9 +130,9 @@ SETTINGS_TEMPLATE = """\
 # provider = "cpu"                         # cpu | dml (Windows GPU) | cuda | auto
 
 [notes]
-# auto = true                              # generate notes after every meeting
-#                                          # (off by default: --notes / the launcher
-#                                          # switch asks for them per run)
+# auto = false                             # true = generate notes after every meeting
+#                                          # (--notes on the CLI or the launcher's
+#                                          # switch asks for them per run instead)
 # backend = "mlx"                          # mlx | ollama | command
 # model = "Qwen/Qwen3-8B-MLX-4bit"         # HF repo id (mlx) / Ollama tag
 # command = ["claude", "-p"]               # argv for backend = "command"
