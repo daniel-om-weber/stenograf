@@ -36,6 +36,12 @@ def to_int16(samples: np.ndarray) -> np.ndarray:
     return np.clip(np.round(samples * 32768.0), -32768, 32767).astype(np.int16)
 
 
+def l2_normalize(vector: np.ndarray) -> np.ndarray:
+    """Unit-norm a vector (voice embeddings); the zero vector passes through."""
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 0 else vector
+
+
 def sample_index(seconds: float) -> int:
     """Seconds → sample index, the ONE conversion for ASR window boundaries.
 

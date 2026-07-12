@@ -72,6 +72,12 @@ class OllamaBackend:
         data = self._get("/api/tags")
         return [m["name"] for m in data.get("models", ())]
 
+    def has_model(self) -> bool:
+        """Whether :attr:`model` is pulled — "qwen3" matches an installed
+        "qwen3:latest"; a fully tagged name is exact."""
+        installed = self.installed_models()
+        return self.model in set(installed) | {m.split(":", 1)[0] for m in installed}
+
     def complete(self, messages: list[dict[str, str]], schema: dict) -> str:
         if not self._model_verified:
             # One tags round-trip per backend instance, not per map-reduce chunk.
@@ -90,14 +96,13 @@ class OllamaBackend:
             raise NotesGenerationError(f"unexpected /api/chat response: {data!r:.200}") from exc
 
     def _verify_model(self) -> None:
-        installed = self.installed_models()
-        # "qwen3" matches an installed "qwen3:latest"; a fully tagged name is exact.
-        names = set(installed) | {m.split(":", 1)[0] for m in installed}
-        if self.model not in names:
-            raise ModelNotFoundError(
-                f"model {self.model!r} is not pulled in Ollama at {self.url} "
-                f"(`ollama pull {self.model}`); installed: {', '.join(installed) or 'none'}"
-            )
+        if self.has_model():
+            return
+        installed = self.installed_models()  # failure path only: re-fetch for the message
+        raise ModelNotFoundError(
+            f"model {self.model!r} is not pulled in Ollama at {self.url} "
+            f"(`ollama pull {self.model}`); installed: {', '.join(installed) or 'none'}"
+        )
 
     def _get(self, endpoint: str) -> dict:
         request = urllib.request.Request(self.url + endpoint)

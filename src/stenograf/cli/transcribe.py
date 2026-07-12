@@ -19,8 +19,12 @@ from stenograf.cli.format import (
 )
 from stenograf.cli.run import (
     _apply_no_diarization,
+    _echo_glossary,
     _finish_run,
+    _load_reid,
+    _notes_options,
     _prepare_output,
+    _reid_format_options,
     _resolve_run_config,
     _vocab_options,
 )
@@ -104,40 +108,9 @@ if TYPE_CHECKING:
     help="A human-readable title for this transcription (recorded in the "
     "transcript and used by the notes prompt and the combined-note export).",
 )
-@click.option(
-    "--reid/--no-reid",
-    "use_reid",
-    default=True,
-    help="Relabel diarized speakers to saved profile names when their voice matches "
-    "(cross-meeting re-identification). No effect without enrolled profiles.",
-)
-@click.option(
-    "--reid-threshold",
-    type=click.FloatRange(0, 1),
-    default=None,
-    help="Cosine similarity required to match a saved profile "
-    "[default: [speakers] reid_threshold in settings.toml, else 0.5].",
-)
-@click.option(
-    "--format",
-    "formats",
-    default=None,
-    metavar="LIST",
-    help="Comma-separated transcript formats to write: md, json, txt, srt, vtt "
-    "[default: [transcript] formats in settings.toml, else md,json,txt]. txt is "
-    "plain prose without speakers or timestamps; srt/vtt re-flow speaker turns "
-    "into subtitle cues.",
-)
+@_reid_format_options
 @_vocab_options
-@click.option(
-    "--notes",
-    "notes_flag",
-    is_flag=True,
-    help="After the transcript is written, generate LLM meeting notes "
-    "(summary, decisions, action items) with the backend configured in "
-    "settings.toml. Non-fatal: a notes failure never loses the transcript.",
-)
-@click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
+@_notes_options
 def transcribe(
     audio_file: Path,
     lang: str | None,
@@ -233,8 +206,7 @@ def transcribe(
             f"  {reason} — transcribing per channel: left → Local, right → Remote"
             + ("; --channels mix to downmix" if correlation is not None else "")
         )
-        if glossary_terms or attendee_names:
-            click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
+        _echo_glossary(glossary_terms, attendee_names)
         profile = MeetingProfile(
             language=given_language,
             local_speakers=local_speakers,
@@ -276,15 +248,8 @@ def transcribe(
             asr_provider=settings.asr.provider,
         )
         started = time.monotonic()  # post-load: the speed stat must not count a model download
-        reid = (
-            loaders.load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
-            if diarizer is not None
-            else None
-        )
-        if reid is not None:
-            click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
-        if glossary_terms or attendee_names:
-            click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
+        reid = _load_reid(diarizer, enabled=use_reid, threshold=reid_threshold, store=reid_store)
+        _echo_glossary(glossary_terms, attendee_names)
 
         def progress(stage: str, done: int, total: int) -> None:
             if stage == STAGE_ASR and done == 0:
@@ -422,17 +387,12 @@ def _transcribe_split_channels(
         asr_backend=asr_backend,
         asr_provider=asr_provider,
     )
-    reid = (
-        loaders.load_reid(
-            enabled=use_reid,
-            threshold=reid_threshold,
-            store_path=profile_store or profile.speaker_profile_store,
-        )
-        if diarizer is not None
-        else None
+    reid = _load_reid(
+        diarizer,
+        enabled=use_reid,
+        threshold=reid_threshold,
+        store=profile_store or profile.speaker_profile_store,
     )
-    if reid is not None:
-        click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
     recorder = MeetingRecorder(
         profile,
         asr=asr,

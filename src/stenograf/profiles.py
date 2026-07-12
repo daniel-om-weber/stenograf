@@ -35,6 +35,7 @@ from pathlib import Path
 
 import numpy as np
 
+from stenograf.audio import l2_normalize
 from stenograf.output import atomic_write_text
 
 DEFAULT_THRESHOLD = 0.5
@@ -69,7 +70,8 @@ class SpeakerProfile:
 
     def similarity(self, embedding: np.ndarray) -> float:
         """Cosine similarity to another embedding (both treated as unit vectors)."""
-        return float(_unit(self.embedding) @ _unit(np.asarray(embedding, dtype=np.float32)))
+        other = l2_normalize(np.asarray(embedding, dtype=np.float32))
+        return float(l2_normalize(self.embedding) @ other)
 
     def _to_json(self) -> dict:
         return {
@@ -84,7 +86,7 @@ class SpeakerProfile:
         return SpeakerProfile(
             name=data["name"],
             embedding_model=data["embedding_model"],
-            embedding=_unit(np.asarray(data["embedding"], dtype=np.float32)),
+            embedding=l2_normalize(np.asarray(data["embedding"], dtype=np.float32)),
             samples=int(data.get("samples", 1)),
         )
 
@@ -160,7 +162,7 @@ class ProfileStore:
         one-cluster-to-one-profile constraint on top for a whole run.
         """
         threshold = self.threshold if threshold is None else threshold
-        vector = _unit(np.asarray(embedding, dtype=np.float32))
+        vector = l2_normalize(np.asarray(embedding, dtype=np.float32))
         best: tuple[SpeakerProfile, float] | None = None
         for profile in self.for_model(model):
             score = float(profile.embedding @ vector)
@@ -179,7 +181,7 @@ class ProfileStore:
         profile = SpeakerProfile(
             name=name,
             embedding_model=model,
-            embedding=_unit(np.asarray(embedding, dtype=np.float32)),
+            embedding=l2_normalize(np.asarray(embedding, dtype=np.float32)),
             samples=samples,
         )
         self._profiles.append(profile)
@@ -191,8 +193,8 @@ class ProfileStore:
         Lets a re-matched cluster strengthen an existing profile over meetings
         without retaining any past audio. Returns the updated profile (the store
         is mutated in place)."""
-        vector = _unit(np.asarray(embedding, dtype=np.float32))
-        blended = _unit(profile.embedding * profile.samples + vector)
+        vector = l2_normalize(np.asarray(embedding, dtype=np.float32))
+        blended = l2_normalize(profile.embedding * profile.samples + vector)
         updated = replace(profile, embedding=blended, samples=profile.samples + 1)
         self._replace(profile, updated)
         return updated
@@ -243,7 +245,8 @@ class SpeakerReID:
         if not profiles or not embeddings:
             return {}
         units = {
-            cluster: _unit(np.asarray(v, dtype=np.float32)) for cluster, v in embeddings.items()
+            cluster: l2_normalize(np.asarray(v, dtype=np.float32))
+            for cluster, v in embeddings.items()
         }
         scored = [
             (score, cluster, p.name)
@@ -260,11 +263,6 @@ class SpeakerReID:
             mapping[cluster] = name
             claimed.add(name)
         return mapping
-
-
-def _unit(vector: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(vector))
-    return vector / norm if norm > 0 else vector
 
 
 def data_dir() -> Path:

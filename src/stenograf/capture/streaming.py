@@ -157,13 +157,11 @@ class QueueStreamingProvider[TransportT](CaptureProvider):
         self._frame_samples = frame_samples(frame_ms)
         self._clock = SessionClock(clock=clock, reanchor_tolerance_s=reanchor_tolerance_s)
         self._queue: SimpleQueue[AudioFrame | Channel] = SimpleQueue()
-        self._started: set[Channel] = set()
         self._threads: dict[Channel, threading.Thread] = {}
         self._stop_event = threading.Event()
 
     def start(self, channels: set[Channel]) -> None:
         self._clock.start()
-        self._started = set(channels)
         self._stop_event.clear()
         for channel in sorted(channels):
             transport = self._open_channel(channel)
@@ -179,7 +177,7 @@ class QueueStreamingProvider[TransportT](CaptureProvider):
     def frames(self) -> Iterator[AudioFrame]:
         if not self._clock.started:
             raise RuntimeError("frames() called before start()")
-        open_channels = set(self._started)
+        open_channels = set(self._threads)
         while open_channels:
             item = self._queue.get()
             if isinstance(item, AudioFrame):

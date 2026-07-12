@@ -3,7 +3,7 @@
 The real-backend test (``test_diarization_sherpa.py``) is gated on cached ONNX
 models + private audio, so on a fresh checkout / Linux CI ``sherpa.py`` executes
 zero test lines — yet Phase 4 ships this "cross-platform baseline diarizer" to
-Linux. These drive ``diarize_with_embeddings`` and ``_l2_normalize`` through a
+Linux. These drive ``diarize_with_embeddings`` and ``l2_normalize`` through a
 fake ``SpeakerEmbeddingExtractor`` + fake pipeline, so the aggregation logic
 (per-cluster unit-norm mean, duration weighting, empty-cluster omission,
 short-turn fallback, zero-vector guard) is verified without any model.
@@ -19,8 +19,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from stenograf.audio import SAMPLE_RATE
-from stenograf.diarization.sherpa import SherpaOnnxDiarizer, _l2_normalize
+from stenograf.audio import SAMPLE_RATE, l2_normalize
+from stenograf.diarization.sherpa import SherpaOnnxDiarizer
 
 
 class _FakeStream:
@@ -121,6 +121,6 @@ def test_short_only_cluster_falls_back_to_its_short_turns():
 
 
 def test_l2_normalize_guards_the_zero_vector():
-    zero = _l2_normalize(np.zeros(3, dtype=np.float32))
+    zero = l2_normalize(np.zeros(3, dtype=np.float32))
     assert np.all(zero == 0.0) and not np.any(np.isnan(zero))  # no div-by-zero / NaN
-    assert _l2_normalize(np.array([3.0, 4.0, 0.0])) == pytest.approx([0.6, 0.8, 0.0])
+    assert l2_normalize(np.array([3.0, 4.0, 0.0])) == pytest.approx([0.6, 0.8, 0.0])

@@ -18,8 +18,12 @@ from stenograf import loaders
 from stenograf.cli.format import _MEETING_MAX_SPEAKERS, _report_speaker_counts
 from stenograf.cli.run import (
     _apply_no_diarization,
+    _echo_glossary,
     _finish_run,
+    _load_reid,
+    _notes_options,
     _prepare_output,
+    _reid_format_options,
     _resolve_run_config,
     _vocab_options,
 )
@@ -171,30 +175,7 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     "scoring (eval/aec_score.py). Writes meeting audio to disk, like "
     "--record-audio. With --no-aec the triple records the uncancelled baseline.",
 )
-@click.option(
-    "--reid/--no-reid",
-    "use_reid",
-    default=True,
-    help="Relabel diarized speakers to saved profile names when their voice matches "
-    "(cross-meeting re-identification). No effect without enrolled profiles.",
-)
-@click.option(
-    "--reid-threshold",
-    type=click.FloatRange(0, 1),
-    default=None,
-    help="Cosine similarity required to match a saved profile "
-    "[default: [speakers] reid_threshold in settings.toml, else 0.5].",
-)
-@click.option(
-    "--format",
-    "formats",
-    default=None,
-    metavar="LIST",
-    help="Comma-separated transcript formats to write: md, json, txt, srt, vtt "
-    "[default: [transcript] formats in settings.toml, else md,json,txt]. txt is "
-    "plain prose without speakers or timestamps; srt/vtt re-flow speaker turns "
-    "into subtitle cues.",
-)
+@_reid_format_options
 @_vocab_options
 @click.option(
     "--full-finalize",
@@ -204,15 +185,7 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     "finalize pass would (so reuse is the default); this forces the "
     "from-scratch ASR pass for A/B comparison or paranoia.",
 )
-@click.option(
-    "--notes",
-    "notes_flag",
-    is_flag=True,
-    help="After the transcript is written, generate LLM meeting notes "
-    "(summary, decisions, action items) with the backend configured in "
-    "settings.toml. Non-fatal: a notes failure never loses the transcript.",
-)
-@click.option("--print", "print_markdown", is_flag=True, help="Also print the transcript.")
+@_notes_options
 def start(
     lang: str | None,
     local_speakers: int | None,
@@ -307,15 +280,8 @@ def start(
         asr_backend=settings.asr.backend,
         asr_provider=settings.asr.provider,
     )
-    reid = (
-        loaders.load_reid(enabled=use_reid, threshold=reid_threshold, store_path=reid_store)
-        if diarizer is not None
-        else None
-    )
-    if reid is not None:
-        click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
-    if glossary_terms or attendee_names:
-        click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
+    reid = _load_reid(diarizer, enabled=use_reid, threshold=reid_threshold, store=reid_store)
+    _echo_glossary(glossary_terms, attendee_names)
     recorder = MeetingRecorder(
         profile,
         asr=asr,

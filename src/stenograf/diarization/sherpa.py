@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from stenograf import models
-from stenograf.audio import SAMPLE_RATE, to_float32
+from stenograf.audio import SAMPLE_RATE, l2_normalize, to_float32
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 
 MIN_EMBED_SECONDS = 0.5
@@ -119,7 +119,7 @@ class SherpaOnnxDiarizer(Diarizer):
         stream.input_finished()
         if not extractor.is_ready(stream):
             return None
-        return _l2_normalize(np.asarray(extractor.compute(stream), dtype=np.float32))
+        return l2_normalize(np.asarray(extractor.compute(stream), dtype=np.float32))
 
     def _embedder(self):
         if self._extractor is None:
@@ -168,10 +168,5 @@ def cluster_embeddings(
                 weights.append(turn.end - turn.start)
         if vectors:
             mean = np.average(vectors, axis=0, weights=weights)
-            embeddings[speaker] = _l2_normalize(mean)
+            embeddings[speaker] = l2_normalize(mean)
     return embeddings
-
-
-def _l2_normalize(vector: np.ndarray) -> np.ndarray:
-    norm = float(np.linalg.norm(vector))
-    return vector / norm if norm > 0 else vector

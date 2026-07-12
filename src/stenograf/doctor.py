@@ -328,11 +328,10 @@ def _notes_check() -> Check:
                 optional=True,
             )
         try:
-            installed = backend.installed_models()
+            pulled = backend.has_model()
         except NotesBackendError as exc:
             return Check(name=name, ok=False, detail=str(exc), optional=True)
-        names = set(installed) | {m.split(":", 1)[0] for m in installed}
-        if backend.model not in names:
+        if not pulled:
             return Check(
                 name=name,
                 ok=False,

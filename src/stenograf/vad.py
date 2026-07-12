@@ -21,6 +21,20 @@ class SpeechSegment:
     end: float
 
 
+def _drain_vad(vad, origin: float = 0.0) -> list[SpeechSegment]:
+    """Pop sherpa's completed speech runs, converted to seconds on ``origin``'s clock.
+
+    The one place sample counts become segment times — the batch scan and the
+    live stream must agree on this conversion exactly."""
+    segments: list[SpeechSegment] = []
+    while not vad.empty():
+        seg = vad.front
+        start = origin + seg.start / SAMPLE_RATE
+        segments.append(SpeechSegment(start, start + len(seg.samples) / SAMPLE_RATE))
+        vad.pop()
+    return segments
+
+
 class SileroVAD:
     """Silero v5 via sherpa-onnx (ONNX/CPU on every platform)."""
 
@@ -54,20 +68,12 @@ class SileroVAD:
 
         vad = sherpa_onnx.VoiceActivityDetector(self._config, buffer_size_in_seconds=120)
         segments: list[SpeechSegment] = []
-
-        def drain() -> None:
-            while not vad.empty():
-                seg = vad.front
-                start = seg.start / SAMPLE_RATE
-                segments.append(SpeechSegment(start, start + len(seg.samples) / SAMPLE_RATE))
-                vad.pop()
-
         chunk = self._config.silero_vad.window_size
         for offset in range(0, len(samples), chunk):
             vad.accept_waveform(samples[offset : offset + chunk])
-            drain()
+            segments.extend(_drain_vad(vad))
         vad.flush()
-        drain()
+        segments.extend(_drain_vad(vad))
         return segments
 
     def stream(self, origin: float) -> SileroVADStream:
@@ -159,11 +165,7 @@ class SileroVADStream:
         self._drain()
 
     def _drain(self) -> None:
-        while not self._vad.empty():
-            seg = self._vad.front
-            start = self._origin + seg.start / SAMPLE_RATE
-            self._segments.append(SpeechSegment(start, start + len(seg.samples) / SAMPLE_RATE))
-            self._vad.pop()
+        self._segments.extend(_drain_vad(self._vad, self._origin))
 
 
 def pack_windows(

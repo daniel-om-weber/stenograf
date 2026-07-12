@@ -194,6 +194,78 @@ def _vocab_options(func: Callable) -> Callable:
     return func
 
 
+def _reid_format_options(func: Callable) -> Callable:
+    """Shared re-ID and ``--format`` options for ``start`` and ``transcribe``."""
+    for option in reversed(
+        (
+            click.option(
+                "--reid/--no-reid",
+                "use_reid",
+                default=True,
+                help="Relabel diarized speakers to saved profile names when their voice matches "
+                "(cross-meeting re-identification). No effect without enrolled profiles.",
+            ),
+            click.option(
+                "--reid-threshold",
+                type=click.FloatRange(0, 1),
+                default=None,
+                help="Cosine similarity required to match a saved profile "
+                "[default: [speakers] reid_threshold in settings.toml, else 0.5].",
+            ),
+            click.option(
+                "--format",
+                "formats",
+                default=None,
+                metavar="LIST",
+                help="Comma-separated transcript formats to write: md, json, txt, srt, vtt "
+                "[default: [transcript] formats in settings.toml, else md,json,txt]. txt is "
+                "plain prose without speakers or timestamps; srt/vtt re-flow speaker turns "
+                "into subtitle cues.",
+            ),
+        )
+    ):
+        func = option(func)
+    return func
+
+
+def _notes_options(func: Callable) -> Callable:
+    """Shared post-transcript options for ``start`` and ``transcribe``."""
+    for option in reversed(
+        (
+            click.option(
+                "--notes",
+                "notes_flag",
+                is_flag=True,
+                help="After the transcript is written, generate LLM meeting notes "
+                "(summary, decisions, action items) with the backend configured in "
+                "settings.toml. Non-fatal: a notes failure never loses the transcript.",
+            ),
+            click.option(
+                "--print", "print_markdown", is_flag=True, help="Also print the transcript."
+            ),
+        )
+    ):
+        func = option(func)
+    return func
+
+
+def _load_reid(diarizer, *, enabled: bool, threshold: float | None, store: Path | None):
+    """Load the re-ID matcher when diarization runs, echoing its profile count."""
+    from stenograf import loaders
+
+    if diarizer is None:
+        return None
+    reid = loaders.load_reid(enabled=enabled, threshold=threshold, store_path=store)
+    if reid is not None:
+        click.echo(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
+    return reid
+
+
+def _echo_glossary(terms: tuple[str, ...], names: tuple[str, ...]) -> None:
+    if terms or names:
+        click.echo(f"glossary: {len(terms)} term(s), {len(names)} name(s)")
+
+
 def _collect_terms(
     glossary: tuple[str, ...],
     glossary_file: Path | None,

@@ -17,7 +17,8 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,6 +90,20 @@ def cached_path(asset: ModelAsset) -> Path | None:
     return path if path.exists() else None
 
 
+@contextmanager
+def _staged(target: Path) -> Iterator[Path]:
+    """A sibling ``.part`` temp file, unlinked on exit unless renamed away.
+
+    Work stages into the yielded path and ``replace``s it onto ``target``, so
+    a crash never leaves a half-written file behind the "already cached" check."""
+    with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".part", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        yield tmp_path
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def fetch(asset: ModelAsset, progress: ProgressHook | None = None) -> Path:
     """Return the local path of ``asset``, downloading it on first use."""
     target = cache_dir() / asset.name
@@ -96,18 +111,12 @@ def fetch(asset: ModelAsset, progress: ProgressHook | None = None) -> Path:
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    # Download to a temp file in the same directory so a crash never leaves a
-    # half-written model behind the "already cached" check.
-    with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".part", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
+    with _staged(target) as tmp_path:
         _download(asset, tmp_path, progress)
         if asset.archive_member is not None:
             _extract_member(tmp_path, asset.archive_member, target)
         else:
             tmp_path.replace(target)
-    finally:
-        tmp_path.unlink(missing_ok=True)
     return target
 
 
@@ -133,12 +142,7 @@ def _download(asset: ModelAsset, dest: Path, progress: ProgressHook | None) -> N
 
 
 def _extract_member(archive: Path, member: str, target: Path) -> None:
-    # Extract to a sibling temp file and rename, mirroring the download path:
-    # an interrupted extraction must never leave a truncated model where
-    # `cached_path` would report it as already downloaded.
-    with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".part", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
+    with _staged(target) as tmp_path:
         with tarfile.open(archive) as tar:
             try:
                 src = tar.extractfile(member)  # KeyError if the name is absent
@@ -150,5 +154,3 @@ def _extract_member(archive: Path, member: str, target: Path) -> None:
                 while chunk := src.read(1 << 20):
                     dst.write(chunk)
         tmp_path.replace(target)
-    finally:
-        tmp_path.unlink(missing_ok=True)
