@@ -255,7 +255,7 @@ def transcribe(
             profile_store=reid_store,
         )
     else:
-        from stenograf.pipeline import finalize_file
+        from stenograf.pipeline import STAGE_ASR, STAGE_DIARIZATION, finalize_file
 
         try:
             samples = load_audio(audio_file)
@@ -286,9 +286,9 @@ def transcribe(
             click.echo(f"glossary: {len(glossary_terms)} term(s), {len(attendee_names)} name(s)")
 
         def progress(stage: str, done: int, total: int) -> None:
-            if stage == "asr" and done == 0:
+            if stage == STAGE_ASR and done == 0:
                 click.echo(f"transcribing {total} windows")
-            elif stage == "diarization":
+            elif stage == STAGE_DIARIZATION:
                 click.echo(f"diarizing ({speakers or 'estimating'} speakers)")
 
         # The settings-derived store path stays off this profile too (see above);

@@ -26,6 +26,10 @@ from stenograf.vad import SileroVAD, pack_windows
 MAX_ENTRY_GAP = 1.5
 """Silence (s) between words of one speaker that still reads as one entry."""
 
+STAGE_ASR = "asr"
+STAGE_DIARIZATION = "diarization"
+"""The two ``on_progress`` stage names (``on_progress(stage, done, total)``)."""
+
 _RAW_CLUSTER = re.compile(r"S\d+")
 """Raw diarization cluster label (``S0``, ``S1``…), as emitted by
 :class:`~stenograf.diarization.base.SpeakerTurn` and :func:`merge_words_turns`.
@@ -78,33 +82,61 @@ def finalize_channel(
         words = list(precomputed_words)
         segments: list[Segment] = []
     else:
-        duration = len(samples) / SAMPLE_RATE
-        if vad is not None:
-            windows = pack_windows(vad.speech_segments(samples), duration)
-        else:
-            windows = [(0.0, duration)] if duration > 0 else []
-
-        segments = []
-        for i, (start, end) in enumerate(windows):
-            if on_progress is not None:
-                on_progress("asr", i, len(windows))
-            window = samples[sample_index(start) : sample_index(end)]
-            segments.extend(_shift(seg, start) for seg in asr.transcribe(window, language))
-        segments.sort(key=lambda seg: seg.start)
-
+        segments = _decode(samples, asr=asr, language=language, vad=vad, on_progress=on_progress)
         if diarizer is None or num_speakers == 1:
             return [
                 TranscriptEntry(
-                    speaker="S0",
-                    text=seg.text,
-                    start=seg.start,
-                    end=seg.end,
-                    words=seg.words,
+                    speaker="S0", text=seg.text, start=seg.start, end=seg.end, words=seg.words
                 )
                 for seg in segments
             ]
-
         words = [word for seg in segments for word in seg.words]
+    return _attribute(
+        samples,
+        words,
+        segments,
+        diarizer=diarizer,
+        num_speakers=num_speakers,
+        reid=reid,
+        on_progress=on_progress,
+    )
+
+
+def _decode(
+    samples,
+    *,
+    asr: ASRBackend,
+    language: Language | None,
+    vad: SileroVAD | None,
+    on_progress,
+) -> list[Segment]:
+    """VAD-window the channel and batch-decode each window into segments."""
+    duration = len(samples) / SAMPLE_RATE
+    if vad is not None:
+        windows = pack_windows(vad.speech_segments(samples), duration)
+    else:
+        windows = [(0.0, duration)] if duration > 0 else []
+    segments: list[Segment] = []
+    for i, (start, end) in enumerate(windows):
+        if on_progress is not None:
+            on_progress(STAGE_ASR, i, len(windows))
+        window = samples[sample_index(start) : sample_index(end)]
+        segments.extend(_shift(seg, start) for seg in asr.transcribe(window, language))
+    segments.sort(key=lambda seg: seg.start)
+    return segments
+
+
+def _attribute(
+    samples,
+    words: list[Word],
+    segments: list[Segment],
+    *,
+    diarizer: Diarizer,
+    num_speakers: int | None,
+    reid: SpeakerResolver | None,
+    on_progress,
+) -> list[TranscriptEntry]:
+    """Diarize the channel and merge the decoded words with the speaker turns."""
     if not words and segments:
         # A backend that emits text but no word timestamps (a contract
         # violation for diarized use — see ASRBackend) would otherwise drop the
@@ -120,7 +152,7 @@ def finalize_channel(
         return []
 
     if on_progress is not None:
-        on_progress("diarization", 0, 1)
+        on_progress(STAGE_DIARIZATION, 0, 1)
     if reid is not None:
         result = diarizer.diarize_with_embeddings(samples, num_speakers)
         turns = result.turns
