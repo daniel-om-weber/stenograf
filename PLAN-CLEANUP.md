@@ -1,10 +1,11 @@
 # Code cleanup & maintainability plan
 
-> **Status: §2 bugs (B1–B5), Pass 1 (§3, T1–T10), Pass 2 (§4, C1–C8), and
-> Pass 3 (§5, A1–A4) COMPLETE 2026-07-12.** Produced by a six-subsystem deep
-> review (CLI, live orchestration, audio/capture, ML pipeline, notes/config,
-> eval/native/tests). Next: Pass 4 (§6). Tick checkboxes and update this
-> blockquote as tasks land.
+> **Status: ALL PASSES COMPLETE 2026-07-12** — §2 bugs (B1–B5), Pass 1 (§3,
+> T1–T10), Pass 2 (§4, C1–C8), Pass 3 (§5, A1–A4), and Pass 4 (§6, S1–S9).
+> Produced by a six-subsystem deep review (CLI, live orchestration,
+> audio/capture, ML pipeline, notes/config, eval/native/tests). What remains
+> is §7 (deferred/awareness-only, no action planned). The backlog is done;
+> future cleanup items should start a new plan or extend §7.
 
 This document is the backlog for making the codebase clean and maintainable.
 It is **behavior-preserving by charter**: no task here changes what stenograf
@@ -337,7 +338,12 @@ test; `test_capture_*` suites green on CI (all three OSes).
 
 ## 6. Pass 4 — `session.py` and `live.py` extractions
 
-- [ ] **S1 — `MeetingRecorder.run()` returns a result object.** The
+- [x] **S1 — `MeetingRecorder.run()` returns a result object.** *(done:
+  frozen `MeetingResult` — transcript + speaker_counts + dropped_echo_lines +
+  reference_gap_s; the canceller gap became a `finalize` parameter measured by
+  module-level `_reference_gap(provider)`; language detection resolves per
+  call and never locks onto the recorder; reentrancy test added. The TUI keeps
+  its Transcript-typed `serve` contract via a wrapper in `cli/start.py`.)* The
   constructor currently sets immutable config (`asr`, `vad`, `diarizer`,
   `reid`) *and* per-run mutable outputs: `speaker_counts`
   (`session.py:1047`), `dropped_echo_lines` (`:1057`), `reference_gap_s`
@@ -346,14 +352,24 @@ test; `test_capture_*` suites green on CI (all three OSes).
   `transcript.parameters`). Fold outputs into the returned
   `Transcript`/result dataclass; make language-locking local to one
   `run()`/`finalize()` call. This is the core god-object fix.
-- [ ] **S2 — shared finalize epilogue.** The stop→finalize tail —
+- [x] **S2 — shared finalize epilogue.** *(done: `_finalize_and_publish` +
+  `_consume_frame` for the shared frame body; batch loop stayed inline as
+  specced. One deliberate nuance: the live path's `finalized` event moved
+  inside its SIGINT shield — it was the only step left outside.)* The
+  stop→finalize tail —
   `view.finalizing()`, `_note_reference_gap`, `with _shield_interrupt():
   finalize(...)`, `view.finalized`, plus identical status literals — is
   duplicated between `_run_batch` (`session.py:848-882`) and `_run_live`
   (`:958-999`). Extract `_finalize_and_publish(...)`. The *capture loop*
   stays inline in batch deliberately (KeyboardInterrupt must land on the
   main thread) — share the frame-body helper, keep the loop structure.
-- [ ] **S3 — `LiveDecoder` becomes a Protocol; Windowed composes.**
+- [x] **S3 — `LiveDecoder` becomes a Protocol; Windowed composes.** *(done:
+  `StreamingDecoder` Protocol (feed/flush/drop_window/window_cap/
+  committed_words) type-hinted by `LiveWorker`/`live_checkpoint`;
+  `WindowedLiveDecoder` is standalone, composing `_CaptionBuffer` (buffer +
+  gap padding + VAD stream + float-or-integer origin) and module-level
+  `_extend_committed`; tests assert the public `buffered_seconds` instead of
+  `dec._buf`.)*
   `WindowedLiveDecoder` (`live.py:359-559`) inherits `LiveDecoder` but
   overrides the entire core (`feed`/`flush`/`drop_window`/`_reset_buf`/
   `_audio_end`), reinterprets inherited `_buf_start`, and carries the base's
@@ -365,18 +381,26 @@ test; `test_capture_*` suites green on CI (all three OSes).
   `dict[Channel, LiveDecoder]` at `:919-932`); share a small buffer/commit
   helper by composition. Gives the private methods tests currently reach
   for (`dec._buf` in test_live.py) a public surface.
-- [ ] **S4 — decouple `_TailCheckpointer` from recorder privates.** It holds
+- [x] **S4 — decouple `_TailCheckpointer` from recorder privates.** *(done:
+  takes `finalize_tail`/`wrap_checkpoint` bound callables; `tail_entries`,
+  `checkpoint_transcript`, `live_checkpoint` are the recorder's public
+  checkpoint surface.)* It holds
   `self._recorder` and calls `recorder._tail_entries(...)` /
   `recorder._checkpoint_transcript(...)` (`session.py:666, 675`). Pass two
   bound callables (`finalize_tail`, `wrap_checkpoint`) or extract a
   `TailFinalizer` collaborator — also gives `test_session.py`'s direct
   private-method tests a public surface.
-- [ ] **S5 — collapse `run()`'s two callback dialects.** `run()` takes 11
+- [x] **S5 — collapse `run()`'s two callback dialects.** *(done: view-only —
+  the bare `LiveView` base is the null view; `_CallbackView` deleted (a test
+  `CallbackView` lives in conftest); checkpoint knobs grouped into
+  `CheckpointConfig(write, interval)`; the batch CLI grew a `_BatchEcho`
+  view.)* `run()` takes 11
   params including both legacy `on_update`/`on_status` and `view`, wrapping
   the former in `_CallbackView` internally (`session.py:750-815, 794`).
   Standardize on the `LiveView` sink (tests already build `LiveView`
   subclasses); group the checkpoint knobs into a small config object.
-- [ ] **S6 — smaller items.** Split `finalize` (80 lines, five jobs;
+- [x] **S6 — smaller items.** *(done as specced; the tui enum is `Phase`,
+  carrying each phase's header lead + color.)* Split `finalize` (80 lines, five jobs;
   `session.py:1012-1090`) into `_apply_echo_backstop` +
   `_assemble_transcript`; fix the close-path lock inconsistency (`:551-564`
   — capture `flush()` under `inference_lock`, run `_emit` after releasing,
@@ -387,17 +411,20 @@ test; `test_capture_*` suites green on CI (all three OSes).
 
 **Pipeline-layer companions (same pass, `pipeline.py`/`glossary.py`):**
 
-- [ ] **S7 — split `finalize_channel`** (`pipeline.py:43-133`): it
+- [x] **S7 — split `finalize_channel`** *(done: `_decode` + `_attribute`;
+  stage strings lifted to `STAGE_ASR`/`STAGE_DIARIZATION`)* (`pipeline.py:43-133`): it
   interleaves precomputed-words vs VAD+ASR, single-speaker vs diarized,
   re-ID vs plain, and a wordless fallback, with `words`/`segments` shared
   across branches. Extract `_decode(...) -> (words, segments)` and
   `_attribute(...) -> entries`; `finalize_channel` becomes a ~15-line
   dispatcher.
-- [ ] **S8 — merge the duplicated run-grouping machinery**:
+- [x] **S8 — merge the duplicated run-grouping machinery** *(done:
+  `_group_runs(words, assign, max_gap)`)*:
   `merge_words_turns` (`pipeline.py:148-189`) and `group_words`
   (`:192-226`) both implement close-run-on-gap with a nested `close_run()`;
   one `_group(words, key, max_gap)` helper, constant key for the plain case.
-- [ ] **S9 — micro-cleanups**: `_shift` uses `dataclasses.replace` instead
+- [x] **S9 — micro-cleanups** *(done; parakeet binds mlx/get_logmel once in
+  `load()`)*: `_shift` uses `dataclasses.replace` instead
   of field-by-field reconstruction (`pipeline.py:136-145`, so a new `Word`
   field can't be silently dropped); simplify `_best_term`'s redundant gate
   (`glossary.py:185-192`); drop the per-call MLX re-imports in
@@ -406,7 +433,8 @@ test; `test_capture_*` suites green on CI (all three OSes).
 **Definition of done for Pass 4:** a `MeetingRecorder` can run twice without
 state bleed (add that test); `LiveWorker` depends on a Protocol; no thread
 class calls another object's `_private` methods; test_session/test_live no
-longer unit-test private methods directly.
+longer unit-test private methods directly. *(All four hold as of 2026-07-12;
+verified end-to-end via replay — batch and live-reuse paths both green.)*
 
 ## 7. Deferred / awareness-only (no action planned)
 
