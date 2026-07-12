@@ -79,7 +79,7 @@ Real defects found during review. Each is a standalone commit with a test.
   elapses mid-decode). Fix: `stop()` stops the process only (SIGINT/kill +
   `wait()` already ends the stream); the reading thread owns and closes
   stdout — matching the Linux/Windows ownership model.
-- [ ] **B2 — leaked checkpointer thread** — `session.py:845-846`
+- [x] **B2 — leaked checkpointer thread** — `session.py:845-846`
   (`_run_batch`): the `_TailCheckpointer` is `.start()`ed before
   `provider.start(...)`, which sits outside the `try`. If `provider.start`
   raises, the bus never closes and the checkpointer blocks on `bus.wait`

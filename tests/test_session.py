@@ -612,6 +612,29 @@ class TestMeetingRecorder:
         counts = [len(c.entries) for c in checkpoints]
         assert counts == sorted(counts)
 
+    def test_failed_provider_start_leaves_no_checkpointer_thread(self):
+        # A provider that fails to start propagates the error; the checkpoint
+        # thread must not be left behind blocked on bus.wait forever.
+        class ExplodingProvider(CaptureProvider):
+            def start(self, channels: set[Channel]) -> None:
+                raise RuntimeError("no capture device")
+
+            def frames(self):
+                yield from ()
+
+            def stop(self) -> None:
+                pass
+
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
+        )
+        with pytest.raises(RuntimeError, match="no capture device"):
+            recorder.run(
+                ExplodingProvider(), on_checkpoint=lambda t: None, checkpoint_interval=1.0
+            )
+        leftover = [t for t in threading.enumerate() if t.name == "tail-checkpoint"]
+        assert not leftover
+
     def test_checkpointer_blocks_between_frames_instead_of_spinning(self):
         """Waiting on the last-*checkpointed* marks makes wait() return instantly
         forever once any audio exists — a hot spin that, measured on live

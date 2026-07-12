@@ -838,12 +838,15 @@ class MeetingRecorder:
         checkpointing = on_checkpoint is not None and checkpoint_interval > 0
         bus = AudioBus(channels) if checkpointing else None
         checkpointer: _TailCheckpointer | None = None
+        # The provider starts before the checkpointer thread: a start failure
+        # propagates (as it must) and would skip the finally below, so the
+        # checkpointer must not yet exist or it would block on bus.wait forever.
+        provider.start(set(channels))
         if bus is not None and on_checkpoint is not None:
             checkpointer = _TailCheckpointer(
                 self, store, plans, bus, on_checkpoint, checkpoint_interval
             )
             checkpointer.start()
-        provider.start(set(channels))
         capture_error: BaseException | None = None
         try:
             for frame in provider.frames():
