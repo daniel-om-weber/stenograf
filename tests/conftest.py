@@ -13,6 +13,35 @@ import numpy as np
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.capture.base import SAMPLE_RATE
 from stenograf.diarization.base import Diarizer, SpeakerTurn
+from stenograf.view import LiveView
+
+
+class CallbackView(LiveView):
+    """A LiveView over plain test callbacks (the orchestrator is view-only).
+
+    ``update``/``status`` forward to their callback; ``language``/``error``
+    fold onto ``on_status`` as text so a status-collecting test sees them too.
+    """
+
+    def __init__(self, on_update=None, on_status=None) -> None:
+        self._on_update = on_update
+        self._on_status = on_status
+
+    def update(self, channel, update) -> None:
+        if self._on_update is not None:
+            self._on_update(channel, update)
+
+    def status(self, message: str) -> None:
+        if self._on_status is not None:
+            self._on_status(message)
+
+    def language(self, language) -> None:
+        if self._on_status is not None:
+            self._on_status(f"detected language: {language.value}")
+
+    def error(self, message: str) -> None:
+        if self._on_status is not None:
+            self._on_status(message)
 
 
 class FakeASR(ASRBackend):

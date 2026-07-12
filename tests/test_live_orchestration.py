@@ -12,7 +12,7 @@ These exercise the threaded plumbing, not the LiveDecoder's caption quality
 import threading
 
 import numpy as np
-from conftest import FakeASR
+from conftest import CallbackView, FakeASR
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
@@ -23,6 +23,7 @@ from stenograf.live import StreamingUpdate
 from stenograf.session import (
     AudioBus,
     CaptureLoop,
+    CheckpointConfig,
     LiveWorker,
     MeetingRecorder,
     SessionStore,
@@ -302,7 +303,7 @@ class TestMeetingRecorderLive:
         provider = ListProvider(_one_second_frames(4))
         updates: list[tuple[Channel, StreamingUpdate]] = []
         transcript = self._recorder().run(
-            provider, live=True, on_update=lambda ch, u: updates.append((ch, u))
+            provider, live=True, view=CallbackView(on_update=lambda ch, u: updates.append((ch, u)))
         )
         # The finalize pass still produced the authoritative transcript.
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
@@ -321,10 +322,7 @@ class TestMeetingRecorderLive:
         provider = ListProvider(_one_second_frames(4))
         checkpoints: list[object] = []
         transcript = self._recorder().run(
-            provider,
-            live=True,
-            on_checkpoint=checkpoints.append,
-            checkpoint_interval=1.0,
+            provider, live=True, checkpoint=CheckpointConfig(checkpoints.append, 1.0)
         )
         # The on-stop finalize is still the authoritative, diarized transcript.
         assert provider.stopped
@@ -343,7 +341,9 @@ class TestMeetingRecorderLive:
         backward = AudioFrame(Channel.MIC, 0.0, np.ones(10, dtype=np.int16))  # goes backwards
         provider = ListProvider([good, backward])
         errors: list[str] = []
-        transcript = self._recorder().run(provider, live=True, on_status=errors.append)
+        transcript = self._recorder().run(
+            provider, live=True, view=CallbackView(on_status=errors.append)
+        )
         assert [e.speaker for e in transcript.entries] == ["Local-1"]  # the good second survived
         assert provider.stopped
         assert any("capture stopped early" in m for m in errors)
@@ -712,9 +712,8 @@ class TestTwoChannelLive:
         transcript = self._recorder(AmplitudeASR()).run(
             provider,
             live=True,
-            on_update=lambda ch, u: updates.append((ch, u)),
-            on_checkpoint=checkpoints.append,
-            checkpoint_interval=1.0,
+            view=CallbackView(on_update=lambda ch, u: updates.append((ch, u))),
+            checkpoint=CheckpointConfig(checkpoints.append, 1.0),
         )
         mic_words = [w.text for ch, u in updates if ch is Channel.MIC for w in u.committed]
         sys_words = [w.text for ch, u in updates if ch is Channel.SYSTEM for w in u.committed]

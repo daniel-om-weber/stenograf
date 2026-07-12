@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 import pytest
-from conftest import FakeASR, FakeDiarizer, RaisingDiarizer
+from conftest import CallbackView, FakeASR, FakeDiarizer, RaisingDiarizer
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
@@ -15,6 +15,7 @@ from stenograf.profiles import ProfileStore, SpeakerProfile, SpeakerReID
 from stenograf.session import (
     AudioBus,
     ChannelPlan,
+    CheckpointConfig,
     MeetingRecorder,
     SessionStore,
     SpeakerCount,
@@ -532,7 +533,7 @@ class TestMeetingRecorder:
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
-        transcript = recorder.run(provider, on_status=errors.append)
+        transcript = recorder.run(provider, view=CallbackView(on_status=errors.append))
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]  # first frame finalized
         assert any("capture stopped early" in m for m in errors)
@@ -546,9 +547,7 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         checkpoints: list[Transcript] = []
-        transcript = recorder.run(
-            provider, on_checkpoint=checkpoints.append, checkpoint_interval=1.0
-        )
+        transcript = recorder.run(provider, checkpoint=CheckpointConfig(checkpoints.append, 1.0))
         # The tail checkpoint runs off-thread and coalesces, so the *count* is
         # timing-dependent — but at least one always fires for 3 s at interval 1.
         assert checkpoints
@@ -577,9 +576,7 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         with pytest.raises(RuntimeError, match="no capture device"):
-            recorder.run(
-                ExplodingProvider(), on_checkpoint=lambda t: None, checkpoint_interval=1.0
-            )
+            recorder.run(ExplodingProvider(), checkpoint=CheckpointConfig(lambda t: None, 1.0))
         leftover = [t for t in threading.enumerate() if t.name == "tail-checkpoint"]
         assert not leftover
 
@@ -667,7 +664,7 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         checkpoints = []
-        recorder.run(provider, on_checkpoint=lambda t: checkpoints.append(t), checkpoint_interval=0)
+        recorder.run(provider, checkpoint=CheckpointConfig(checkpoints.append, interval=0))
         assert checkpoints == []
 
     def test_language_is_auto_detected_from_the_transcript(self):

@@ -441,6 +441,9 @@ def _run_meeting(
     - **Batch** (``--no-live``): no live pass; status and checkpoint notices echo
       as before.
     """
+    from stenograf.session import CheckpointConfig
+
+    checkpoint = CheckpointConfig(checkpoint_writer(out_dir, basename), flush_interval)
     if use_tui:
         from stenograf.tui import TextualLiveView
 
@@ -453,8 +456,7 @@ def _run_meeting(
                 live=True,
                 view=view,
                 on_frame=on_frame,
-                on_checkpoint=checkpoint_writer(out_dir, basename),
-                checkpoint_interval=flush_interval,
+                checkpoint=checkpoint,
                 max_seconds=max_seconds,
             )
         )
@@ -467,18 +469,32 @@ def _run_meeting(
                 live=True,
                 view=view,
                 on_frame=on_frame,
-                on_checkpoint=checkpoint_writer(out_dir, basename),
-                checkpoint_interval=flush_interval,
+                checkpoint=checkpoint,
                 max_seconds=max_seconds,
             )
+
+    from stenograf.view import LiveView
+
+    class _BatchEcho(LiveView):
+        """Batch-mode sink: notices echo indented under the "capturing" line."""
+
+        def status(self, message: str) -> None:
+            click.echo(f"  {message}")
+
+        def language(self, language: Language) -> None:
+            click.echo(f"  detected language: {language.value}")
+
+        def error(self, message: str) -> None:
+            click.echo(f"  {message}")
+
     return recorder.run(
         provider,
+        view=_BatchEcho(),
         on_frame=on_frame,
-        on_status=lambda msg: click.echo(f"  {msg}"),
-        on_checkpoint=checkpoint_writer(
-            out_dir, basename, announce=lambda m: click.echo(f"  {m}")
+        checkpoint=CheckpointConfig(
+            checkpoint_writer(out_dir, basename, announce=lambda m: click.echo(f"  {m}")),
+            flush_interval,
         ),
-        checkpoint_interval=flush_interval,
         max_seconds=max_seconds,
     )
 

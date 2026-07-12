@@ -356,43 +356,25 @@ def _shield_interrupt() -> Iterator[None]:
 OnUpdate = Callable[[Channel, StreamingUpdate], None]
 """Live-pass callback: a channel's newest committed words plus its provisional
 grey tail. ``LiveView.update`` (view.py) has this signature, so a view wires
-straight to the worker; tests pass a plain callback."""
+straight to the worker."""
 
 
-class _CallbackView(LiveView):
-    """Adapt the raw ``on_update``/``on_status`` callbacks to a :class:`LiveView`.
+@dataclass(frozen=True)
+class CheckpointConfig:
+    """Crash-checkpoint wiring (PLAN.md §3 Option B).
 
-    The orchestrator drives a single sink internally (structured view events), so
-    a caller passing plain callbacks — the tests, and the batch CLI's status echo
-    — is wrapped in one of these. ``update``/``status`` forward to their callback;
-    ``language``/``error`` fold onto ``on_status`` as text so a callback-only
-    caller still sees them; ``finalizing``/``finalized`` have no string form and
-    are dropped (only a rendering view cares about the finalize swap).
+    ``write`` receives each coalesced checkpoint transcript (the CLI wires the
+    ``.partial`` writer here); ``interval`` is the seconds of captured audio
+    between flushes. An ``interval`` <= 0 disables checkpointing, as does not
+    passing a config at all.
     """
 
-    def __init__(
-        self,
-        on_update: OnUpdate | None = None,
-        on_status: Callable[[str], None] | None = None,
-    ) -> None:
-        self._on_update = on_update
-        self._on_status = on_status
+    write: Callable[[Transcript], None]
+    interval: float = 180.0
 
-    def update(self, channel: Channel, update: StreamingUpdate) -> None:
-        if self._on_update is not None:
-            self._on_update(channel, update)
-
-    def status(self, message: str) -> None:
-        if self._on_status is not None:
-            self._on_status(message)
-
-    def language(self, language: Language) -> None:
-        if self._on_status is not None:
-            self._on_status(f"detected language: {language.value}")
-
-    def error(self, message: str) -> None:
-        if self._on_status is not None:
-            self._on_status(message)
+    @property
+    def enabled(self) -> bool:
+        return self.interval > 0
 
 
 class AudioBus:
@@ -778,14 +760,11 @@ class MeetingRecorder:
         self,
         provider: CaptureProvider,
         *,
+        view: LiveView | None = None,
         on_frame: Callable[[AudioFrame], None] | None = None,
-        on_status: Callable[[str], None] | None = None,
-        on_checkpoint: Callable[[Transcript], None] | None = None,
-        checkpoint_interval: float = 180.0,
+        checkpoint: CheckpointConfig | None = None,
         max_seconds: float | None = None,
         live: bool = False,
-        on_update: OnUpdate | None = None,
-        view: LiveView | None = None,
     ) -> Transcript:
         """Capture until the provider stops (or Ctrl-C), then finalize.
 
@@ -800,44 +779,32 @@ class MeetingRecorder:
         interim words to the view. The heavy finalize still runs once on stop and
         replaces the whole live transcript.
 
-        Events go to a single :class:`~stenograf.view.LiveView` sink: pass a
-        concrete ``view`` (the CLI's TUI / plain view), or the legacy
-        ``on_update``/``on_status`` callbacks, which are adapted to a view. The
-        orchestrator emits the structured lifecycle events on it — ``status`` /
-        ``language`` / ``finalizing`` / ``finalized`` / ``error`` — around the
-        capture and finalize passes.
+        Events go to the single :class:`~stenograf.view.LiveView` sink (the
+        CLI's TUI / plain view; the bare base class is the null view and the
+        default). The orchestrator emits the structured lifecycle events on it
+        — ``status`` / ``language`` / ``finalizing`` / ``finalized`` /
+        ``error`` — around the capture and finalize passes.
 
-        Both modes checkpoint for crash recovery (PLAN.md §3 Option B), if
-        ``on_checkpoint`` is given, coalesced to ``checkpoint_interval`` seconds of
-        capture — but never any inference the mode does not already do. Live: the
-        already-committed live text is flushed as-is (zero inference). Batch: only
-        the *new* tail since the last checkpoint is finalized (O(audio), off the
-        capture thread), not the whole buffer. Either way a crash loses at most one
-        interval of text, audio is never persisted, and the authoritative
-        transcript is the full finalize returned on stop.
+        Both modes checkpoint for crash recovery (PLAN.md §3 Option B), if a
+        :class:`CheckpointConfig` is given, coalesced to its ``interval`` seconds
+        of capture — but never any inference the mode does not already do. Live:
+        the already-committed live text is flushed as-is (zero inference). Batch:
+        only the *new* tail since the last checkpoint is finalized (O(audio), off
+        the capture thread), not the whole buffer. Either way a crash loses at
+        most one interval of text, audio is never persisted, and the
+        authoritative transcript is the full finalize returned on stop.
         """
         plans = plan_channels(self.profile)
         store = SessionStore({p.channel for p in plans})
-        sink = view if view is not None else _CallbackView(on_update, on_status)
-        if live:
-            return self._run_live(
-                provider,
-                plans,
-                store,
-                on_frame=on_frame,
-                view=sink,
-                on_checkpoint=on_checkpoint,
-                checkpoint_interval=checkpoint_interval,
-                max_seconds=max_seconds,
-            )
-        return self._run_batch(
+        sink = view if view is not None else LiveView()
+        run_mode = self._run_live if live else self._run_batch
+        return run_mode(
             provider,
             plans,
             store,
             on_frame=on_frame,
             view=sink,
-            on_checkpoint=on_checkpoint,
-            checkpoint_interval=checkpoint_interval,
+            checkpoint=checkpoint,
             max_seconds=max_seconds,
         )
 
@@ -849,8 +816,7 @@ class MeetingRecorder:
         *,
         on_frame: Callable[[AudioFrame], None] | None,
         view: LiveView,
-        on_checkpoint: Callable[[Transcript], None] | None,
-        checkpoint_interval: float,
+        checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
     ) -> Transcript:
         """Consume-thread capture + a tail-only checkpoint thread (no live view).
@@ -862,22 +828,22 @@ class MeetingRecorder:
         capture nor re-finalizes the whole buffer (PLAN.md §3 Option B).
         """
         channels = [p.channel for p in plans]
-        checkpointing = on_checkpoint is not None and checkpoint_interval > 0
+        checkpointing = checkpoint is not None and checkpoint.enabled
         bus = AudioBus(channels) if checkpointing else None
         checkpointer: _TailCheckpointer | None = None
         # The provider starts before the checkpointer thread: a start failure
         # propagates (as it must) and would skip the finally below, so the
         # checkpointer must not yet exist or it would block on bus.wait forever.
         provider.start(set(channels))
-        if bus is not None and on_checkpoint is not None:
+        if bus is not None and checkpoint is not None:
             checkpointer = _TailCheckpointer(
                 store,
                 plans,
                 bus,
                 finalize_tail=self.tail_entries,
                 wrap_checkpoint=self.checkpoint_transcript,
-                on_checkpoint=on_checkpoint,
-                interval=checkpoint_interval,
+                on_checkpoint=checkpoint.write,
+                interval=checkpoint.interval,
             )
             checkpointer.start()
         capture_error: BaseException | None = None
@@ -914,20 +880,19 @@ class MeetingRecorder:
         *,
         on_frame: Callable[[AudioFrame], None] | None,
         view: LiveView,
-        on_checkpoint: Callable[[Transcript], None] | None,
-        checkpoint_interval: float,
+        checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
     ) -> Transcript:
         """Live pass: threaded capture + one inference worker, then finalize.
 
         Capture runs on :class:`CaptureLoop` (never blocked by inference); one
         :class:`LiveWorker` drives a :class:`~stenograf.live.LiveDecoder` per
-        channel and streams updates to ``on_update``. On stop the worker is joined
+        channel and streams updates to the view. On stop the worker is joined
         and the full finalize pass runs — it replaces the whole live transcript,
         so live compromises never reach the final output (PLAN.md §2).
 
         Option B checkpointing (PLAN.md §3): the worker flushes the decoders'
-        already-committed text to ``on_checkpoint`` every ``checkpoint_interval``
+        already-committed text to ``checkpoint.write`` every ``checkpoint.interval``
         seconds — pure file I/O, no extra inference, since the live pass already
         produced that text. Empty flushes (nothing committed yet) are skipped so a
         ``.partial`` only appears once there is text to recover. The worker flushes
@@ -962,9 +927,9 @@ class MeetingRecorder:
         def flush_checkpoint() -> None:
             transcript = self.live_checkpoint(decoders)
             if transcript.entries:
-                on_checkpoint(transcript)  # type: ignore[misc]  # None-guarded below
+                checkpoint.write(transcript)  # type: ignore[union-attr]  # None-guarded below
 
-        checkpointing = on_checkpoint is not None and checkpoint_interval > 0
+        checkpointing = checkpoint is not None and checkpoint.enabled
         worker = LiveWorker(
             store,
             bus,
@@ -973,7 +938,7 @@ class MeetingRecorder:
             channels=channels,
             on_update=view.update,
             on_flush=flush_checkpoint if checkpointing else None,
-            flush_interval=checkpoint_interval,
+            flush_interval=checkpoint.interval if checkpoint is not None else 0.0,
         )
         capture = CaptureLoop(
             provider, store, bus, channels=channels, on_frame=on_frame, max_seconds=max_seconds
@@ -1086,7 +1051,7 @@ class MeetingRecorder:
         None — direct calls, batch mode, ``--full-finalize``) re-decodes.
         """
         plans = plans or plan_channels(self.profile)
-        view = view or _CallbackView()
+        view = view or LiveView()  # the bare base class is the null view
         by_channel: dict[Channel, list[TranscriptEntry]] = {}
         counts: list[SpeakerCount] = []
         for plan in plans:
