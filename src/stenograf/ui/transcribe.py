@@ -26,6 +26,7 @@ more than the refusal does.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import time
 from collections.abc import Iterable
 from datetime import datetime
@@ -202,12 +203,18 @@ class TranscribeScreen(Screen[None]):
             write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)
 
             split_pcms, _correlation = _resolve_split_channels(audio_file, "auto")
+            # [speakers] diarization = false is the launcher's only off switch
+            # (rerun with the CLI's --diarization to override): counts collapse
+            # to one speaker per channel and the diarizer is never loaded.
+            diarize = settings.speakers.diarization is not False
             profile = MeetingProfile(
                 glossary=glossary_terms,
                 attendee_names=attendee_names,
                 title=audio_file.stem,
             )
             if split_pcms is not None:
+                if not diarize:
+                    profile = dataclasses.replace(profile, local_speakers=1, remote_speakers=1)
                 duration = len(split_pcms[0]) / SAMPLE_RATE
                 self._post(self._set_status, "2 voice channels — transcribing per channel…")
                 result, elapsed = _transcribe_split_channels(
@@ -229,7 +236,7 @@ class TranscribeScreen(Screen[None]):
                 duration = len(samples) / SAMPLE_RATE
                 self._post(self._set_status, "loading models…")
                 asr, vad, diarizer = loaders.load_backends(
-                    need_diarizer=True,
+                    need_diarizer=diarize,
                     asr_backend=settings.asr.backend,
                     asr_provider=settings.asr.provider,
                 )
@@ -254,6 +261,7 @@ class TranscribeScreen(Screen[None]):
                     asr=asr,
                     vad=vad,
                     diarizer=diarizer,
+                    num_speakers=None if diarize else 1,
                     reid=reid,
                     glossary_threshold=settings.vocab.glossary_threshold,
                     on_progress=progress,

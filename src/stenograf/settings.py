@@ -19,6 +19,13 @@ optional; a missing file is simply all defaults. The full schema::
                                         # here (--out bypasses it for one run)
 
     [speakers]
+    diarization = false                 # skip speaker diarization by default:
+                                        # each channel is one speaker and the
+                                        # diarizer model is never loaded (for
+                                        # machines where it takes minutes). A
+                                        # per-run --diarization flag or an
+                                        # explicit speaker count above 1 still
+                                        # turns it on.
     reid_threshold = 0.5                # cosine similarity 0-1 to match a
                                         # saved speaker profile
     profile_store = "~/steno/profiles.json"  # re-ID store location override
@@ -103,6 +110,8 @@ SETTINGS_TEMPLATE = """\
 # dir = "~/Documents/Meetings"             # where meeting folders are created
 
 [speakers]
+# diarization = true                       # false = skip speaker separation (fast;
+#                                          # a per-run flag or count still overrides)
 # reid_threshold = 0.5                     # voice-match strictness 0-1
 # profile_store = "~/steno/profiles.json"  # re-ID voiceprint store location
 
@@ -152,6 +161,11 @@ class OutputSettings:
 
 @dataclass(frozen=True)
 class SpeakerSettings:
+    diarization: bool | None = None
+    """``False`` skips speaker diarization by default: each channel is
+    attributed to one speaker and the diarizer model is never loaded — for
+    machines where diarization costs minutes. A per-run ``--diarization`` flag
+    or an explicit speaker count above 1 still turns it on; ``None`` = on."""
     reid_threshold: float | None = None
     profile_store: Path | None = None
 
@@ -349,6 +363,7 @@ def _output_from_table(data: dict) -> OutputSettings:
 def _speakers_from_table(data: dict) -> SpeakerSettings:
     t = _Table("speakers", data)
     settings = SpeakerSettings(
+        diarization=t.bool_("diarization"),
         reid_threshold=t.number("reid_threshold", 0, 1),
         profile_store=t.path("profile_store"),
     )

@@ -25,6 +25,7 @@ from stenograf.cli.run import (
     _notes_options,
     _prepare_output,
     _reid_format_options,
+    _resolve_diarization,
     _resolve_run_config,
     _vocab_options,
 )
@@ -79,12 +80,13 @@ if TYPE_CHECKING:
     help="Split channels: number of speakers on the right/remote channel; omit to auto-detect.",
 )
 @click.option(
-    "--no-diarization",
-    "no_diarization",
-    is_flag=True,
-    help="Skip speaker diarization: the diarizer model is never loaded and each "
-    "voice channel (or the mixed stream) is attributed to a single speaker. "
-    "Conflicts with a speaker count above 1.",
+    "--diarization/--no-diarization",
+    "diarization_flag",
+    default=None,
+    help="Run (or skip) speaker diarization; skipped, the diarizer model is "
+    "never loaded and each voice channel (or the mixed stream) is attributed "
+    "to a single speaker. --no-diarization conflicts with a speaker count "
+    "above 1 [default: [speakers] diarization in settings.toml, else on].",
 )
 @click.option(
     "--out",
@@ -118,7 +120,7 @@ def transcribe(
     channels_mode: str,
     local_speakers: int | None,
     remote_speakers: int | None,
-    no_diarization: bool,
+    diarization_flag: bool | None,
     out: Path | None,
     force: bool,
     title: str | None,
@@ -183,9 +185,13 @@ def transcribe(
             "--local/--remote apply to split voice channels only; this run "
             "transcribes one mixed stream (--channels split to force splitting)"
         )
-    if no_diarization:
+    if not _resolve_diarization(
+        diarization_flag, settings.speakers.diarization, speakers, local_speakers, remote_speakers
+    ):
         if (speakers or 0) > 1:
             raise click.UsageError("--no-diarization conflicts with a speaker count above 1")
+        if diarization_flag is None:  # settings turned it off — say so, a flag user knows
+            click.echo("diarization: off ([speakers] in settings.toml; --diarization to enable)")
         if split_pcms is None:
             speakers = 1
         else:

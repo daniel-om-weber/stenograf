@@ -173,6 +173,31 @@ class TestMeetingSetupScreen:
 
         _run(body)
 
+    def test_settings_diarization_off_defaults_the_counts_to_one(self, tmp_path, monkeypatch):
+        # [speakers] diarization = false makes 1 (the diarizer-free path) the
+        # form's starting point; the Selects stay editable, so Auto-detect or a
+        # real count re-enables diarization for this one meeting.
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text("[speakers]\ndiarization = false\n", encoding="utf-8")
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            results = []
+            async with app.run_test(size=(80, 40)) as pilot:
+                app.push_screen(MeetingSetupScreen(), results.append)
+                await pilot.pause()
+                await pilot.click("#go")
+                await pilot.pause()
+                assert len(results) == 1
+                request = results[0]
+                assert request.profile.local_speakers == 1  # not auto-estimated
+                assert request.profile.remote_speakers == 1
+
+        _run(body)
+
     def test_impossible_profile_keeps_the_form_open(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         from textual.widgets import Select
@@ -340,6 +365,48 @@ class TestTranscribeScreen:
         transcripts = list(home_dir.glob("*/transcript.md"))
         assert len(transcripts) == 1
         assert "wort" in transcripts[0].read_text(encoding="utf-8")
+
+    def test_settings_diarization_off_skips_the_diarizer(self, tmp_path, monkeypatch):
+        # The launcher has no --diarization flag; [speakers] diarization = false
+        # must keep the diarizer model unloaded and label one speaker.
+        import conftest
+
+        from stenograf import loaders, output
+        from stenograf.ui.transcribe import TranscribeScreen
+
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text("[speakers]\ndiarization = false\n", encoding="utf-8")
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        home_dir = tmp_path / "meetings"
+        monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
+        calls = {}
+
+        def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+            calls["need_diarizer"] = need_diarizer
+            return conftest.FakeASR(), None, None
+
+        monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+        audio = tmp_path / "rec.wav"
+        conftest.write_wav(audio)
+
+        async def body():
+            app = StenografApp()
+            async with app.run_test(size=(90, 40)) as pilot:
+                screen = TranscribeScreen(root=tmp_path)
+                app.push_screen(screen)
+                await pilot.pause()
+                screen.on_directory_tree_file_selected(SimpleNamespace(path=audio))
+                await pilot.pause()
+                await pilot.click("#go")
+                for _ in range(400):
+                    await pilot.pause(0.05)
+                    if screen.status_text.startswith(("wrote", "failed")):
+                        break
+                assert screen.status_text.startswith("wrote"), screen.status_text
+
+        _run(body)
+        assert calls["need_diarizer"] is False
 
     def test_a_failing_run_lands_on_the_status_line(self, tmp_path, monkeypatch):
         from stenograf import output

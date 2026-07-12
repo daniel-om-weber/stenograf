@@ -113,6 +113,7 @@ glossary_threshold = 0.9
 dir = "~/Documents/Meetings"
 
 [speakers]
+diarization = false
 reid_threshold = 0.6
 profile_store = "~/steno/profiles.json"
 
@@ -128,6 +129,7 @@ provider = "dml"
     assert s.vocab.attendees == ("Ada Lovelace", "Grace Hopper")
     assert s.vocab.glossary_threshold == 0.9
     assert s.output.dir == Path("~/Documents/Meetings").expanduser()
+    assert s.speakers.diarization is False
     assert s.speakers.reid_threshold == 0.6
     assert s.speakers.profile_store == Path("~/steno/profiles.json").expanduser()
     assert s.asr.backend == "parakeet"
@@ -198,6 +200,16 @@ def test_wrong_typed_bool_is_rejected(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text("[notes]\nthinking = 1\n", encoding="utf-8")
     with pytest.raises(SettingsError, match="must be true or false"):
+        load_settings(path)
+
+
+def test_diarization_defaults_to_none_and_rejects_junk(tmp_path):
+    # Tri-state: unset must stay None (= on), not become False.
+    path = tmp_path / "settings.toml"
+    path.write_text("[speakers]\n", encoding="utf-8")
+    assert load_settings(path).speakers.diarization is None
+    path.write_text('[speakers]\ndiarization = "off"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match="speakers.diarization must be true or false"):
         load_settings(path)
 
 

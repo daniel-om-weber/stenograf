@@ -81,15 +81,16 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
         self.notices: list[str] = []  # plain-text mirror of the toasts shown
 
     def compose(self) -> ComposeResult:
+        count_default, count_hint = self._count_default()
         form = VerticalScroll(id="form")
         form.can_focus = False  # focus starts on the first field, not the container
         with form:
             yield Static("Start meeting", id="form-title")
             yield Static("Speakers in the room (this computer's microphone)", classes="field-label")
-            yield Select(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="local")
+            yield Select(_COUNT_CHOICES, value=count_default, allow_blank=False, id="local")
             yield Static("Remote speakers (system audio: calls, videos)", classes="field-label")
-            yield Select(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="remote")
-            yield Static("Auto-detect works; exact counts label speakers better.", classes="hint")
+            yield Select(_COUNT_CHOICES, value=count_default, allow_blank=False, id="remote")
+            yield Static(count_hint, classes="hint")
             yield Static("Language", classes="field-label")
             yield Select(_LANGUAGE_CHOICES, value="auto", allow_blank=False, id="language")
             yield Static("Title (optional; used by notes)", classes="field-label")
@@ -101,6 +102,24 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
                 yield Button("Start", variant="success", id="go")
                 yield Button("Back", id="back")
         yield Footer()
+
+    def _count_default(self) -> tuple[int, str]:
+        """The count Selects' starting value and the hint shown under them.
+
+        ``[speakers] diarization = false`` makes 1 — the diarizer-free path —
+        the form's starting point; picking Auto-detect or a real count still
+        separates speakers for this one meeting (the form beats the file, the
+        same way a CLI flag does). A broken settings file keeps the Auto
+        defaults here — :meth:`_submit` is where it is reported.
+        """
+        from stenograf.settings import SettingsError, load_settings
+
+        try:
+            if load_settings().speakers.diarization is False:
+                return 1, "Diarization is off in settings; Auto-detect or a count separates."
+        except SettingsError:
+            pass
+        return _AUTO, "Auto-detect works; exact counts label speakers better."
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "go":

@@ -24,6 +24,7 @@ from stenograf.cli.run import (
     _notes_options,
     _prepare_output,
     _reid_format_options,
+    _resolve_diarization,
     _resolve_run_config,
     _vocab_options,
 )
@@ -76,12 +77,13 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     help="Number of remote speakers; 0 = in-room meeting without system audio.",
 )
 @click.option(
-    "--no-diarization",
-    "no_diarization",
-    is_flag=True,
-    help="Skip speaker diarization: the diarizer model is never loaded and each "
-    "captured channel is attributed to a single speaker (Local-1/Remote-1). "
-    "Conflicts with a --local/--remote count above 1.",
+    "--diarization/--no-diarization",
+    "diarization_flag",
+    default=None,
+    help="Run (or skip) speaker diarization; skipped, the diarizer model is "
+    "never loaded and each captured channel is attributed to a single speaker "
+    "(Local-1/Remote-1). --no-diarization conflicts with a --local/--remote "
+    "count above 1 [default: [speakers] diarization in settings.toml, else on].",
 )
 @click.option(
     "--replay",
@@ -190,7 +192,7 @@ def start(
     lang: str | None,
     local_speakers: int | None,
     remote_speakers: int | None,
-    no_diarization: bool,
+    diarization_flag: bool | None,
     replay: str | None,
     out: Path | None,
     force: bool,
@@ -231,8 +233,13 @@ def start(
     glossary_threshold, reid_threshold = cfg.glossary_threshold, cfg.reid_threshold
     reid_store = cfg.reid_store
 
+    diarize = _resolve_diarization(
+        diarization_flag, settings.speakers.diarization, local_speakers, remote_speakers
+    )
+    if not diarize and diarization_flag is None:  # settings turned it off — say so
+        click.echo("diarization: off ([speakers] in settings.toml; --diarization to enable)")
     local_speakers, remote_speakers = _apply_no_diarization(
-        no_diarization, local_speakers, remote_speakers
+        not diarize, local_speakers, remote_speakers
     )
     try:
         profile = MeetingProfile(

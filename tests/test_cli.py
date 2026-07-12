@@ -181,6 +181,88 @@ def test_apply_no_diarization_preserves_a_disabled_channel():
     assert cli.run._apply_no_diarization(False, None, 3) == (None, 3)
 
 
+def test_resolve_diarization_precedence():
+    # flag > explicit count > settings.toml > on.
+    resolve = cli.run._resolve_diarization
+    assert resolve(None, None, None) is True  # everything unset → on
+    assert resolve(None, False, None) is False  # settings turn it off
+    assert resolve(True, False, None) is True  # --diarization beats the file
+    assert resolve(None, False, 3) is True  # an explicit count asks to diarize
+    assert resolve(False, None, 3) is False  # --no-diarization wins (UsageError later)
+    assert resolve(None, True, None, 1) is True  # explicit on in the file
+
+
+def _write_settings(monkeypatch_env_dir: Path, body: str) -> None:
+    """Drop a settings.toml into the test's $STENOGRAF_DATA dir."""
+    data = monkeypatch_env_dir / "steno-data"
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "settings.toml").write_text(body, encoding="utf-8")
+
+
+def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch):
+    calls = {}
+
+    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+        calls["need_diarizer"] = need_diarizer
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert calls["need_diarizer"] is False
+    assert "diarization: off" in result.output  # the file's default is announced
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    assert {e["speaker"] for e in entries} == {"Speaker 1"}
+
+
+def test_transcribe_diarization_flag_beats_settings_off(tmp_path, monkeypatch):
+    calls = {}
+
+    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+        calls["need_diarizer"] = need_diarizer
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--diarization"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["need_diarizer"] is True
+    assert "diarization: off" not in result.output
+
+
+def test_transcribe_explicit_count_beats_settings_off(tmp_path, monkeypatch):
+    # A per-run --speakers above 1 is itself a request to diarize; the file's
+    # default must not force it off (or error like the explicit flag does).
+    calls = {}
+
+    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+        calls["need_diarizer"] = need_diarizer
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--speakers", "2"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["need_diarizer"] is True
+
+
 def test_cleanup_checkpoints_removes_every_checkpoint_format(tmp_path):
     for fmt in ("md", "json", "txt"):
         (tmp_path / f"transcript.partial.{fmt}").write_text("x", encoding="utf-8")
@@ -438,6 +520,30 @@ def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls["need_diarizer"] is False  # counts collapsed to 1 → no diarizer load
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    assert {e["speaker"] for e in entries} == {"Local-1"}
+
+
+def test_start_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch):
+    calls = {}
+
+    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+        calls["need_diarizer"] = need_diarizer
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+
+    result = CliRunner().invoke(
+        cli.main,
+        ["start", "--remote", "0", "--replay", str(mic), "--out", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["need_diarizer"] is False
+    assert "diarization: off" in result.output
     entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
     assert {e["speaker"] for e in entries} == {"Local-1"}
 

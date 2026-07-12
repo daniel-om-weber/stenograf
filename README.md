@@ -92,8 +92,11 @@ steno start --replay mic.wav        # dev: drive the live pass from a file
 
 Both `start` and `transcribe` accept `--format md,json,txt,srt,vtt` (default
 `md,json,txt` — `txt` is the plain prose without speaker labels or timestamps),
-`--lang de|en`, `--no-diarization` to skip speaker separation entirely (the
-diarizer model is never loaded), and `--print` to echo the transcript to stdout.
+`--lang de|en`, `--diarization/--no-diarization` to run or skip speaker
+separation entirely (skipped, the diarizer model is never loaded — worthwhile
+on machines where it costs minutes; `[speakers] diarization = false` in the
+settings makes skipping the default), and `--print` to echo the transcript to
+stdout.
 
 If you know how many people spoke in a recording, tell `steno transcribe` with
 `--speakers N` — it is the biggest diarization accuracy lever (`--speakers 1`
@@ -230,6 +233,8 @@ glossary_threshold = 0.82
 dir = "~/Documents/Meetings"      # where meeting folders are created
 
 [speakers]
+diarization = false               # skip speaker separation by default (fast; a
+                                  # per-run flag or speaker count still overrides)
 reid_threshold = 0.5              # cross-meeting voice match strictness (0–1)
 profile_store = "~/steno/profiles.json"
 

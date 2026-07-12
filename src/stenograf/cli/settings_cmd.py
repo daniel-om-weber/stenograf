@@ -116,6 +116,7 @@ def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
             None,
         ),
         ("output", "dir", settings.output.dir, default_output_home(), None),
+        ("speakers", "diarization", settings.speakers.diarization, True, None),
         ("speakers", "reid_threshold", settings.speakers.reid_threshold, REID_THRESHOLD, None),
         ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
         ("asr", "backend", settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"),

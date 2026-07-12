@@ -132,6 +132,23 @@ def _parse_formats(spec: str) -> list[str]:
     return formats
 
 
+def _resolve_diarization(flag: bool | None, setting: bool | None, *counts: int | None) -> bool:
+    """Whether diarization runs this run: flag > explicit count > settings > on.
+
+    The per-run ``--diarization/--no-diarization`` flag wins outright (an
+    explicit ``--no-diarization`` beside a count above 1 stays the
+    :func:`_apply_no_diarization` UsageError). Without a flag, an explicit
+    speaker count above 1 is itself a request to diarize, so it beats a
+    ``[speakers] diarization = false`` default; otherwise that settings value
+    decides, and the built-in default is on.
+    """
+    if flag is not None:
+        return flag
+    if any((count or 0) > 1 for count in counts):
+        return True
+    return setting if setting is not None else True
+
+
 def _apply_no_diarization(
     enabled: bool, local_speakers: int | None, remote_speakers: int | None
 ) -> tuple[int | None, int | None]:
