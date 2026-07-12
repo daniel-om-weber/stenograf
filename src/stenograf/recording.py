@@ -25,10 +25,10 @@ from pathlib import Path
 import numpy as np
 
 from stenograf.capture.base import (
-    ORDER_TOLERANCE_SAMPLES,
     SAMPLE_RATE,
     AudioFrame,
     Channel,
+    GapPaddedBuffer,
 )
 
 _BYTES_PER_SAMPLE = 2  # int16
@@ -157,32 +157,22 @@ class WavTee:
         )
 
 
-class _PendingChannel:
-    """FIFO of a channel's not-yet-written int16 samples, gap-padded by time."""
+class _PendingChannel(GapPaddedBuffer):
+    """FIFO of a channel's not-yet-written int16 samples, gap-padded by time.
+
+    Anchored at session t=0 with every gap padded exactly (``pad_gaps_over=0``),
+    so the recorded file's clock stays honest and all of a meeting's recordings
+    share the capture clock's t=0.
+    """
 
     def __init__(self) -> None:
+        super().__init__(label="recorded", anchor=0)
         self._chunks: deque[np.ndarray] = deque()
         self._available = 0
-        self._received = 0  # total samples placed, including silence padding
 
-    def add(self, timestamp: float, samples: np.ndarray) -> None:
-        offset = round(timestamp * SAMPLE_RATE)
-        if offset < self._received - ORDER_TOLERANCE_SAMPLES:
-            # Backward past jitter tolerance: appending here would misalign the
-            # recorded file from this frame on. Frames arrive in order per channel.
-            raise ValueError(
-                f"frame went backwards {(self._received - offset) / SAMPLE_RATE:.3f}s "
-                f"(timestamp {timestamp:.3f}s); frames must arrive in order"
-            )
-        if offset > self._received:  # gap → pad silence to keep the clock honest
-            gap = offset - self._received
-            self._chunks.append(np.zeros(gap, dtype=np.int16))
-            self._available += gap
-            self._received += gap
-        samples = np.asarray(samples, dtype=np.int16)
+    def _place(self, samples: np.ndarray) -> None:
         self._chunks.append(samples)
         self._available += len(samples)
-        self._received += len(samples)
 
     @property
     def available(self) -> int:

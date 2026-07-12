@@ -11,6 +11,10 @@ Providers are platform-specific:
 
 The core never learns where the audio came from; it only consumes
 ``AudioFrame`` objects. No provider may ever write audio to disk.
+
+Also home to :class:`GapPaddedBuffer`, the one implementation of the
+timestamp-anchored buffering arithmetic that consumers of frames
+(echo canceller, recording tee) rely on.
 """
 
 from __future__ import annotations
@@ -60,6 +64,55 @@ class AudioFrame:
     @property
     def duration(self) -> float:
         return len(self.samples) / SAMPLE_RATE
+
+
+class GapPaddedBuffer(ABC):
+    """Timestamp-anchored int16 sample stream — subclasses provide the storage.
+
+    The one home of the forward-gap / backward-jump arithmetic that keeps a
+    channel's sample index and its timeline in agreement. Both consumers —
+    the echo canceller's tracks and the recording tee's pending channels —
+    build on it; a divergence between the two would silently misalign the
+    recording or the AEC's far-end reference.
+
+    Frames land at ``round(timestamp * SAMPLE_RATE)``. The stream anchors at
+    the first frame by default; constructing with ``anchor=0`` anchors at
+    session t=0 instead, so a late first frame gets its head padded (the
+    recording tee aligns every file to the capture clock's t=0 this way). A
+    forward gap wider than ``pad_gaps_over`` samples is filled with silence
+    to keep the timeline honest; gaps up to it (delivery jitter) are absorbed
+    by appending flush. A backward jump past ``ORDER_TOLERANCE_SAMPLES``
+    raises — appending anyway would silently misalign everything after it.
+    """
+
+    def __init__(self, *, label: str, pad_gaps_over: int = 0, anchor: int | None = None) -> None:
+        self._label = label
+        self._pad_gaps_over = pad_gaps_over
+        self._end = anchor
+        """Absolute end of the stored stream, in samples; None until anchored."""
+
+    def add(self, timestamp: float, samples: np.ndarray) -> None:
+        """Append a frame's samples, silence-padding any gap before them."""
+        offset = round(timestamp * SAMPLE_RATE)
+        if self._end is None:
+            self._end = offset
+        gap = offset - self._end
+        if gap < -ORDER_TOLERANCE_SAMPLES:
+            raise ValueError(
+                f"{self._label} frame went backwards {-gap / SAMPLE_RATE:.3f}s "
+                f"(timestamp {timestamp:.3f}s): the capture stream desynced; "
+                "frames arrive in order per channel"
+            )
+        if gap > self._pad_gaps_over:
+            self._place(np.zeros(gap, dtype=np.int16))
+            self._end += gap
+        samples = np.asarray(samples, dtype=np.int16)
+        self._place(samples)
+        self._end += len(samples)
+
+    @abstractmethod
+    def _place(self, samples: np.ndarray) -> None:
+        """Store ``samples`` at the end of the stream."""
 
 
 class CaptureProvider(ABC):

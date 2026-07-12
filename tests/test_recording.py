@@ -70,6 +70,31 @@ def test_gap_between_frames_pads_silence(tmp_path):
     assert data[SAMPLE_RATE] == 8
 
 
+def test_even_a_jitter_sized_gap_is_padded(tmp_path):
+    # Unlike the AEC tracks (which absorb jitter-sized gaps), the recording
+    # pads every gap exactly, so the WAV clock stays honest.
+    path = tmp_path / "rec.wav"
+    tee = WavTee(path, {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, np.array([7], dtype=np.int16)))
+    tee.add(frame(Channel.MIC, 4 / SAMPLE_RATE, np.array([8], dtype=np.int16)))
+    tee.close()
+
+    _, data = read_wav(path)
+    assert data.tolist() == [7, 0, 0, 0, 8]
+
+
+def test_late_first_frame_pads_the_head_to_session_start(tmp_path):
+    # Every recording is anchored at the capture clock's t=0, not at its first
+    # frame — the AEC dump triple relies on this for sample alignment.
+    path = tmp_path / "rec.wav"
+    tee = WavTee(path, {Channel.MIC})
+    tee.add(frame(Channel.MIC, 2 / SAMPLE_RATE, np.array([5], dtype=np.int16)))
+    tee.close()
+
+    _, data = read_wav(path)
+    assert data.tolist() == [0, 0, 5]
+
+
 def test_backward_frame_raises_instead_of_misaligning(tmp_path):
     tee = WavTee(tmp_path / "rec.wav", {Channel.MIC})
     tee.add(frame(Channel.MIC, 1.0, np.ones(SAMPLE_RATE, dtype=np.int16)))

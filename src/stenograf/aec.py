@@ -46,6 +46,7 @@ from stenograf.capture.base import (
     AudioFrame,
     CaptureProvider,
     Channel,
+    GapPaddedBuffer,
 )
 from stenograf.recording import WavTee
 
@@ -68,53 +69,41 @@ against silence rather than stall the live captions: a stalled tap (device
 change, sleep/wake) must degrade to "no cancellation", never to "no captions"."""
 
 
-class _Track:
+class _Track(GapPaddedBuffer):
     """A contiguous run of one channel's samples, and the timestamp of sample 0.
 
     Providers deliver frames monotonically per channel, but a device that drops
-    buffers leaves a hole. Padding it with silence keeps the sample index and
-    the timeline in agreement, which is the only reason the far-end reference
-    can be looked up by timestamp at all.
+    buffers leaves a hole. The shared buffer pads it with silence, keeping the
+    sample index and the timeline in agreement — the only reason the far-end
+    reference can be looked up by timestamp at all. Jitter-sized gaps are
+    absorbed (``pad_gaps_over``) rather than zero-stuffed mid-speech.
     """
 
     def __init__(self, channel: Channel) -> None:
-        self._channel = channel
+        super().__init__(label=channel.value, pad_gaps_over=ORDER_TOLERANCE_SAMPLES)
         self._buf = np.zeros(0, dtype=np.int16)
-        self.start_ts: float | None = None
+
+    def _place(self, samples: np.ndarray) -> None:
+        if self._buf.size:
+            self._buf = np.concatenate([self._buf, samples])
+        else:
+            self._buf = samples.astype(np.int16, copy=True)
 
     @property
     def available(self) -> int:
         return self._buf.size
 
     @property
-    def end_ts(self) -> float | None:
-        if self.start_ts is None:
+    def start_ts(self) -> float | None:
+        """Timestamp of sample 0 — derived, so ``take`` advances it implicitly."""
+        if self._end is None:
             return None
-        return self.start_ts + self._buf.size / SAMPLE_RATE
-
-    def append(self, frame: AudioFrame) -> None:
-        if self.start_ts is None:
-            self.start_ts = frame.timestamp
-            self._buf = frame.samples.astype(np.int16, copy=True)
-            return
-        assert self.end_ts is not None
-        gap = int(round((frame.timestamp - self.end_ts) * SAMPLE_RATE))
-        if gap < -ORDER_TOLERANCE_SAMPLES:
-            raise ValueError(
-                f"{self._channel.value} frame went backwards by {-gap} samples; "
-                "the capture stream desynced"
-            )
-        pieces = [self._buf]
-        if gap > ORDER_TOLERANCE_SAMPLES:
-            pieces.append(np.zeros(gap, dtype=np.int16))
-        pieces.append(frame.samples)
-        self._buf = np.concatenate(pieces)
+        return (self._end - self._buf.size) / SAMPLE_RATE
 
     def take(self, count: int) -> np.ndarray:
         """Remove and return the first ``count`` samples, advancing the timeline."""
-        assert self.start_ts is not None
+        assert self._end is not None
         head, self._buf = self._buf[:count], self._buf[count:]
-        self.start_ts += head.size / SAMPLE_RATE
         return head
 
     def window(self, ts: float, count: int) -> np.ndarray | None:
@@ -141,12 +130,12 @@ class _Track:
         return np.concatenate([np.zeros(pad, dtype=np.int16), tail])
 
     def trim_before(self, ts: float) -> None:
-        if self.start_ts is None or ts <= self.start_ts:
+        start = self.start_ts
+        if start is None or ts <= start:
             return
-        drop = min(int((ts - self.start_ts) * SAMPLE_RATE), self._buf.size)
+        drop = min(int((ts - start) * SAMPLE_RATE), self._buf.size)
         if drop > 0:
-            self._buf = self._buf[drop:]
-            self.start_ts += drop / SAMPLE_RATE
+            self._buf = self._buf[drop:]  # start_ts is derived; it advances with the slice
 
 
 class EchoCanceller:
@@ -195,9 +184,9 @@ class EchoCanceller:
         if not self.enabled:
             return [frame]
         if frame.channel is Channel.SYSTEM:
-            self._far.append(frame)
+            self._far.add(frame.timestamp, frame.samples)
             return [frame]
-        self._near.append(frame)
+        self._near.add(frame.timestamp, frame.samples)
         return self._drain()
 
     def drain(self) -> list[AudioFrame]:

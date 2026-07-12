@@ -6,7 +6,13 @@ import numpy as np
 import pytest
 
 from stenograf.aec import TICK_SAMPLES, EchoCanceller, EchoCancellingProvider
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.capture.base import (
+    ORDER_TOLERANCE_SAMPLES,
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureProvider,
+    Channel,
+)
 from stenograf.recording import read_channels
 
 BOTH = {Channel.MIC, Channel.SYSTEM}
@@ -156,6 +162,23 @@ class TestFailureModes:
 
         total = sum(p.samples.size for p in produced)
         assert total == MIC_CHUNK * 2, "the hole was not filled, so the timeline shifted"
+
+    def test_jitter_sized_gap_is_absorbed_not_zero_stuffed(self) -> None:
+        # A forward gap within ORDER_TOLERANCE_SAMPLES is delivery jitter, not
+        # a dropped buffer; padding it would splice silence mid-speech. This
+        # pins the tracks' pad_gaps_over choice — the recording tee deliberately
+        # differs (it pads every gap so the WAV clock stays exact).
+        aec = EchoCanceller(BOTH)
+        for i in range(0, SAMPLE_RATE, SYS_CHUNK):  # 1 s of reference
+            ts = i / SAMPLE_RATE
+            aec.process(AudioFrame(Channel.SYSTEM, ts, np.zeros(SYS_CHUNK, np.int16)))
+
+        aec.process(AudioFrame(Channel.MIC, 0.0, np.ones(MIC_CHUNK, np.int16)))
+        late = (MIC_CHUNK + ORDER_TOLERANCE_SAMPLES) / SAMPLE_RATE  # at the tolerance
+        produced = aec.process(AudioFrame(Channel.MIC, late, np.ones(MIC_CHUNK, np.int16)))
+
+        total = sum(p.samples.size for p in produced)
+        assert total == MIC_CHUNK, "jitter was zero-stuffed instead of absorbed"
 
     def test_end_of_stream_flush_is_not_reference_loss(self) -> None:
         """The far end legitimately ends a hair before the mic tail; the flush
