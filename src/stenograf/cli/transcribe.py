@@ -50,7 +50,8 @@ if TYPE_CHECKING:
     type=click.IntRange(1, _FILE_MAX_SPEAKERS),
     default=None,
     help="Known speaker count (the biggest diarization accuracy lever); "
-    "1 skips diarization, omit to estimate. Mixed single stream only — "
+    "a count above 1 turns diarization on, 1 skips it, omitted the count "
+    "is estimated when diarization runs. Mixed single stream only — "
     "with split voice channels give --local/--remote instead.",
 )
 @click.option(
@@ -86,7 +87,7 @@ if TYPE_CHECKING:
     help="Run (or skip) speaker diarization; skipped, the diarizer model is "
     "never loaded and each voice channel (or the mixed stream) is attributed "
     "to a single speaker. --no-diarization conflicts with a speaker count "
-    "above 1 [default: [speakers] diarization in settings.toml, else on].",
+    "above 1 [default: [speakers] diarization in settings.toml, else off].",
 )
 @click.option(
     "--out",
@@ -190,8 +191,8 @@ def transcribe(
     ):
         if (speakers or 0) > 1:
             raise click.UsageError("--no-diarization conflicts with a speaker count above 1")
-        if diarization_flag is None:  # settings turned it off — say so, a flag user knows
-            click.echo("diarization: off ([speakers] in settings.toml; --diarization to enable)")
+        if diarization_flag is None:  # off without an explicit flag — say so, a flag user knows
+            click.echo("diarization: off (--diarization or a speaker count enables it)")
         if split_pcms is None:
             speakers = 1
         else:

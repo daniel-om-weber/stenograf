@@ -21,8 +21,8 @@ in from the start.
   runs, then a high-accuracy re-transcription of the full in-memory buffer the
   moment it ends. German is a first-class citizen, not an afterthought.
 - **Channel-aware speakers.** Microphone and system audio are captured as
-  separate streams, so local and remote voices never get confused; diarization
-  handles the rest (2–8 speakers).
+  separate streams, so local and remote voices never get confused; optional
+  diarization separates further speakers within a channel (2–8 speakers).
 - **Speakers, not headphones.** Remote voices leaving your laptop speakers and
   re-entering the mic are cancelled in the audio domain (WebRTC AEC3, with the
   system channel as the far-end reference), so they are never transcribed as a
@@ -84,7 +84,7 @@ steno start --no-live               # skip live captions; just finalize on stop
 steno start --title "Weekly sync"   # name the meeting (notes + export use it)
 steno start --flush-interval 60     # crash-checkpoint the captions every 60s
 steno start --no-aec                # disable echo cancellation (headphones)
-steno start --no-diarization        # skip speaker separation (labels stay per channel)
+steno start --diarization           # separate speakers within each channel (off by default)
 steno start --record-audio          # opt in to keeping a WAV (off by default)
 steno start --max-seconds 3600      # stop capture automatically after an hour
 steno start --replay mic.wav        # dev: drive the live pass from a file
@@ -93,14 +93,15 @@ steno start --replay mic.wav        # dev: drive the live pass from a file
 Both `start` and `transcribe` accept `--format md,json,txt,srt,vtt` (default
 `md,json,txt` — `txt` is the plain prose without speaker labels or timestamps),
 `--lang de|en`, `--diarization/--no-diarization` to run or skip speaker
-separation entirely (skipped, the diarizer model is never loaded — worthwhile
-on machines where it costs minutes; `[speakers] diarization = false` in the
-settings makes skipping the default), and `--print` to echo the transcript to
-stdout.
+separation for one run (off by default: each channel is one speaker and the
+diarizer model is never loaded — it costs minutes on some machines;
+`[speakers] diarization = true` in the settings makes running it the
+default), and `--print` to echo the transcript to stdout.
 
 If you know how many people spoke in a recording, tell `steno transcribe` with
-`--speakers N` — it is the biggest diarization accuracy lever (`--speakers 1`
-skips diarization; omitted, the count is estimated).
+`--speakers N` — a count above 1 turns diarization on, and a known count is
+the biggest diarization accuracy lever (omitted, the count is estimated
+whenever diarization runs).
 
 `steno transcribe` recognizes 2-channel recordings whose channels are separate
 voice feeds — a `--record-audio` tee (mic left, system right) or a
@@ -233,8 +234,8 @@ glossary_threshold = 0.82
 dir = "~/Documents/Meetings"      # where meeting folders are created
 
 [speakers]
-diarization = false               # skip speaker separation by default (fast; a
-                                  # per-run flag or speaker count still overrides)
+diarization = true                # separate speakers within a channel (off by
+                                  # default; a per-run flag or count also enables)
 reid_threshold = 0.5              # cross-meeting voice match strictness (0–1)
 profile_store = "~/steno/profiles.json"
 

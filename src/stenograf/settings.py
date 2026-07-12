@@ -19,13 +19,14 @@ optional; a missing file is simply all defaults. The full schema::
                                         # here (--out bypasses it for one run)
 
     [speakers]
-    diarization = false                 # skip speaker diarization by default:
-                                        # each channel is one speaker and the
-                                        # diarizer model is never loaded (for
-                                        # machines where it takes minutes). A
-                                        # per-run --diarization flag or an
-                                        # explicit speaker count above 1 still
-                                        # turns it on.
+    diarization = true                  # separate speakers within each channel.
+                                        # Off by default: each channel is one
+                                        # speaker and the diarizer model is
+                                        # never loaded (it can take minutes on
+                                        # some machines). A per-run
+                                        # --diarization flag or an explicit
+                                        # speaker count above 1 also turns it
+                                        # on.
     reid_threshold = 0.5                # cosine similarity 0-1 to match a
                                         # saved speaker profile
     profile_store = "~/steno/profiles.json"  # re-ID store location override
@@ -110,8 +111,9 @@ SETTINGS_TEMPLATE = """\
 # dir = "~/Documents/Meetings"             # where meeting folders are created
 
 [speakers]
-# diarization = true                       # false = skip speaker separation (fast;
-#                                          # a per-run flag or count still overrides)
+# diarization = true                       # true = separate speakers within a channel
+#                                          # (off by default; a per-run flag or a
+#                                          # speaker count above 1 also enables it)
 # reid_threshold = 0.5                     # voice-match strictness 0-1
 # profile_store = "~/steno/profiles.json"  # re-ID voiceprint store location
 
@@ -162,10 +164,11 @@ class OutputSettings:
 @dataclass(frozen=True)
 class SpeakerSettings:
     diarization: bool | None = None
-    """``False`` skips speaker diarization by default: each channel is
-    attributed to one speaker and the diarizer model is never loaded — for
-    machines where diarization costs minutes. A per-run ``--diarization`` flag
-    or an explicit speaker count above 1 still turns it on; ``None`` = on."""
+    """``True`` separates speakers within each channel. Unset (``None``) or
+    ``False`` = off, the built-in default: each channel is attributed to one
+    speaker and the diarizer model is never loaded — it costs minutes on some
+    machines. A per-run ``--diarization`` flag or an explicit speaker count
+    above 1 also turns it on."""
     reid_threshold: float | None = None
     profile_store: Path | None = None
 

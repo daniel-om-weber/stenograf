@@ -96,10 +96,13 @@ def test_transcribe_writes_outputs_and_detects_language(tmp_path, stub_backends)
 def test_transcribe_records_parameter_provenance_in_json(tmp_path, stub_backends):
     # No --lang and no --speakers: both are auto, so the JSON must record them as
     # detected (language via LID, count via the finalize), not as user-set (3b).
+    # --diarization opts in so the count is estimated rather than pinned to 1.
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
-    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--diarization"]
+    )
 
     assert result.exit_code == 0, result.output
     params = json.loads((tmp_path / "transcript.json").read_text())["parameters"]
@@ -182,12 +185,13 @@ def test_apply_no_diarization_preserves_a_disabled_channel():
 
 
 def test_resolve_diarization_precedence():
-    # flag > explicit count > settings.toml > on.
+    # flag > explicit count > settings.toml > off.
     resolve = cli.run._resolve_diarization
-    assert resolve(None, None, None) is True  # everything unset → on
-    assert resolve(None, False, None) is False  # settings turn it off
+    assert resolve(None, None, None) is False  # everything unset → off
+    assert resolve(None, False, None) is False  # explicit off in the file too
+    assert resolve(None, None, 3) is True  # an explicit count asks to diarize
+    assert resolve(None, False, 3) is True  # …and beats an explicit file off too
     assert resolve(True, False, None) is True  # --diarization beats the file
-    assert resolve(None, False, 3) is True  # an explicit count asks to diarize
     assert resolve(False, None, 3) is False  # --no-diarization wins (UsageError later)
     assert resolve(None, True, None, 1) is True  # explicit on in the file
 
@@ -197,6 +201,28 @@ def _write_settings(monkeypatch_env_dir: Path, body: str) -> None:
     data = monkeypatch_env_dir / "steno-data"
     data.mkdir(parents=True, exist_ok=True)
     (data / "settings.toml").write_text(body, encoding="utf-8")
+
+
+def test_transcribe_diarization_off_by_default(tmp_path, monkeypatch):
+    # No settings file, no flag, no count: diarization must not run — the
+    # built-in default is off, and the run says so.
+    calls = {}
+
+    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+        calls["need_diarizer"] = need_diarizer
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert calls["need_diarizer"] is False
+    assert "diarization: off" in result.output
+    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
+    assert {e["speaker"] for e in entries} == {"Speaker 1"}
 
 
 def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch):
@@ -348,7 +374,9 @@ def test_transcribe_auto_splits_independent_voice_channels(tmp_path, monkeypatch
     audio = tmp_path / "meeting.wav"
     write_stereo_wav(audio, *_voice_channel_pcms())
 
-    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--diarization"]
+    )
 
     assert result.exit_code == 0, result.output
     assert "2 voice channels" in result.output
@@ -575,14 +603,25 @@ def test_start_no_live_uses_the_batch_path(tmp_path, stub_backends):
 
 
 def test_start_surfaces_estimated_local_count_as_editable(tmp_path, stub_backends):
-    # Omitting --local estimates the mic count (Stage 3a); the summary shows the
-    # detected count and the exact flag to lock or correct it by re-running.
+    # With --diarization, omitting --local estimates the mic count (Stage 3a);
+    # the summary shows the detected count and the exact flag to lock or
+    # correct it by re-running.
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
     result = CliRunner().invoke(
         cli.main,
-        ["start", "--remote", "0", "--replay", str(mic), "--no-live", "--out", str(tmp_path)],
+        [
+            "start",
+            "--diarization",
+            "--remote",
+            "0",
+            "--replay",
+            str(mic),
+            "--no-live",
+            "--out",
+            str(tmp_path),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -619,7 +658,9 @@ def test_transcribe_surfaces_estimated_count_as_editable(tmp_path, stub_backends
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
-    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--diarization"]
+    )
 
     assert result.exit_code == 0, result.output
     assert "speakers: 1 detected" in result.output

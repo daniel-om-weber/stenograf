@@ -106,20 +106,21 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
     def _count_default(self) -> tuple[int, str]:
         """The count Selects' starting value and the hint shown under them.
 
-        ``[speakers] diarization = false`` makes 1 — the diarizer-free path —
-        the form's starting point; picking Auto-detect or a real count still
-        separates speakers for this one meeting (the form beats the file, the
-        same way a CLI flag does). A broken settings file keeps the Auto
-        defaults here — :meth:`_submit` is where it is reported.
+        Diarization is off by default, so 1 — the diarizer-free path — is the
+        form's starting point; picking Auto-detect or a real count still
+        separates speakers for this one meeting (the form beats the settings,
+        the same way a CLI flag does). Only ``[speakers] diarization = true``
+        makes Auto the default again; a broken settings file behaves like the
+        defaults — :meth:`_submit` is where it is reported.
         """
         from stenograf.settings import SettingsError, load_settings
 
         try:
-            if load_settings().speakers.diarization is False:
-                return 1, "Diarization is off in settings; Auto-detect or a count separates."
+            if load_settings().speakers.diarization is True:
+                return _AUTO, "Auto-detect works; exact counts label speakers better."
         except SettingsError:
             pass
-        return _AUTO, "Auto-detect works; exact counts label speakers better."
+        return 1, "Diarization is off by default; Auto-detect or a count separates."
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "go":

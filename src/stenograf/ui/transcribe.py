@@ -203,10 +203,11 @@ class TranscribeScreen(Screen[None]):
             write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)
 
             split_pcms, _correlation = _resolve_split_channels(audio_file, "auto")
-            # [speakers] diarization = false is the launcher's only off switch
-            # (rerun with the CLI's --diarization to override): counts collapse
-            # to one speaker per channel and the diarizer is never loaded.
-            diarize = settings.speakers.diarization is not False
+            # Diarization is off unless [speakers] diarization = true — the
+            # launcher's only on switch (or rerun with the CLI's --diarization):
+            # counts collapse to one speaker per channel and the diarizer is
+            # never loaded.
+            diarize = settings.speakers.diarization is True
             profile = MeetingProfile(
                 glossary=glossary_terms,
                 attendee_names=attendee_names,

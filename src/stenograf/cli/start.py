@@ -83,7 +83,7 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     help="Run (or skip) speaker diarization; skipped, the diarizer model is "
     "never loaded and each captured channel is attributed to a single speaker "
     "(Local-1/Remote-1). --no-diarization conflicts with a --local/--remote "
-    "count above 1 [default: [speakers] diarization in settings.toml, else on].",
+    "count above 1 [default: [speakers] diarization in settings.toml, else off].",
 )
 @click.option(
     "--replay",
@@ -236,8 +236,8 @@ def start(
     diarize = _resolve_diarization(
         diarization_flag, settings.speakers.diarization, local_speakers, remote_speakers
     )
-    if not diarize and diarization_flag is None:  # settings turned it off — say so
-        click.echo("diarization: off ([speakers] in settings.toml; --diarization to enable)")
+    if not diarize and diarization_flag is None:  # off without an explicit flag — say so
+        click.echo("diarization: off (--diarization or a speaker count enables it)")
     local_speakers, remote_speakers = _apply_no_diarization(
         not diarize, local_speakers, remote_speakers
     )
