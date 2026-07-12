@@ -9,6 +9,8 @@ survive customization (PLAN.md §5 D4).
 
 from __future__ import annotations
 
+import json
+
 from stenograf.config import Language
 from stenograf.transcript import Transcript, TranscriptEntry, format_timestamp
 
@@ -52,6 +54,19 @@ NOTES_SCHEMA: dict = {
     },
     "required": ["title", "summary", "decisions", "action_items", "open_questions"],
 }
+
+def schema_instruction(schema: dict) -> str:
+    """The instruction a backend *without* decode-time grammar appends.
+
+    Ollama enforces the schema server-side (``format=``) and must NOT use
+    this; mlx and command inline it and rely on the tolerant JSON extraction
+    in :mod:`.generate`. One wording, here, so the two grammarless backends
+    can never drift apart."""
+    return (
+        "Respond with exactly one JSON object matching this JSON Schema — "
+        "no other text before or after it:\n" + json.dumps(schema, ensure_ascii=False)
+    )
+
 
 _LANGUAGE_NAMES = {Language.GERMAN: "German", Language.ENGLISH: "English"}
 

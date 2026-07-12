@@ -9,12 +9,12 @@ models with a login-managed CLI thus need no API key handling here.
 
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
+from stenograf.notes.prompt import schema_instruction
 
 if TYPE_CHECKING:
     from stenograf.settings import NotesSettings
@@ -98,8 +98,5 @@ class CommandBackend:
 def _render(messages: list[dict[str, str]], schema: dict) -> str:
     """Flatten chat messages into one prompt text, schema instruction last."""
     parts = [m["content"] for m in messages]
-    parts.append(
-        "Respond with exactly one JSON object matching this JSON Schema — "
-        "no other text before or after it:\n" + json.dumps(schema, ensure_ascii=False)
-    )
+    parts.append(schema_instruction(schema))
     return "\n\n".join(parts)

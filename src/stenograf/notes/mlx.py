@@ -20,13 +20,13 @@ The CLI always satisfies this (notes run synchronously on the main thread).
 from __future__ import annotations
 
 import importlib.util
-import json
 import os
 import re
 import threading
 from typing import TYPE_CHECKING, Any
 
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
+from stenograf.notes.prompt import schema_instruction
 
 if TYPE_CHECKING:
     from stenograf.settings import NotesSettings
@@ -172,10 +172,7 @@ class MlxBackend:
         ``enable_thinking`` toggles Qwen3's reasoning mode; templates without
         that variable simply ignore it."""
         messages = [*messages[:-1], dict(messages[-1])]
-        messages[-1]["content"] += (
-            "\n\nRespond with exactly one JSON object matching this JSON Schema — "
-            "no other text before or after it:\n" + json.dumps(schema, ensure_ascii=False)
-        )
+        messages[-1]["content"] += "\n\n" + schema_instruction(schema)
         try:
             return tokenizer.apply_chat_template(
                 messages, add_generation_prompt=True, enable_thinking=self.thinking

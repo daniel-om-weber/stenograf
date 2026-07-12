@@ -157,7 +157,7 @@ delete the copies, keep behavior identical.
   `to_int16(block.mean(axis=1))`; the divergent copy is deleted. (Tiny
   numeric change on Windows samples — acoustically negligible, restores the
   documented single-conversion invariant; note it in the commit message.)
-- [ ] **T8 — `schema_instruction(schema)` in `notes/prompt.py`.** The
+- [x] **T8 — `schema_instruction(schema)` in `notes/prompt.py`.** The
   "respond with exactly one JSON object matching this JSON Schema" string +
   render step is copy-pasted, already subtly divergent, in
   `notes/mlx.py:166-170` and `notes/command.py:98-104`. Both grammarless
