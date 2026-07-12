@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from stenograf import __version__
-from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
+from stenograf.config import Language, MeetingProfile
 from stenograf.doctor import run_checks
 from stenograf.output import atomic_write_text
 from stenograf.transcript import DEFAULT_FORMATS, FORMATS, Transcript
@@ -1196,13 +1196,8 @@ def transcribe(
             asr_provider=settings.asr.provider,
             profile_store=reid_store,
         )
-        entries = transcript.entries
-        language = transcript.language
-        if given_language is None and language is not None:
-            click.echo(f"language: detected {language.value}")
     else:
-        from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
-        from stenograf.pipeline import finalize_channel, relabel_speakers
+        from stenograf.pipeline import finalize_file
 
         try:
             samples = load_audio(audio_file)
@@ -1238,45 +1233,31 @@ def transcribe(
             elif stage == "diarization":
                 click.echo(f"diarizing ({speakers or 'estimating'} speakers)")
 
-        entries = relabel_speakers(
-            finalize_channel(
-                samples,
-                asr=asr,
-                language=language,
-                vad=vad,
-                diarizer=diarizer,
-                num_speakers=speakers,
-                reid=reid,
-                on_progress=progress,
-            )
-        )
-        threshold = DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
-        entries = apply_glossary(
-            entries, glossary=glossary_terms, attendee_names=attendee_names, threshold=threshold
-        )
-        if language is None:
-            from stenograf.lid import detect_language
-
-            language = detect_language(" ".join(e.text for e in entries))
-            if language is not None:
-                click.echo(f"language: detected {language.value}")
-        profile = MeetingProfile(
-            language=given_language,
-            glossary=glossary_terms,
-            attendee_names=attendee_names,
-            speaker_profile_store=profile_store,
-            title=title,
-        )
-        # A file transcribe is one un-split stream (no local/remote model), so its
-        # speaker provenance is recorded under a single "audio" channel (PLAN.md §5 3b).
-        parameters = ResolvedParameters(
-            language=resolve_value(given_language, language),
-            speakers={"audio": resolve_value(speakers, len({e.speaker for e in entries}))},
-        )
-        transcript = Transcript(
-            language=language, profile=profile, entries=entries, parameters=parameters
+        # The settings-derived store path stays off this profile too (see above);
+        # the library assembles the whole transcript, the CLI only reports.
+        transcript = finalize_file(
+            samples,
+            profile=MeetingProfile(
+                language=given_language,
+                glossary=glossary_terms,
+                attendee_names=attendee_names,
+                speaker_profile_store=profile_store,
+                title=title,
+            ),
+            asr=asr,
+            vad=vad,
+            diarizer=diarizer,
+            num_speakers=speakers,
+            reid=reid,
+            glossary_threshold=glossary_threshold,
+            on_progress=progress,
         )
         elapsed = time.monotonic() - started
+
+    entries = transcript.entries
+    language = transcript.language
+    if given_language is None and language is not None:
+        click.echo(f"language: detected {language.value}")
 
     paths = _write_transcript(transcript, out_dir, basename, write_formats)
     speed = duration / elapsed if elapsed else 0.0

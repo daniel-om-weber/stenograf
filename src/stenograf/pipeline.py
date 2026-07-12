@@ -15,9 +15,11 @@ import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE, sample_index
-from stenograf.config import Language
+from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
 from stenograf.diarization.base import Diarizer, SpeakerTurn
-from stenograf.transcript import TranscriptEntry
+from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
+from stenograf.lid import detect_language
+from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD, pack_windows
 
 MAX_ENTRY_GAP = 1.5
@@ -131,6 +133,58 @@ def finalize_channel(
             replace(e, speaker=names[e.speaker]) if e.speaker in names else e for e in entries
         ]
     return entries
+
+
+def finalize_file(
+    samples,
+    *,
+    profile: MeetingProfile,
+    asr: ASRBackend,
+    vad: SileroVAD | None = None,
+    diarizer: Diarizer | None = None,
+    num_speakers: int | None = None,
+    reid: SpeakerResolver | None = None,
+    glossary_threshold: float | None = None,
+    on_progress=None,
+) -> Transcript:
+    """One mixed audio stream → a finished transcript (``steno transcribe``).
+
+    Runs the same accuracy core a meeting's stop runs (:func:`finalize_channel`)
+    followed by the same post-steps :meth:`MeetingRecorder.finalize` applies —
+    display relabel, glossary snap, language detection, parameter provenance —
+    so a file transcribe and a live meeting produce the same artifact shape.
+    One un-split stream has no local/remote model, so speakers get the neutral
+    ``Speaker <n>`` template and provenance is recorded under a single
+    ``"audio"`` channel (PLAN.md §5 3b). ``profile.language`` is the *given*
+    language (``None`` = detect); the returned transcript carries the resolved
+    one."""
+    entries = relabel_speakers(
+        finalize_channel(
+            samples,
+            asr=asr,
+            language=profile.language,
+            vad=vad,
+            diarizer=diarizer,
+            num_speakers=num_speakers,
+            reid=reid,
+            on_progress=on_progress,
+        )
+    )
+    threshold = DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
+    entries = apply_glossary(
+        entries,
+        glossary=profile.glossary,
+        attendee_names=profile.attendee_names,
+        threshold=threshold,
+    )
+    language = profile.language
+    if language is None:
+        language = detect_language(" ".join(e.text for e in entries))
+    parameters = ResolvedParameters(
+        language=resolve_value(profile.language, language),
+        speakers={"audio": resolve_value(num_speakers, len({e.speaker for e in entries}))},
+    )
+    return Transcript(language=language, profile=profile, entries=entries, parameters=parameters)
 
 
 def _shift(seg: Segment, offset: float) -> Segment:

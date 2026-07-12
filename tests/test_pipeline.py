@@ -3,9 +3,11 @@ from conftest import FakeASR, FakeDiarizer, RaisingDiarizer
 
 from stenograf.asr.base import Segment, Word
 from stenograf.audio import SAMPLE_RATE
+from stenograf.config import Language, MeetingProfile, Provenance
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.pipeline import (
     finalize_channel,
+    finalize_file,
     group_words,
     merge_words_turns,
     relabel_speakers,
@@ -367,3 +369,36 @@ class TestFinalizeChannelReID:
         assert entries[0].speaker == "S0"
         assert diarizer.embed_calls == 0
         assert reid.seen is None
+
+
+class TestFinalizeFile:
+    """finalize_file assembles the same artifact shape a meeting's stop does."""
+
+    def test_detects_language_and_records_audio_channel_provenance(self):
+        class GermanASR(FakeASR):
+            def transcribe(self, samples, language):
+                text = "und das ist wirklich eine gute idee für uns"
+                return [Segment(text=text, start=0.1, end=1.0, words=(Word(text, 0.1, 1.0),))]
+
+        profile = MeetingProfile(title="Planung")
+        transcript = finalize_file(
+            np.zeros(SAMPLE_RATE, dtype=np.float32), profile=profile, asr=GermanASR()
+        )
+        assert transcript.language is Language.GERMAN
+        assert transcript.profile is profile  # the given (language=None) profile survives
+        assert [e.speaker for e in transcript.entries] == ["Speaker 1"]
+        assert transcript.parameters.language.provenance is Provenance.DETECTED
+        speakers = transcript.parameters.speakers["audio"]
+        assert speakers.value == 1 and speakers.provenance is Provenance.DETECTED
+
+    def test_explicit_language_and_speaker_count_are_marked_explicit(self):
+        profile = MeetingProfile(language=Language.ENGLISH)
+        transcript = finalize_file(
+            np.zeros(SAMPLE_RATE, dtype=np.float32),
+            profile=profile,
+            asr=FakeASR(),
+            num_speakers=1,
+        )
+        assert transcript.language is Language.ENGLISH
+        assert transcript.parameters.language.provenance is Provenance.EXPLICIT
+        assert transcript.parameters.speakers["audio"].provenance is Provenance.EXPLICIT

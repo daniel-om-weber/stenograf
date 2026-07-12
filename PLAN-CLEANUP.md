@@ -191,7 +191,7 @@ definition each of the primitives above; full suite green.
 
 Order matters; each step is committable alone.
 
-- [ ] **C1 — `finalize_file(...)` in `pipeline.py` (keystone).** The mixed-
+- [x] **C1 — `finalize_file(...)` in `pipeline.py` (keystone).** The mixed-
   file transcribe branch (`cli.py:1201-1277`) hand-assembles the pipeline —
   `finalize_channel` → `relabel_speakers` → `apply_glossary` →
   `detect_language` → hand-built `MeetingProfile`/`ResolvedParameters`/
