@@ -38,9 +38,17 @@ async def _click_start(pilot, screen) -> None:
     """Click the setup form's Start button, scrolling it into view first —
     the form overflows the pilot's small screen, and a click outside the
     visible scroll area lands on the container instead of the button."""
-    screen.query_one("#go").scroll_visible(animate=False)
+    go = screen.query_one("#go")
+    go.scroll_visible(animate=False)
     await pilot.pause()
-    await pilot.click("#go")
+    hit = await pilot.click("#go")
+    if not hit:  # DIAGNOSTIC (temporary): what did the click land on instead?
+        form = screen.query_one("#form")
+        raise AssertionError(
+            f"click missed #go: go.region={go.region} form.region={form.region} "
+            f"scroll_offset={form.scroll_offset} virtual_size={form.virtual_size} "
+            f"screen={screen.size} notices={screen.notices}"
+        )
 
 
 class TestMinimalRedraw:
