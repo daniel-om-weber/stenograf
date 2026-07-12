@@ -441,6 +441,29 @@ class AudioBus:
             return dict(self._marks), self._closed
 
 
+def _consume_frame(
+    frame: AudioFrame,
+    store: SessionStore,
+    bus: AudioBus | None,
+    on_frame: Callable[[AudioFrame], None] | None,
+    channels: list[Channel],
+    max_seconds: float | None,
+) -> bool:
+    """Store one captured frame (tee + watermark); True once ``max_seconds`` is hit.
+
+    The shared per-frame body of both capture loops. The loops themselves stay
+    separate on purpose: batch keeps capture on the calling thread so a
+    ``KeyboardInterrupt`` in the provider ends the meeting cleanly, while the
+    live pass runs it on :class:`CaptureLoop`.
+    """
+    store.append(frame)
+    if on_frame is not None:
+        on_frame(frame)
+    if bus is not None:
+        bus.advance(frame.channel, store.duration(frame.channel))
+    return max_seconds is not None and max(store.duration(ch) for ch in channels) >= max_seconds
+
+
 class CaptureLoop(threading.Thread):
     """Consumes provider frames into the store; never blocks on inference.
 
@@ -476,15 +499,11 @@ class CaptureLoop(threading.Thread):
     def run(self) -> None:
         try:
             for frame in self._provider.frames():
-                self._store.append(frame)
-                if self._on_frame is not None:
-                    self._on_frame(frame)
-                self._bus.advance(frame.channel, self._store.duration(frame.channel))
-                if self._max_seconds is not None:
-                    captured = max(self._store.duration(ch) for ch in self._channels)
-                    if captured >= self._max_seconds:
-                        self._provider.stop()
-                        break
+                if _consume_frame(
+                    frame, self._store, self._bus, self._on_frame, self._channels, self._max_seconds
+                ):
+                    self._provider.stop()
+                    break
         except Exception as exc:  # a desync (backward frame) etc. — surfaced on join
             self.error = exc
         finally:
@@ -853,15 +872,8 @@ class MeetingRecorder:
         capture_error: BaseException | None = None
         try:
             for frame in provider.frames():
-                store.append(frame)
-                if on_frame is not None:
-                    on_frame(frame)
-                if bus is not None:
-                    bus.advance(frame.channel, store.duration(frame.channel))
-                if max_seconds is not None:
-                    captured = max(store.duration(ch) for ch in channels)
-                    if captured >= max_seconds:
-                        break
+                if _consume_frame(frame, store, bus, on_frame, channels, max_seconds):
+                    break
         except KeyboardInterrupt:
             view.status("interrupted — finalizing captured audio")
         except Exception as exc:  # noqa: BLE001 — a desync etc. must not lose the transcript
@@ -874,18 +886,14 @@ class MeetingRecorder:
                 bus.close()  # wakes the checkpointer so it drains and exits
             if checkpointer is not None:
                 checkpointer.join()
-        if capture_error is not None:
-            view.error(f"capture stopped early: {capture_error}; finalizing captured audio")
-        if checkpointer is not None and checkpointer.error is not None:
-            view.error(f"checkpoint stopped early: {checkpointer.error}")
-        view.finalizing()
-        self._note_reference_gap(provider)
-        # Capture has stopped; the finalize is authoritative. Shield it from a
-        # second Ctrl-C so an impatient interrupt cannot discard the transcript.
-        with _shield_interrupt():
-            transcript = self.finalize(store, plans, view=view)
-        view.finalized(transcript)
-        return transcript
+        aux_error = (
+            f"checkpoint stopped early: {checkpointer.error}"
+            if checkpointer is not None and checkpointer.error is not None
+            else None
+        )
+        return self._finalize_and_publish(
+            provider, store, plans, view, capture_error=capture_error, aux_error=aux_error
+        )
 
     def _run_live(
         self,
@@ -975,18 +983,6 @@ class MeetingRecorder:
         with _shield_interrupt():
             worker.join()
             provider.stop()  # idempotent — releases the device if capture ended on its own
-            # A capture error (a stream desync, a device drop) is non-fatal to the
-            # finalize: every frame that did arrive is already in the store, so
-            # surface the error but still finalize what was captured rather than
-            # discarding the whole meeting's transcript.
-            if capture.error is not None:
-                view.error(f"capture stopped early: {capture.error}; finalizing captured audio")
-            # The live pass is provisional; if a decode failed, surface it but still
-            # finalize — the finalize pass is the authoritative transcript regardless.
-            if worker.error is not None:
-                view.error(f"live pass stopped early: {worker.error}")
-            view.finalizing()
-            self._note_reference_gap(provider)
             # The window pass produced finalize-identical decodes (same windows,
             # same model — eval/live.py --mode window); reuse them so finalize
             # skips its ASR pass. A load-shed channel has a caption gap and a
@@ -998,10 +994,55 @@ class MeetingRecorder:
                     for ch in channels
                     if worker.shed_by_channel.get(ch, 0.0) == 0.0
                 }
+            # The live pass is provisional; if a decode failed, surface it but still
+            # finalize — the finalize pass is the authoritative transcript regardless.
+            aux_error = f"live pass stopped early: {worker.error}" if worker.error else None
             # Single-flight: the worker is already joined, but taking the same lock it
             # held documents (and future-proofs) that finalize never runs alongside a
             # live decode.
-            with inference_lock:
+            return self._finalize_and_publish(
+                provider,
+                store,
+                plans,
+                view,
+                capture_error=capture.error,
+                aux_error=aux_error,
+                live_words=live_words,
+                inference_lock=inference_lock,
+            )
+
+    def _finalize_and_publish(
+        self,
+        provider: CaptureProvider,
+        store: SessionStore,
+        plans: list[ChannelPlan],
+        view: LiveView,
+        *,
+        capture_error: BaseException | None,
+        aux_error: str | None,
+        live_words: dict[Channel, tuple[Word, ...]] | None = None,
+        inference_lock: threading.Lock | None = None,
+    ) -> Transcript:
+        """The shared stop→finalize tail of both run modes.
+
+        Capture has stopped when this runs; the finalize is authoritative, so it
+        is shielded from a second Ctrl-C (nested shields are harmless — the live
+        path already holds one across the worker join). A capture error (a
+        stream desync, a device drop) is non-fatal: every frame that did arrive
+        is already in the store, so surface the error but still finalize what
+        was captured rather than discarding the whole meeting's transcript.
+        ``aux_error`` is the mode's secondary-thread failure (checkpointer /
+        live worker), likewise surfaced without losing the transcript.
+        """
+        if capture_error is not None:
+            view.error(f"capture stopped early: {capture_error}; finalizing captured audio")
+        if aux_error is not None:
+            view.error(aux_error)
+        view.finalizing()
+        self._note_reference_gap(provider)
+        with _shield_interrupt():
+            lock = inference_lock if inference_lock is not None else contextlib.nullcontext()
+            with lock:
                 transcript = self.finalize(store, plans, view=view, live_words=live_words)
         view.finalized(transcript)
         return transcript
