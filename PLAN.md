@@ -1047,25 +1047,29 @@ meeting finalizes at ≥4× RT.
 Exit: on a fresh VM (or fresh user account), the one-liner reaches
 "setup complete" and drops the Desktop launcher.
 
-**Track D — on-device notes backend (decision first; code maybe never).**
+**Track D — on-device notes backend — DECIDED 2026-07-12 (no code; the
+build gate stays "Ollama proves insufficient").**
 
-The recorded choice (onnxruntime-genai-directml + Phi-4-mini) predates
-learning that **DirectML is EOL** (team disbanded; wheels track ORT patch
-releases for now — same watch-item as the ASR marker). Ollama/`command`
-already cover Windows, so this track is **gated on Ollama proving
-insufficient** for real Windows users; until then it is a decision task, not
-a build task.
+Re-researched against the DirectML EOL. The clobber fear was unfounded:
+`onnxruntime-genai-directml` (0.14.1, 2026-06-02, still released) does not
+bundle its own ORT — it pip-depends on **`onnxruntime-directml`**, the very
+flavor the ASR already ships, so it coexists cleanly (the CPU flavor
+`onnxruntime-genai` depends on base `onnxruntime` and IS disqualified by the
+one-flavor rule). **Rejected anyway**: DX12-GPU-only with no CPU fallback,
+built entirely on the EOL DirectML EP — the wrong bet when Microsoft's
+investment moved to Windows ML. The successors aren't pip-reachable today:
+Windows ML genai is NuGet/C#-only Preview (no Python wheel); Foundry Local
+(GA 2026-06) requires a DX12 GPU and pulls `onnxruntime-core`/-genai (real
+conflict risk), an Ollama-class service rather than an in-process analog.
 
-1. Re-research (delegate to a subagent): is onnxruntime-genai still shipping
-   `-directml` wheels, and does its package bundle its own ORT — the
-   one-flavor-per-env clobber rule means it must coexist with our
-   `onnxruntime-directml` or it's disqualified outright. Alternatives:
-   llama-cpp-python (CPU/Vulkan; wheels are OFF-PyPI — the same extra-index
-   friction as the Linux fallback), or waiting for a Windows ML-based genai
-   path (Windows ML is the sanctioned multi-vendor successor, GA 2025-09).
-2. Record the decision here and in CLAUDE.md ("Notes backends per platform");
-   implement behind the existing notes-backend registry only if the gate is
-   met.
+**Decision: stay Ollama-default on Windows. If an in-process pip backend is
+ever needed, use llama-cpp-python (CPU GGUF)** — the same fallback CLAUDE.md
+already records for Linux CPU, same off-PyPI extra-index friction, zero ORT
+entanglement. Caveat: the official wheel index's Windows cp313 CPU wheel is
+stale (0.3.2) — build from source (VS Build Tools installed on the desktop)
+or a third-party index. Model: Phi-4-mini stays fine as Q4 GGUF (Qwen2.5-3B /
+Llama-3.2-3B as smaller CPU-friendly alternatives). Revisit the ONNX route
+only when Windows ML genai ships an out-of-preview Python wheel.
 
 **Watch-items (not tasks):** `onnxruntime-directml` wheels ceasing to track
 ORT patch releases (swap the marker back to plain `onnxruntime`; the provider

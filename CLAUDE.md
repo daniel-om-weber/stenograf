@@ -38,9 +38,13 @@ real PipeWire); GitHub Actions Ubuntu is the stable-distro CI reference.
   import-broken, and Voxtral needs 4.x); generation must stay bound to the
   thread that imported `mlx_lm` (guarded in code). **Linux CPU fallback =
   llama-cpp-python — its wheels are OFF-PyPI** (extra index URL required);
-  Ollama stays the default when a GPU box is available. Windows (future) =
-  onnxruntime-genai-directml + Phi-4-mini — but re-check before building:
-  DirectML went EOL after this was recorded (PLAN.md §5 Phase 6 Track D).
+  Ollama stays the default when a GPU box is available. **Windows (decided
+  2026-07-12): Ollama-default, no in-process backend unless Ollama proves
+  insufficient — then llama-cpp-python CPU GGUF (Phi-4-mini), same off-PyPI
+  wheel friction as Linux.** onnxruntime-genai-directml was rejected
+  (DX12-GPU-only on the EOL DirectML EP; coexistence with our
+  onnxruntime-directml would actually have been fine — it depends on the
+  same flavor). Details: PLAN.md §5 Phase 6 Track D.
 - **MLX on background threads**: materialize weights on the load thread or
   inference dies with "no Stream(gpu, 0)"; verify MLX-threading changes
   against the real backend, not mocks.
