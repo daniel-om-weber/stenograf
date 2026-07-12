@@ -81,6 +81,28 @@ class TestMacOSCaptureProvider:
         provider.stop()
         assert provider._proc is None  # torn down
 
+    def test_a_stalled_consumer_never_blocks_the_helper(self):
+        # The regression behind two production bugs (ebf660a, 7dd1510): the
+        # consumer stalls, the 64 KB pipe fills, the helper blocks in write()
+        # and Core Audio kills the tap permanently. The drain thread must absorb
+        # the stream regardless of the consumer, so a helper with far more
+        # output than the pipe holds can exit before frames() is ever read.
+        provider = MacOSCaptureProvider(command=[*FAKE, "--frames", "200"])
+        provider.start({Channel.MIC})
+        assert provider._proc.wait(timeout=10) == 0  # a blocked write would time out
+        frames = list(provider.frames())
+        provider.stop()
+        assert len(frames) == 200  # buffered while the consumer stalled, none dropped
+
+    def test_stream_desync_raises_in_the_consumer(self):
+        # The drain thread hits the malformed header; the error must surface in
+        # frames(), not die silently on the drain thread.
+        provider = MacOSCaptureProvider(command=[*FAKE, "--malformed"])
+        provider.start({Channel.MIC})
+        with pytest.raises(ValueError, match="malformed"):
+            list(provider.frames())
+        provider.stop()
+
     def test_stop_does_not_close_the_pipe_under_a_paused_reader(self):
         # stop() may fire (max_seconds, TUI quit) while the consumer sits between
         # yields; the read that resumes afterwards must end at clean EOF, not

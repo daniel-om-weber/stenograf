@@ -22,6 +22,7 @@ SIGINT/SIGTERM.
 from __future__ import annotations
 
 import os
+import queue
 import signal
 import struct
 import subprocess
@@ -96,6 +97,8 @@ class MacOSCaptureProvider(CaptureProvider):
         else:
             self._prefix = [str(command)]
         self._proc: subprocess.Popen[bytes] | None = None
+        self._queue: queue.SimpleQueue[AudioFrame | Exception | None] | None = None
+        self._drainer: threading.Thread | None = None
         # stop() is called from several threads (the capture loop on max_seconds,
         # the meeting thread on close, and the TUI's quit binding), so serialize it.
         self._stop_lock = threading.Lock()
@@ -106,22 +109,34 @@ class MacOSCaptureProvider(CaptureProvider):
         # stdout is the binary frame stream; stderr (status/prompts) is inherited
         # so the user sees TCC prompts and any capture errors on their terminal.
         self._proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
+        assert self._proc.stdout is not None
+        # The pipe is drained on a dedicated thread, whatever the consumer does.
+        # If the consumer stalls with the pipe full (it holds 64 KB ≈ 1 s of
+        # frames), the helper blocks in write(), Core Audio decides its IO
+        # callback is unresponsive and kills the tap — permanently, mid-meeting;
+        # ebf660a and 7dd1510 both reached production through this. The queue is
+        # unbounded on purpose: the meeting already lives in RAM (SessionStore),
+        # so buffering here (~64 KB/s) costs nothing new, while dropping frames
+        # would lose meeting audio to a stall the consumer recovers from.
+        self._queue = queue.SimpleQueue()
+        self._drainer = threading.Thread(
+            target=_drain_pipe,
+            args=(self._proc.stdout, self._queue),
+            name="stenocap-drain",
+            daemon=True,
+        )
+        self._drainer.start()
 
     def frames(self) -> Iterator[AudioFrame]:
-        if self._proc is None or self._proc.stdout is None:
+        if self._queue is None:
             raise RuntimeError("frames() called before start()")
-        stream = self._proc.stdout
-        # This iterator owns the pipe: stop() runs on other threads and must not
-        # close it under an in-flight read, so the stream is closed here — at
-        # end of stream or when the consumer abandons the iterator.
-        try:
-            while True:
-                frame = read_frame(stream)
-                if frame is None:
-                    return  # helper closed its stdout (stopped or exited)
-                yield frame
-        finally:
-            stream.close()
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return  # helper closed its stdout (stopped or exited)
+            if isinstance(item, Exception):
+                raise item  # stream desync, noticed by the drain thread
+            yield item
 
     def stop(self) -> None:
         # Idempotent + thread-safe: claim the process under the lock and null it so
@@ -139,8 +154,31 @@ class MacOSCaptureProvider(CaptureProvider):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-        # stdout is deliberately not closed here: frames() may be blocked in a
-        # read on another thread, and the helper's exit already ends the stream.
+        # The helper's exit ends the stream: the drain thread sees EOF, queues
+        # the end-of-stream marker for frames(), closes the pipe, and exits.
+        drainer = self._drainer
+        if drainer is not None:
+            drainer.join(timeout=5)
+
+
+def _drain_pipe(stream, out: queue.SimpleQueue) -> None:
+    """Pump helper frames into the queue at capture rate, whatever downstream does.
+
+    Runs on its own thread and owns the pipe: it closes it at end of stream,
+    after queueing the ``None`` end-of-stream marker. A malformed frame (stream
+    desync) is queued as the exception for ``frames()`` to re-raise.
+    """
+    try:
+        while True:
+            frame = read_frame(stream)
+            if frame is None:
+                out.put(None)
+                return
+            out.put(frame)
+    except Exception as exc:
+        out.put(exc)
+    finally:
+        stream.close()
 
 
 def read_frame(stream) -> AudioFrame | None:
