@@ -19,6 +19,20 @@ from textual.screen import Screen
 
 from stenograf.ui.home import HomeScreen
 
+try:  # private module — tolerate it moving in a future textual
+    from textual.widgets._toast import Toast
+except ImportError:  # pragma: no cover
+    pass
+else:
+    # Textual 8.2.8 crash guard: a mouse-down on a toast that is mid-dismissal
+    # enters the text-selection path with the toast already unmounted —
+    # Screen._forward_event dereferences toast.parent (None) and the app dies
+    # with AttributeError (the Textualize/textual#5629 family; no released
+    # fix). Toasts are transient and click-to-dismiss, nothing to select, so
+    # opting the class out of selection short-circuits that branch before the
+    # None is touched.
+    Toast.ALLOW_SELECT = False
+
 
 class StenografApp(App[None]):
     """Screen-stack shell: mounts Home, or a caller-supplied root screen.

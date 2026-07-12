@@ -56,6 +56,15 @@ class TestMinimalRedraw:
 
         _run(body)
 
+    def test_toasts_opt_out_of_text_selection(self):
+        # A mouse-down on a toast that is mid-dismissal enters textual's
+        # text-selection path with toast.parent already None and kills the
+        # app (textual 8.2.8, the Textualize/textual#5629 family). ui.app
+        # pins Toast.ALLOW_SELECT off so that branch never runs on a toast.
+        from textual.widgets._toast import Toast
+
+        assert Toast.ALLOW_SELECT is False
+
 
 class TestHomeScreen:
     def test_home_is_the_default_screen_with_the_full_menu(self):
