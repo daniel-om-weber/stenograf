@@ -36,10 +36,11 @@ from typing import TYPE_CHECKING
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Button, DirectoryTree, Footer, ProgressBar, Static
 
+from stenograf.ui.widgets import FormScroll, NavDirectoryTree
 from stenograf.view import LiveView
 
 if TYPE_CHECKING:
@@ -71,7 +72,7 @@ def _shows_in_picker(path: Path) -> bool:
     )
 
 
-class _AudioTree(DirectoryTree):
+class _AudioTree(NavDirectoryTree):
     """Directory tree showing only directories and transcribable files."""
 
     def filter_paths(self, paths: Iterable[Path]) -> list[Path]:
@@ -123,9 +124,7 @@ class TranscribeScreen(Screen[None]):
         self.status_text = ""  # plain-text mirror of the status line
 
     def compose(self) -> ComposeResult:
-        panel = VerticalScroll(id="panel")
-        panel.can_focus = False  # focus belongs to the tree and buttons
-        with panel:
+        with FormScroll(id="panel"):  # arrows walk tree/buttons, not the scrollbar
             yield Static("Transcribe a recording", id="panel-title")
             yield Static("Pick an audio (or video) file, then press Transcribe.", id="panel-hint")
             yield _AudioTree(self._root, id="tree")

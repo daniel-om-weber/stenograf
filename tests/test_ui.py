@@ -290,6 +290,99 @@ class TestMeetingSetupScreen:
         _run(body)
 
 
+class TestKeyboardNavigation:
+    def test_arrows_walk_the_setup_form(self, tmp_path, monkeypatch):
+        # FormScroll rebinds the container's arrow-scroll keys to focus
+        # movement, and FormSelect releases up/down (enter/space open it), so
+        # the arrows travel the whole form instead of dying on a switch or
+        # getting trapped at the first dropdown.
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            async with app.run_test(size=(80, 50)) as pilot:
+                app.push_screen(MeetingSetupScreen())
+                await pilot.pause()
+                walk = [app.focused.id]
+                for _ in range(7):
+                    await pilot.press("down")
+                    walk.append(app.focused.id)
+                assert walk == [
+                    "mic", "system", "diarize", "language",
+                    "title", "record", "notes", "go",
+                ]  # fmt: skip
+                await pilot.press("up")
+                assert app.focused.id == "notes"  # and back up again
+
+        _run(body)
+
+    def test_dropdown_opens_on_enter_and_lets_arrows_pass(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        from textual.widgets import Select
+
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            async with app.run_test(size=(80, 50)) as pilot:
+                screen = MeetingSetupScreen()
+                app.push_screen(screen)
+                await pilot.pause()
+                select = screen.query_one("#language", Select)
+                select.focus()
+                await pilot.pause()
+                await pilot.press("up")  # travels on — must NOT open the menu
+                assert not select.expanded
+                assert app.focused.id == "diarize"
+                select.focus()
+                await pilot.pause()
+                await pilot.press("enter")  # enter (or space) is what opens it
+                assert select.expanded
+                await pilot.press("escape")  # closes the menu, not the screen
+                await pilot.pause()
+                assert not select.expanded
+                assert app.screen is screen
+
+        _run(body)
+
+    def test_tree_arrows_open_and_close_folders(self, tmp_path, monkeypatch):
+        # The file-manager idiom: right opens a folder (again: steps into
+        # it), left jumps to the parent and then closes it.
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        from stenograf.ui.transcribe import TranscribeScreen
+
+        (tmp_path / "folder").mkdir()
+        (tmp_path / "folder" / "inner.wav").touch()
+
+        async def body():
+            app = StenografApp()
+            async with app.run_test(size=(90, 40)) as pilot:
+                screen = TranscribeScreen(root=tmp_path)
+                app.push_screen(screen)
+                await pilot.pause(0.2)
+                tree = screen.query_one("#tree")
+                tree.focus()
+                await pilot.press("down")  # cursor onto 'folder'
+                await pilot.pause(0.2)
+                assert not tree.cursor_node.is_expanded
+                await pilot.press("right")
+                await pilot.pause(0.3)  # the expand loads the directory
+                assert tree.cursor_node.is_expanded
+                await pilot.press("right")  # already open: step into it
+                await pilot.pause(0.2)
+                assert tree.cursor_node.data.path.name == "inner.wav"
+                await pilot.press("left")  # from the child back to the folder
+                await pilot.pause(0.2)
+                assert tree.cursor_node.data.path.name == "folder"
+                assert tree.cursor_node.is_expanded
+                await pilot.press("left")  # and close it
+                await pilot.pause(0.2)
+                assert not tree.cursor_node.is_expanded
+
+        _run(body)
+
+
 class TestMeetingFlow:
     def test_start_meeting_runs_end_to_end_from_home(self, tmp_path, monkeypatch):
         # The whole launcher path with offline fakes: Home → setup form

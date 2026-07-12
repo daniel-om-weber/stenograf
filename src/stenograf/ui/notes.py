@@ -28,15 +28,17 @@ from typing import TYPE_CHECKING
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Button, DirectoryTree, Footer, Static
+
+from stenograf.ui.widgets import FormScroll, NavDirectoryTree
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-class _TranscriptTree(DirectoryTree):
+class _TranscriptTree(NavDirectoryTree):
     """Directory tree showing only directories and transcript JSON files."""
 
     def filter_paths(self, paths: Iterable[Path]) -> list[Path]:
@@ -92,9 +94,7 @@ class NotesScreen(Screen[None]):
         # happen right after the meeting they summarize.
         self._target = latest_meeting_dir(home)
 
-        panel = VerticalScroll(id="panel")
-        panel.can_focus = False  # focus belongs to the tree and buttons
-        with panel:
+        with FormScroll(id="panel"):  # arrows walk tree/buttons, not the scrollbar
             yield Static("Generate notes", id="panel-title")
             yield Static(
                 "The newest meeting is pre-selected; pick another folder "

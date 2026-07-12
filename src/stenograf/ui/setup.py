@@ -22,11 +22,12 @@ from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Input, Select, Static, Switch
 
 from stenograf.config import Language, MeetingProfile
+from stenograf.ui.widgets import FormScroll, FormSelect
 
 if TYPE_CHECKING:
     from stenograf.settings import Settings
@@ -88,9 +89,7 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
 
     def compose(self) -> ComposeResult:
         diarize = self._diarize_default()
-        form = VerticalScroll(id="form")
-        form.can_focus = False  # focus starts on the first field, not the container
-        with form:
+        with FormScroll(id="form"):  # arrows walk the fields, not the scrollbar
             yield Static("Start meeting", id="form-title")
             with Horizontal(classes="switch-row"):
                 yield Switch(value=True, id="mic")
@@ -106,14 +105,14 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
             counts.display = diarize  # the counts only mean something while diarizing
             with counts:
                 yield Static("Speakers in the room (microphone)", classes="field-label")
-                yield Select(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="local")
+                yield FormSelect(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="local")
                 yield Static("Remote speakers (system audio)", classes="field-label")
-                yield Select(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="remote")
+                yield FormSelect(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="remote")
                 yield Static(
                     "Auto-detect works; exact counts label speakers better.", classes="hint"
                 )
             yield Static("Language", classes="field-label")
-            yield Select(_LANGUAGE_CHOICES, value="auto", allow_blank=False, id="language")
+            yield FormSelect(_LANGUAGE_CHOICES, value="auto", allow_blank=False, id="language")
             yield Static("Title (optional; used by notes)", classes="field-label")
             yield Input(placeholder="e.g. Weekly sync", id="title")
             with Horizontal(classes="switch-row"):
