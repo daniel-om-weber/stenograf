@@ -68,6 +68,19 @@ installs the current main branch; building from the repository compiles the
 capture helper on your machine, which needs the Xcode command-line tools
 (`xcode-select --install`).
 
+### Windows
+
+Same one command, run from PowerShell — installs uv if missing, then stenograf,
+then the launcher:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.ps1 | iex"
+```
+
+Windows never prompts for the microphone, so capture stays silent until you flip
+the toggle under Settings > Privacy & security > Microphone. Windows Terminal is
+recommended for the live-caption TUI.
+
 ### From a checkout
 
 ```sh

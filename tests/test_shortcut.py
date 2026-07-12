@@ -127,3 +127,14 @@ def test_install_script_parses_and_is_executable():
     content = script.read_text()
     assert "tool install --upgrade stenograf" in content
     assert "setup" in content  # the script must end in `steno setup`
+
+
+@pytest.mark.skipif(not WINDOWS, reason="Windows installer: PowerShell parsing is win32-only")
+def test_install_ps1_parses():
+    script = REPO_ROOT / "install.ps1"
+    # Parse-only: [ScriptBlock]::Create raises on a syntax error, runs nothing.
+    check = f"[ScriptBlock]::Create((Get-Content -Raw '{script}')) | Out-Null"
+    subprocess.run(["powershell", "-NoProfile", "-Command", check], check=True)
+    content = script.read_text()
+    assert "tool install --upgrade stenograf" in content
+    assert "setup" in content  # the script must end in `steno setup`
