@@ -349,10 +349,11 @@ def start(
             "meeting ended before a transcript was produced; any .partial checkpoint is kept"
         )
 
-    # The canceller counts every 10 ms mic tick it had to cancel against silence
-    # because the system reference never arrived. A stalled tap degrades to "no
-    # cancellation" by design — but silently, so say how much of the meeting ran
-    # unprotected, and whether the armed text backstop had to clean up after it.
+    # The canceller counts every 10 ms mic tick that ran without a usable system
+    # reference — frames that never arrived, or a dead tap delivering bit-exact
+    # zeros. A lost reference degrades to "no cancellation" by design — but
+    # silently, so say how much of the meeting ran unprotected, and whether the
+    # armed text backstop had to clean up after it.
     canceller = getattr(provider, "canceller", None)
     if canceller is not None and canceller.far_end_missing_ticks > 0:
         if result.dropped_echo_lines:
@@ -365,7 +366,7 @@ def start(
         click.secho(
             f"echo cancellation ran without its reference for "
             f"{canceller.far_end_missing_ticks / 100:.1f}s — the system-audio tap "
-            f"stalled{backstop}",
+            f"stalled or went silent{backstop}",
             fg="yellow",
         )
 

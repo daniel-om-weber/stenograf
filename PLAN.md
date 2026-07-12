@@ -625,13 +625,6 @@ stable-distro; nothing in the design touches ALSA directly, so these suffice.
   so diarization/re-ID quality stays unmeasured: the re-ID threshold stays at an
   untuned 0.5 and far-field local-speaker-count estimation is known to
   over-split (a small group measured as 8).
-- **Capture-tap fragility (two open defects, see PLAN-AEC.md §5).** (1) Any
-  Python-side stall over ~1 s permanently kills the Core Audio tap with no
-  recovery — a drain thread in `MacOSCaptureProvider` would decouple it; two
-  separate bugs have already been traced to this. (2) A tap that keeps
-  delivering **all-zero** PCM is undetected: `far_end_missing_ticks` counts only
-  *absent* far-end frames, so the armed text backstop never arms and no warning
-  fires while the canceller runs blind.
 - **stenodiar on Windows** — the Linux port shipped 2026-07-11 (§2 "stenodiar
   on Linux"); Windows should inherit the same patched CPU build but its
   throughput is unmeasured; details in §2 "Deferred task — stenodiar on

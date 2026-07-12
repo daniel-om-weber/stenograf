@@ -29,9 +29,12 @@ Two properties of AEC3 shape the design:
 Measured across the PLAN-AEC.md scenario matrix (quiet/loud, batch/live,
 built-in/Bluetooth, double-talk), a canceller with a live reference leaks
 nothing the ASR decodes. What residual echo survives comes from *losing* the
-reference — a stalled or mis-clocked tap — which ``far_end_missing_ticks``
-counts; a cross-channel text backstop at merge time arms itself on that signal
-(``session.MeetingRecorder``), and the CLI warns when it had to act.
+reference — a stalled or mis-clocked tap. Loss arrives in two shapes, and
+``far_end_missing_ticks`` counts both: reference frames that stop arriving,
+and a dead tap that keeps delivering frames of bit-exact-zero PCM (the energy
+check in ``_check_dead_tap``). A cross-channel text backstop at merge time
+arms itself on that signal (``session.MeetingRecorder``), and the CLI warns
+when it had to act.
 """
 
 from __future__ import annotations
@@ -67,6 +70,13 @@ _MAX_HOLD_S = 0.5
 """Mic backlog tolerated while waiting for the reference. Past this we cancel
 against silence rather than stall the live captions: a stalled tap (device
 change, sleep/wake) must degrade to "no cancellation", never to "no captions"."""
+
+_DEAD_TAP_S = 30.0
+"""A reference that is bit-exact zero this long, while the mic is live, is a
+dead tap, not a quiet meeting: a live tap carries the meeting app's dither and
+comfort noise, and the mic always carries its own noise floor. Zeros are what
+the known long-session tap failure delivers — frames keep arriving, so absent-
+frame counting alone never notices (PLAN-AEC.md §5)."""
 
 
 class _Track(GapPaddedBuffer):
@@ -161,6 +171,7 @@ class EchoCanceller:
     ) -> None:
         self.enabled = cancel and Channel.MIC in channels and Channel.SYSTEM in channels
         self.far_end_missing_ticks = 0
+        self._zero_run = 0  # consecutive all-zero reference ticks under a live mic
         self._delay_ms = delay_ms
         self._near = _Track(Channel.MIC)
         self._far = _Track(Channel.SYSTEM)
@@ -208,6 +219,7 @@ class EchoCanceller:
             assert ts is not None
 
             far = self._far.window(ts, TICK_SAMPLES)
+            live = far is not None
             if far is None:
                 # The reference has not caught up. Wait — unless the mic backlog
                 # says the tap has stopped, in which case forward uncancelled
@@ -225,6 +237,8 @@ class EchoCanceller:
 
             count = min(TICK_SAMPLES, self._near.available)
             near = self._near.take(count)
+            if live and not flush:
+                self._check_dead_tap(far, near)
             if count < TICK_SAMPLES:
                 near = np.concatenate([near, np.zeros(TICK_SAMPLES - count, dtype=np.int16)])
 
@@ -237,6 +251,32 @@ class EchoCanceller:
         if first_ts is None:
             return []
         return [AudioFrame(channel=Channel.MIC, timestamp=first_ts, samples=np.concatenate(ticks))]
+
+    def _check_dead_tap(self, far: np.ndarray, near: np.ndarray) -> None:
+        """Fold a tap that delivers only zeros into the reference-loss count.
+
+        ``far_end_missing_ticks`` sees *absent* reference frames; the known
+        long-session failure keeps delivering frames of bit-exact-zero PCM, so
+        without this check the counter stays 0, the text backstop never arms,
+        and AEC3 adapts against silence while echo passes straight through to
+        the ASR (PLAN-AEC.md §5). A zero reference tick extends the run only
+        while the mic tick is non-zero (an all-zero mic is no evidence either
+        way — it neither extends nor resets); any far-end energy resets it.
+        A run that reaches ``_DEAD_TAP_S`` lands in ``far_end_missing_ticks``
+        retroactively — the reference was already dead for the whole run —
+        and tick by tick from there.
+        """
+        if far.any():
+            self._zero_run = 0
+            return
+        if not near.any():
+            return
+        self._zero_run += 1
+        threshold = int(_DEAD_TAP_S * 100)
+        if self._zero_run == threshold:
+            self.far_end_missing_ticks += threshold
+        elif self._zero_run > threshold:
+            self.far_end_missing_ticks += 1
 
     def _tick(self, far: np.ndarray, near: np.ndarray) -> np.ndarray:
         """One 10 ms step: reference first, then the mic, per AEC3's contract."""

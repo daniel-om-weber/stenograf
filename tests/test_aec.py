@@ -7,7 +7,7 @@ import wave
 import numpy as np
 import pytest
 
-from stenograf.aec import TICK_SAMPLES, EchoCanceller, EchoCancellingProvider
+from stenograf.aec import _DEAD_TAP_S, TICK_SAMPLES, EchoCanceller, EchoCancellingProvider
 from stenograf.capture.base import (
     ORDER_TOLERANCE_SAMPLES,
     SAMPLE_RATE,
@@ -181,6 +181,26 @@ class TestFailureModes:
 
         total = sum(p.samples.size for p in produced)
         assert total == MIC_CHUNK, "jitter was zero-stuffed instead of absorbed"
+
+    def test_a_tap_delivering_only_zeros_is_reference_loss(self) -> None:
+        """The known long-session failure: the tap keeps delivering frames, but
+        of bit-exact-zero PCM. Absent-frame counting never fires on it, so the
+        energy check must fold the dead span into the same signal — otherwise
+        AEC3 adapts against silence and echo reaches the ASR unwarned."""
+        n = int((_DEAD_TAP_S + 2.0) * SAMPLE_RATE)
+        near = np.full(n, 1000, np.int16)  # a real mic always has a noise floor
+        _, aec = _run(_interleave(near, np.zeros(n, np.int16)))
+        assert aec.far_end_missing_ticks >= int(_DEAD_TAP_S * 100)
+
+    def test_a_quiet_but_live_reference_is_not_a_dead_tap(self) -> None:
+        # Sparse far-end energy (comfort noise, a notification) resets the run:
+        # a merely quiet meeting must never arm the backstop or warn.
+        n = int((_DEAD_TAP_S + 2.0) * SAMPLE_RATE)
+        near = np.full(n, 1000, np.int16)
+        system = np.zeros(n, np.int16)
+        system[:: int(_DEAD_TAP_S * SAMPLE_RATE) // 2] = 1  # a heartbeat every half-threshold
+        _, aec = _run(_interleave(near, system))
+        assert aec.far_end_missing_ticks == 0
 
     def test_end_of_stream_flush_is_not_reference_loss(self) -> None:
         """The far end legitimately ends a hair before the mic tail; the flush

@@ -172,30 +172,36 @@ which would silently blind the canceller.
    with (3)**: no decodeable residual to suppress. LocalVQE/DTLN-aec remain in
    §5 as the escalation path if a future device class measures differently.
 
-## 5. Open items (the echo path is settled; the tap that feeds it is not)
+## 5. Open items — both RESOLVED 2026-07-12 (the echo path is fully settled)
 
 Both tasks 3 and 4 closed on the same finding: **a canceller with a live reference
-does not leak.** Every measured leak came from *losing* the reference. That makes
-tap robustness — not suppression — the remaining work. Neither item below is
-scheduled; both are cheap, and either would silently reintroduce echo lines.
+does not leak.** Every measured leak came from *losing* the reference. That made
+tap robustness — not suppression — the remaining work; both defects below are now
+fixed and regression-tested.
 
 1. **The tap dies on any Python-side stall >~1 s, permanently, with no recovery.**
    `stenocap`'s 64 KB stdout pipe fills, Core Audio kills the tap, and nothing
-   restarts it. Two separate bugs have already reached production through this
-   path (the tail-checkpointer busy-spin, `ebf660a`; the aggregate-rate mismatch,
-   `7dd1510`). A **drain thread in `MacOSCaptureProvider`** — reading the pipe
-   into a queue independently of the consumer — decouples capture from every
-   downstream stall. Highest-value hardening in the capture layer.
+   restarts it. Two separate bugs reached production through this path (the
+   tail-checkpointer busy-spin, `ebf660a`; the aggregate-rate mismatch,
+   `7dd1510`). **FIXED:** `MacOSCaptureProvider` drains the pipe on a dedicated
+   thread into an unbounded in-process queue, so the helper is never blocked by a
+   downstream stall (the queue is deliberately unbounded — the meeting already
+   lives in RAM via `SessionStore`, and dropping frames would trade a recoverable
+   stall for lost audio). Pinned by a test where the helper emits ~10× the pipe's
+   capacity and exits before the consumer reads a byte.
 
-2. **An all-zero tap is undetected.** `far_end_missing_ticks` (`aec.py:235`)
-   increments only when a far-end frame is **absent**. The known long-session
-   failure where the tap keeps delivering frames of silent PCM therefore leaves
-   the counter at 0: the armed text backstop never arms, the CLI never warns, and
-   AEC3 adapts against silence while echo passes straight through to the ASR —
-   the exact failure the backstop exists to catch, in its quietest form. Fix: an
-   energy check on the far-end tick (a reference that is bit-exact zero for many
-   consecutive seconds *while the near end is not* is a dead tap, not a quiet
-   meeting), feeding the same `reference_gap_s` signal.
+2. **An all-zero tap is undetected.** `far_end_missing_ticks` increments only
+   when a far-end frame is **absent**; the known long-session failure keeps
+   delivering frames of silent PCM, so the counter stayed 0, the text backstop
+   never armed, the CLI never warned, and AEC3 adapted against silence while echo
+   passed straight through to the ASR. **FIXED:** an energy check on the far-end
+   tick (`EchoCanceller._check_dead_tap`): a reference that is bit-exact zero for
+   `_DEAD_TAP_S` (30 s) straight while the mic tick is non-zero is a dead tap,
+   not a quiet meeting; the whole run lands retroactively in
+   `far_end_missing_ticks`, feeding the same `reference_gap_s` signal, so the
+   existing backstop and CLI warning fire. Any far-end energy (comfort noise, a
+   notification sound) resets the run; an all-zero mic tick neither extends nor
+   resets it.
 
 ## 6. Sources
 
