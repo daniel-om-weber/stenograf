@@ -356,6 +356,7 @@ def _transcribe_split_channels(
     asr_backend: str | None = None,
     asr_provider: str | None = None,
     profile_store: Path | None = None,
+    view=None,
 ):
     """Transcribe two voice channels through the meeting finalize.
 
@@ -368,6 +369,10 @@ def _transcribe_split_channels(
     counts for reporting, ``elapsed`` the processing seconds (clocked after
     model load, so a first-run weight download never masquerades as
     transcription speed).
+
+    ``view`` receives the finalize's per-channel status lines; ``None`` (the
+    CLI) echoes them to stdout. The launcher's TranscribeScreen passes its own
+    — a click echo would print into a raw-mode Textual terminal.
     """
     from stenograf.audio import to_int16
     from stenograf.capture.base import AudioFrame, Channel
@@ -405,5 +410,5 @@ def _transcribe_split_channels(
     store.append(AudioFrame(Channel.MIC, 0.0, to_int16(left)))
     store.append(AudioFrame(Channel.SYSTEM, 0.0, to_int16(right)))
     started = time.monotonic()
-    result = recorder.finalize(store, plans, view=_StatusEcho())
+    result = recorder.finalize(store, plans, view=view if view is not None else _StatusEcho())
     return result, time.monotonic() - started

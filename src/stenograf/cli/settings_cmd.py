@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
 import click
 
 from stenograf.cli.format import _fmt_setting
 from stenograf.output import atomic_write_text
 from stenograf.transcript import DEFAULT_FORMATS
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @click.group("settings")
@@ -47,12 +51,10 @@ def settings_edit() -> None:
     available key is in front of you. Validation failures keep your edits —
     rerun to fix them.
     """
-    from stenograf.settings import SETTINGS_TEMPLATE, SettingsError, load_settings, settings_path
+    from stenograf.settings import SettingsError, load_settings
 
-    path = settings_path()
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, SETTINGS_TEMPLATE)
+    path, created = _ensure_settings_file()
+    if created:
         click.echo(f"created {path}")
     click.edit(filename=str(path))
     try:
@@ -62,6 +64,22 @@ def settings_edit() -> None:
             f"{exc}\nyour edits are saved — run `steno settings edit` again to fix them"
         ) from exc
     click.echo(f"{path} OK")
+
+
+def _ensure_settings_file() -> tuple[Path, bool]:
+    """settings.toml's path, created from the commented template when missing.
+
+    Shared by ``settings edit`` and the launcher's Settings screen — the
+    template (every key present, commented out) is the editing surface both
+    hand to $EDITOR. Returns ``(path, created)``."""
+    from stenograf.settings import SETTINGS_TEMPLATE, settings_path
+
+    path = settings_path()
+    if path.exists():
+        return path, False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, SETTINGS_TEMPLATE)
+    return path, True
 
 
 def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:

@@ -6,11 +6,10 @@ a one-line description of what it does. Buttons are mouse-first (click to
 activate) but fully keyboard-reachable (tab/arrows + enter).
 
 *Start meeting* pushes the setup form (``ui.setup``) and hands a submitted
-request to the meeting flow (``ui.flow``). Until their screens exist
-(Tasks 4–5), the remaining workflow buttons are stubs: pressing one shows a
-notice naming the CLI command that already does the job. Notices are mirrored
-on :attr:`HomeScreen.notices` so tests assert behaviour without scraping
-toast widgets (the plain-text-mirror rule).
+request to the meeting flow (``ui.flow``); every other workflow button pushes
+its screen directly. Errors surfaced as toasts are mirrored on
+:attr:`HomeScreen.notices` so tests assert behaviour without scraping toast
+widgets (the plain-text-mirror rule).
 
 Keyboard model: focus starts on the first button (the scroll container is
 made non-focusable so it never swallows the initial focus), and the arrow
@@ -38,14 +37,6 @@ _MENU: tuple[tuple[str, str, str], ...] = (
     ("quit", "Quit", "Leave the launcher."),
 )
 """``(button id, label, description)`` per menu entry, in display order."""
-
-_STUB_HINT = {
-    "transcribe": "steno transcribe <file>",
-    "notes": "steno notes --last",
-    "settings": "steno settings show",
-    "doctor": "steno doctor",
-}
-"""The CLI command a stubbed button points at until its screen ships."""
 
 
 class HomeScreen(Screen[None]):
@@ -90,11 +81,29 @@ class HomeScreen(Screen[None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "quit":
             self.app.exit()
-            return
-        if event.button.id == "start":
+        elif event.button.id == "start":
             self._start_meeting()
-            return
-        self._stub(event.button.id or "")
+        else:
+            self.app.push_screen(self._make_screen(event.button.id or ""))
+
+    def _make_screen(self, button_id: str) -> Screen:
+        """The workflow screen behind a menu button (lazy: one import per press)."""
+        if button_id == "transcribe":
+            from stenograf.ui.transcribe import TranscribeScreen
+
+            return TranscribeScreen()
+        if button_id == "notes":
+            from stenograf.ui.notes import NotesScreen
+
+            return NotesScreen()
+        if button_id == "settings":
+            from stenograf.ui.settings import SettingsScreen
+
+            return SettingsScreen()
+        assert button_id == "doctor", f"unknown menu button {button_id!r}"
+        from stenograf.ui.doctor import DoctorScreen
+
+        return DoctorScreen()
 
     def _start_meeting(self) -> None:
         """Push the setup form; a submitted request starts the meeting flow."""
@@ -115,9 +124,3 @@ class HomeScreen(Screen[None]):
                 self.notify(message, title="Start meeting", severity="error")
 
         self.app.push_screen(MeetingSetupScreen(), on_setup)
-
-    def _stub(self, button_id: str) -> None:
-        """Task-1 placeholder: name the CLI command until the screen exists."""
-        message = f"Not built yet — run `{_STUB_HINT[button_id]}` from the command line."
-        self.notices.append(message)
-        self.notify(message, title="Coming soon", severity="warning")

@@ -1058,6 +1058,13 @@ cheap):
 6. `steno setup` drops the platform launcher (`.command` / `.desktop` /
    `.lnk`) and the README gains the "for non-terminal users" paragraph.
 
+**Status: Tasks 1–5 SHIPPED 2026-07-12 — the launcher TUI is complete** (every
+Home button opens a real screen; workflow pipelines run in thread workers with
+plain-text mirrors for the tests). Two naming landmines for future screens:
+never define `_running` or `_render` on a Screen — both shadow Textual
+internals (`MessagePump._running`, `Widget._render`) and break the screen
+silently. Task 6 (desktop shortcut + README) is the remaining Tier-1 work.
+
 ---
 
 ## 6. Key sources
