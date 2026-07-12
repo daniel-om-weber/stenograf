@@ -85,7 +85,7 @@ Real defects found during review. Each is a standalone commit with a test.
   raises, the bus never closes and the checkpointer blocks on `bus.wait`
   forever. Fix: start the provider first, or move it inside the
   `try/finally` that closes the bus.
-- [ ] **B3 — model downloads: no timeout, no integrity check** —
+- [x] **B3 — model downloads: no timeout, no integrity check** —
   `models.py:77-100`. `urllib.request.urlretrieve` (line 93) can hang
   indefinitely; any complete-looking file (e.g. a CDN error page saved as
   `.onnx`) passes `target.exists()` forever. Fix: add `sha256` (and/or

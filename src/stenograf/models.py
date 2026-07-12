@@ -11,6 +11,7 @@ built-in downloader. Files land in one cache directory:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import tarfile
@@ -22,6 +23,12 @@ from pathlib import Path
 
 _RELEASES = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 
+_DOWNLOAD_TIMEOUT_S = 30.0
+"""Socket timeout per connect/read, not for the whole download — a stalled
+server raises instead of hanging ``fetch`` forever."""
+
+_CHUNK_BYTES = 1 << 20
+
 ProgressHook = Callable[[str, int, int], None]
 """(asset name, bytes done, bytes total) — total is 0 when unknown."""
 
@@ -31,6 +38,11 @@ class ModelAsset:
     name: str
     """Filename inside the cache directory."""
     url: str
+    sha256: str
+    """Digest of the downloaded bytes (the archive itself for tar assets),
+    verified before the file can reach the cache: without it, any
+    complete-looking download — a CDN error page saved as ``.onnx``, a
+    corrupted transfer — would pass the ``exists()`` check forever."""
     archive_member: str | None = None
     """For tar archives: the member to extract as ``name``."""
 
@@ -38,11 +50,13 @@ class ModelAsset:
 SILERO_VAD = ModelAsset(
     name="silero_vad_v5.onnx",
     url=f"{_RELEASES}/asr-models/silero_vad_v5.onnx",
+    sha256="6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396",
 )
 
 PYANNOTE_SEGMENTATION = ModelAsset(
     name="pyannote-segmentation-3-0.onnx",
     url=f"{_RELEASES}/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+    sha256="24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
     archive_member="sherpa-onnx-pyannote-segmentation-3-0/model.onnx",
 )
 
@@ -53,6 +67,7 @@ SPEAKER_EMBEDDING = ModelAsset(
     # one speaker into many; eres2net and titanet-small agree with each
     # other and match the audio. eres2net is the smaller of the two.
     url=f"{_RELEASES}/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
+    sha256="c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
 )
 
 
@@ -81,16 +96,12 @@ def fetch(asset: ModelAsset, progress: ProgressHook | None = None) -> Path:
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    def hook(blocks: int, block_size: int, total: int) -> None:
-        if progress is not None:
-            progress(asset.name, min(blocks * block_size, max(total, 0)), max(total, 0))
-
     # Download to a temp file in the same directory so a crash never leaves a
     # half-written model behind the "already cached" check.
     with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".part", delete=False) as tmp:
         tmp_path = Path(tmp.name)
     try:
-        urllib.request.urlretrieve(asset.url, tmp_path, reporthook=hook)
+        _download(asset, tmp_path, progress)
         if asset.archive_member is not None:
             _extract_member(tmp_path, asset.archive_member, target)
         else:
@@ -98,6 +109,27 @@ def fetch(asset: ModelAsset, progress: ProgressHook | None = None) -> Path:
     finally:
         tmp_path.unlink(missing_ok=True)
     return target
+
+
+def _download(asset: ModelAsset, dest: Path, progress: ProgressHook | None) -> None:
+    """Stream ``asset.url`` to ``dest``, verifying the digest as it arrives."""
+    digest = hashlib.sha256()
+    done = 0
+    with urllib.request.urlopen(asset.url, timeout=_DOWNLOAD_TIMEOUT_S) as response:
+        total = int(response.headers.get("Content-Length") or 0)
+        with open(dest, "wb") as out:
+            while chunk := response.read(_CHUNK_BYTES):
+                out.write(chunk)
+                digest.update(chunk)
+                done += len(chunk)
+                if progress is not None:
+                    progress(asset.name, done, total)
+    if digest.hexdigest() != asset.sha256:
+        raise RuntimeError(
+            f"{asset.name}: download from {asset.url} failed its integrity check "
+            f"(sha256 {digest.hexdigest()}, expected {asset.sha256}). The server "
+            "may have sent an error page or the transfer was corrupted; re-run to retry."
+        )
 
 
 def _extract_member(archive: Path, member: str, target: Path) -> None:
