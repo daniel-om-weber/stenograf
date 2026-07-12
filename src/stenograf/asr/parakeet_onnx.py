@@ -40,6 +40,10 @@ _SENTENCE_END = (".", "!", "?", "…")
 
 class ParakeetOnnxBackend(ASRBackend):
     name = "parakeet-onnx"
+    # Always set; narrow the base's optional declarations (provider "cpu",
+    # never None — this backend is provider-configurable).
+    model_id: str
+    provider: str
 
     def __init__(
         self,
@@ -51,13 +55,11 @@ class ParakeetOnnxBackend(ASRBackend):
         self.model_id = model_id
         self._quantization = quantization
         self._model = None
+        # Diagnostics surface declared on ASRBackend; "cpu" (never None)
+        # marks this backend as provider-configurable.
         self.provider = provider or "cpu"
-        """Requested provider name (``cpu``/``dml``/``cuda``/``auto``); the CLI
-        sets it from ``[asr] provider`` / ``STENOGRAF_ASR_PROVIDER``."""
-        self.active_provider: str | None = None
-        """The provider actually running after :meth:`load` (post-fallback)."""
-        self.provider_fallback: str | None = None
-        """Why an accelerated provider was abandoned for CPU, or ``None``."""
+        self.active_provider = None
+        self.provider_fallback = None
 
     def load(self) -> None:
         from stenograf.asr.providers import ort_providers, resolve, unavailable_reason

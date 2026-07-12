@@ -63,20 +63,20 @@ def load_backends(
             "via [asr] backend in settings.toml or STENOGRAF_ASR_BACKEND"
         )
     asr = create_backend(name)
-    # Duck-typed: only the ORT-backed backend carries a provider; a configured
-    # provider on a backend with its own runtime (MLX) is noted, not an error,
-    # so one settings file can serve a mac and a Windows box.
-    if hasattr(asr, "provider"):
-        asr.provider = provider  # pyright: ignore[reportAttributeAccessIssue] — PLAN-CLEANUP.md C4
+    # Only an ORT-backed backend is provider-configurable (provider != None);
+    # a configured provider on a backend with its own runtime (MLX) is noted,
+    # not an error, so one settings file can serve a mac and a Windows box.
+    if asr.provider is not None:
+        asr.provider = provider
     elif provider != "cpu":
         click.echo(f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
-    click.echo(f"asr: loading {getattr(asr, 'model_id', None) or asr.name}")
+    click.echo(f"asr: loading {asr.model_id or asr.name}")
     asr.load()
-    if fallback := getattr(asr, "provider_fallback", None):
+    if fallback := asr.provider_fallback:
         click.secho(
             f"asr: acceleration unavailable ({fallback}) — using CPU", fg="yellow", err=True
         )
-    elif (active := getattr(asr, "active_provider", None)) not in (None, "cpu"):
+    elif (active := asr.active_provider) not in (None, "cpu"):
         click.echo(f"asr: accelerated ({PROVIDER_LABELS[active]})")
     vad = SileroVAD(models.fetch(models.SILERO_VAD, model_progress))
     diarizer = load_diarizer() if need_diarizer else None

@@ -217,7 +217,7 @@ Order matters; each step is committable alone.
   and `1609`); move the sherpa-vs-speakrs selection into
   `stenograf.diarization.build_diarizer()` (it's a diarization-domain
   decision and a shared seam with `profiles enroll` — `cli.py:1370-1397`).
-- [ ] **C4 — declared ASR diagnostics instead of `getattr` probing.**
+- [x] **C4 — declared ASR diagnostics instead of `getattr` probing.**
   `cli.py:1353-1364` probes `hasattr(asr, "provider")` /
   `getattr(asr, "provider_fallback"/"active_provider"/"model_id")` — an
   informal side-channel only the ONNX backend implements. Give `ASRBackend`

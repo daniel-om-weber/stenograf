@@ -45,6 +45,23 @@ class ASRBackend(ABC):
 
     name: str
 
+    model_id: str | None = None
+    """Model identifier for display and provenance (HF repo / onnx-asr id);
+    ``None`` when the backend has no meaningful id."""
+
+    provider: str | None = None
+    """Requested execution provider (``cpu``/``dml``/``cuda``/``auto``) —
+    the ``[asr] provider`` / ``STENOGRAF_ASR_PROVIDER`` value, set by the
+    loader before :meth:`load`. ``None`` (the default) declares that this
+    backend manages its own runtime (MLX) and providers do not apply; an
+    ORT-backed backend initializes it to ``"cpu"``."""
+
+    active_provider: str | None = None
+    """The provider actually running after :meth:`load` (post-fallback)."""
+
+    provider_fallback: str | None = None
+    """Why an accelerated provider was abandoned for CPU, or ``None``."""
+
     @abstractmethod
     def load(self) -> None:
         """Load model weights (downloads to the local cache on first use)."""

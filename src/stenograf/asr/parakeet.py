@@ -60,6 +60,7 @@ def _cached_snapshot(model_id: str) -> str | None:
 
 class ParakeetMLXBackend(ASRBackend):
     name = "parakeet"
+    model_id: str  # always set; narrows the base's optional declaration
 
     def __init__(self, model_id: str = MODEL_ID) -> None:
         self.model_id = model_id
