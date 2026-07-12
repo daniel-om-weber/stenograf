@@ -11,7 +11,9 @@ VBx can; stenograf routes estimate-mode diarization through it and known
 counts through sherpa (see `stenograf/diarization/speakrs.py`). Raw mono
 16 kHz s16le PCM goes in on stdin, JSON speaker turns come out on stdout.
 Build with `stenodiar/build.sh` (needs a Rust toolchain: `brew install rust`);
-no signing needed — it touches no TCC-guarded resource. The first run per
+on Windows use `stenodiar/build.ps1` (rustup + VS Build Tools; CPU/ORT default,
+CUDA a manual `--features cuda` opt-in); no signing needed — it touches no
+TCC-guarded resource. The first run per
 machine downloads models and compiles them for CoreML (minutes; `--warmup`
 does it eagerly). Without the binary, stenograf silently falls back to
 sherpa-only diarization.

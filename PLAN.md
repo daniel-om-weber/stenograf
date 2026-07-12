@@ -1003,31 +1003,38 @@ on a verified core).
 
 **Track B — stenodiar (estimated speaker counts).**
 
-State: builds and runs on Windows (measured 2026-07-11 on the desktop: CPU
-3.0× RT but still ~1.1 cores — that measurement **predates** the two vendored
-speakrs patches that took Linux from 1.4× to 8.2× RT; CUDA 60× RT works via
-pip `nvidia-*-cu12` DLLs on PATH + `onnxruntime_providers_cuda.dll` beside the
-exe; rustup + VS 2022 Build Tools are installed there). The CPU exe is
-self-contained (~40 MB, ORT statically linked).
+State: **the patched CPU build is measured on Windows (2026-07-12, desktop
+Ryzen 9 5900X 12C/24T).** Prior state (2026-07-11): CPU 3.0× RT but still
+~1.1 cores, which **predated** the two vendored speakrs patches; CUDA 60× RT
+works via pip `nvidia-*-cu12` DLLs on PATH + `onnxruntime_providers_cuda.dll`
+beside the exe; rustup + VS 2022 Build Tools are installed there. The CPU exe
+is self-contained (~40 MB, ORT statically linked).
 
-1. Rebuild from the patched vendor tree (`native/stenodiar/vendor/`, threads +
-   model-list patches; CPU default features) and re-measure on the AMI
-   segments. The intra-op-thread patch is the same lever that fixed Linux, so
-   expect a similar shape. Record the number next to the Linux 8.2×.
-   **Accept ≥4× RT**; below that, investigate ORT thread behavior on Windows
-   before reaching for the NME-SC fallback (§2 lever order unchanged).
-2. Shipping decision: GitHub Releases attachment + `find_stenodiar` discovery
-   vs. bundling in a platform wheel. The `hatch_build.py` stenocap precedent
-   exists, but a 40 MB wheel for an optional feature argues for Releases +
-   a documented drop location. Verify `find_stenodiar` handles the `.exe`
-   suffix on win32 and pick/document the install dir (align with the
-   `%LOCALAPPDATA%` cache-dir convention).
-3. Build docs: `build.sh` is POSIX — either a `build.ps1` twin or a
-   documented plain `cargo build --release` (CPU) / `--features cuda` (GPU
-   opt-in, stays manual).
+1. **Done.** Rebuilt from the patched vendor tree (`native/stenodiar/vendor/`,
+   threads + model-list patches; CPU default features, `cargo build --release
+   --locked`) and re-measured on a 300 s mono-16 kHz cut of AMI ES2004a
+   Mix-Headset: **34.6–35.1 s wall/segment → 8.6× RT, ~6.0 cores** (208 s
+   CPU-time / 34.6 s wall), 3 speakers / 46 turns, byte-identical across the
+   two timed back-to-back runs. Right at the Linux **8.2×** figure (the
+   intra-op-thread patch is the same lever; embedding threads still cap at 8),
+   and a ~2.9× jump over the pre-patch Windows 3.0× — well past the ≥4× bar.
+2. Shipping decision (recommendation, not yet implemented): **GitHub Releases
+   attachment + a documented drop location**, not wheel bundling — a 40 MB
+   binary for an optional, sherpa-fallback feature does not belong in every
+   platform wheel, and `hatch_build.py` already keeps stenodiar off non-mac
+   wheels. `find_stenodiar` now handles the `.exe` suffix on win32 (via
+   `_HELPER_FILENAME`) and, as a dev/drop fallback, also checks
+   `native/stenodiar/target/release/`; the packaged-bin lookup
+   (`stenograf/bin/stenodiar.exe`) and `STENOGRAF_DIAR_HELPER` override are the
+   two Release-install landing spots.
+3. **Done.** `build.ps1` twin of `build.sh` added (CPU/ORT default, `--locked`,
+   copies `stenodiar.exe` next to the script; CUDA stays a manual `--features
+   cuda`); `native/README.md` and the `find_stenodiar` not-found message point
+   Windows at it.
 
-Exit: `steno doctor` reports the helper on Windows; an estimated-count
-meeting finalizes at ≥4× RT.
+Exit: **met** — `steno doctor` finds the helper on Windows (the target/release
+fallback discovers a plain `cargo build`), and estimated-count diarization runs
+at 8.6× RT (≥4× bar cleared).
 
 **Track C — install story (the Phase-7 Windows leg).**
 

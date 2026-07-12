@@ -31,6 +31,9 @@ from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.diarization.sherpa import SherpaOnnxDiarizer, cluster_embeddings
 
 HELPER_NAME = "stenodiar"
+_HELPER_FILENAME = HELPER_NAME + (".exe" if sys.platform == "win32" else "")
+"""On-disk name of the built binary — cargo appends ``.exe`` on Windows."""
+_BUILD_SCRIPT = "build.ps1" if sys.platform == "win32" else "build.sh"
 _ENV_OVERRIDE = "STENOGRAF_DIAR_HELPER"
 
 _TIMEOUT_S = 1800
@@ -53,20 +56,23 @@ def find_stenodiar() -> Path:
     if override:
         return Path(override)
 
-    packaged = resources.files("stenograf") / "bin" / HELPER_NAME
+    packaged = resources.files("stenograf") / "bin" / _HELPER_FILENAME
     if packaged.is_file():
         path = Path(str(packaged))
         if not os.access(path, os.X_OK):
             path.chmod(path.stat().st_mode | 0o755)
         return path
 
-    dev = Path(__file__).resolve().parents[3] / "native" / "stenodiar" / HELPER_NAME
-    if dev.is_file():
-        return dev
+    # Dev build: the copy build.sh/build.ps1 drops next to the script, and the
+    # raw cargo output (a plain ``cargo build --release`` without the copy step).
+    native = Path(__file__).resolve().parents[3] / "native" / "stenodiar"
+    for dev in (native / _HELPER_FILENAME, native / "target" / "release" / _HELPER_FILENAME):
+        if dev.is_file():
+            return dev
 
     raise DiarizerHelperNotFoundError(
         f"diarization helper '{HELPER_NAME}' not found. Build it with "
-        f"native/stenodiar/build.sh, or set {_ENV_OVERRIDE} to its path."
+        f"native/stenodiar/{_BUILD_SCRIPT}, or set {_ENV_OVERRIDE} to its path."
     )
 
 

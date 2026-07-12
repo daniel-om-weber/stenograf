@@ -129,5 +129,22 @@ def test_find_stenodiar_env_override_and_not_found(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "stenograf.diarization.speakrs.Path.resolve", lambda self: tmp_path / "elsewhere"
     )
-    with pytest.raises(DiarizerHelperNotFoundError, match="build.sh"):
+    with pytest.raises(DiarizerHelperNotFoundError, match="native/stenodiar"):
         find_stenodiar()
+
+
+def test_find_stenodiar_dev_build_uses_platform_suffix(tmp_path, monkeypatch):
+    """The dev fallback finds the raw ``cargo build`` output under target/release,
+    with the ``.exe`` suffix on Windows."""
+    from stenograf.diarization import speakrs as mod
+
+    monkeypatch.delenv("STENOGRAF_DIAR_HELPER", raising=False)
+    monkeypatch.setattr(mod.resources, "files", lambda _: tmp_path / "nowhere")
+    # parents[3] of the faked resolve() path is tmp_path (the repo root stand-in).
+    fake_module = tmp_path / "a" / "b" / "c" / "speakrs.py"
+    monkeypatch.setattr(mod.Path, "resolve", lambda self: fake_module)
+
+    built = tmp_path / "native" / "stenodiar" / "target" / "release" / mod._HELPER_FILENAME
+    built.parent.mkdir(parents=True)
+    built.write_bytes(b"")
+    assert find_stenodiar() == built
