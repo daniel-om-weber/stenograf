@@ -27,10 +27,9 @@ showed a ~1 s startup gap. Measured behaviours the device names rely on:
   it). A meeting the user can hear is by definition not muted, so this only
   bites test rigs — a fresh ``module-null-sink`` loads muted here.
 
-Both channels are stamped against one clock: ``start()`` anchors a shared
-t=0 and each channel pins itself to it at its first delivered frame, like
-the macOS helper anchoring each channel to the host time of its first
-buffer. No code path writes audio to disk.
+Queue/pump/clock machinery is shared with the Windows provider
+(:mod:`stenograf.capture.streaming`); parec delivers gap-free PCM, so the
+re-anchor tolerance stays infinite. No code path writes audio to disk.
 """
 
 from __future__ import annotations
@@ -38,19 +37,15 @@ from __future__ import annotations
 import shutil
 import subprocess
 import threading
-import time
-from collections.abc import Iterator
-from queue import SimpleQueue
 
 import numpy as np
 
 from stenograf.capture.base import (
     SAMPLE_RATE,
-    AudioFrame,
-    CaptureProvider,
     CaptureUnavailableError,
     Channel,
 )
+from stenograf.capture.streaming import QueueStreamingProvider
 
 DEFAULT_FRAME_MS = 200
 """Frame size delivered to the core (~200 ms, matching the macOS helper)."""
@@ -100,7 +95,7 @@ def _pactl_default(command: str, what: str) -> str:
     return name
 
 
-class LinuxCaptureProvider(CaptureProvider):
+class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
     """Streams frames from one ``parec`` subprocess per captured channel.
 
     ``command`` overrides the parec launch command (a path or an argv prefix)
@@ -114,7 +109,10 @@ class LinuxCaptureProvider(CaptureProvider):
     the pipe filling and the server overrunning the stream.
     """
 
+    _thread_prefix = "parec"
+
     def __init__(self, *, command: str | list[str] | None = None, frame_ms: int = DEFAULT_FRAME_MS):
+        super().__init__(frame_ms=frame_ms)
         if command is None:
             if shutil.which("parec") is None:
                 raise CaptureUnavailableError(
@@ -126,58 +124,56 @@ class LinuxCaptureProvider(CaptureProvider):
             self._prefix = command
         else:
             self._prefix = [str(command)]
-        self._frame_samples = max(1, SAMPLE_RATE * frame_ms // 1000)
         self._procs: dict[Channel, subprocess.Popen[bytes]] = {}
-        self._queue: SimpleQueue[AudioFrame | Channel] = SimpleQueue()
-        self._t0: float | None = None
-        self._started: set[Channel] = set()
-        self._stopping = False
         # stop() is called from several threads (the capture loop on max_seconds,
         # the meeting thread on close, the TUI's quit binding, and a reader on an
         # unexpected stream death), so serialize claiming the processes.
         self._stop_lock = threading.Lock()
 
-    def start(self, channels: set[Channel]) -> None:
-        self._t0 = time.monotonic()
-        self._started = set(channels)
-        self._stopping = False
-        for channel in sorted(channels):
-            argv = [
-                *self._prefix,
-                f"--device={_CHANNEL_DEVICE[channel]}",
-                f"--rate={SAMPLE_RATE}",
-                "--channels=1",
-                "--format=s16le",
-                "--raw",
-                f"--latency-msec={_PAREC_LATENCY_MS}",
-                "--client-name=stenograf",
-                f"--stream-name={channel.value}",
-            ]
-            # stdout is the raw PCM stream; stderr (server errors) is inherited
-            # so the user sees why a stream died on their terminal.
-            proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
-            self._procs[channel] = proc
-            threading.Thread(
-                target=self._pump, args=(channel, proc), name=f"parec-{channel.value}", daemon=True
-            ).start()
+    def _open_channel(self, channel: Channel) -> subprocess.Popen[bytes]:
+        argv = [
+            *self._prefix,
+            f"--device={_CHANNEL_DEVICE[channel]}",
+            f"--rate={SAMPLE_RATE}",
+            "--channels=1",
+            "--format=s16le",
+            "--raw",
+            f"--latency-msec={_PAREC_LATENCY_MS}",
+            "--client-name=stenograf",
+            f"--stream-name={channel.value}",
+        ]
+        # stdout is the raw PCM stream; stderr (server errors) is inherited
+        # so the user sees why a stream died on their terminal.
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
+        self._procs[channel] = proc
+        return proc
 
-    def frames(self) -> Iterator[AudioFrame]:
-        if self._t0 is None:
-            raise RuntimeError("frames() called before start()")
-        open_channels = set(self._started)
-        while open_channels:
-            item = self._queue.get()
-            if isinstance(item, AudioFrame):
-                yield item
-            else:  # a channel sentinel: that reader hit end of stream
-                open_channels.discard(item)
+    def _pump(self, channel: Channel, transport: subprocess.Popen[bytes]) -> None:
+        """Read one channel's byte stream into timestamped frames.
 
-    def stop(self) -> None:
-        # Idempotent + thread-safe: claim the processes under the lock so only
-        # one caller signals/reaps them; the blocking waits run outside it.
+        Runs until end of stream (a stop, or the stream dying). The reading
+        thread owns and closes the pipe — ``_stop_transport`` only terminates
+        the process (its exit ends the stream), so the pipe is never closed
+        under an in-flight read.
+        """
+        stream = transport.stdout
+        assert stream is not None  # Popen(stdout=PIPE) in _open_channel
+        frame_bytes = self._frame_samples * 2
+        try:
+            while True:
+                data = _read_up_to(stream, frame_bytes)
+                if len(data) < 2:
+                    return
+                samples = np.frombuffer(data[: len(data) & ~1], dtype="<i2").astype(np.int16)
+                self._emit(channel, samples)
+        finally:
+            stream.close()
+
+    def _stop_transport(self) -> None:
+        # Claim the processes under the lock so only one caller signals/reaps
+        # them; the blocking waits run outside it.
         with self._stop_lock:
             procs, self._procs = self._procs, {}
-            self._stopping = True
         for proc in procs.values():
             if proc.poll() is None:
                 proc.terminate()
@@ -186,41 +182,6 @@ class LinuxCaptureProvider(CaptureProvider):
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
-
-    def _pump(self, channel: Channel, proc: subprocess.Popen[bytes]) -> None:
-        """Read one channel's byte stream into timestamped frames.
-
-        The channel anchors itself to the shared clock at its first frame —
-        arrival time minus the frame's duration, since those samples were
-        captured over the preceding frame-length — and derives every later
-        timestamp from the sample count, so gaps in *delivery* never shift
-        audio in session time. On end of stream (a stop, or the stream dying)
-        it enqueues its channel as a sentinel; an unexpected death also tears
-        down the other channel so the meeting ends visibly and finalizes,
-        rather than silently continuing half-captured.
-        """
-        stream = proc.stdout
-        assert stream is not None  # Popen(stdout=PIPE) above
-        frame_bytes = self._frame_samples * 2
-        anchor: float | None = None
-        delivered = 0
-        try:
-            while True:
-                data = _read_up_to(stream, frame_bytes)
-                if len(data) < 2:
-                    return
-                samples = np.frombuffer(data[: len(data) & ~1], dtype="<i2").astype(np.int16)
-                if anchor is None:
-                    elapsed = time.monotonic() - (self._t0 or 0.0)
-                    anchor = max(0.0, elapsed - len(samples) / SAMPLE_RATE)
-                timestamp = anchor + delivered / SAMPLE_RATE
-                delivered += len(samples)
-                self._queue.put(AudioFrame(channel=channel, timestamp=timestamp, samples=samples))
-        finally:
-            stream.close()
-            if not self._stopping:
-                self.stop()
-            self._queue.put(channel)
 
 
 def _read_up_to(stream, n: int) -> bytes:

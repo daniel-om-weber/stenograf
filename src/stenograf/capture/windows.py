@@ -23,18 +23,18 @@ Two WASAPI behaviours the design leans on:
   papers over this by synthesizing zeros from the measured idle time, so the
   stream stays continuous — but the fill is wall-clock *estimated*, so
   sample-count-derived timestamps can drift from session time across long
-  silences. The pump re-anchors whenever its derived clock falls behind the
-  arrival-derived one by more than ``_REANCHOR_TOLERANCE_S`` (forward only:
-  per-channel timestamps must stay monotonic, and ``SessionStore`` pads the
-  skipped span with silence).
+  silences. The session clock re-anchors whenever a channel's derived clock
+  falls behind the arrival-derived one by more than
+  ``_REANCHOR_TOLERANCE_S`` (forward only: per-channel timestamps must stay
+  monotonic, and ``SessionStore`` pads the skipped span with silence).
 - **COM apartments are per-thread**, so each channel's device is resolved and
   its recorder opened *inside* its own pump thread (spike-verified working).
 
-Both channels are stamped against one clock: ``start()`` anchors a shared
-t=0 and each channel pins itself to it at its first delivered frame, like
-the other providers. Both devices pin to the defaults at meeting start; a
-mid-meeting default switch is not followed (unlike ``@DEFAULT_MONITOR@`` on
-Linux — WASAPI has no equivalent alias). No code path writes audio to disk.
+Queue/pump/clock machinery is shared with the Linux provider
+(:mod:`stenograf.capture.streaming`). Both devices pin to the defaults at
+meeting start; a mid-meeting default switch is not followed (unlike
+``@DEFAULT_MONITOR@`` on Linux — WASAPI has no equivalent alias). No code
+path writes audio to disk.
 """
 
 from __future__ import annotations
@@ -43,29 +43,27 @@ import sys
 import threading
 import time
 import warnings
-from collections.abc import Callable, Iterator
-from queue import SimpleQueue
+from collections.abc import Callable
 
 import numpy as np
 
 from stenograf.audio import to_int16
 from stenograf.capture.base import (
     SAMPLE_RATE,
-    AudioFrame,
-    CaptureProvider,
     CaptureUnavailableError,
     Channel,
 )
+from stenograf.capture.streaming import QueueStreamingProvider
 
 DEFAULT_FRAME_MS = 200
 """Frame size delivered to the core (~200 ms, matching the other providers)."""
 
 _REANCHOR_TOLERANCE_S = 0.5
 """How far a channel's sample-derived clock may fall behind its
-arrival-derived clock before the pump re-anchors. Generous enough that
-delivery jitter (one frame + WASAPI buffering, ~0.25 s worst measured) never
-trips it; tight enough that a mis-estimated silence gap cannot skew the AEC's
-far-end alignment or the transcript for the rest of the meeting."""
+arrival-derived clock before the session clock re-anchors. Generous enough
+that delivery jitter (one frame + WASAPI buffering, ~0.25 s worst measured)
+never trips it; tight enough that a mis-estimated silence gap cannot skew the
+AEC's far-end alignment or the transcript for the rest of the meeting."""
 
 
 _SILENT_MIC_WARN_S = 5.0
@@ -177,7 +175,7 @@ def _default_device(soundcard, channel: Channel):
         ) from exc
 
 
-class WindowsCaptureProvider(CaptureProvider):
+class WindowsCaptureProvider(QueueStreamingProvider[None]):
     """Streams frames from one WASAPI capture stream per captured channel.
 
     ``backend`` overrides the soundcard module (a fake in tests); production
@@ -191,6 +189,8 @@ class WindowsCaptureProvider(CaptureProvider):
     the shared session clock; ``frames()`` drains their queue.
     """
 
+    _thread_prefix = "wasapi"
+
     def __init__(
         self,
         *,
@@ -198,62 +198,21 @@ class WindowsCaptureProvider(CaptureProvider):
         frame_ms: int = DEFAULT_FRAME_MS,
         clock: Callable[[], float] = time.monotonic,
     ):
+        super().__init__(
+            frame_ms=frame_ms, clock=clock, reanchor_tolerance_s=_REANCHOR_TOLERANCE_S
+        )
         self._soundcard = backend if backend is not None else _import_soundcard()
-        self._clock = clock
-        self._frame_samples = max(1, SAMPLE_RATE * frame_ms // 1000)
-        self._queue: SimpleQueue[AudioFrame | Channel] = SimpleQueue()
-        self._t0: float | None = None
-        self._started: set[Channel] = set()
-        self._threads: dict[Channel, threading.Thread] = {}
-        self._stop_event = threading.Event()
 
-    def start(self, channels: set[Channel]) -> None:
-        self._t0 = self._clock()
-        self._started = set(channels)
-        self._stop_event.clear()
-        for channel in sorted(channels):
-            thread = threading.Thread(
-                target=self._pump, args=(channel,), name=f"wasapi-{channel.value}", daemon=True
-            )
-            self._threads[channel] = thread
-            thread.start()
+    def _open_channel(self, channel: Channel) -> None:
+        return None  # COM: the device must be resolved inside the pump thread
 
-    def frames(self) -> Iterator[AudioFrame]:
-        if self._t0 is None:
-            raise RuntimeError("frames() called before start()")
-        open_channels = set(self._started)
-        while open_channels:
-            item = self._queue.get()
-            if isinstance(item, AudioFrame):
-                yield item
-            else:  # a channel sentinel: that pump ended
-                open_channels.discard(item)
-
-    def stop(self) -> None:
-        # Idempotent + thread-safe (an Event); pumps notice within one frame
-        # read (~frame_ms + WASAPI's silence threshold) and release their
-        # devices on the way out. Also called *from* a pump thread on an
-        # unexpected stream death, hence the current-thread guard.
-        self._stop_event.set()
-        current = threading.current_thread()
-        for thread in self._threads.values():
-            if thread is not current:
-                thread.join(timeout=5)
-
-    def _pump(self, channel: Channel) -> None:
+    def _pump(self, channel: Channel, transport: None) -> None:
         """Own one channel end to end: device, recorder, framing, timestamps.
 
-        The channel anchors itself to the shared clock at its first frame —
-        arrival time minus the frame's duration — and derives every later
-        timestamp from the sample count, so delivery jitter never shifts
-        audio in session time. The one exception is the forward re-anchor
-        after an under-filled loopback silence (module docstring). On end it
-        enqueues its channel as a sentinel; an unexpected death also tears
-        down the other channel so the meeting ends visibly and finalizes,
-        rather than silently continuing half-captured.
+        Runs until the stop event is set or the stream dies; the session
+        clock stamps each frame (with the forward re-anchor after an
+        under-filled loopback silence — module docstring).
         """
-        anchor: float | None = None
-        delivered = 0
         zero_run = 0
         warned_silent = False
         try:
@@ -278,26 +237,21 @@ class WindowsCaptureProvider(CaptureProvider):
                                 "(Settings > Privacy & security > Microphone)",
                                 file=sys.stderr,
                             )
-                    elapsed = self._clock() - (self._t0 or 0.0)
-                    started_at = max(0.0, elapsed - len(samples) / SAMPLE_RATE)
-                    if anchor is None:
-                        anchor = started_at
-                    timestamp = anchor + delivered / SAMPLE_RATE
-                    if started_at - timestamp > _REANCHOR_TOLERANCE_S:
-                        anchor += started_at - timestamp
-                        timestamp = started_at
-                    delivered += len(samples)
-                    self._queue.put(
-                        AudioFrame(channel=channel, timestamp=timestamp, samples=samples)
-                    )
+                    self._emit(channel, samples)
         except Exception as exc:
             # The other providers inherit their subprocess's stderr; this is
             # the in-process equivalent so the user sees why a stream died.
             print(f"stenograf: {channel.value} capture stream died: {exc}", file=sys.stderr)
-        finally:
-            if not self._stop_event.is_set():
-                self.stop()
-            self._queue.put(channel)
+
+    def _stop_transport(self) -> None:
+        # Pumps notice the stop event within one frame read (~frame_ms +
+        # WASAPI's silence threshold) and release their devices on the way
+        # out. Skip the current thread: stop() also runs *from* a pump on an
+        # unexpected stream death.
+        current = threading.current_thread()
+        for thread in self._threads.values():
+            if thread is not current:
+                thread.join(timeout=5)
 
 
 def _to_mono_int16(block: np.ndarray) -> np.ndarray:
