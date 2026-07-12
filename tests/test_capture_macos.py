@@ -81,6 +81,18 @@ class TestMacOSCaptureProvider:
         provider.stop()
         assert provider._proc is None  # torn down
 
+    def test_stop_does_not_close_the_pipe_under_a_paused_reader(self):
+        # stop() may fire (max_seconds, TUI quit) while the consumer sits between
+        # yields; the read that resumes afterwards must end at clean EOF, not
+        # raise "read of closed file" because stop() closed the pipe object.
+        provider = MacOSCaptureProvider(command=[*FAKE, "--forever"])
+        provider.start({Channel.MIC})
+        frames = provider.frames()
+        next(frames)  # reader is now paused mid-iteration
+        provider.stop()
+        for _ in frames:  # drain to EOF — must not raise
+            pass
+
 
 class TestFindHelper:
     def test_env_override_wins(self, monkeypatch, tmp_path):

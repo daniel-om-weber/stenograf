@@ -72,7 +72,7 @@ be factored toward. Leave it essentially alone.
 
 Real defects found during review. Each is a standalone commit with a test.
 
-- [ ] **B1 — macOS `stop()` races `frames()`** — `capture/macos.py:135-136`
+- [x] **B1 — macOS `stop()` races `frames()`** — `capture/macos.py:135-136`
   closes `proc.stdout` from another thread while `frames()`
   (`macos.py:112-117`) may be mid-`read()` → `ValueError: read of closed
   file` instead of clean `StopIteration` (fires when e.g. `max_seconds`

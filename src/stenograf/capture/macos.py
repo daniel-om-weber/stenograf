@@ -110,11 +110,17 @@ class MacOSCaptureProvider(CaptureProvider):
         if self._proc is None or self._proc.stdout is None:
             raise RuntimeError("frames() called before start()")
         stream = self._proc.stdout
-        while True:
-            frame = read_frame(stream)
-            if frame is None:
-                return  # helper closed its stdout (stopped or exited)
-            yield frame
+        # This iterator owns the pipe: stop() runs on other threads and must not
+        # close it under an in-flight read, so the stream is closed here — at
+        # end of stream or when the consumer abandons the iterator.
+        try:
+            while True:
+                frame = read_frame(stream)
+                if frame is None:
+                    return  # helper closed its stdout (stopped or exited)
+                yield frame
+        finally:
+            stream.close()
 
     def stop(self) -> None:
         # Idempotent + thread-safe: claim the process under the lock and null it so
@@ -132,8 +138,8 @@ class MacOSCaptureProvider(CaptureProvider):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
-        if proc.stdout is not None:
-            proc.stdout.close()
+        # stdout is deliberately not closed here: frames() may be blocked in a
+        # read on another thread, and the helper's exit already ends the stream.
 
 
 def _read_exact(stream, n: int) -> bytes | None:
