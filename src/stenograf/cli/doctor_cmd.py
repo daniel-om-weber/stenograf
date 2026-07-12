@@ -35,17 +35,31 @@ def doctor() -> None:
     help="Skip the permission prompts and only download the models (headless machines, CI).",
 )
 def setup(models_only: bool) -> None:
-    """One-time setup: permission prompts, then model downloads.
+    """One-time setup: permission prompts, desktop launcher, model downloads.
 
     Launches the capture helper so macOS shows both permission prompts (mic +
     system audio) now instead of at the start of your first meeting — nothing
-    is recorded — then downloads every model the first meeting would otherwise
-    stop to fetch. macOS scopes the grant to the app the helper was launched
-    from, so re-run this from each terminal app (or IDE) you will run meetings
-    from; the models are cached machine-wide.
+    is recorded — then installs a double-clickable launcher and downloads
+    every model the first meeting would otherwise stop to fetch. macOS scopes
+    the grant to the app the helper was launched from, so re-run this from
+    each terminal app (or IDE) you will run meetings from; the models are
+    cached machine-wide.
     """
     if not models_only and sys.platform == "darwin":
         _grant_capture_permissions()  # only macOS gates capture behind TCC prompts
+
+    # The launcher lands before the model download: the download can fail (and
+    # models fetch on first use anyway), the shortcut shouldn't be lost to that.
+    # --models-only skips it — headless machines and CI have no desktop.
+    if not models_only:
+        from stenograf.shortcut import install_shortcut
+
+        if (shortcut := install_shortcut()) is not None:
+            click.echo(click.style("✓", fg="green") + f" launcher installed: {shortcut}")
+            if sys.platform == "darwin":
+                click.echo("  Double-click it to start stenograf — no terminal needed.")
+            else:
+                click.echo('  Look for "Stenograf" in your application menu.')
 
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.

@@ -1096,6 +1096,7 @@ def _helper_wrapper(tmp_path, *forced_args):
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
 def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))  # the launcher lands in $HOME/Desktop
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
@@ -1103,6 +1104,8 @@ def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "granted" in result.output
     assert fetched  # downloads run after the permission step
+    assert "launcher installed" in result.output
+    assert (tmp_path / "Desktop" / "Stenograf.command").exists()
     assert "setup complete" in result.output
 
 
@@ -1110,6 +1113,7 @@ def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
 def test_setup_fails_when_helper_dies_without_mic_frames(tmp_path, monkeypatch):
     # A denied permission means the helper exits before its first mic frame;
     # emitting only system frames then exiting reproduces that shape.
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path, "--system")))
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
@@ -1129,6 +1133,7 @@ def test_setup_models_only_skips_the_permission_step(monkeypatch):
     assert result.exit_code == 0, result.output
     assert fetched
     assert "granted" not in result.output
+    assert "launcher" not in result.output  # headless machines get no shortcut
 
 
 def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):

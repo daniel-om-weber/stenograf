@@ -30,16 +30,32 @@ in from the start.
 
 ## Install
 
-Requires [uv](https://docs.astral.sh/uv/) and either macOS 14.4+ on Apple
-Silicon (the wheel ships the signed capture helper — no toolchain needed) or
-Linux with PipeWire or PulseAudio (capture uses `parec`, shipped with
-pipewire-pulse / pulseaudio-utils on every desktop distro; ASR runs ONNX on
-CPU).
+One command sets up everything — [uv](https://docs.astral.sh/uv/) (installed
+for you if missing), stenograf itself, the permission prompts, the model
+downloads, and a desktop launcher:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh
+```
+
+That's the only terminal moment. Afterwards, double-click **Stenograf** on
+your Desktop (macOS) or start **Stenograf** from the application menu (Linux)
+to open the interactive launcher — every workflow below is reachable there
+with the mouse. Re-running the command upgrades stenograf.
+
+Works on macOS 14.4+ on Apple Silicon (the wheel ships the signed capture
+helper — no toolchain needed) and Linux with PipeWire or PulseAudio (capture
+uses `parec`, shipped with pipewire-pulse / pulseaudio-utils on every desktop
+distro; ASR runs ONNX on CPU).
+
+### Manual install
+
+With [uv](https://docs.astral.sh/uv/) already installed:
 
 ```sh
 uv tool install stenograf
 steno doctor    # environment checks
-steno setup     # one-time: mic + system-audio permission prompts, model downloads
+steno setup     # one-time: permission prompts, desktop launcher, model downloads
 ```
 
 macOS scopes the permission grant to the app the prompt came from, so run

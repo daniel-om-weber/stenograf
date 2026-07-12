@@ -965,6 +965,23 @@ and is not worth building before real non-terminal users ask to double-click
 an installer. A browser UI is off the table regardless — the no-web-UI
 philosophy lock (§ product philosophy) is load-bearing here.
 
+**Download-artifact research (2026-07-12, Task 6 reframe).** A GitHub-page
+"download and double-click" install was researched and **deferred**: macOS
+Tahoe hard-blocks any unsigned downloaded `.command` (empirically tested — the
+dialog offers only *Move to Trash / Done*; the escape is System Settings →
+"Open Anyway" + admin password, unshippable to non-terminal users). Zipping
+doesn't help (Archive Utility propagates quarantine) and bare scripts cannot
+be notarized (tickets attach only to Mach-O/.app/.pkg/.dmg), so a downloadable
+artifact requires a $99/yr Apple Developer ID + a notarized wrapper — the
+proven shape is a tiny notarized `.app` that opens Terminal via LaunchServices
+(Ollama/ComfyUI pattern; TCC grants then still attach to Terminal.app, so the
+`setup`/`doctor` permission flow survives). Revisit alongside Tier 2. Tier 1
+instead ships a **one-command install**: `install.sh` at the repo root
+(README one-liner via `curl | sh`) bootstraps uv → `uv tool install stenograf`
+→ `steno setup`, and `setup` now drops the launcher — locally written files
+carry no quarantine flag, so the double-click story starts *after* the one
+terminal moment.
+
 **Library decision: Textual** — already a dependency (the live-caption view),
 full mouse support (buttons, focus-follows-click, scroll, hover) in every
 terminal we target, real widgets (`Button`, `Input`, `Select`, `DirectoryTree`,
@@ -1051,12 +1068,19 @@ cheap):
 6. `steno setup` drops the platform launcher (`.command` / `.desktop` /
    `.lnk`) and the README gains the "for non-terminal users" paragraph.
 
-**Status: Tasks 1–5 SHIPPED 2026-07-12 — the launcher TUI is complete** (every
-Home button opens a real screen; workflow pipelines run in thread workers with
-plain-text mirrors for the tests). Two naming landmines for future screens:
-never define `_running` or `_render` on a Screen — both shadow Textual
-internals (`MessagePump._running`, `Widget._render`) and break the screen
-silently. Task 6 (desktop shortcut + README) is the remaining Tier-1 work.
+**Status: Tasks 1–6 SHIPPED 2026-07-12 — Tier 1 is complete.** The launcher
+TUI covers every workflow (Tasks 1–5: every Home button opens a real screen;
+workflow pipelines run in thread workers with plain-text mirrors for the
+tests). Task 6 shipped as reframed above: `stenograf/shortcut.py` writes the
+launcher (`~/Desktop/Stenograf.command` on macOS, a `Terminal=true` `.desktop`
+menu entry on Linux — GNOME desktops need a manual "allow launching" for
+desktop *files*, menu entries don't; Windows `.lnk` deferred to Phase 6) with
+the absolute interpreter + `-m stenograf` (new `__main__.py`) so a login-shell
+PATH without uv's shims can't break it; `steno setup` installs it (skipped
+under `--models-only` — headless/CI); `install.sh` + README one-liner do the
+rest. Two naming landmines for future screens: never define `_running` or
+`_render` on a Screen — both shadow Textual internals (`MessagePump._running`,
+`Widget._render`) and break the screen silently.
 
 ---
 
