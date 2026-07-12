@@ -9,6 +9,14 @@ CLI-support code — it reports progress via click and raises
 ``click.ClickException`` for user errors; the pure selection seams it
 drives live in the library (:func:`stenograf.diarization.build_diarizer`,
 the ASR registry).
+
+The launcher TUI reuses these factories from inside a running Textual app,
+where progress must NOT go through click: Textual redirects stdio to a
+proxy, and on Windows ``click.echo`` probes that proxy's fd against the
+real console (``msvcrt.get_osfhandle``) and dies with EBADF — the meeting
+fails before capture starts. Every announcing entry point therefore takes
+``announce``: ``None`` keeps today's click-echoed CLI behaviour, a callable
+routes the same lines to the caller's sink (the meeting screen's header).
 """
 
 from __future__ import annotations
@@ -19,17 +27,43 @@ from typing import TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
+
+    Announce = Callable[[str], None]
+
+
+def _say(announce: Announce | None, message: str, *, warn: bool = False) -> None:
+    """One progress line: the caller's sink, or click for the CLI (module docstring)."""
+    if announce is not None:
+        announce(message)
+    elif warn:
+        click.secho(message, fg="yellow", err=True)
+    else:
+        click.echo(message)
+
+
+def download_progress(announce: Announce | None):
+    """ProgressHook that announces a model download once, at its start."""
+
+    def hook(name: str, done: int, total: int) -> None:
+        if total and done == 0:
+            _say(announce, f"model: downloading {name} ({total >> 20} MB)")
+
+    return hook
 
 
 def model_progress(name: str, done: int, total: int) -> None:
-    """ProgressHook that announces a model download once, at its start."""
-    if total and done == 0:
-        click.echo(f"model: downloading {name} ({total >> 20} MB)")
+    """The CLI-flavored ProgressHook (kept for the non-TUI call sites)."""
+    download_progress(None)(name, done, total)
 
 
 def load_backends(
-    *, need_diarizer: bool, asr_backend: str | None = None, asr_provider: str | None = None
+    *,
+    need_diarizer: bool,
+    asr_backend: str | None = None,
+    asr_provider: str | None = None,
+    announce: Announce | None = None,
 ):
     """Load the finalize backends (ASR, VAD, and optionally the diarizer).
 
@@ -71,28 +105,26 @@ def load_backends(
     if asr.provider is not None:
         asr.provider = provider
     elif provider != "cpu":
-        click.echo(f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
-    click.echo(f"asr: loading {asr.model_id or asr.name}")
+        _say(announce, f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
+    _say(announce, f"asr: loading {asr.model_id or asr.name}")
     asr.load()
     if fallback := asr.provider_fallback:
-        click.secho(
-            f"asr: acceleration unavailable ({fallback}) — using CPU", fg="yellow", err=True
-        )
+        _say(announce, f"asr: acceleration unavailable ({fallback}) — using CPU", warn=True)
     elif (active := asr.active_provider) not in (None, "cpu"):
-        click.echo(f"asr: accelerated ({PROVIDER_LABELS[active]})")
-    vad = SileroVAD(models.fetch(models.SILERO_VAD, model_progress))
-    diarizer = load_diarizer() if need_diarizer else None
+        _say(announce, f"asr: accelerated ({PROVIDER_LABELS[active]})")
+    vad = SileroVAD(models.fetch(models.SILERO_VAD, download_progress(announce)))
+    diarizer = load_diarizer(announce=announce) if need_diarizer else None
     return asr, vad, diarizer
 
 
-def load_diarizer():
-    """The committed diarization stack with CLI download progress attached.
+def load_diarizer(*, announce: Announce | None = None):
+    """The committed diarization stack with download progress attached.
 
     A seam of its own (over calling :func:`~stenograf.diarization.build_diarizer`
     inline) so tests can inject a fake without a real ONNX model."""
     from stenograf.diarization import build_diarizer
 
-    return build_diarizer(progress=model_progress)
+    return build_diarizer(progress=download_progress(announce))
 
 
 def load_reid(*, enabled: bool, threshold: float | None, store_path: Path | None = None):
@@ -124,6 +156,7 @@ def make_provider(
     paced: bool = False,
     aec: bool = True,
     aec_dump: Path | None = None,
+    announce: Announce | None = None,
 ):
     """Build the capture provider: file replay if given, else the native helper.
 
@@ -134,7 +167,7 @@ def make_provider(
     """
     from stenograf.capture.base import Channel
 
-    provider = _base_provider(replay, plans, paced=paced)
+    provider = _base_provider(replay, plans, paced=paced, announce=announce)
     channels = {plan.channel for plan in plans}
     if (aec or aec_dump is not None) and {Channel.MIC, Channel.SYSTEM} <= channels:
         from stenograf.aec import EchoCancellingProvider
@@ -143,7 +176,7 @@ def make_provider(
     return provider
 
 
-def _base_provider(replay: str | None, plans, *, paced: bool = False):
+def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=None):
     from stenograf.capture.base import Channel
 
     if replay is not None:
@@ -155,7 +188,10 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False):
         planned = {p.channel for p in plans}
         ignored = [ch.value for ch in sources if ch not in planned]
         if ignored:
-            click.echo(f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}")
+            _say(
+                announce,
+                f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}",
+            )
         return FileCaptureProvider(
             {ch: p for ch, p in sources.items() if ch in planned}, paced=paced
         )
@@ -171,12 +207,12 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False):
     if sys.platform.startswith("linux"):
         from stenograf.capture.linux import LinuxCaptureProvider, default_devices
 
-        return _native_provider(LinuxCaptureProvider, default_devices, plans)
+        return _native_provider(LinuxCaptureProvider, default_devices, plans, announce)
 
     if sys.platform == "win32":
         from stenograf.capture.windows import WindowsCaptureProvider, default_devices
 
-        return _native_provider(WindowsCaptureProvider, default_devices, plans)
+        return _native_provider(WindowsCaptureProvider, default_devices, plans, announce)
 
     raise click.ClickException(
         "live capture is supported on macOS, Linux, and Windows; here, transcribe "
@@ -184,7 +220,7 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False):
     )
 
 
-def _native_provider(provider_cls, default_devices, plans):
+def _native_provider(provider_cls, default_devices, plans, announce=None):
     """Construct a queue-streaming native provider and announce its devices.
 
     Resolves the default devices up front so a broken audio stack fails before
@@ -200,7 +236,7 @@ def _native_provider(provider_cls, default_devices, plans):
     except CaptureUnavailableError as exc:
         raise click.ClickException(str(exc)) from exc
     for channel, device in devices.items():
-        click.echo(f"capture: {channel.value} ← {device}")
+        _say(announce, f"capture: {channel.value} ← {device}")
     return provider
 
 

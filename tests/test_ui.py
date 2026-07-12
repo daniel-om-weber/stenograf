@@ -441,22 +441,22 @@ class TestMeetingFlow:
         monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
         mic = tmp_path / "mic.wav"
         conftest.write_wav(mic)
-        monkeypatch.setattr(
-            loaders,
-            "load_backends",
-            lambda *, need_diarizer, asr_backend=None, asr_provider=None: (
-                conftest.FakeASR(),
-                None,
-                None,
-            ),
-        )
-        monkeypatch.setattr(
-            loaders,
-            "make_provider",
-            lambda replay, plans, *, paced=False, aec=True, aec_dump=None: FileCaptureProvider(
-                {Channel.MIC: mic}
-            ),
-        )
+        announced = {}  # the flow must route loader progress to the view, not click
+
+        def fake_load_backends(
+            *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        ):
+            announced["load_backends"] = announce
+            return conftest.FakeASR(), None, None
+
+        def fake_make_provider(
+            replay, plans, *, paced=False, aec=True, aec_dump=None, announce=None
+        ):
+            announced["make_provider"] = announce
+            return FileCaptureProvider({Channel.MIC: mic})
+
+        monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
+        monkeypatch.setattr(loaders, "make_provider", fake_make_provider)
 
         async def body():
             app = StenografApp()
@@ -491,6 +491,11 @@ class TestMeetingFlow:
         audio = transcripts[0].parent / "audio.wav"
         assert audio.exists(), "the 'keep the audio' switch should tee a WAV"
         assert audio.stat().st_size > 44  # a finalized header plus actual frames
+        # Loader progress must be routed to the meeting header: under Textual's
+        # redirected stdio, click.echo crashes on Windows (EBADF probing the
+        # proxy against the real console) and the meeting dies before capture.
+        assert callable(announced["make_provider"])
+        assert callable(announced["load_backends"])
 
 
 class TestTranscribeScreen:
@@ -517,7 +522,7 @@ class TestTranscribeScreen:
         monkeypatch.setattr(
             loaders,
             "load_backends",
-            lambda *, need_diarizer, asr_backend=None, asr_provider=None: (
+            lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None: (
                 conftest.FakeASR(),
                 None,
                 None,
@@ -566,7 +571,9 @@ class TestTranscribeScreen:
         monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
         calls = {}
 
-        def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+        def recording_load_backends(
+            *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        ):
             calls["need_diarizer"] = need_diarizer
             return conftest.FakeASR(), None, None
 
@@ -607,7 +614,9 @@ class TestTranscribeScreen:
         monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
         calls = {}
 
-        def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+        def recording_load_backends(
+            *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        ):
             calls["need_diarizer"] = need_diarizer
             return conftest.FakeASR(), None, None
 

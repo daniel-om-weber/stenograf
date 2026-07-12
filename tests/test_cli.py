@@ -66,7 +66,7 @@ class FakeDiarizer(Diarizer):
         return DiarizationResult(turns=list(self._turns), embeddings=dict(self._embeddings))
 
 
-def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
     # No VAD (whole buffer is one window) and no diarizer (single speaker).
     return FakeASR(), None, None
 
@@ -147,7 +147,9 @@ def test_transcribe_format_writes_requested_subtitle_files(tmp_path, stub_backen
 def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording_load_backends(
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+    ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -208,7 +210,9 @@ def test_transcribe_diarization_off_by_default(tmp_path, monkeypatch):
     # built-in default is off, and the run says so.
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording_load_backends(
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+    ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -228,7 +232,9 @@ def test_transcribe_diarization_off_by_default(tmp_path, monkeypatch):
 def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording_load_backends(
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+    ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -249,7 +255,9 @@ def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, monkey
 def test_transcribe_diarization_flag_beats_settings_off(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording_load_backends(
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+    ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -272,7 +280,9 @@ def test_transcribe_explicit_count_beats_settings_off(tmp_path, monkeypatch):
     # default must not force it off (or error like the explicit flag does).
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording_load_backends(
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+    ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -348,7 +358,7 @@ class ChannelASR(conftest.FakeASR):
         return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
 
 
-def fake_channel_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+def fake_channel_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
     return ChannelASR(), None, None
 
 
@@ -524,7 +534,9 @@ def test_start_replay_streams_live_captions_by_default(tmp_path, stub_backends):
 def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording_load_backends(
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+    ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -555,7 +567,9 @@ def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
 def test_start_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
-    def recording_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording_load_backends(
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+    ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
 
@@ -897,7 +911,11 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     monkeypatch.setattr(
         loaders,
         "load_backends",
-        lambda *, need_diarizer, asr_backend=None, asr_provider=None: (FakeASR(), None, diar),
+        lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None: (
+            FakeASR(),
+            None,
+            diar,
+        ),
     )
     reid = CliRunner().invoke(
         cli.main, ["transcribe", str(audio), "--speakers", "2", "--out", str(tmp_path)]
@@ -1040,7 +1058,7 @@ def test_out_overwrite_guard_ignores_partial_checkpoints(tmp_path, monkeypatch):
 
 
 def test_transcribe_out_refusal_happens_before_any_transcription(tmp_path, monkeypatch):
-    def explode(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def explode(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
         raise AssertionError("backends must not load when --out is refused")
 
     monkeypatch.setattr(loaders, "load_backends", explode)
@@ -1347,7 +1365,7 @@ def test_broken_settings_fail_fast_with_a_clean_error(tmp_path, stub_backends):
 def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
     calls = {}
 
-    def recording(*, need_diarizer, asr_backend=None, asr_provider=None):
+    def recording(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
         calls["asr_backend"] = asr_backend
         calls["asr_provider"] = asr_provider
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -1480,3 +1498,33 @@ def test_subcommands_never_open_the_launcher(monkeypatch):
     result = CliRunner().invoke(cli.main, ["profiles", "list"])
 
     assert result.exit_code == 0
+
+
+def test_native_provider_with_announce_never_touches_click(monkeypatch):
+    # The TUIs hand loaders an announce sink because click.echo under Textual's
+    # redirected stdio crashes on Windows (EBADF probing the proxy's fd against
+    # the real console); with a sink given, the seam must not touch click.
+    import click
+
+    from stenograf.config import MeetingProfile
+    from stenograf.session import plan_channels
+
+    def boom(*args, **kwargs):
+        raise AssertionError("click must not be used when announce is given")
+
+    monkeypatch.setattr(click, "echo", boom)
+    monkeypatch.setattr(click, "secho", boom)
+
+    class FakeProvider:
+        pass
+
+    lines = []
+    plans = plan_channels(MeetingProfile(local_speakers=1, remote_speakers=1))
+    provider = loaders._native_provider(
+        FakeProvider,
+        lambda channels: {ch: f"dev-{ch.value}" for ch in sorted(channels)},
+        plans,
+        lines.append,
+    )
+    assert isinstance(provider, FakeProvider)
+    assert lines == ["capture: mic ← dev-mic", "capture: system ← dev-system"]

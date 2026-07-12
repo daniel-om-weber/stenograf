@@ -239,6 +239,8 @@ class TranscribeScreen(Screen[None]):
                     need_diarizer=diarize,
                     asr_backend=settings.asr.backend,
                     asr_provider=settings.asr.provider,
+                    # Not click: Textual owns stdio (loaders module docstring).
+                    announce=lambda message: self._post(self._set_status, message),
                 )
                 started = time.monotonic()
                 reid = None

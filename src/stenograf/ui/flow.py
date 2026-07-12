@@ -79,7 +79,10 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
 
     def meeting() -> Transcript | None:
         view.status("starting capture…")
-        provider = loaders.make_provider(None, plans, paced=True, aec=True)
+        # announce=view.status everywhere below: loader progress must go to
+        # the header, never through click — Textual owns stdio here, and on
+        # Windows click.echo dies probing its proxy (loaders module docstring).
+        provider = loaders.make_provider(None, plans, paced=True, aec=True, announce=view.status)
         view.set_stop(provider.stop)  # Stop/Ctrl-C crosses to capture from here on
         tee = None
         if request.record_audio:
@@ -92,6 +95,7 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
             need_diarizer=any(p.num_speakers != 1 for p in plans),
             asr_backend=settings.asr.backend,
             asr_provider=settings.asr.provider,
+            announce=view.status,
         )
         reid = None
         if diarizer is not None:

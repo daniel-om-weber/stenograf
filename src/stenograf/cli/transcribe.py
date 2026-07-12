@@ -398,6 +398,9 @@ def _transcribe_split_channels(
         need_diarizer=any(p.num_speakers != 1 for p in plans),
         asr_backend=asr_backend,
         asr_provider=asr_provider,
+        # An injected view means a Textual screen owns stdio — loader progress
+        # must follow the status lines, not click (loaders module docstring).
+        announce=None if view is None else view.status,
     )
     reid = _load_reid(
         diarizer,
