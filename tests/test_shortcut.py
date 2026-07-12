@@ -11,19 +11,29 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from stenograf import shortcut
 
 REPO_ROOT = Path(__file__).parent.parent
+WINDOWS = sys.platform == "win32"  # the real host, before any monkeypatching
+
+
+def _home(monkeypatch, path: Path) -> None:
+    """Redirect the home dir: POSIX Path.home() reads HOME, Windows USERPROFILE."""
+    monkeypatch.setenv("HOME", str(path))
+    monkeypatch.setenv("USERPROFILE", str(path))
 
 
 def test_macos_shortcut_is_an_executable_command_file(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _home(monkeypatch, tmp_path)
 
     target = shortcut.install_shortcut()
 
     assert target == tmp_path / "Desktop" / "Stenograf.command"
-    assert target.stat().st_mode & 0o111  # double-click needs the exec bit
+    if not WINDOWS:  # Windows stat reports no exec bits
+        assert target.stat().st_mode & 0o111  # double-click needs the exec bit
     content = target.read_text()
     assert content.startswith("#!/bin/sh")
     assert f'exec "{sys.executable}" -m stenograf' in content
@@ -43,7 +53,7 @@ def test_linux_shortcut_is_a_terminal_desktop_entry(tmp_path, monkeypatch):
 
 def test_linux_shortcut_defaults_to_local_share(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _home(monkeypatch, tmp_path)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
 
     target = shortcut.install_shortcut()
@@ -53,7 +63,7 @@ def test_linux_shortcut_defaults_to_local_share(tmp_path, monkeypatch):
 
 def test_reinstall_overwrites_and_self_heals(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _home(monkeypatch, tmp_path)
 
     first = shortcut.install_shortcut()
     first.write_text("#!/bin/sh\nexec /stale/interpreter -m stenograf\n")
@@ -66,7 +76,7 @@ def test_reinstall_overwrites_and_self_heals(tmp_path, monkeypatch):
 def test_unsupported_platform_installs_nothing(tmp_path, monkeypatch):
     # Windows gets its .lnk with Phase 6; until then setup must not fail there.
     monkeypatch.setattr(sys, "platform", "win32")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _home(monkeypatch, tmp_path)
 
     assert shortcut.install_shortcut() is None
     assert not list(tmp_path.rglob("*"))
@@ -84,6 +94,7 @@ def test_python_m_stenograf_is_a_working_entry():
     assert "stenograf" in result.stdout
 
 
+@pytest.mark.skipif(WINDOWS, reason="POSIX installer: exec bits and sh don't exist here")
 def test_install_script_parses_and_is_executable():
     script = REPO_ROOT / "install.sh"
     assert script.stat().st_mode & 0o111
