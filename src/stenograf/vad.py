@@ -192,7 +192,7 @@ def pack_windows(
         # hard-split rather than hand the model an unbounded window.
         if seg.end - seg.start > max_window:
             for cut in np.arange(seg.start, seg.end, max_window):
-                windows.append([cut, min(cut + max_window, seg.end)])
+                windows.append([float(cut), float(min(cut + max_window, seg.end))])
             continue
         if (
             windows

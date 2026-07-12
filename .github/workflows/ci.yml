@@ -28,6 +28,10 @@ jobs:
           enable-cache: true
       - run: uv sync
       - run: uv run ruff check .
+      # macOS only: the platform-marker deps (mlx-lm, parakeet-mlx) are only
+      # installed there, and pyright needs them importable to resolve types.
+      - run: uv run --with pyright pyright
+        if: runner.os == 'macOS'
       - run: uv run pytest -q
 
   # Type-check the stenodiar helper (vendored speakrs) in the default CPU

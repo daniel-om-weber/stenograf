@@ -917,17 +917,19 @@ class MeetingRecorder:
         bus = AudioBus(channels)
         # The window pass needs a streaming VAD; a duck-typed VAD without one
         # (test fakes) falls back to the utterance-mode LiveDecoder, no reuse.
-        windowed = self.live_decode_interval is None and hasattr(self.vad, "stream")
+        vad = self.vad
+        windowed = self.live_decode_interval is None and vad is not None and hasattr(vad, "stream")
         if windowed:
+            assert vad is not None  # windowed requires a streaming VAD
             decoders: dict[Channel, LiveDecoder] = {
-                ch: WindowedLiveDecoder(self.asr, vad=self.vad, language=self.language)
+                ch: WindowedLiveDecoder(self.asr, vad=vad, language=self.language)
                 for ch in channels
             }
         else:
             decoders = {
                 ch: LiveDecoder(
                     self.asr,
-                    vad=self.vad,
+                    vad=vad,
                     language=self.language,
                     decode_interval=self.live_decode_interval,
                 )

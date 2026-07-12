@@ -1161,6 +1161,7 @@ def transcribe(
                 True, local_speakers, remote_speakers
             )
 
+    recorder = None  # bound by the split-channel branch, which reports its counts
     if split_pcms is not None:
         duration = len(split_pcms[0]) / SAMPLE_RATE
         reason = (
@@ -1278,7 +1279,7 @@ def transcribe(
 
     paths = _write_transcript(transcript, out_dir, basename, write_formats)
     speed = duration / elapsed if elapsed else 0.0
-    if split_pcms is not None:
+    if recorder is not None:
         _report_speaker_counts(recorder.speaker_counts)
     elif speakers is None:
         found = len({e.speaker for e in entries})
@@ -1351,7 +1352,7 @@ def _load_backends(
     # provider on a backend with its own runtime (MLX) is noted, not an error,
     # so one settings file can serve a mac and a Windows box.
     if hasattr(asr, "provider"):
-        asr.provider = provider
+        asr.provider = provider  # pyright: ignore[reportAttributeAccessIssue] — PLAN-CLEANUP.md C4
     elif provider != "cpu":
         click.echo(f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
     click.echo(f"asr: loading {getattr(asr, 'model_id', None) or asr.name}")
@@ -1699,6 +1700,7 @@ def profiles_enroll(
 
     samples = load_audio(audio_file)
     diarizer = _load_diarizer(need=True)
+    assert diarizer is not None  # need=True exits instead of returning None
     result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers)
     if not result.embeddings:
         raise click.ClickException(

@@ -75,7 +75,7 @@ class CaptureUnavailableError(RuntimeError):
 
 def _import_soundcard():
     try:
-        import soundcard
+        import soundcard  # pyright: ignore[reportMissingImports] — Windows-only dependency
     except Exception as exc:  # ImportError, or COM/cffi init failures
         raise CaptureUnavailableError(
             f"the soundcard package is unavailable ({exc}) — reinstall stenograf, "
@@ -143,10 +143,10 @@ def mic_access_blocked() -> str | None:
 
 def _consent_value(subkey: str, *, machine: bool) -> str | None:
     """A consent-store key's ``Value`` ("allow"/"deny", lowered), or ``None``."""
-    try:
-        import winreg
-    except ImportError:  # not Windows
+    if sys.platform != "win32":  # also lets the type checker use win32 stubs
         return None
+    import winreg
+
     hive = winreg.HKEY_LOCAL_MACHINE if machine else winreg.HKEY_CURRENT_USER
     path = f"{_CONSENT_STORE}\\{subkey}" if subkey else _CONSENT_STORE
     try:

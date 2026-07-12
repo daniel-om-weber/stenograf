@@ -152,6 +152,15 @@ packages = ["src/stenograf"]
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build.py"
 
+[tool.pyright]
+# Run as `uv run --with pyright pyright` (CI does). Basic mode over the shipped
+# package only; eval/ and tests/ are out of scope for now (PLAN-CLEANUP.md T1).
+include = ["src"]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

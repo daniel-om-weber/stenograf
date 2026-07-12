@@ -55,6 +55,14 @@ NOTES_SCHEMA: dict = {
 
 _LANGUAGE_NAMES = {Language.GERMAN: "German", Language.ENGLISH: "English"}
 
+
+def _language_name(language: Language | None) -> str:
+    """The name the system prompt writes notes in; undetected stays generic."""
+    if language is None:
+        return "the language of the transcript"
+    return _LANGUAGE_NAMES.get(language, "the language of the transcript")
+
+
 _SYSTEM = """\
 You turn a meeting transcript into precise written notes.
 
@@ -81,7 +89,7 @@ def build_messages(
     """Chat messages asking for notes over ``entries`` (default: the whole
     transcript). ``partial=True`` marks a map-reduce chunk, whose notes are
     later merged — the model is told not to pad missing context."""
-    language = _LANGUAGE_NAMES.get(transcript.language, "the language of the transcript")
+    language = _language_name(transcript.language)
     system = _SYSTEM.format(language=language)
     context = _context_lines(transcript)
     if context:
@@ -107,7 +115,7 @@ def build_reduce_messages(
     instructions: str | None = None,
 ) -> list[dict[str, str]]:
     """The reduce step: merge per-chunk notes JSON into one set of notes."""
-    language = _LANGUAGE_NAMES.get(transcript.language, "the language of the transcript")
+    language = _language_name(transcript.language)
     system = _SYSTEM.format(language=language)
     context = _context_lines(transcript)
     if context:

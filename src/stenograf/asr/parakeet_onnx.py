@@ -106,7 +106,11 @@ class ParakeetOnnxBackend(ASRBackend):
         # is intentionally unused (may be None until LID runs over the text).
         if self._model is None:
             self.load()
-        result = self._model.recognize(to_float32(samples), sample_rate=SAMPLE_RATE)
+        model = self._model
+        assert model is not None  # load() sets it or raises
+        result = model.recognize(to_float32(samples), sample_rate=SAMPLE_RATE)
+        # with_timestamps() at load time guarantees both are present.
+        assert result.tokens is not None and result.timestamps is not None
         return _split_sentences(merge_tokens(_approximate_ends(result.tokens, result.timestamps)))
 
     def unload(self) -> None:

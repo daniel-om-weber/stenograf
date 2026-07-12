@@ -91,12 +91,14 @@ class ParakeetMLXBackend(ASRBackend):
         # is intentionally unused (may be None until LID runs over the text).
         if self._model is None:
             self.load()
+        model = self._model
+        assert model is not None  # load() sets it or raises
         import mlx.core as mx
         from parakeet_mlx.audio import get_logmel
 
         audio = mx.array(to_float32(samples))
-        mel = get_logmel(audio, self._model.preprocessor_config)
-        (result,) = self._model.generate(mel)
+        mel = get_logmel(audio, model.preprocessor_config)
+        (result,) = model.generate(mel)
 
         segments = []
         for sentence in result.sentences:

@@ -136,11 +136,13 @@ class LiveDecoder:
             return StreamingUpdate((), self._interim_text())
 
         audio_end = self._audio_end()
+        buf_start = self._buf_start
+        assert buf_start is not None  # non-empty _buf ⇒ _append set it
         speech = self._speech()
         uncommitted_speech = True  # without a VAD, assume the tail is speech
         if speech is not None:
             committed_end = self._committed_end()
-            last_speech = speech[-1].end if speech else self._buf_start
+            last_speech = speech[-1].end if speech else buf_start
             uncommitted_speech = any(s.end > committed_end + self.match_tolerance for s in speech)
             # An utterance boundary: the VAD-closed tail has gone quiet. Force the
             # pending words out (with the pause as right-context) and reset.
@@ -159,7 +161,7 @@ class LiveDecoder:
         # audio. In utterance mode this is the only mid-utterance decode, so it
         # must fire on uncommitted *audio* — a pending LocalAgreement tail may
         # never exist.
-        keep_from = max(self._committed_end() - self.left_context, self._buf_start)
+        keep_from = max(self._committed_end() - self.left_context, buf_start)
         if audio_end - keep_from > self.window_cap and (self._buffer or uncommitted_speech):
             return StreamingUpdate(tuple(self._finalize_utterance(speech)), "")
 

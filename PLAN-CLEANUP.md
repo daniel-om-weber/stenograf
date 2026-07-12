@@ -109,7 +109,7 @@ Real defects found during review. Each is a standalone commit with a test.
 
 ### 3.1 Tooling
 
-- [ ] **T1 — add a type checker to CI.** Functions are ~86% annotated but
+- [x] **T1 — add a type checker to CI.** *(pyright basic over src/, macOS CI job)* Functions are ~86% annotated but
   nothing verifies it. Add pyright (preferred: faster, better inference) or
   mypy; wire into `ci.yml` next to ruff. Start permissive (basic mode /
   ignore missing stubs for mlx/sherpa/onnx), tighten later. Annotate the

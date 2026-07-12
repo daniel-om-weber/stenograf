@@ -24,7 +24,7 @@ import json
 import os
 import re
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
 
@@ -53,7 +53,7 @@ _MAX_OUTPUT_TOKENS_THINKING = 12_288
 """With reasoning on, the think block spends output tokens before the JSON
 starts — give it room, still bounded against loops."""
 
-_THINKING_SAMPLER = {"temp": 0.6, "top_p": 0.95}
+_THINKING_TEMP, _THINKING_TOP_P = 0.6, 0.95
 """Qwen3's model card is explicit: greedy decoding in thinking mode causes
 endless repetition. Non-thinking mode keeps mlx-lm's greedy default."""
 
@@ -78,7 +78,9 @@ class MlxBackend:
         self.model = model or os.environ.get("STENOGRAF_NOTES_MODEL") or DEFAULT_MODEL
         self.max_input_chars = max_input_chars or DEFAULT_MAX_INPUT_CHARS
         self.thinking = DEFAULT_THINKING if thinking is None else thinking
-        self._loaded: tuple[object, object] | None = None
+        # (model, tokenizer) — Any because mlx_lm's types are only importable
+        # lazily, on the generation thread.
+        self._loaded: tuple[Any, Any] | None = None
         self._generation_thread: int | None = None
 
     @classmethod
@@ -121,22 +123,26 @@ class MlxBackend:
 
         model, tokenizer = self._load()
         prompt = self._render(tokenizer, messages, schema)
-        kwargs = {"max_tokens": _MAX_OUTPUT_TOKENS}
         if self.thinking:
             from mlx_lm.sample_utils import make_sampler
 
-            kwargs = {
-                "max_tokens": _MAX_OUTPUT_TOKENS_THINKING,
-                "sampler": make_sampler(**_THINKING_SAMPLER),
-            }
-        text = generate(model, tokenizer, prompt=prompt, **kwargs)
+            text = generate(
+                model,
+                tokenizer,
+                prompt=prompt,
+                max_tokens=_MAX_OUTPUT_TOKENS_THINKING,
+                sampler=make_sampler(temp=_THINKING_TEMP, top_p=_THINKING_TOP_P),
+            )
+        else:
+            text = generate(model, tokenizer, prompt=prompt, max_tokens=_MAX_OUTPUT_TOKENS)
         # The think block precedes the JSON (and with thinking off a stray one
         # still can); its prose may contain braces, so it must not reach the
         # JSON extraction.
         return _THINK_BLOCK.sub("", text)
 
-    def _load(self) -> tuple[object, object]:
-        if self._loaded is None:
+    def _load(self) -> tuple[Any, Any]:
+        loaded = self._loaded
+        if loaded is None:
             try:
                 from mlx_lm import load
             except ImportError as exc:
@@ -145,7 +151,7 @@ class MlxBackend:
                     "another backend under [notes] in settings.toml"
                 ) from exc
             try:
-                self._loaded = load(self.model)
+                model, tokenizer = load(self.model)[:2]
             except Exception as exc:
                 # One typed error for the whole fetch+load chain (HF download,
                 # missing repo, corrupt weights) — the CLI catches it and the
@@ -153,7 +159,9 @@ class MlxBackend:
                 raise NotesBackendUnavailableError(
                     f"could not load notes model {self.model!r} via mlx-lm: {exc}"
                 ) from exc
-        return self._loaded
+            loaded = (model, tokenizer)
+            self._loaded = loaded
+        return loaded
 
     def _render(self, tokenizer, messages: list[dict[str, str]], schema: dict) -> list[int]:
         """Token ids for the chat, schema instruction in the last message.

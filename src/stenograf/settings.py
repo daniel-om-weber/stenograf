@@ -76,6 +76,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NoReturn
 
 from stenograf.profiles import data_dir
 
@@ -249,7 +250,7 @@ class _Table:
         self._read.add(key)
         return self._data.get(key)
 
-    def _err(self, key: str, problem: str) -> None:
+    def _err(self, key: str, problem: str) -> NoReturn:
         label = f"{self._name}.{key}" if self._name else key
         raise ValueError(f"{label} {problem}")
 
@@ -270,12 +271,14 @@ class _Table:
         return value
 
     def number(self, key: str, lo: float | None = None, hi: float | None = None) -> float | None:
+        if (lo is None) != (hi is None):
+            raise TypeError("number() bounds must be given together")
         value = self._get(key)
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, int | float):
             self._err(key, "must be a number")
-        if lo is not None and not lo <= value <= hi:
+        if lo is not None and hi is not None and not lo <= value <= hi:
             self._err(key, f"must be between {lo:g} and {hi:g}")
         return float(value)
 
@@ -298,7 +301,11 @@ class _Table:
     def table(self, key: str) -> dict:
         """The nested table under ``key`` (``{}`` if absent), for a child ``_Table``."""
         value = self._get(key)
-        return value if value is not None else {}
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            self._err(key, "must be a table")
+        return value
 
     def reject_unknown(self) -> None:
         unknown = sorted(set(self._data) - self._read)

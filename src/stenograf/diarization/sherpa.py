@@ -84,8 +84,10 @@ class SherpaOnnxDiarizer(Diarizer):
         num_clusters = num_speakers if num_speakers is not None else -1
         if self._pipeline is None or self._num_clusters != num_clusters:
             self._build(num_clusters)
+        pipeline = self._pipeline
+        assert pipeline is not None  # _build() sets it or raises
 
-        result = self._pipeline.process(to_float32(samples))
+        result = pipeline.process(to_float32(samples))
         return [
             SpeakerTurn(speaker=f"S{seg.speaker}", start=seg.start, end=seg.end)
             for seg in result.sort_by_start_time()

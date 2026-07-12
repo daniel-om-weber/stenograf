@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
+from typing import Any
 
 from stenograf.asr.base import Word
 from stenograf.config import (
@@ -190,7 +191,7 @@ def _profile_from_json(obj: dict) -> MeetingProfile:
     )
 
 
-def _value_from_json(obj: dict, coerce: Callable[[object], object]) -> ResolvedValue:
+def _value_from_json(obj: dict, coerce: Callable[[Any], object]) -> ResolvedValue:
     """Rebuild one :class:`ResolvedValue`, coercing its type-erased ``value``.
 
     ``ResolvedValue.value`` is ``object | None``, so JSON alone can't say whether a
