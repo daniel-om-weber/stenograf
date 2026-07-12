@@ -1,6 +1,6 @@
 [project]
 name = "stenograf"
-version = "0.2.1"
+version = "0.2.2"
 description = "Accuracy-first local meeting transcription for German and English. Audio stays in RAM; only text is written."
 readme = "README.md"
 license = "MIT"
