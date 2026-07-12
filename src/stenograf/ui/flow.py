@@ -110,6 +110,10 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
             glossary_threshold=settings.vocab.glossary_threshold,
             dedup_echo=True,
         )
+        # Loading is done; clear the status or "loading models…" would sit in
+        # the header for the whole meeting (the recorder emits no status event
+        # between capture start and finalize). REC/elapsed carry it from here.
+        view.status("")
         try:
             result = recorder.run(
                 provider,
