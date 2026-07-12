@@ -8,6 +8,34 @@ description: How to run and observe stenograf end-to-end (TUI, live pass, finali
 The product surface is the `steno` CLI / Textual TUI. Everything is drivable
 headlessly via `--replay` — no mic, no system tap, no native helper needed.
 
+## Headless TUI smoke — real stack, no TTY, any platform
+
+CLI-mode green does NOT imply the launcher works: the CLI does its loader
+work *before* Textual owns stdio, the launcher does it *under* a live app —
+a code path no `--plain`/`--replay` run touches (this is how the win32
+EBADF meeting-start crash shipped despite a fully validated CLI,
+2026-07-12). Textual's `run_test` pilot drives the real launcher without a
+terminal, so "the TUI needs eyes" is true only for rendering — plumbing is
+verifiable headlessly:
+
+```python
+app = StenografApp()
+async with app.run_test(size=(100, 40)) as pilot:
+    await pilot.click("#start")          # Home -> setup form
+    await pilot.pause()
+    app.screen._submit()                 # form defaults -> meeting screen
+    # ... pilot.pause() until MeetingScreen._phase is CAPTURING (model load
+    # takes seconds), press "q" to stop+finalize, then inspect
+    # app._notifications — a "Meeting failed" toast is the failure signal.
+```
+
+Patch `stenograf.output.default_output_home` to a scratch dir first. On a
+machine with audio devices this runs the REAL provider + models end to end.
+When a test must fake (CI has no audio), fake at the hardware boundary
+(`capture.windows.default_devices`, the provider class), never at
+`loaders.make_provider`/`load_backends` — faking the orchestration seam is
+exactly what hid the EBADF crash from the UI suite.
+
 ## Build & launch
 
 No build step; run from the repo with uv:
