@@ -8,6 +8,7 @@ interleaves the results. ``steno transcribe`` runs it on a file.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Protocol
 
@@ -208,6 +209,37 @@ def merge_words_turns(
     overlapping turns the largest-overlap turn wins and the entry is flagged
     provisional; words outside every turn take the nearest turn's speaker.
     """
+    ordered = sorted(words, key=lambda w: w.start)
+    return _group_runs(ordered, lambda word: _assign(word, turns), max_gap)
+
+
+def group_words(
+    words: list[Word], speaker: str, *, max_gap: float = MAX_ENTRY_GAP
+) -> list[TranscriptEntry]:
+    """Group one un-diarized speaker's words into entries, split on gaps > max_gap.
+
+    The live checkpoint (Option B, PLAN.md §3) turns a channel's committed live
+    words into readable entries the same way :func:`merge_words_turns` groups a
+    diarization turn — one entry per continuous run of speech — but with no
+    speaker assignment: every word is attributed to ``speaker`` (a channel-coarse
+    ``Local``/``Remote`` label, since the live pass does not diarize). Words must
+    already be in time order.
+    """
+    return _group_runs(words, lambda _: (speaker, False), max_gap)
+
+
+def _group_runs(
+    words: list[Word],
+    assign: Callable[[Word], tuple[str, bool]],
+    max_gap: float,
+) -> list[TranscriptEntry]:
+    """Close-run-on-gap grouping shared by the diarized and un-diarized paths.
+
+    ``assign`` gives each word its ``(speaker, provisional)``; a run closes when
+    the speaker changes or the silence to the next word exceeds ``max_gap``, and
+    an entry is provisional if any word in its run was. Words must be in time
+    order.
+    """
     entries: list[TranscriptEntry] = []
     run: list[Word] = []
     run_speaker = ""
@@ -229,50 +261,13 @@ def merge_words_turns(
         run = []
         run_provisional = False
 
-    for word in sorted(words, key=lambda w: w.start):
-        speaker, provisional = _assign(word, turns)
+    for word in words:
+        speaker, provisional = assign(word)
         if run and (speaker != run_speaker or word.start - run[-1].end > max_gap):
             close_run()
         run.append(word)
         run_speaker = speaker
         run_provisional = run_provisional or provisional
-    close_run()
-    return entries
-
-
-def group_words(
-    words: list[Word], speaker: str, *, max_gap: float = MAX_ENTRY_GAP
-) -> list[TranscriptEntry]:
-    """Group one un-diarized speaker's words into entries, split on gaps > max_gap.
-
-    The live checkpoint (Option B, PLAN.md §3) turns a channel's committed live
-    words into readable entries the same way :func:`merge_words_turns` groups a
-    diarization turn — one entry per continuous run of speech — but with no
-    speaker assignment: every word is attributed to ``speaker`` (a channel-coarse
-    ``Local``/``Remote`` label, since the live pass does not diarize). Words must
-    already be in time order.
-    """
-    entries: list[TranscriptEntry] = []
-    run: list[Word] = []
-
-    def close_run() -> None:
-        nonlocal run
-        if run:
-            entries.append(
-                TranscriptEntry(
-                    speaker=speaker,
-                    text=" ".join(w.text for w in run),
-                    start=run[0].start,
-                    end=run[-1].end,
-                    words=tuple(run),
-                )
-            )
-        run = []
-
-    for word in words:
-        if run and word.start - run[-1].end > max_gap:
-            close_run()
-        run.append(word)
     close_run()
     return entries
 
