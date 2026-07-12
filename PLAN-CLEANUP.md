@@ -1,10 +1,10 @@
 # Code cleanup & maintainability plan
 
-> **Status: §2 bugs (B1–B5), Pass 1 (§3, T1–T10), and Pass 2 (§4, C1–C8)
-> COMPLETE 2026-07-12.** Produced by a six-subsystem deep review (CLI, live
-> orchestration, audio/capture, ML pipeline, notes/config, eval/native/tests).
-> Next: Pass 3 (§5 capture — do it before the Phase 5 CachyOS capture work),
-> then §6. Tick checkboxes and update this blockquote as tasks land.
+> **Status: §2 bugs (B1–B5), Pass 1 (§3, T1–T10), Pass 2 (§4, C1–C8), and
+> Pass 3 (§5, A1–A4) COMPLETE 2026-07-12.** Produced by a six-subsystem deep
+> review (CLI, live orchestration, audio/capture, ML pipeline, notes/config,
+> eval/native/tests). Next: Pass 4 (§6). Tick checkboxes and update this
+> blockquote as tasks land.
 
 This document is the backlog for making the codebase clean and maintainable.
 It is **behavior-preserving by charter**: no task here changes what stenograf
@@ -271,7 +271,10 @@ lines; test suite green with fewer monkeypatches than before.
 > making today's Linux/Windows duplication permanent, and the injectable
 > clock makes the new Linux code testable from day one.
 
-- [ ] **A1 — hoist `_QueueStreamingProvider` base + `SessionClock`.**
+- [x] **A1 — hoist `_QueueStreamingProvider` base + `SessionClock`.**
+  *(done as `capture/streaming.py`: `QueueStreamingProvider[TransportT]` +
+  `SessionClock`; subclasses implement `_open_channel`/`_pump`/
+  `_stop_transport` only)*
   Linux (`capture/linux.py`) and Windows (`capture/windows.py`) share ~70%
   of their machinery with no base class: byte-identical `frames()`
   (`linux.py:162-171` / `windows.py:219-228`), the
@@ -289,12 +292,16 @@ lines; test suite green with fewer monkeypatches than before.
   separate (single synchronous helper process). Preserves the load-bearing
   invariant: timestamps derive from cumulative sample count, never arrival
   jitter.
-- [ ] **A2 — injectable clock for Linux (falls out of A1).** Windows already
+- [x] **A2 — injectable clock for Linux (falls out of A1).** *(plus a direct
+  SessionClock unit suite in tests/test_capture_streaming.py)* Windows already
   takes `clock=` (`windows.py:197`) and has a deterministic re-anchor test
   (`test_capture_windows.py:172-189`); Linux hardcodes `time.monotonic`
   (`linux.py:212`) so its test can only assert `timestamp < 0.5` against a
   wall clock. After A1, port the Windows-quality anchor test to Linux.
-- [ ] **A3 — extract `GapPaddedBuffer`.** `_Track` (`aec.py:71-149`) and
+- [x] **A3 — extract `GapPaddedBuffer`.** *(home: `capture/base.py`; the two
+  deliberate differences are constructor params pinned by tests — tracks
+  absorb jitter-sized gaps (`pad_gaps_over`) and anchor at first frame, the
+  tee pads every gap and anchors at t=0)* `_Track` (`aec.py:71-149`) and
   `_PendingChannel` (`recording.py:160-209`) independently implement the
   same primitive: timestamp-anchored int16 buffer, silence-padded forward
   gaps, raise past `-ORDER_TOLERANCE_SAMPLES` backward jumps, front-pop.
@@ -303,7 +310,13 @@ lines; test suite green with fewer monkeypatches than before.
   `window()`/`trim_before()`, `_PendingChannel` layers its deque. A
   divergence here silently misaligns the recording or the AEC reference —
   this is the highest-value dedup in the codebase.
-- [ ] **A4 — smaller consolidations.** One `DEFAULT_FRAME_MS` + frame-size
+- [x] **A4 — smaller consolidations.** *(done: DEFAULT_FRAME_MS +
+  `frame_samples()` in `capture/base.py`; `read_up_to`/`read_exact` in
+  `streaming.py`; Linux `command=` accepts Path; AecDump closed by `stop()`
+  when `frames()` never ran. Judgment calls: silent-mic watchdog stays
+  Windows-only (the only measured dead-mic mode is the privacy toggle);
+  `default_devices` stays a module-level preflight — must run before
+  construction — with the divergence documented on the ABC)* One `DEFAULT_FRAME_MS` + frame-size
   computation (copied at `linux.py:49/127`, `windows.py:53/201`,
   `file.py:25/40`); merge the near-duplicate pipe readers `_read_exact`
   (`macos.py:139`) / `_read_up_to` (`linux.py:224`) once a shared home
