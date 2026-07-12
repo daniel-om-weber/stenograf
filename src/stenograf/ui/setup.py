@@ -1,11 +1,13 @@
 """Meeting setup — the few choices that matter before capture starts.
 
-Phase 7, Task 3 (PLAN.md §5). The launcher's pre-meeting form: speaker counts
-(the meeting profile), language, an optional title, and the notes toggle.
-Everything else — formats, vocabulary, re-ID, AEC, checkpoint cadence — comes
-from settings.toml exactly as it does for a flagless ``steno start``, resolved
-through the same helpers the CLI uses (``cli/run.py``), so the two entries can
-never disagree about defaults.
+Phase 7, Task 3 (PLAN.md §5). The launcher's pre-meeting form, one concept per
+control: which sources to capture (two switches), whether to tell speakers
+apart (the diarization switch — the per-channel counts only appear while it is
+on), language, an optional title, the audio-recording opt-in, and the notes
+toggle. Everything else — formats, vocabulary, re-ID, AEC, checkpoint cadence
+— comes from settings.toml exactly as it does for a flagless ``steno start``,
+resolved through the same helpers the CLI uses (``cli/run.py``), so the two
+entries can never disagree about defaults.
 
 Submitting validates here (a bad profile keeps the form open with the error
 shown) and dismisses with a :class:`MeetingRequest`; the flow module turns
@@ -20,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Input, Select, Static, Switch
 
@@ -32,7 +34,7 @@ if TYPE_CHECKING:
 _AUTO = -1
 """Select sentinel for "auto-detect" (Select values must not be None)."""
 
-_COUNT_CHOICES = [("Auto-detect", _AUTO), ("0 — channel off", 0)] + [
+_COUNT_CHOICES = [("Auto-detect", _AUTO)] + [
     (str(n), n)
     for n in range(1, 9)  # MeetingProfile caps counts at 8
 ]
@@ -47,11 +49,14 @@ class MeetingRequest:
     """What the form resolved: the profile to record plus the run-level extras.
 
     ``settings`` rides along so the flow uses the exact values in force when
-    the user pressed Start — not whatever the file says seconds later."""
+    the user pressed Start — not whatever the file says seconds later.
+    ``record_audio`` is the CLI's bare ``--record-audio``: keep the raw
+    capture as the meeting folder's ``audio.wav``."""
 
     profile: MeetingProfile
     settings: Settings
     notes: bool
+    record_audio: bool
 
 
 class MeetingSetupScreen(Screen[MeetingRequest | None]):
@@ -67,8 +72,9 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
     .field-label { margin: 1 0 0 0; }
     .hint { color: $text-muted; }
     #form Select, #form Input { width: 100%; }
-    #notes-row { height: auto; margin: 1 0 0 0; }
-    #notes-row Static { padding: 0 0 0 1; }
+    .switch-row { height: auto; margin: 1 0 0 0; }
+    .switch-row Static { padding: 0 0 0 1; width: 1fr; }
+    #counts { height: auto; }
     #actions { height: auto; margin: 1 0 0 0; }
     #actions Button { width: 1fr; }
     #actions #go { margin: 0 1 0 0; }
@@ -81,21 +87,39 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
         self.notices: list[str] = []  # plain-text mirror of the toasts shown
 
     def compose(self) -> ComposeResult:
-        count_default, count_hint = self._count_default()
+        diarize = self._diarize_default()
         form = VerticalScroll(id="form")
         form.can_focus = False  # focus starts on the first field, not the container
         with form:
             yield Static("Start meeting", id="form-title")
-            yield Static("Speakers in the room (this computer's microphone)", classes="field-label")
-            yield Select(_COUNT_CHOICES, value=count_default, allow_blank=False, id="local")
-            yield Static("Remote speakers (system audio: calls, videos)", classes="field-label")
-            yield Select(_COUNT_CHOICES, value=count_default, allow_blank=False, id="remote")
-            yield Static(count_hint, classes="hint")
+            with Horizontal(classes="switch-row"):
+                yield Switch(value=True, id="mic")
+                yield Static("Microphone — people in the room")
+            with Horizontal(classes="switch-row"):
+                yield Switch(value=True, id="system")
+                yield Static("System audio — calls, videos")
+            with Horizontal(classes="switch-row"):
+                yield Switch(value=diarize, id="diarize")
+                yield Static("Tell speakers apart (diarization)")
+            yield Static("Off: each source is one speaker in the transcript.", classes="hint")
+            counts = Vertical(id="counts")
+            counts.display = diarize  # the counts only mean something while diarizing
+            with counts:
+                yield Static("Speakers in the room (microphone)", classes="field-label")
+                yield Select(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="local")
+                yield Static("Remote speakers (system audio)", classes="field-label")
+                yield Select(_COUNT_CHOICES, value=_AUTO, allow_blank=False, id="remote")
+                yield Static(
+                    "Auto-detect works; exact counts label speakers better.", classes="hint"
+                )
             yield Static("Language", classes="field-label")
             yield Select(_LANGUAGE_CHOICES, value="auto", allow_blank=False, id="language")
             yield Static("Title (optional; used by notes)", classes="field-label")
             yield Input(placeholder="e.g. Weekly sync", id="title")
-            with Horizontal(id="notes-row"):
+            with Horizontal(classes="switch-row"):
+                yield Switch(value=False, id="record")
+                yield Static("Keep the audio recording (audio.wav)")
+            with Horizontal(classes="switch-row"):
                 yield Switch(value=False, id="notes")
                 yield Static("Generate notes after the meeting")
             with Horizontal(id="actions"):
@@ -103,24 +127,25 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
                 yield Button("Back", id="back")
         yield Footer()
 
-    def _count_default(self) -> tuple[int, str]:
-        """The count Selects' starting value and the hint shown under them.
+    def _diarize_default(self) -> bool:
+        """Whether the "tell speakers apart" switch starts on.
 
-        Diarization is off by default, so 1 — the diarizer-free path — is the
-        form's starting point; picking Auto-detect or a real count still
-        separates speakers for this one meeting (the form beats the settings,
-        the same way a CLI flag does). Only ``[speakers] diarization = true``
-        makes Auto the default again; a broken settings file behaves like the
-        defaults — :meth:`_submit` is where it is reported.
+        Diarization is off by default; only ``[speakers] diarization = true``
+        turns it on as a standing choice. The switch beats the settings the
+        same way a CLI flag does, for this one meeting. A broken settings
+        file behaves like the defaults — :meth:`_submit` is where it is
+        reported.
         """
         from stenograf.settings import SettingsError, load_settings
 
         try:
-            if load_settings().speakers.diarization is True:
-                return _AUTO, "Auto-detect works; exact counts label speakers better."
+            return load_settings().speakers.diarization is True
         except SettingsError:
-            pass
-        return 1, "Diarization is off by default; Auto-detect or a count separates."
+            return False
+
+    def on_switch_changed(self, event: Switch.Changed) -> None:
+        if event.switch.id == "diarize":
+            self.query_one("#counts").display = event.value
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "go":
@@ -152,20 +177,30 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
             self._error(exc.message)
             return
 
-        local = self.query_one("#local", Select).value
-        remote = self.query_one("#remote", Select).value
+        diarize = self.query_one("#diarize", Switch).value
         language = self.query_one("#language", Select).value
         title = self.query_one("#title", Input).value
+
+        def count(source_id: str, count_id: str) -> int | None:
+            """The profile count a source's controls mean: 0 = source off,
+            1 = capture as one speaker, None = diarize and estimate."""
+            if not self.query_one(f"#{source_id}", Switch).value:
+                return 0
+            if not diarize:
+                return 1
+            value = self.query_one(f"#{count_id}", Select).value
+            return None if value == _AUTO else value
+
         try:
             profile = MeetingProfile(
                 language=None if language == "auto" else Language(language),
-                local_speakers=None if local == _AUTO else local,
-                remote_speakers=None if remote == _AUTO else remote,
+                local_speakers=count("mic", "local"),
+                remote_speakers=count("system", "remote"),
                 glossary=glossary_terms,
                 attendee_names=attendee_names,
                 title=title,
             )
-        except ValueError as exc:  # e.g. 0 local + 0 remote
+        except ValueError as exc:  # e.g. both sources switched off
             self._error(str(exc))
             return
         self.dismiss(
@@ -173,6 +208,7 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
                 profile=profile,
                 settings=settings,
                 notes=self.query_one("#notes", Switch).value,
+                record_audio=self.query_one("#record", Switch).value,
             )
         )
 

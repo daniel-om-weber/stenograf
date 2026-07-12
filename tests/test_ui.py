@@ -34,6 +34,15 @@ def _run(body) -> None:
     asyncio.run(body())
 
 
+async def _click_start(pilot, screen) -> None:
+    """Click the setup form's Start button, scrolling it into view first —
+    the form overflows the pilot's small screen, and a click outside the
+    visible scroll area lands on the container instead of the button."""
+    screen.query_one("#go").scroll_visible(animate=False)
+    await pilot.pause()
+    await pilot.click("#go")
+
+
 class TestMinimalRedraw:
     def test_frame_cap_and_animations_are_pinned(self):
         # Importing stenograf.ui.app pins TEXTUAL_FPS before textual imports
@@ -153,9 +162,8 @@ class TestHomeScreen:
 
 class TestMeetingSetupScreen:
     def test_submit_defaults_to_single_speaker_counts(self, tmp_path, monkeypatch):
-        # Diarization is off by default, so 1 (the diarizer-free path) is the
-        # form's starting point; the Selects stay editable, so Auto-detect or a
-        # real count enables diarization for this one meeting.
+        # Defaults: both sources on, diarization off (its counts hidden), no
+        # recording, no notes — each source lands on one speaker.
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         from stenograf.ui.setup import MeetingSetupScreen
 
@@ -163,9 +171,11 @@ class TestMeetingSetupScreen:
             app = StenografApp()
             results = []
             async with app.run_test(size=(80, 40)) as pilot:
-                app.push_screen(MeetingSetupScreen(), results.append)
+                screen = MeetingSetupScreen()
+                app.push_screen(screen, results.append)
                 await pilot.pause()
-                await pilot.click("#go")
+                assert not screen.query_one("#counts").display  # hidden while off
+                await _click_start(pilot, screen)
                 await pilot.pause()
                 assert len(results) == 1
                 request = results[0]
@@ -173,12 +183,40 @@ class TestMeetingSetupScreen:
                 assert request.profile.remote_speakers == 1
                 assert request.profile.language is None
                 assert request.notes is False
+                assert request.record_audio is False
 
         _run(body)
 
-    def test_settings_diarization_on_defaults_the_counts_to_auto(self, tmp_path, monkeypatch):
-        # [speakers] diarization = true restores the Auto-detect defaults —
-        # the count is estimated unless the form is given a real one.
+    def test_diarize_switch_reveals_the_counts_and_submits_auto(self, tmp_path, monkeypatch):
+        # Flipping "tell speakers apart" on shows the count Selects; left on
+        # Auto-detect they submit as None — diarize and estimate per channel.
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        from textual.widgets import Switch
+
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            results = []
+            async with app.run_test(size=(80, 50)) as pilot:
+                screen = MeetingSetupScreen()
+                app.push_screen(screen, results.append)
+                await pilot.pause()
+                screen.query_one("#diarize", Switch).value = True
+                await pilot.pause()
+                assert screen.query_one("#counts").display
+                await _click_start(pilot, screen)
+                await pilot.pause()
+                assert len(results) == 1
+                request = results[0]
+                assert request.profile.local_speakers is None  # auto-detect
+                assert request.profile.remote_speakers is None
+
+        _run(body)
+
+    def test_settings_diarization_on_defaults_the_switch_to_on(self, tmp_path, monkeypatch):
+        # [speakers] diarization = true starts the switch on, so the counts
+        # are visible and default to Auto-detect.
         data = tmp_path / "data"
         data.mkdir()
         (data / "settings.toml").write_text("[speakers]\ndiarization = true\n", encoding="utf-8")
@@ -188,10 +226,12 @@ class TestMeetingSetupScreen:
         async def body():
             app = StenografApp()
             results = []
-            async with app.run_test(size=(80, 40)) as pilot:
-                app.push_screen(MeetingSetupScreen(), results.append)
+            async with app.run_test(size=(80, 50)) as pilot:
+                screen = MeetingSetupScreen()
+                app.push_screen(screen, results.append)
                 await pilot.pause()
-                await pilot.click("#go")
+                assert screen.query_one("#counts").display
+                await _click_start(pilot, screen)
                 await pilot.pause()
                 assert len(results) == 1
                 request = results[0]
@@ -202,7 +242,7 @@ class TestMeetingSetupScreen:
 
     def test_impossible_profile_keeps_the_form_open(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
-        from textual.widgets import Select
+        from textual.widgets import Switch
 
         from stenograf.ui.setup import MeetingSetupScreen
 
@@ -213,9 +253,9 @@ class TestMeetingSetupScreen:
                 screen = MeetingSetupScreen()
                 app.push_screen(screen, results.append)
                 await pilot.pause()
-                screen.query_one("#local", Select).value = 0
-                screen.query_one("#remote", Select).value = 0
-                await pilot.click("#go")
+                screen.query_one("#mic", Switch).value = False
+                screen.query_one("#system", Switch).value = False
+                await _click_start(pilot, screen)
                 await pilot.pause()
                 assert results == []  # not dismissed — the form keeps the input
                 assert app.screen is screen
@@ -243,11 +283,12 @@ class TestMeetingSetupScreen:
 
 class TestMeetingFlow:
     def test_start_meeting_runs_end_to_end_from_home(self, tmp_path, monkeypatch):
-        # The whole launcher path with offline fakes: Home → setup form →
-        # meeting screen runs a (replayed, silent) meeting through the real
-        # recorder → done → q → back Home with the transcript on disk.
+        # The whole launcher path with offline fakes: Home → setup form
+        # (mic only, keep the audio) → meeting screen runs a (replayed,
+        # silent) meeting through the real recorder → done → q → back Home
+        # with the transcript and the recorded WAV on disk.
         import conftest
-        from textual.widgets import Select
+        from textual.widgets import Switch
 
         from stenograf import loaders, output
         from stenograf.capture.base import Channel
@@ -283,9 +324,9 @@ class TestMeetingFlow:
                 await pilot.click("#start")
                 await pilot.pause()
                 assert isinstance(app.screen, MeetingSetupScreen)
-                app.screen.query_one("#local", Select).value = 1
-                app.screen.query_one("#remote", Select).value = 0
-                await pilot.click("#go")
+                app.screen.query_one("#system", Switch).value = False  # mic-only meeting
+                app.screen.query_one("#record", Switch).value = True  # keep audio.wav
+                await _click_start(pilot, app.screen)
                 for _ in range(100):  # the dismiss callback pushes the meeting screen
                     await pilot.pause(0.05)
                     if isinstance(app.screen, MeetingScreen):
@@ -307,6 +348,9 @@ class TestMeetingFlow:
         transcripts = list(home_dir.glob("*/transcript.md"))
         assert len(transcripts) == 1, "the meeting folder should hold one transcript"
         assert "wort" in transcripts[0].read_text(encoding="utf-8")
+        audio = transcripts[0].parent / "audio.wav"
+        assert audio.exists(), "the 'keep the audio' switch should tee a WAV"
+        assert audio.stat().st_size > 44  # a finalized header plus actual frames
 
 
 class TestTranscribeScreen:

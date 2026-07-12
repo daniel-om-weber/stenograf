@@ -5,9 +5,10 @@ command body, built from the same library seams (``loaders``,
 ``MeetingRecorder``, the output writers) with settings.toml supplying
 everything the setup form doesn't ask about. Differences from the CLI are
 deliberate scope, not drift: no ``--out``/``--force`` (a fresh date-named
-folder can't collide), no replay/tee/AEC-dump/full-finalize (developer
-flags), and progress reports through the meeting screen's header instead of
-``click.echo``.
+folder can't collide), no replay/AEC-dump/full-finalize (developer flags),
+and progress reports through the meeting screen's header instead of
+``click.echo``. The audio tee is the form's "keep the audio" switch — the
+CLI's bare ``--record-audio``, always the meeting folder's ``audio.wav``.
 
 Ordering matters twice here:
 
@@ -48,6 +49,7 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
     """
     from stenograf.cli.start import _LIVE_FLUSH_INTERVAL_S, _PersistOnce
     from stenograf.output import (
+        AUDIO_NAME,
         TRANSCRIPT_STEM,
         allocate_meeting_dir,
         checkpoint_writer,
@@ -79,6 +81,12 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
         view.status("starting capture…")
         provider = loaders.make_provider(None, plans, paced=True, aec=True)
         view.set_stop(provider.stop)  # Stop/Ctrl-C crosses to capture from here on
+        tee = None
+        if request.record_audio:
+            from stenograf.recording import WavTee
+
+            out_dir.mkdir(parents=True, exist_ok=True)  # the tee is this run's first write
+            tee = WavTee(out_dir / AUDIO_NAME, {p.channel for p in plans})
         view.status("loading models…")
         asr, vad, diarizer = loaders.load_backends(
             need_diarizer=any(p.num_speakers != 1 for p in plans),
@@ -102,14 +110,19 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
             glossary_threshold=settings.vocab.glossary_threshold,
             dedup_echo=True,
         )
-        result = recorder.run(
-            provider,
-            live=True,
-            view=view,
-            checkpoint=CheckpointConfig(
-                checkpoint_writer(out_dir, basename), _LIVE_FLUSH_INTERVAL_S
-            ),
-        )
+        try:
+            result = recorder.run(
+                provider,
+                live=True,
+                view=view,
+                on_frame=tee.add if tee else None,
+                checkpoint=CheckpointConfig(
+                    checkpoint_writer(out_dir, basename), _LIVE_FLUSH_INTERVAL_S
+                ),
+            )
+        finally:
+            if tee is not None:
+                tee.close()  # flush + finalize the WAV header even on a dying run
         transcript = result.transcript
         if transcript is not None:
             # Persisted already, at the finalized event — this is display only.
