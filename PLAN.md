@@ -979,6 +979,42 @@ on a verified core).
 
 **Track A — real-hardware validation (the gate).**
 
+State (desktop, 2026-07-12, Ryzen 9 5900X + RTX 4080 SUPER, Sharkoon Gaming
+DAC Pro S, output = headphones): **the automatable core is verified on the
+desktop; items 1–2 pass, item 3's live path smoke-passes, the ≥30-min/AEC gate
+and the notebook re-run stay open.** Measured on a 56.4 s piper-TTS clip
+(en_US-lessac-medium, the ci.yml sentence with "provisioning"/"October"):
+
+- **Item 1 — transcribe, PASS.** Warm CPU run (weights pre-cached): 8.3 s wall
+  → 6.8× RT end-to-end, but that is model-load-bound on a short clip; the
+  tool's own transcribe-only figure is **14.9× RT** (3.8 s). Sentinels present;
+  "backend"→"backhand" is the known TTS mishearing. `provider = "dml"`
+  (`STENOGRAF_ASR_PROVIDER=dml`) engaged ("asr: accelerated (DirectML)"), no
+  silent CPU fallback: transcript **byte-identical** to CPU (SHA-256 match on
+  transcript.{txt,md,json}), transcribe-only **35.3× RT** (1.6 s) →
+  **2.37× DML speedup** over CPU compute. Output files are clean UTF-8/ASCII,
+  no code-page mangling (the only mojibake seen — a UTF-16 BOM and a `✓`→`?`
+  glyph — is PowerShell's `*>` redirect + console codepage, not the tool).
+- **Item 2 — `steno start --replay`, PASS.** End-to-end via the `verify` flow
+  (mic replay, in-room): live caption emitted, finalize + transcript written,
+  both sentinels present.
+- **Item 3 (desktop smoke) — live WASAPI capture, PASS.** `--local 0 --remote
+  1` captured the Sharkoon **loopback** render stream (default output =
+  headphones, yet loopback still taps render); both sentinels present on a
+  single clean playback. Back-to-back double playback reorders/garbles the
+  ASR (a playback-overlap harness artifact, not a capture bug). Bonus
+  `--local 1 --remote 1` mic+system smoke: **both channels captured**, **AEC
+  armed** ("echo cancellation: on (mic cancelled against system audio)"),
+  stderr clean — **no far-end-missing / armed-backstop warnings**, and the
+  **silent-mic watchdog stayed quiet** (no false-positive). With headphones
+  output the mic heard nothing intelligible and all content arrived via the
+  system channel — expected on this box.
+- **Still open (needs the notebook, real speakers):** the ≥30-min
+  **speakers-not-headphones** AEC meeting (far-end re-anchor / echo-leak across
+  long system-silence gaps — item 3's AEC bullet and item 4's long run); the
+  **TUI-by-eye** check in Windows Terminal (live captions, resize, clean Ctrl-C);
+  and re-running items 1–3 on the **notebook's GPU** (different DML vendor tier).
+
 1. Real `steno transcribe` on a meeting-length recording with downloaded
    models (fp32 ONNX, CPU): correctness + RTF on the notebook. Repeat with
    `[asr] provider = "dml"` — byte-identity + speedup were verified on the
