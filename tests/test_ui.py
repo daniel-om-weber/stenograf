@@ -37,10 +37,25 @@ def _run(body) -> None:
 async def _click_start(pilot, screen) -> None:
     """Click the setup form's Start button, scrolling it into view first —
     the form overflows the pilot's small screen, and a click outside the
-    visible scroll area lands on the container instead of the button."""
-    screen.query_one("#go").scroll_visible(animate=False)
-    await pilot.pause()
-    await pilot.click("#go")
+    visible scroll area lands on the container instead of the button.
+
+    The scroll has to *settle* before the click: ``Pilot.click`` aims at the
+    button's region as it stands when the click is posted, so a scroll that
+    has not been applied yet aims at where the button used to be — off the
+    visible area, and the click lands on the container. One ``pause()`` is
+    enough on an idle machine and not always enough on a loaded CI runner, so
+    scroll until the region stops moving, then click once. The pilot reports
+    whether the click reached the button; a miss must fail loudly rather than
+    look like a form that refused to submit."""
+    go = screen.query_one("#go")
+    previous = None
+    for _ in range(10):
+        go.scroll_visible(animate=False)
+        await pilot.pause()
+        if go.region == previous:
+            break
+        previous = go.region
+    assert await pilot.click("#go"), f"the Start button did not take the click: {go.region}"
 
 
 class TestMinimalRedraw:
