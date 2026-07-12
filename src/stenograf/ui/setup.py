@@ -188,7 +188,9 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
             if not diarize:
                 return 1
             value = self.query_one(f"#{count_id}", Select).value
-            return None if value == _AUTO else value
+            # Not an int = Select.BLANK (never happens: allow_blank is off);
+            # _AUTO is the real "estimate the count" sentinel.
+            return value if isinstance(value, int) and value != _AUTO else None
 
         try:
             profile = MeetingProfile(

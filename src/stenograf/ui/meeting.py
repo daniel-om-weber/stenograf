@@ -484,7 +484,9 @@ class TextualLiveView(LiveView):
             raise result["error"]  # type: ignore[misc]
         return result.get("transcript")  # type: ignore[return-value]
 
-    def arm_meeting(self, meeting: Callable[[], Transcript], result: dict[str, object]) -> None:
+    def arm_meeting(
+        self, meeting: Callable[[], Transcript | None], result: dict[str, object]
+    ) -> None:
         """Wire ``on_ready`` to run ``meeting`` on a background thread once mounted.
 
         :meth:`serve` (the CLI) calls this itself; the launcher flow calls it

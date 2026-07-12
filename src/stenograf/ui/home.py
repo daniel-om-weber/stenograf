@@ -107,10 +107,13 @@ class HomeScreen(Screen[None]):
         def on_setup(request: MeetingRequest | None) -> None:
             if request is None:  # the form was cancelled
                 return
+            from stenograf.ui.app import StenografApp
             from stenograf.ui.flow import start_meeting
 
+            app = self.app
+            assert isinstance(app, StenografApp)  # HomeScreen only runs inside it
             try:
-                start_meeting(self.app, request)
+                start_meeting(app, request)
             except Exception as exc:  # e.g. an unwritable output home
                 message = f"could not start the meeting: {exc}"
                 self.notices.append(message)
