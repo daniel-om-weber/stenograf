@@ -42,6 +42,7 @@ import contextlib  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 from collections.abc import Callable, Sequence  # noqa: E402
+from enum import Enum  # noqa: E402
 
 import textual.constants  # noqa: E402
 import textual.screen  # noqa: E402
@@ -84,6 +85,23 @@ area until some future commit displaces it — minutes, in a quiet meeting."""
 _INTERIM_TAIL_CHARS = 200
 """At most this much of the open line (its tail) renders in the interim area.
 The area clips at the bottom, so only the freshest words may occupy it."""
+
+
+class Phase(Enum):
+    """App lifecycle: drives the header rendering and what a quit keypress does.
+
+    ``CAPTURING`` → live pass running; ``FINALIZING`` → capture stopped, on-stop
+    pass running; ``DONE`` → transcript shown, quit just exits. Each member
+    carries its header lead text and color.
+    """
+
+    CAPTURING = ("● REC", "red")
+    FINALIZING = ("◼ finalizing", "yellow")
+    DONE = ("✓ done", "green")
+
+    def __init__(self, lead: str, color: str) -> None:
+        self.lead = lead
+        self.color = color
 
 
 def _clock(seconds: float) -> str:
@@ -137,10 +155,7 @@ class LiveApp(App[None]):
         self.stop_callback = stop
         self._on_ready = on_ready
 
-        # Phase drives the header and what a quit keypress does.
-        # capturing → live pass running; finalizing → capture stopped, on-stop
-        # pass running; done → transcript shown, quit just exits.
-        self._phase = "capturing"
+        self._phase = Phase.CAPTURING
         self._status = ""
         self._start = 0.0
 
@@ -267,7 +282,7 @@ class LiveApp(App[None]):
         self._render_header()
 
     def push_finalizing(self) -> None:
-        self._phase = "finalizing"
+        self._phase = Phase.FINALIZING
         self._render_header()
 
     def push_finalized(self, transcript: Transcript) -> None:
@@ -287,7 +302,7 @@ class LiveApp(App[None]):
             self.committed_lines.append(f"{entry.speaker}  {entry.text}")
         if transcript.language is not None:
             self._language = transcript.language
-        self._phase = "done"
+        self._phase = Phase.DONE
         n = len(transcript.entries)
         self._status = f"{n} {'entry' if n == 1 else 'entries'} · q to exit"
         self._render_header()
@@ -300,17 +315,15 @@ class LiveApp(App[None]):
 
     def header_text(self) -> str:
         elapsed = _clock(time.monotonic() - self._start) if self._start else "0:00"
-        lead = {"capturing": "● REC", "finalizing": "◼ finalizing", "done": "✓ done"}[self._phase]
         lang = self._language.value if self._language else "—"
-        bits = [lead, elapsed, lang, _profile_label(self._profile)]
+        bits = [self._phase.lead, elapsed, lang, _profile_label(self._profile)]
         if self._status:
             bits.append(self._status)
         return "  ·  ".join(bits)
 
     def _render_header(self) -> None:
         header = self.query_one("#header", Static)
-        color = {"capturing": "red", "finalizing": "yellow", "done": "green"}[self._phase]
-        header.update(f"[{color}]{self.header_text()}[/]")
+        header.update(f"[{self._phase.color}]{self.header_text()}[/]")
 
     # -- quit --------------------------------------------------------------
 
@@ -329,8 +342,8 @@ class LiveApp(App[None]):
         force an exit. The teardown finishes on its own; the meeting thread then
         finalizes and exits the app.
         """
-        if self._phase == "capturing" and self.stop_callback is not None:
-            self._phase = "finalizing"
+        if self._phase is Phase.CAPTURING and self.stop_callback is not None:
+            self._phase = Phase.FINALIZING
             self._render_header()
             threading.Thread(target=self._invoke_stop, name="tui-stop", daemon=True).start()
         else:
@@ -491,10 +504,10 @@ class TextualLiveView(LiveView):
         """
         transcript = result.get("transcript")
         if isinstance(transcript, Transcript):
-            if self._app._phase != "done":
+            if self._app._phase is not Phase.DONE:
                 self._app.push_finalized(transcript)
         else:  # the meeting raised — nothing to show, so just exit
             self._app.exit()
 
 
-__all__ = ["LiveApp", "TextualLiveView"]
+__all__ = ["LiveApp", "Phase", "TextualLiveView"]

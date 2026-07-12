@@ -23,7 +23,7 @@ from stenograf.capture.base import Channel
 from stenograf.config import Language, MeetingProfile
 from stenograf.live import StreamingUpdate
 from stenograf.transcript import Transcript, TranscriptEntry
-from stenograf.tui import LiveApp, TextualLiveView
+from stenograf.tui import LiveApp, Phase, TextualLiveView
 
 
 def _run(body) -> None:
@@ -214,7 +214,7 @@ class TestFinalizeSwap:
                 await pilot.pause()
                 # The live channel-coarse captions are gone; the diarized speakers win.
                 assert app.committed_lines == ["Local-1  guten Morgen", "Remote-1  hallo"]
-                assert app._phase == "done"
+                assert app._phase is Phase.DONE
                 interim = app.query_one("#interim").render()
                 interim = interim.plain if hasattr(interim, "plain") else str(interim)
                 assert interim.strip() == ""
@@ -239,7 +239,7 @@ class TestQuitBinding:
                 assert stopped.wait(timeout=5)  # stop is dispatched to a worker thread
                 await pilot.pause()
                 assert calls == [1]  # crossed to the capture side
-                assert app._phase == "finalizing"
+                assert app._phase is Phase.FINALIZING
                 assert app.is_running  # graceful finalize, not an abort
 
         _run(body)
@@ -271,7 +271,7 @@ class TestQuitBinding:
             async with app.run_test() as pilot:
                 app.push_finalized(Transcript(language=None, profile=app._profile, entries=[]))
                 await pilot.pause()
-                assert app._phase == "done"
+                assert app._phase is Phase.DONE
                 await pilot.press("q")
                 await pilot.pause()
                 assert not app.is_running
@@ -354,7 +354,7 @@ class TestServeIntegration:
             async with view.app.run_test() as pilot:
                 for _ in range(200):
                     await pilot.pause()
-                    if view.app._phase == "done":
+                    if view.app._phase is Phase.DONE:
                         break
                 # The finalize swap ran; the app stays up showing the result.
                 assert result["transcript"] is transcript

@@ -560,8 +560,11 @@ class LiveWorker(threading.Thread):
                             next_flush += self._flush_interval
                 if closed:
                     for ch in self._channels:
+                        # Same discipline as the main loop above: never hold the
+                        # accelerator lock across the view callback.
                         with self._inference_lock:
-                            self._emit(ch, self._decoders[ch].flush())
+                            update = self._decoders[ch].flush()
+                        self._emit(ch, update)
                     # One last checkpoint now that every word is committed: the
                     # finalize (diarization included) runs next and can still die,
                     # and the periodic flush may be an interval behind. Zero
@@ -1050,31 +1053,49 @@ class MeetingRecorder:
                 view.status(f"{plan.channel}: detected {detected} speaker(s)")
             by_channel[plan.channel] = labeled
         self.speaker_counts = counts
+        self._apply_echo_backstop(by_channel, view)
+        return self._assemble_transcript(plans, by_channel, counts, view)
 
-        # The text backstop for a canceller that lost its reference (a stalled or
-        # mis-clocked tap): echo then lands on the mic channel uncancelled, and
-        # the remote channel's own transcript identifies it. Armed only when the
-        # reference was degraded (or unobserved) — a healthy canceller leaks
-        # nothing decodeable, and never arming it then means a verbatim local
-        # repeat of remote speech can never be mistaken for echo.
+    def _apply_echo_backstop(
+        self, by_channel: dict[Channel, list[TranscriptEntry]], view: LiveView
+    ) -> None:
+        """Drop mic lines that duplicate remote speech, if the backstop is armed.
+
+        The text backstop for a canceller that lost its reference (a stalled or
+        mis-clocked tap): echo then lands on the mic channel uncancelled, and
+        the remote channel's own transcript identifies it. Armed only when the
+        reference was degraded (or unobserved) — a healthy canceller leaks
+        nothing decodeable, and never arming it then means a verbatim local
+        repeat of remote speech can never be mistaken for echo. Mutates
+        ``by_channel`` in place and records :attr:`dropped_echo_lines`.
+        """
         mic, system = by_channel.get(Channel.MIC), by_channel.get(Channel.SYSTEM)
         armed = self.dedup_echo and (self.reference_gap_s is None or self.reference_gap_s > 0)
         self.dropped_echo_lines = 0
-        if armed and mic and system:
-            kept = drop_echo_duplicates(mic, system)
-            if len(kept) < len(mic):
-                self.dropped_echo_lines = len(mic) - len(kept)
-                cause = (
-                    f" — the canceller ran {self.reference_gap_s:.1f}s without its reference"
-                    if self.reference_gap_s
-                    else ""
-                )
-                view.status(
-                    f"echo backstop: dropped {self.dropped_echo_lines} mic line(s) "
-                    f"duplicating remote speech{cause}"
-                )
-            by_channel[Channel.MIC] = kept
+        if not (armed and mic and system):
+            return
+        kept = drop_echo_duplicates(mic, system)
+        if len(kept) < len(mic):
+            self.dropped_echo_lines = len(mic) - len(kept)
+            cause = (
+                f" — the canceller ran {self.reference_gap_s:.1f}s without its reference"
+                if self.reference_gap_s
+                else ""
+            )
+            view.status(
+                f"echo backstop: dropped {self.dropped_echo_lines} mic line(s) "
+                f"duplicating remote speech{cause}"
+            )
+        by_channel[Channel.MIC] = kept
 
+    def _assemble_transcript(
+        self,
+        plans: list[ChannelPlan],
+        by_channel: dict[Channel, list[TranscriptEntry]],
+        counts: list[SpeakerCount],
+        view: LiveView,
+    ) -> Transcript:
+        """Interleave the channels, snap the glossary, resolve language/provenance."""
         entries = [entry for plan in plans for entry in by_channel.get(plan.channel, [])]
         interleaved = interleave(entries)
         # Snap domain vocabulary / attendee names to canonical spelling on the
