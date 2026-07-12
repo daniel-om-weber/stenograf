@@ -220,6 +220,17 @@ class TestWindowsCaptureProvider:
         assert any(f.channel is Channel.MIC for f in frames)
         assert all(not t.is_alive() for t in provider._threads.values())
 
+    def test_stop_skips_a_pump_thread_that_has_not_started(self):
+        # start() registers each pump thread before starting it. A pump that
+        # dies inside that window tears its siblings down from its own thread
+        # and reaches a sibling that is registered but unstarted — joining one
+        # raises, which used to kill the dying pump before it could enqueue its
+        # sentinel and hang frames() forever. Nothing is lost by skipping it:
+        # the stop event is set, so that pump exits on its first loop check.
+        provider = WindowsCaptureProvider(backend=fake_backend(), frame_ms=50)
+        provider._threads[Channel.SYSTEM] = threading.Thread(target=lambda: None)
+        provider.stop()  # must not raise
+
     def test_silent_mic_warns_once(self, capsys):
         # >5 s of exact-zero mic PCM is a dead stream (mute, denied privacy
         # toggle) — the pump must say so on stderr, once, and keep running.

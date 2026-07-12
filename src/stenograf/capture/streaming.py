@@ -193,9 +193,14 @@ class QueueStreamingProvider[TransportT](CaptureProvider):
         try:
             self._pump(channel, transport)
         finally:
-            if not self._stop_event.is_set():
-                self.stop()
-            self._queue.put(channel)
+            try:
+                if not self._stop_event.is_set():
+                    self.stop()
+            finally:
+                # The sentinel is the only way frames() learns this channel is
+                # done, so it must survive a teardown that raises — otherwise
+                # frames() waits on an empty queue with every pump already dead.
+                self._queue.put(channel)
 
     def _emit(self, channel: Channel, samples: np.ndarray) -> None:
         """Stamp a frame onto the session clock and hand it to ``frames()``."""

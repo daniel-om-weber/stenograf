@@ -1,8 +1,10 @@
-"""SessionClock unit tests — the one home of the timestamp-anchoring formula.
+"""Unit tests for the shared queue-streaming machinery.
 
-The provider suites (test_capture_linux.py / test_capture_windows.py) cover
-the same invariants end to end through their transports; these pin the
-arithmetic itself with a scripted clock and no threads.
+SessionClock is the one home of the timestamp-anchoring formula: the provider
+suites (test_capture_linux.py / test_capture_windows.py) cover the same
+invariants end to end through their transports, while these pin the arithmetic
+itself with a scripted clock. TestPumpSentinel pins the other base-class
+contract — the end-of-channel sentinel that terminates ``frames()``.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import math
 import pytest
 
 from stenograf.capture.base import SAMPLE_RATE, Channel
-from stenograf.capture.streaming import SessionClock
+from stenograf.capture.streaming import QueueStreamingProvider, SessionClock
 
 FRAME = SAMPLE_RATE // 5  # 200 ms
 
@@ -106,3 +108,33 @@ class TestSessionClock:
         clock.t = 0.6
         assert session.stamp(Channel.MIC, FRAME) == pytest.approx(0.0)
         assert session.started
+
+
+class ExplodingTeardownProvider(QueueStreamingProvider[None]):
+    """Its stream ends at once, and tearing the siblings down always raises."""
+
+    _thread_prefix = "boom"
+
+    def _open_channel(self, channel: Channel) -> None:
+        return None
+
+    def _pump(self, channel: Channel, transport: None) -> None:
+        return  # end of stream, immediately
+
+    def _stop_transport(self) -> None:
+        raise RuntimeError("teardown blew up")
+
+
+class TestPumpSentinel:
+    def test_sentinel_survives_a_teardown_that_raises(self):
+        # A pump that ends tears its siblings down, and the sentinel it
+        # enqueues on the way out is the only way frames() learns the channel
+        # is done. A teardown that raises must not swallow it — the Windows
+        # pump used to die on "cannot join thread before it is started" here,
+        # which left frames() blocked on an empty queue, every pump dead, for
+        # the rest of the meeting.
+        provider = ExplodingTeardownProvider()
+        provider._clock.start()
+        with pytest.raises(RuntimeError, match="teardown blew up"):
+            provider._run_pump(Channel.MIC, None)
+        assert provider._queue.get_nowait() is Channel.MIC

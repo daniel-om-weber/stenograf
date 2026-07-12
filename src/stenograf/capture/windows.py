@@ -245,10 +245,14 @@ class WindowsCaptureProvider(QueueStreamingProvider[None]):
         # Pumps notice the stop event within one frame read (~frame_ms +
         # WASAPI's silence threshold) and release their devices on the way
         # out. Skip the current thread: stop() also runs *from* a pump on an
-        # unexpected stream death.
+        # unexpected stream death. Skip threads that have not started either:
+        # a pump dying this early can land inside start()'s register-then-start
+        # window, and joining an unstarted thread raises. Nothing is lost by
+        # skipping — the stop event is already set, so a pump that starts after
+        # this exits on its first loop check.
         current = threading.current_thread()
         for thread in self._threads.values():
-            if thread is not current:
+            if thread is not current and thread.ident is not None:
                 thread.join(timeout=5)
 
 
