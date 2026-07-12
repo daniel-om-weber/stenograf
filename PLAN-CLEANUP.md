@@ -91,7 +91,7 @@ Real defects found during review. Each is a standalone commit with a test.
   `.onnx`) passes `target.exists()` forever. Fix: add `sha256` (and/or
   `size`) to `ModelAsset`, verify the `.part` before `replace(target)`;
   download with an explicit timeout.
-- [ ] **B4 — `notes_command` flattens all exceptions** — `cli.py:2029-2030`:
+- [x] **B4 — `notes_command` flattens all exceptions** — `cli.py:2029-2030`:
   `except Exception as exc: raise click.ClickException(str(exc))` makes a
   programming bug (AttributeError/KeyError) indistinguishable from "Ollama
   down". Fix: catch the documented typed set

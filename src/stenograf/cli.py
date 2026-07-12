@@ -1999,7 +1999,9 @@ def notes_command(
     """
     import json as json_mod
 
+    from stenograf.notes import NotesBackendError
     from stenograf.output import created_at_from_dir_name
+    from stenograf.settings import SettingsError
     from stenograf.transcript import UnsupportedTranscriptVersion
 
     path = _resolve_notes_target(meeting, last)
@@ -2026,7 +2028,9 @@ def notes_command(
             export_dir=export_dir,
             no_export=no_export,
         )
-    except Exception as exc:
+    except (NotesBackendError, SettingsError, ValueError, OSError) as exc:
+        # The documented failure modes become clean CLI errors; anything else
+        # is a bug and must propagate as a traceback, not masquerade as one.
         raise click.ClickException(str(exc)) from exc
 
     click.echo(f"wrote {', '.join(str(p) for p in written)}")

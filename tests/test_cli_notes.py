@@ -173,6 +173,23 @@ def test_notes_backend_down_exits_nonzero_and_writes_nothing(tmp_path, monkeypat
     assert not (tmp_path / "transcript.notes.json").exists()
 
 
+def test_notes_reports_a_bug_as_a_traceback_not_a_clean_error(tmp_path, monkeypatch):
+    # Documented failure modes (backend down, bad settings) become clean CLI
+    # errors; a programming bug must keep its traceback, or an AttributeError
+    # reads like "Ollama down" and never gets reported.
+    def buggy(*args, **kwargs):
+        raise AttributeError("'NoneType' object has no attribute 'entries'")
+
+    monkeypatch.setattr(cli, "_generate_and_write_notes", buggy)
+    path = tmp_path / "transcript.json"
+    write_transcript_json(path)
+
+    result = CliRunner().invoke(cli.main, ["notes", str(path)])
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, AttributeError)
+
+
 # ---- export --------------------------------------------------------------------
 
 
