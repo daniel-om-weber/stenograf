@@ -35,18 +35,22 @@ def doctor() -> None:
     help="Skip the permission prompts and only download the models (headless machines, CI).",
 )
 def setup(models_only: bool) -> None:
-    """One-time setup: permission prompts, desktop launcher, model downloads.
+    """One-time setup: capture permissions, desktop launcher, model downloads.
 
-    Launches the capture helper so macOS shows both permission prompts (mic +
-    system audio) now instead of at the start of your first meeting — nothing
-    is recorded — then installs a double-clickable launcher and downloads
-    every model the first meeting would otherwise stop to fetch. macOS scopes
-    the grant to the app the helper was launched from, so re-run this from
-    each terminal app (or IDE) you will run meetings from; the models are
-    cached machine-wide.
+    macOS: launches the capture helper so both permission prompts (mic +
+    system audio) appear now instead of at the start of your first meeting —
+    nothing is recorded; the grant is scoped to the app the helper was
+    launched from, so re-run this from each terminal app (or IDE) you will
+    run meetings from. Windows: no prompt exists, so the microphone privacy
+    toggle is checked and named instead. Then installs a double-clickable
+    launcher and downloads every model the first meeting would otherwise
+    stop to fetch; the models are cached machine-wide.
     """
-    if not models_only and sys.platform == "darwin":
-        _grant_capture_permissions()  # only macOS gates capture behind TCC prompts
+    if not models_only:
+        if sys.platform == "darwin":
+            _grant_capture_permissions()  # only macOS gates capture behind TCC prompts
+        elif sys.platform == "win32":
+            _check_windows_mic_access()  # no prompt exists — read the privacy toggle now
 
     # The launcher lands before the model download: the download can fail (and
     # models fetch on first use anyway), the shortcut shouldn't be lost to that.
@@ -56,10 +60,10 @@ def setup(models_only: bool) -> None:
 
         if (shortcut := install_shortcut()) is not None:
             click.echo(click.style("✓", fg="green") + f" launcher installed: {shortcut}")
-            if sys.platform == "darwin":
-                click.echo("  Double-click it to start stenograf — no terminal needed.")
-            else:
+            if sys.platform.startswith("linux"):  # menu entry; macOS/Windows land on the Desktop
                 click.echo('  Look for "Stenograf" in your application menu.')
+            else:
+                click.echo("  Double-click it to start stenograf — no terminal needed.")
 
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.
@@ -71,6 +75,27 @@ def setup(models_only: bool) -> None:
             "download on first use."
         ) from exc
     click.echo(click.style("✓", fg="green") + " setup complete.")
+
+
+def _check_windows_mic_access() -> None:
+    """Fail setup loud when the Windows mic privacy toggle denies capture.
+
+    Windows never prompts desktop apps for the microphone (no TCC
+    equivalent) — a denied toggle just makes the stream deliver zeros — so
+    setup reads the consent store up front, mirroring the macOS grant step's
+    fail-before-models behavior, and tells the user no prompt is coming.
+    """
+    from stenograf.capture.windows import mic_access_blocked
+
+    if (blocked := mic_access_blocked()) is not None:
+        raise click.ClickException(f"{blocked}, then re-run `steno setup`")
+    click.echo(
+        click.style("✓", fg="green") + " microphone access is allowed in Windows privacy settings."
+    )
+    click.echo(
+        "  Windows shows no permission prompt — if the mic ever records only silence, "
+        "check Settings > Privacy & security > Microphone."
+    )
 
 
 def _grant_capture_permissions() -> None:

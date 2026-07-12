@@ -73,9 +73,34 @@ def test_reinstall_overwrites_and_self_heals(tmp_path, monkeypatch):
     assert sys.executable in second.read_text()
 
 
-def test_unsupported_platform_installs_nothing(tmp_path, monkeypatch):
-    # Windows gets its .lnk with Phase 6; until then setup must not fail there.
+def test_windows_shortcut_is_a_cmd_wrapper(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
+    # Bypass the registry lookup: on POSIX hosts winreg doesn't exist, and on
+    # a real Windows host it would point at the user's actual Desktop.
+    monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
+
+    target = shortcut.install_shortcut()
+
+    assert target == tmp_path / "Desktop" / "Stenograf.cmd"
+    content = target.read_text()
+    assert content.startswith("@echo off")
+    assert f'"{sys.executable}" -m stenograf' in content
+    assert "pause" in content  # a crash must not vanish with the console window
+
+
+@pytest.mark.skipif(not WINDOWS, reason="reads the real User Shell Folders registry key")
+def test_windows_desktop_is_the_shell_folder():
+    # Redirected (OneDrive) or not, the shell key names an absolute, existing
+    # dir with no unexpanded %VARS% left in it.
+    desktop = shortcut._windows_desktop()
+    assert desktop.is_absolute()
+    assert "%" not in str(desktop)
+    assert desktop.is_dir()
+
+
+def test_unsupported_platform_installs_nothing(tmp_path, monkeypatch):
+    # `steno transcribe` works anywhere Python does; setup must not fail there.
+    monkeypatch.setattr(sys, "platform", "freebsd14")
     _home(monkeypatch, tmp_path)
 
     assert shortcut.install_shortcut() is None

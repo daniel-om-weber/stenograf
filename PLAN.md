@@ -938,15 +938,141 @@ SIGINT-based macOS-provider teardown now skipped on win32) and **one real produc
 bug**: on Windows, piped/redirected output uses the legacy code page and `click.echo`
 crashed on ✓/← — the CLI entry now reconfigures stdout/stderr with
 `errors="replace"` on win32. `livekit` win_amd64 wheels confirmed (1.1.13 installs;
-AEC behaviour on Windows hardware still to be exercised). Still open in Phase 6: real
-`steno transcribe`/`steno start` with downloaded models, the `windows-latest` CI job +
-Windows classifier, setup messaging, the DirectML notes backend, the stenodiar port,
-and the Windows leg of the Phase-7 install story (deferred there 2026-07-12): an
-`install.ps1` one-liner (uv ships `irm https://astral.sh/uv/install.ps1 | iex`) plus
-the win32 branch of `stenograf/shortcut.py` — a Desktop `.lnk`, or simpler a `.cmd`
-wrapper, since `steno.exe` is a console app and any shortcut to it opens its own
-console window; `install_shortcut()` currently returns `None` on win32 so `steno
-setup` stays silent there.
+AEC behaviour on Windows hardware still to be exercised).
+
+**Closed since the capture track (recorded 2026-07-12):**
+
+- **ASR GPU acceleration (2026-07-11, commit 293545f):** `[asr] provider` setting /
+  `STENOGRAF_ASR_PROVIDER` (`cpu` default | `dml` | `cuda` | `auto`) with an
+  availability pre-check + canary decode + CPU fallback (`asr/parakeet_onnx.py`,
+  `asr/providers.py`). pyproject ships `onnxruntime-directml` on win32 via marker —
+  every ORT flavor installs the same package directory and silently clobbers the
+  others (verified), so extras can't express the swap. Measured on an RTX 4080 SUPER:
+  DML transcripts byte-identical to CPU, 107× vs 16× realtime. Gotcha for future EPs:
+  ORT does **not** raise on an unlisted provider — it warns and runs on the rest, so
+  always pre-check `get_available_providers()`.
+- The `windows-latest` CI job (unit suite; pyright stays macOS-only for the
+  marker-dep imports) and a `cargo check` leg for stenodiar's `cuda` feature.
+- The `Operating System :: Microsoft :: Windows` classifier (2026-07-12).
+- `steno setup` messaging (2026-07-12): a win32 branch reads `mic_access_blocked()`
+  up front and fails before the model download, mirroring the macOS grant step —
+  and, when allowed, tells the user Windows will never show a prompt.
+- The `shortcut.py` win32 branch (2026-07-12): a Desktop `Stenograf.cmd` — the
+  "simpler" option from the two scoped here, since `steno` is a console app (a
+  `.lnk` would open a console window anyway) and a text wrapper regenerates without
+  COM. The Desktop is resolved through the shell's `User Shell Folders` registry key
+  (OneDrive folder backup redirects it on a large share of Windows 11 machines;
+  `~/Desktop` would be an invisible decoy there), and the wrapper ends in
+  `if errorlevel 1 pause` so a startup crash stays readable instead of vanishing
+  with the console window.
+
+What remains for **full Windows support** is planned in the next subsection.
+
+### Phase 6 — remaining-work plan (planned 2026-07-12)
+
+**Definition of done:** a fresh Windows 11 machine goes one-liner install →
+`steno setup` → live meeting → diarized transcript + notes in
+`Documents\Meetings`, at parity with Linux, with no manual step beyond the
+mic privacy toggle. Four tracks: **A gates the "supported" claim**; B, C, D
+are independent of each other and of A (but A first — everything else builds
+on a verified core).
+
+**Track A — real-hardware validation (the gate).**
+
+1. Real `steno transcribe` on a meeting-length recording with downloaded
+   models (fp32 ONNX, CPU): correctness + RTF on the notebook. Repeat with
+   `[asr] provider = "dml"` — byte-identity + speedup were verified on the
+   desktop's RTX 4080; re-confirm on the notebook's GPU (different vendor
+   tier is exactly what DML is for).
+2. `steno start --replay` end to end (the `verify` skill flow) on Windows.
+3. A real live meeting on the notebook — **speakers, not headphones**, both
+   channels captured. Checks, in order of risk:
+   - **AEC**: livekit's APM is installed but unexercised on Windows, and
+     laptop mics genuinely hear the speakers. Watch `far_end_missing_ticks`
+     and the armed-backstop warning across WASAPI loopback silence gaps; a
+     0.5 s re-anchor moves the far-end alignment, so confirm the AEC
+     re-converges after long system silence instead of leaking echo.
+   - TUI in Windows Terminal: live captions, resize, clean Ctrl-C shutdown.
+   - The silent-mic watchdog must not false-positive on real hardware.
+   - Finalize with diarization (sherpa known-count path) + notes via Ollama;
+     transcript + notes land in `Documents\Meetings`, no code-page mangling.
+4. Run the checklist **twice**: one short smoke, one ≥30-min meeting with
+   long system-silence stretches — the gap/zero-fill/re-anchor path only
+   shows up in the long one. Record results here; anything broken becomes a
+   task in this section.
+
+**Track B — stenodiar (estimated speaker counts).**
+
+State: builds and runs on Windows (measured 2026-07-11 on the desktop: CPU
+3.0× RT but still ~1.1 cores — that measurement **predates** the two vendored
+speakrs patches that took Linux from 1.4× to 8.2× RT; CUDA 60× RT works via
+pip `nvidia-*-cu12` DLLs on PATH + `onnxruntime_providers_cuda.dll` beside the
+exe; rustup + VS 2022 Build Tools are installed there). The CPU exe is
+self-contained (~40 MB, ORT statically linked).
+
+1. Rebuild from the patched vendor tree (`native/stenodiar/vendor/`, threads +
+   model-list patches; CPU default features) and re-measure on the AMI
+   segments. The intra-op-thread patch is the same lever that fixed Linux, so
+   expect a similar shape. Record the number next to the Linux 8.2×.
+   **Accept ≥4× RT**; below that, investigate ORT thread behavior on Windows
+   before reaching for the NME-SC fallback (§2 lever order unchanged).
+2. Shipping decision: GitHub Releases attachment + `find_stenodiar` discovery
+   vs. bundling in a platform wheel. The `hatch_build.py` stenocap precedent
+   exists, but a 40 MB wheel for an optional feature argues for Releases +
+   a documented drop location. Verify `find_stenodiar` handles the `.exe`
+   suffix on win32 and pick/document the install dir (align with the
+   `%LOCALAPPDATA%` cache-dir convention).
+3. Build docs: `build.sh` is POSIX — either a `build.ps1` twin or a
+   documented plain `cargo build --release` (CPU) / `--features cuda` (GPU
+   opt-in, stays manual).
+
+Exit: `steno doctor` reports the helper on Windows; an estimated-count
+meeting finalizes at ≥4× RT.
+
+**Track C — install story (the Phase-7 Windows leg).**
+
+1. `install.ps1` mirroring `install.sh`: install uv via the astral installer
+   (`irm https://astral.sh/uv/install.ps1 | iex` — **not** winget, whose uv
+   lands off-PATH), then `uv tool install --upgrade stenograf` (the
+   `<3.14` python cap already steers uv to 3.12/3.13), then `steno setup`.
+   Documented invocation is the piped one-liner — a downloaded, double-clicked
+   `.ps1` hits execution policy.
+2. CI parity with `install.sh`'s `sh -n` test: syntax-check via
+   `[ScriptBlock]::Create((Get-Content -Raw install.ps1))` (runs on the
+   windows-latest job, skipped elsewhere) + the same content asserts
+   (`tool install --upgrade stenograf`, ends in `setup`).
+3. README: a Windows install section — the one-liner, the privacy-toggle
+   note, Windows Terminal recommended.
+
+Exit: on a fresh VM (or fresh user account), the one-liner reaches
+"setup complete" and drops the Desktop launcher.
+
+**Track D — on-device notes backend (decision first; code maybe never).**
+
+The recorded choice (onnxruntime-genai-directml + Phi-4-mini) predates
+learning that **DirectML is EOL** (team disbanded; wheels track ORT patch
+releases for now — same watch-item as the ASR marker). Ollama/`command`
+already cover Windows, so this track is **gated on Ollama proving
+insufficient** for real Windows users; until then it is a decision task, not
+a build task.
+
+1. Re-research (delegate to a subagent): is onnxruntime-genai still shipping
+   `-directml` wheels, and does its package bundle its own ORT — the
+   one-flavor-per-env clobber rule means it must coexist with our
+   `onnxruntime-directml` or it's disqualified outright. Alternatives:
+   llama-cpp-python (CPU/Vulkan; wheels are OFF-PyPI — the same extra-index
+   friction as the Linux fallback), or waiting for a Windows ML-based genai
+   path (Windows ML is the sanctioned multi-vendor successor, GA 2025-09).
+2. Record the decision here and in CLAUDE.md ("Notes backends per platform");
+   implement behind the existing notes-backend registry only if the gate is
+   met.
+
+**Watch-items (not tasks):** `onnxruntime-directml` wheels ceasing to track
+ORT patch releases (swap the marker back to plain `onnxruntime`; the provider
+setting degrades to CPU with a warning — designed in); mid-meeting default-
+device switches stay unfollowed on Windows (WASAPI has no `@DEFAULT_MONITOR@`
+alias — accepted asymmetry vs Linux); Windows ML as the eventual multi-vendor
+EP path for ASR, once dynamic-shape conformer models are validated there.
 
 ---
 

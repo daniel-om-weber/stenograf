@@ -1123,6 +1123,44 @@ def test_setup_fails_when_helper_dies_without_mic_frames(tmp_path, monkeypatch):
     assert not fetched  # no downloads on a failed permission grant
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="the mic privacy toggle is Windows-only")
+def test_setup_windows_checks_the_privacy_toggle_then_prefetches(tmp_path, monkeypatch):
+    from stenograf import shortcut
+    from stenograf.capture import windows as capture_windows
+
+    monkeypatch.setattr(capture_windows, "mic_access_blocked", lambda: None)
+    monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
+    fetched = []
+    monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
+    result = CliRunner().invoke(cli.main, ["setup"])
+    assert result.exit_code == 0, result.output
+    assert "microphone access is allowed" in result.output
+    assert "shows no permission prompt" in result.output  # no prompt is ever coming
+    assert "launcher installed" in result.output
+    assert (tmp_path / "Desktop" / "Stenograf.cmd").exists()
+    assert fetched
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the mic privacy toggle is Windows-only")
+def test_setup_windows_fails_when_the_privacy_toggle_denies(monkeypatch):
+    # Mirrors the macOS denied-permission shape: fail before any download,
+    # naming the settings page (the fake reason stands in for the real one).
+    from stenograf.capture import windows as capture_windows
+
+    monkeypatch.setattr(
+        capture_windows,
+        "mic_access_blocked",
+        lambda: "microphone access is turned off in Windows privacy settings",
+    )
+    fetched = []
+    monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
+    result = CliRunner().invoke(cli.main, ["setup"])
+    assert result.exit_code != 0
+    assert "privacy settings" in result.output
+    assert "re-run `steno setup`" in result.output
+    assert not fetched  # no downloads when the toggle denies capture
+
+
 def test_setup_models_only_skips_the_permission_step(monkeypatch):
     # No STENOGRAF_CAPTURE_HELPER and no fake helper: reaching the permission
     # code would fail loudly, so success proves it was skipped. Runs on any OS.
