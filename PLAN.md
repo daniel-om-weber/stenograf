@@ -940,7 +940,13 @@ crashed on ✓/← — the CLI entry now reconfigures stdout/stderr with
 `errors="replace"` on win32. `livekit` win_amd64 wheels confirmed (1.1.13 installs;
 AEC behaviour on Windows hardware still to be exercised). Still open in Phase 6: real
 `steno transcribe`/`steno start` with downloaded models, the `windows-latest` CI job +
-Windows classifier, setup messaging, the DirectML notes backend, the stenodiar port.
+Windows classifier, setup messaging, the DirectML notes backend, the stenodiar port,
+and the Windows leg of the Phase-7 install story (deferred there 2026-07-12): an
+`install.ps1` one-liner (uv ships `irm https://astral.sh/uv/install.ps1 | iex`) plus
+the win32 branch of `stenograf/shortcut.py` — a Desktop `.lnk`, or simpler a `.cmd`
+wrapper, since `steno.exe` is a console app and any shortcut to it opens its own
+console window; `install_shortcut()` currently returns `None` on win32 so `steno
+setup` stays silent there.
 
 ---
 
