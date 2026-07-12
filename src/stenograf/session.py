@@ -52,7 +52,7 @@ from stenograf.config import (
 from stenograf.diarization.base import Diarizer
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
-from stenograf.live import LiveDecoder, StreamingUpdate, WindowedLiveDecoder
+from stenograf.live import LiveDecoder, StreamingDecoder, StreamingUpdate, WindowedLiveDecoder
 from stenograf.pipeline import SpeakerResolver, finalize_channel, group_words, relabel_speakers
 from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD
@@ -539,7 +539,7 @@ class LiveWorker(threading.Thread):
         self,
         store: SessionStore,
         bus: AudioBus,
-        decoders: dict[Channel, LiveDecoder],
+        decoders: dict[Channel, StreamingDecoder],
         inference_lock: threading.Lock,
         *,
         channels: list[Channel],
@@ -924,7 +924,7 @@ class MeetingRecorder:
         windowed = self.live_decode_interval is None and vad is not None and hasattr(vad, "stream")
         if windowed:
             assert vad is not None  # windowed requires a streaming VAD
-            decoders: dict[Channel, LiveDecoder] = {
+            decoders: dict[Channel, StreamingDecoder] = {
                 ch: WindowedLiveDecoder(self.asr, vad=vad, language=self.language)
                 for ch in channels
             }
@@ -1205,7 +1205,7 @@ class MeetingRecorder:
                 view.error(f"{plan.channel}: finalize failed ({exc2}); skipping channel")
                 return []
 
-    def live_checkpoint(self, decoders: dict[Channel, LiveDecoder]) -> Transcript:
+    def live_checkpoint(self, decoders: dict[Channel, StreamingDecoder]) -> Transcript:
         """A crash checkpoint from the live pass's already-committed words.
 
         Zero inference: the words are read straight off each channel's decoder and

@@ -473,7 +473,7 @@ class TestWindowedDecoder:
         for i in range(20):
             dec.feed(pcm(1.0), float(i))
         assert asr.calls == 0 and dec.decodes == 0
-        assert len(dec._buf) <= 2 * SAMPLE_RATE  # trimmed to the silence guard
+        assert dec.buffered_seconds <= 2.0  # trimmed to the silence guard
         assert dec.flush().committed == ()
 
     def test_drop_window_abandons_the_pending_window(self):

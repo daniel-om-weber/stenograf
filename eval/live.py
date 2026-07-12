@@ -36,7 +36,7 @@ from stenograf import models
 from stenograf.asr.base import Word
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.audio import SAMPLE_RATE, load_audio
-from stenograf.live import LiveDecoder, WindowedLiveDecoder
+from stenograf.live import LiveDecoder, StreamingDecoder, WindowedLiveDecoder
 from stenograf.pipeline import finalize_channel
 from stenograf.vad import SileroVAD
 
@@ -51,7 +51,7 @@ def _pctl(values: list[float], q: float) -> float:
 
 
 def stream(
-    clip, decoder: LiveDecoder, feed_chunk: float
+    clip, decoder: StreamingDecoder, feed_chunk: float
 ) -> tuple[list[Word], list[float], int]:
     """Feed the clip in real-time-sized chunks; return committed words, per-word
     commit latencies (feed commits only), and the count force-committed at flush."""

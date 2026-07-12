@@ -30,12 +30,17 @@ The commit stream is **append-only**: a committed word is never rewritten
 (monotonicity — one of the label-free acceptance metrics). The decoder composes
 ``ASRBackend.transcribe`` and is model-agnostic, but the live pass needs word
 timestamps, so in practice it runs Parakeet (the committed default).
+
+:class:`WindowedLiveDecoder` is the second, cheaper live pass (the product
+default): finalize-identical windows, decoded once each. Both decoders satisfy
+the :class:`StreamingDecoder` protocol the orchestrator drives.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 
@@ -63,6 +68,165 @@ class StreamingUpdate:
     @property
     def committed_text(self) -> str:
         return " ".join(w.text for w in self.committed)
+
+
+class StreamingDecoder(Protocol):
+    """What the live pass needs from a per-channel decoder.
+
+    ``LiveWorker`` (session.py) drives exactly this surface — feed each new
+    chunk, force-commit the tail on close, abandon the window on a load-shed —
+    and the orchestrator's checkpoint/reuse paths read ``committed_words``.
+    :class:`LiveDecoder` and :class:`WindowedLiveDecoder` satisfy it
+    structurally (they share a buffer, not an algorithm).
+    """
+
+    window_cap: float
+    """Seconds of unprocessed backlog the decoder absorbs in one feed; past it
+    the worker load-sheds (``LiveWorker._shed_if_behind``)."""
+
+    def feed(self, samples: np.ndarray, t_offset: float) -> StreamingUpdate: ...
+
+    def flush(self) -> StreamingUpdate: ...
+
+    def drop_window(self) -> None: ...
+
+    @property
+    def committed_words(self) -> tuple[Word, ...]: ...
+
+
+class _CaptionBuffer:
+    """The retained audio window a live decoder feeds, scans, and slices.
+
+    Owns the absolute-timestamped mono float32 samples, the silence padding
+    across feed gaps, the backwards-feed guard, and the optional streaming VAD
+    fed in lockstep (created per buffer origin when the VAD object supports
+    ``stream``; ``None`` falls back to the caller's per-feed window scan).
+
+    ``quantize_origin`` pins the origin to an exact integer sample index: the
+    windowed pass slices its windows with ``sample_index()`` over absolute
+    times, and reuse is byte-identical to the batch pass only if it extracts
+    the very same samples — so that origin is tracked as an integer (float
+    accumulation would drift by ±1 sample) and ``start`` is always derived
+    from it by a single division. The LocalAgreement pass keeps the float
+    origin its feeds arrived with.
+    """
+
+    def __init__(self, vad: SileroVAD | None) -> None:
+        self._vad = vad
+        self.samples = np.zeros(0, dtype=np.float32)
+        self.start: float | None = None  # absolute time of samples[0]
+        self.start_idx: int | None = None  # integer sample origin (windowed pass)
+        self.vad_stream = None
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def append(self, chunk: np.ndarray, t_offset: float, *, tolerance: float) -> None:
+        """Add audio at absolute time ``t_offset``; pad gaps beyond ``tolerance``."""
+        chunk = to_float32(np.asarray(chunk)).reshape(-1)
+        if self.start is None:
+            self.start = float(t_offset)
+            self.samples = chunk.copy()
+            stream = getattr(self._vad, "stream", None)
+            self.vad_stream = stream(self.start) if stream is not None else None
+            self.push_vad(chunk)
+            return
+        gap = t_offset - self.end()
+        if gap < -tolerance:
+            raise ValueError(
+                f"feed went backwards {-gap:.3f}s (t_offset {t_offset:.3f}s "
+                f"< buffered end {self.end():.3f}s); frames must arrive in order"
+            )
+        if gap > tolerance:  # a real gap since the last chunk → pad silence
+            pad = np.zeros(round(gap * SAMPLE_RATE), np.float32)
+            self.samples = np.concatenate([self.samples, pad])
+            self.push_vad(pad)
+        self.samples = np.concatenate([self.samples, chunk])
+        self.push_vad(chunk)
+
+    def push_vad(self, samples: np.ndarray) -> None:
+        if self.vad_stream is not None:
+            self.vad_stream.push(samples)
+
+    def quantize_origin(self) -> None:
+        """Pin the origin to the sample grid (idempotent; see the class docstring)."""
+        if self.start_idx is None and self.start is not None:
+            self.start_idx = round(self.start * SAMPLE_RATE)
+            self.start = self.start_idx / SAMPLE_RATE
+
+    def end(self) -> float:
+        """The live edge. On the integer origin this reproduces the batch
+        pass's ``len(samples) / SAMPLE_RATE`` float bit-for-bit — (origin +
+        buffered) equals the total sample count, so one division suffices;
+        the float branch accumulates like the feeds did."""
+        if self.start_idx is not None:
+            return (self.start_idx + len(self.samples)) / SAMPLE_RATE
+        return (self.start or 0.0) + len(self.samples) / SAMPLE_RATE
+
+    def trim_before(self, keep_from: float) -> None:
+        """Drop audio older than ``keep_from``.
+
+        On the integer origin, trims land on the same ``sample_index()`` grid
+        the decode slices use, so a window's padded start is never trimmed past
+        (truncation only rounds down, and ``keep_from`` is a lower bound on
+        every future span start).
+        """
+        if self.start_idx is not None:
+            keep_idx = max(self.start_idx, sample_index(keep_from))
+            drop = keep_idx - self.start_idx
+            if drop > 0:
+                self.samples = self.samples[drop:]
+                self.start_idx = keep_idx
+                self.start = keep_idx / SAMPLE_RATE
+            return
+        drop = round((keep_from - (self.start or 0.0)) * SAMPLE_RATE)
+        if drop > 0:
+            self.samples = self.samples[drop:]
+            self.start = (self.start or 0.0) + drop / SAMPLE_RATE
+
+    def reset_to_preroll(self, pre_roll: float) -> None:
+        """Keep only a short silence pre-roll of the buffer."""
+        keep = round(pre_roll * SAMPLE_RATE)
+        if len(self.samples) <= keep:
+            return
+        if self.start_idx is not None:
+            self.start_idx += len(self.samples) - keep
+            self.samples = self.samples[-keep:]
+            self.start = self.start_idx / SAMPLE_RATE
+        else:
+            self.start = self.end() - keep / SAMPLE_RATE
+            self.samples = self.samples[-keep:]
+
+    def drop(self) -> None:
+        """Abandon the whole buffer; the next append restarts at its own origin.
+
+        No silence is padded across the skipped span. The VAD stream's sample
+        clock can't jump, so it is discarded too and rebuilt on the next append.
+        """
+        self.samples = np.zeros(0, dtype=np.float32)
+        self.start = None
+        self.start_idx = None
+        self.vad_stream = None
+
+
+def _extend_committed(committed: list[Word], words: list[Word]) -> list[Word]:
+    """Append ``words`` to the committed stream, enforcing non-decreasing starts.
+
+    Re-decoding jitters word boundaries by a few ms, so a fresh window can
+    place a boundary word a hair before the last committed word's start. Such
+    a regressor is a re-emitted duplicate, never genuinely new text — dropping
+    it keeps the committed stream strictly append-only (the monotonicity
+    invariant; PLAN.md §5) with no visible loss. Returns the words kept.
+    """
+    kept: list[Word] = []
+    last = committed[-1].start if committed else float("-inf")
+    for word in words:
+        if word.start + 1e-6 < last:
+            continue
+        committed.append(word)
+        last = word.start
+        kept.append(word)
+    return kept
 
 
 class LiveDecoder:
@@ -113,11 +277,7 @@ class LiveDecoder:
         # (the efficiency floor; needs a VAD to see any commits before flush).
         self.decode_interval = decode_interval
 
-        self._buf = np.zeros(0, dtype=np.float32)
-        self._buf_start: float | None = None  # absolute time of _buf[0]
-        # Persistent incremental VAD (created per buffer origin) when the vad
-        # object supports streaming; None falls back to a per-feed window scan.
-        self._vad_stream = None
+        self._window = _CaptionBuffer(vad)
         self._last_decode_end = float("-inf")  # audio_end at the last decode
         self._committed: list[Word] = []
         # Previous decode's uncommitted tail; LocalAgreement-2 commits the prefix
@@ -131,13 +291,13 @@ class LiveDecoder:
     def feed(self, samples: np.ndarray, t_offset: float) -> StreamingUpdate:
         """Add audio at absolute time ``t_offset`` and re-decode the window."""
         if len(samples):
-            self._append(samples, t_offset)
-        if len(self._buf) == 0:
+            self._window.append(samples, t_offset, tolerance=self.match_tolerance)
+        if len(self._window) == 0:
             return StreamingUpdate((), self._interim_text())
 
-        audio_end = self._audio_end()
-        buf_start = self._buf_start
-        assert buf_start is not None  # non-empty _buf ⇒ _append set it
+        audio_end = self._window.end()
+        buf_start = self._window.start
+        assert buf_start is not None  # non-empty window ⇒ append set it
         speech = self._speech()
         uncommitted_speech = True  # without a VAD, assume the tail is speech
         if speech is not None:
@@ -153,7 +313,7 @@ class LiveDecoder:
             if not uncommitted_speech:
                 # Idle silence between utterances: everything is committed, so drop
                 # the buffered audio down to a pre-roll and keep memory bounded.
-                self._reset_buf()
+                self._window.reset_to_preroll(self.pre_roll)
                 return StreamingUpdate((), "")
 
         # Bound the window: past window_cap of unbroken speech, force the tail out
@@ -185,7 +345,7 @@ class LiveDecoder:
     def reset(self) -> None:
         """Drop the window and pending tail at a long silence; keep committed text."""
         self._buffer = []
-        self._reset_buf()
+        self._window.reset_to_preroll(self.pre_roll)
 
     def drop_window(self) -> None:
         """Abandon the retained window and pending tail without committing them.
@@ -197,12 +357,8 @@ class LiveDecoder:
         caption gap the finalize pass fills on stop. The worker calls this when
         inference has fallen so far behind that feeding the whole backlog would
         spiral (PLAN.md §5, Task 0f)."""
-        self._buf = np.zeros(0, dtype=np.float32)
-        self._buf_start = None
+        self._window.drop()
         self._buffer = []
-        # The VAD stream's sample clock can't jump; the next feed rebuilds it
-        # at its own origin.
-        self._vad_stream = None
 
     @property
     def committed_words(self) -> tuple[Word, ...]:
@@ -216,61 +372,36 @@ class LiveDecoder:
     def interim(self) -> str:
         return self._interim_text()
 
+    @property
+    def buffered_seconds(self) -> float:
+        """Seconds of audio currently retained (bounded by trims and resets)."""
+        return len(self._window) / SAMPLE_RATE
+
     # -- windowing ---------------------------------------------------------
 
-    def _append(self, samples: np.ndarray, t_offset: float) -> None:
-        chunk = to_float32(np.asarray(samples)).reshape(-1)
-        if self._buf_start is None:
-            self._buf_start = float(t_offset)
-            self._buf = chunk.copy()
-            stream = getattr(self._vad, "stream", None)
-            self._vad_stream = stream(self._buf_start) if stream is not None else None
-            self._push_vad(chunk)
-            return
-        gap = t_offset - self._audio_end()
-        tol = self.match_tolerance
-        if gap < -tol:
-            raise ValueError(
-                f"feed went backwards {-gap:.3f}s (t_offset {t_offset:.3f}s "
-                f"< buffered end {self._audio_end():.3f}s); frames must arrive in order"
-            )
-        if gap > tol:  # a real gap since the last chunk → pad silence
-            pad = np.zeros(round(gap * SAMPLE_RATE), np.float32)
-            self._buf = np.concatenate([self._buf, pad])
-            self._push_vad(pad)
-        self._buf = np.concatenate([self._buf, chunk])
-        self._push_vad(chunk)
-
-    def _push_vad(self, samples: np.ndarray) -> None:
-        if self._vad_stream is not None:
-            self._vad_stream.push(samples)
-
-    def _audio_end(self) -> float:
-        return (self._buf_start or 0.0) + len(self._buf) / SAMPLE_RATE
-
     def _committed_end(self) -> float:
-        return self._committed[-1].end if self._committed else (self._buf_start or 0.0)
+        return self._committed[-1].end if self._committed else (self._window.start or 0.0)
 
     def _speech(self) -> list[SpeechSegment] | None:
         """VAD segments over the current buffer (absolute time), or None w/o a VAD."""
-        if self._vad is None or len(self._buf) == 0:
+        if self._vad is None or len(self._window) == 0:
             return None
-        start = self._buf_start or 0.0
-        if self._vad_stream is not None:
-            return self._vad_stream.segments(start)
+        start = self._window.start or 0.0
+        if self._window.vad_stream is not None:
+            return self._window.vad_stream.segments(start)
         return [
             SpeechSegment(s.start + start, s.end + start)
-            for s in self._vad.speech_segments(self._buf)
+            for s in self._vad.speech_segments(self._window.samples)
         ]
 
     def _decode(self) -> list[Word]:
         """Re-decode the whole retained window; word times shifted to absolute."""
         self.decodes += 1
-        self._last_decode_end = self._audio_end()
-        start = self._buf_start or 0.0
+        self._last_decode_end = self._window.end()
+        start = self._window.start or 0.0
         return [
             Word(w.text, w.start + start, w.end + start, w.confidence)
-            for seg in self._asr.transcribe(self._buf, self._language)
+            for seg in self._asr.transcribe(self._window.samples, self._language)
             for w in seg.words
         ]
 
@@ -282,26 +413,16 @@ class LiveDecoder:
         the overflow-flush in :meth:`feed`, which keeps the retained buffer within
         ``window_cap`` without ever discarding un-transcribed speech.
         """
-        keep_from = max(self._committed_end() - self.left_context, self._buf_start or 0.0)
-        drop = round((keep_from - (self._buf_start or 0.0)) * SAMPLE_RATE)
-        if drop > 0:
-            self._buf = self._buf[drop:]
-            self._buf_start = (self._buf_start or 0.0) + drop / SAMPLE_RATE
-
-    def _reset_buf(self) -> None:
-        """Keep only a short silence pre-roll of the buffer."""
-        keep = round(self.pre_roll * SAMPLE_RATE)
-        if len(self._buf) > keep:
-            self._buf_start = self._audio_end() - keep / SAMPLE_RATE
-            self._buf = self._buf[-keep:]
+        keep_from = max(self._committed_end() - self.left_context, self._window.start or 0.0)
+        self._window.trim_before(keep_from)
 
     def _finalize_utterance(self, speech: list[SpeechSegment] | None) -> list[Word]:
         """Commit everything still pending (utterance done → no grey zone) and reset."""
         committed: list[Word] = []
-        if len(self._buf) > 0 and (speech is None or speech):
-            committed = self._extend_committed(self._filter_new(self._decode()))
+        if len(self._window) > 0 and (speech is None or speech):
+            committed = _extend_committed(self._committed, self._filter_new(self._decode()))
         self._buffer = []
-        self._reset_buf()
+        self._window.reset_to_preroll(self.pre_roll)
         return committed
 
     # -- LocalAgreement-2 --------------------------------------------------
@@ -333,32 +454,13 @@ class LiveDecoder:
         while count < agree and new[count].end <= horizon:
             count += 1
         self._buffer = new[count:]
-        return self._extend_committed(new[:count])
-
-    def _extend_committed(self, words: list[Word]) -> list[Word]:
-        """Append words, enforcing a non-decreasing start time.
-
-        Re-decoding jitters word boundaries by a few ms, so a fresh window can
-        place a boundary word a hair before the last committed word's start. Such
-        a regressor is a re-emitted duplicate, never genuinely new text — dropping
-        it keeps the committed stream strictly append-only (the monotonicity
-        invariant; PLAN.md §5) with no visible loss.
-        """
-        kept: list[Word] = []
-        last = self._committed[-1].start if self._committed else float("-inf")
-        for word in words:
-            if word.start + 1e-6 < last:
-                continue
-            self._committed.append(word)
-            last = word.start
-            kept.append(word)
-        return kept
+        return _extend_committed(self._committed, new[:count])
 
     def _interim_text(self) -> str:
         return " ".join(w.text for w in self._buffer)
 
 
-class WindowedLiveDecoder(LiveDecoder):
+class WindowedLiveDecoder:
     """Live pass that decodes exactly the windows the finalize pass would build.
 
     :func:`stenograf.vad.pack_windows` is a greedy left-to-right merge, so it
@@ -377,7 +479,11 @@ class WindowedLiveDecoder(LiveDecoder):
     Chosen as the product default because the live view runs in the background
     (efficiency outranks caption latency).
 
-    Requires a streaming-capable VAD (``vad.stream``) — windows are VAD-defined.
+    Satisfies the same :class:`StreamingDecoder` surface as
+    :class:`LiveDecoder` but shares no algorithm with it — LocalAgreement has
+    no role here — so it composes the same :class:`_CaptionBuffer` rather than
+    inheriting machinery it would have to disable. Requires a streaming-capable
+    VAD (``vad.stream``) — windows are VAD-defined.
     """
 
     def __init__(
@@ -393,9 +499,8 @@ class WindowedLiveDecoder(LiveDecoder):
     ) -> None:
         if not hasattr(vad, "stream"):
             raise TypeError("WindowedLiveDecoder needs a streaming VAD (vad.stream)")
-        super().__init__(
-            asr, vad=vad, language=language, window_cap=max_window, decode_interval=None
-        )
+        self._asr = asr
+        self._language = language
         # Window packing policy — MUST match pack_windows (the finalize pass
         # reuses these decodes verbatim; a policy drift silently degrades it).
         self.max_window = max_window
@@ -404,35 +509,35 @@ class WindowedLiveDecoder(LiveDecoder):
         # Audio kept behind the live edge during silence, so a speech onset the
         # VAD reports a beat late (plus the window pad) is still in the buffer.
         self.silence_guard = silence_guard
+        self.window_cap = max_window  # the load-shed bound (StreamingDecoder)
+        self.pre_roll = 0.25  # silence kept after the end-of-stream reset
+        self.match_tolerance = 0.15  # feed-gap jitter still treated as contiguous
+        # The buffer runs on the integer origin (quantized on first append):
+        # decode slices must be byte-identical to the batch pass's.
+        self._window = _CaptionBuffer(vad)
+        self._committed: list[Word] = []
         self._pending: list[SpeechSegment] = []  # closed runs of the open window
         self._decoded_to = 0.0  # padded end of the last decoded window
-        # Exact sample index of _buf[0]. The finalize pass slices its windows
-        # with sample_index() over absolute times; reuse is byte-identical only
-        # if this pass extracts the very same samples, so the buffer origin is
-        # tracked as an integer (float accumulation would drift by ±1 sample)
-        # and _buf_start is always derived from it by a single division.
-        self._buf_start_idx: int | None = None
+        self.decodes = 0
 
     def feed(self, samples: np.ndarray, t_offset: float) -> StreamingUpdate:
         """Add audio; decode (only) the windows that closed since the last feed."""
         if len(samples):
-            self._append(samples, t_offset)
-            if self._buf_start_idx is None and self._buf_start is not None:
-                self._buf_start_idx = round(self._buf_start * SAMPLE_RATE)
-                self._buf_start = self._buf_start_idx / SAMPLE_RATE
-        if len(self._buf) == 0 or self._vad_stream is None:
+            self._window.append(samples, t_offset, tolerance=self.match_tolerance)
+            self._window.quantize_origin()
+        if len(self._window) == 0 or self._window.vad_stream is None:
             return StreamingUpdate((), "")
         committed: list[Word] = []
-        for seg in self._vad_stream.take_completed():
+        for seg in self._window.vad_stream.take_completed():
             committed.extend(self._absorb(seg))
-        open_seg = self._vad_stream.open_segment()
+        open_seg = self._window.vad_stream.open_segment()
         if self._pending:
             # The window also closes once nothing can join it any more — exactly
             # when pack_windows would split: the next run (open now, or anywhere
             # in the future silence) starts more than max_gap after it, or the
             # open run has already grown past the shared budget. Waiting longer
             # only delays the caption; the packing cannot change.
-            next_start = open_seg.start if open_seg is not None else self._audio_end()
+            next_start = open_seg.start if open_seg is not None else self._window.end()
             if next_start - self._pending[-1].end > self.max_gap or (
                 open_seg is not None and open_seg.end - self._pending[0].start > self.max_window
             ):
@@ -442,50 +547,46 @@ class WindowedLiveDecoder(LiveDecoder):
 
     def flush(self) -> StreamingUpdate:
         """End of stream: close the VAD like the batch scan does, pack, decode."""
-        if self._vad_stream is None or len(self._buf) == 0:
+        stream = self._window.vad_stream
+        if stream is None or len(self._window) == 0:
             return StreamingUpdate((), "")
         committed: list[Word] = []
-        finish = getattr(self._vad_stream, "finish", None)
+        finish = getattr(stream, "finish", None)
         if finish is not None:
             finish()  # remainder + detector flush → the open run completes
-        for seg in self._vad_stream.take_completed():
+        for seg in stream.take_completed():
             committed.extend(self._absorb(seg))
         if finish is None:
-            open_seg = self._vad_stream.open_segment()
+            open_seg = stream.open_segment()
             if open_seg is not None:
                 committed.extend(self._absorb(open_seg))
         if self._pending:
             committed.extend(self._decode_window())
-        self._reset_buf()
+        self._window.reset_to_preroll(self.pre_roll)
         return StreamingUpdate(tuple(committed), "")
 
     def drop_window(self) -> None:
-        super().drop_window()
-        self._pending = []
-        self._buf_start_idx = None
+        """Load-shed: abandon the buffer and pending window without committing.
 
-    def _reset_buf(self) -> None:
-        """Keep the base pre-roll trim on the integer origin (end of stream)."""
-        if self._buf_start_idx is None:
-            super()._reset_buf()
-            return
-        keep = round(self.pre_roll * SAMPLE_RATE)
-        if len(self._buf) > keep:
-            self._buf_start_idx += len(self._buf) - keep
-            self._buf = self._buf[-keep:]
-            self._buf_start = self._buf_start_idx / SAMPLE_RATE
-
-    def _audio_end(self) -> float:
-        """The live edge, from the integer origin — the batch pass's exact float.
-
-        The last window's padded end is ``min(audio_end, …)``; the batch pass
-        computes ``len(samples) / SAMPLE_RATE`` there, and (origin + buffered)
-        equals the total sample count, so this single division reproduces its
-        float bit-for-bit (the base class's accumulated float would not).
+        Committed history is left intact and still monotonic; the abandoned
+        audio becomes a caption gap the finalize pass fills on stop (see
+        :meth:`LiveDecoder.drop_window`).
         """
-        if self._buf_start_idx is None:
-            return super()._audio_end()
-        return (self._buf_start_idx + len(self._buf)) / SAMPLE_RATE
+        self._window.drop()
+        self._pending = []
+
+    @property
+    def committed_words(self) -> tuple[Word, ...]:
+        return tuple(self._committed)
+
+    @property
+    def committed_text(self) -> str:
+        return " ".join(w.text for w in self._committed)
+
+    @property
+    def buffered_seconds(self) -> float:
+        """Seconds of audio currently retained (bounded by :meth:`_retain`)."""
+        return len(self._window) / SAMPLE_RATE
 
     # -- online pack_windows -------------------------------------------------
 
@@ -524,41 +625,31 @@ class WindowedLiveDecoder(LiveDecoder):
         """
         start, end = self._pending[0].start, self._pending[-1].end
         self._pending = []
-        a = max(self._buf_start or 0.0, start - self.pad, self._decoded_to)
-        b = min(self._audio_end(), end + self.pad)
+        a = max(self._window.start or 0.0, start - self.pad, self._decoded_to)
+        b = min(self._window.end(), end + self.pad)
         self._decoded_to = b
         self.decodes += 1
-        origin = self._buf_start_idx or 0
+        origin = self._window.start_idx or 0
         lo = max(0, sample_index(a) - origin)
         hi = sample_index(b) - origin
         words = [
             Word(w.text, w.start + a, w.end + a, w.confidence)
-            for seg in self._asr.transcribe(self._buf[lo:hi], self._language)
+            for seg in self._asr.transcribe(self._window.samples[lo:hi], self._language)
             for w in seg.words
         ]
-        return self._extend_committed(words)
+        return _extend_committed(self._committed, words)
 
     def _retain(self, open_seg: SpeechSegment | None) -> None:
-        """Trim decoded/silent audio; keep the open window (plus its pad).
-
-        Trims land on the same sample_index() grid the decode slices use, so a
-        window's padded start is never trimmed past (truncation only rounds
-        down, and keep_from is a lower bound on every future span start).
-        """
+        """Trim decoded/silent audio; keep the open window (plus its pad)."""
         if self._pending:
             keep_from = self._pending[0].start - self.pad
         elif open_seg is not None:
             keep_from = open_seg.start - self.pad
         else:
-            keep_from = self._audio_end() - self.silence_guard
-        if self._buf_start_idx is None:
+            keep_from = self._window.end() - self.silence_guard
+        if self._window.start_idx is None:
             return
-        keep_idx = max(self._buf_start_idx, sample_index(keep_from))
-        drop = keep_idx - self._buf_start_idx
-        if drop > 0:
-            self._buf = self._buf[drop:]
-            self._buf_start_idx = keep_idx
-            self._buf_start = keep_idx / SAMPLE_RATE
+        self._window.trim_before(keep_from)
 
 
 def _key(word: Word) -> str:
