@@ -30,7 +30,7 @@ def _run(body) -> None:
 class TestMinimalRedraw:
     def test_frame_cap_and_animations_are_pinned(self):
         # Importing stenograf.ui.app pins TEXTUAL_FPS before textual imports
-        # (the same shared module stenograf.tui uses).
+        # (the same shared module stenograf.ui.meeting uses).
         assert tconst.MAX_FPS == 15
 
         async def body():

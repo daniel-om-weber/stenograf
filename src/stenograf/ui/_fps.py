@@ -4,8 +4,8 @@ The minimal-redraw budget (PLAN.md §5, Phase 2 Task 6) caps Textual at 15 fps.
 The cap is import-order-sensitive: textual reads ``TEXTUAL_FPS`` once, at
 import, into ``constants.MAX_FPS`` and ``Screen.UPDATE_PERIOD`` — so the env
 var must be set before textual is imported. Both textual entry points
-(:mod:`stenograf.tui`, the live view; :mod:`stenograf.ui.app`, the launcher)
-import this module first, keeping the sensitive dance in exactly one place.
+(:mod:`stenograf.ui.meeting`, the live view; :mod:`stenograf.ui.app`, the
+launcher) import this module first, keeping the sensitive dance in one place.
 
 Importing it late is still safe: the re-pin below overwrites the baked
 constants regardless of who imported textual first. ``UPDATE_PERIOD`` (the

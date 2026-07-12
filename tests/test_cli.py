@@ -594,7 +594,7 @@ def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
 
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
     monkeypatch.setattr(cli.start, "_stdout_is_tty", lambda: True)  # pretend we're on a terminal
-    monkeypatch.setattr("stenograf.tui.TextualLiveView", FakeTUI)
+    monkeypatch.setattr("stenograf.ui.meeting.TextualLiveView", FakeTUI)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 

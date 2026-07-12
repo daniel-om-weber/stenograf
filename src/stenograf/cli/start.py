@@ -416,7 +416,7 @@ def _run_meeting(
 
     checkpoint = CheckpointConfig(checkpoint_writer(out_dir, basename), flush_interval)
     if use_tui:
-        from stenograf.tui import TextualLiveView
+        from stenograf.ui.meeting import TextualLiveView
 
         view = TextualLiveView(
             profile, language=profile.language, stop=provider.stop, persist=persist

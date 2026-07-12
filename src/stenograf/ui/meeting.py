@@ -1,28 +1,36 @@
-"""Textual live-caption TUI — the second :class:`~stenograf.view.LiveView`.
+"""The live-caption meeting screen — the second :class:`~stenograf.view.LiveView`.
 
-Phase 2, Task 6 (PLAN.md §5). A pinned header (REC / elapsed / language /
-profile), an append-only ``RichLog`` of committed captions, a dim per-channel
-interim tail (channel-coarse ``You``/``Remote`` — the real ``Local-N``/
-``Remote-M`` labels appear only after the on-stop finalize swap), and a footer.
+Built as a standalone Textual app in Phase 2, Task 6; converted to a
+:class:`~textual.screen.Screen` in Phase 7, Task 2 (PLAN.md §5) so one
+codepath serves two entries:
+
+- **``steno start``** runs :class:`~stenograf.ui.app.StenografApp` with this
+  screen as its *default* (root) screen via :meth:`TextualLiveView.serve`; the
+  screen exits the whole app when dismissed.
+- **The launcher** pushes it onto the Home stack; dismissing returns to Home
+  with the finalized transcript as the screen result.
+
+The screen itself: a pinned header (REC / elapsed / language / profile), an
+append-only ``RichLog`` of committed captions, a dim per-channel interim tail
+(channel-coarse ``You``/``Remote`` — the real ``Local-N``/``Remote-M`` labels
+appear only after the on-stop finalize swap), and a footer.
 
 Design constraints from the plan:
 
 - **Minimal redraw.** One 1 Hz clock is the only periodic repaint (it advances
   the header's elapsed time and flushes an idle open caption line); everything
-  else updates on an event. Animations are
-  disabled (``animation_level = "none"``) and the frame cap is pinned low
-  (``TEXTUAL_FPS=15`` via :mod:`stenograf.ui._fps`, which must be imported
-  before textual — the value is baked into ``Screen.UPDATE_PERIOD`` at import
-  time).
+  else updates on an event. The frame cap and animation kill-switch are owned
+  by the app shell (:mod:`stenograf.ui._fps` + ``StenografApp.on_mount``), so
+  they cover this screen wherever it runs.
 - **Worker → UI crossing.** The live worker calls the view from its own thread;
   every UI mutation is marshalled onto the Textual event loop via
   :meth:`App.call_from_thread` (Textual's supported ``loop.call_soon_threadsafe``
-  wrapper). Updates arriving before the app is mounted or after it stops are
+  wrapper). Updates arriving before the screen is mounted or after it stops are
   dropped — the UI is best-effort, the transcript is authoritative.
 - **Ctrl-C is a captured key event**, not a ``KeyboardInterrupt``: under Textual
   the terminal is in raw mode, so the quit binding must *deliberately* cross back
   to the capture side via a ``stop`` callback (``provider.stop``) to end capture
-  gracefully; the meeting then finalizes and the app exits on its own.
+  gracefully; the meeting then finalizes and the screen dismisses on its own.
 
 The heavy import (textual) lives here, not in :mod:`stenograf.view`, so the plain
 stdout view stays dependency-light; ``steno start`` imports this module only when
@@ -41,14 +49,16 @@ import time
 from collections.abc import Callable, Sequence
 from enum import Enum
 
-from textual.app import App, ComposeResult
+from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.screen import Screen
 from textual.widgets import Footer, RichLog, Static
 
 from stenograf.asr.base import Word
 from stenograf.capture.base import Channel
 from stenograf.config import Language, MeetingProfile
 from stenograf.transcript import Transcript
+from stenograf.ui.app import StenografApp
 from stenograf.view import LiveView
 
 _LIVE_LABEL = {Channel.MIC: "You", Channel.SYSTEM: "Remote"}
@@ -74,10 +84,10 @@ The area clips at the bottom, so only the freshest words may occupy it."""
 
 
 class Phase(Enum):
-    """App lifecycle: drives the header rendering and what a quit keypress does.
+    """Screen lifecycle: drives the header rendering and what a quit keypress does.
 
     ``CAPTURING`` → live pass running; ``FINALIZING`` → capture stopped, on-stop
-    pass running; ``DONE`` → transcript shown, quit just exits. Each member
+    pass running; ``DONE`` → transcript shown, quit just leaves. Each member
     carries its header lead text and color.
     """
 
@@ -107,16 +117,16 @@ def _profile_label(profile: MeetingProfile) -> str:
     return f"local {part(profile.local_speakers)} · remote {part(profile.remote_speakers)}"
 
 
-class LiveApp(App[None]):
-    """The Textual application: header, captions log, interim tail, footer.
+class MeetingScreen(Screen[Transcript | None]):
+    """Header, captions log, interim tail, footer — the live meeting view.
 
     UI mutations happen through the ``push_*`` methods, which must run on the app
-    thread (the :class:`TextualLiveView` adapter marshals them there). The app
+    thread (the :class:`TextualLiveView` adapter marshals them there). The screen
     keeps plain-text mirrors of what it renders (``committed_lines``, the live
     tail, the header) so behaviour is assertable without scraping widget internals.
     """
 
-    CSS = """
+    DEFAULT_CSS = """
     #header { dock: top; height: 1; background: $panel; color: $text; padding: 0 1; }
     #captions { height: 1fr; padding: 0 1; scrollbar-size-vertical: 1; }
     /* The live "bottom line": the open committed run renders normally (bright);
@@ -144,6 +154,7 @@ class LiveApp(App[None]):
         self._phase = Phase.CAPTURING
         self._status = ""
         self._start = 0.0
+        self._transcript: Transcript | None = None  # the screen result (finalize swap)
 
         # One interleaved committed stream (the RichLog), tracked like the plain
         # view: a run continues on the open line until the channel changes or a
@@ -171,7 +182,6 @@ class LiveApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.animation_level = "none"  # minimal redraw: no CSS/scroll animations
         self._start = time.monotonic()
         self._render_header()
         self.set_interval(1.0, self._tick)  # the ONLY periodic repaint (1 Hz)
@@ -289,6 +299,7 @@ class LiveApp(App[None]):
         if transcript.language is not None:
             self._language = transcript.language
         self._phase = Phase.DONE
+        self._transcript = transcript
         n = len(transcript.entries)
         self._status = f"{n} {'entry' if n == 1 else 'entries'} · q to exit"
         self._render_header()
@@ -317,23 +328,37 @@ class LiveApp(App[None]):
         """Ctrl-C / q: end capture (crossing to the worker), then let it finalize.
 
         The first press while capturing hands off to ``stop_callback`` — capture
-        ends, the meeting thread runs the finalize pass, and it exits the app when
-        done. A second press (impatient, still finalizing) forces an exit. Once the
-        transcript is shown, quit just exits.
+        ends, the meeting thread runs the finalize pass, and it dismisses the
+        screen when done. A second press (impatient, still finalizing) forces the
+        exit. Once the transcript is shown, quit just leaves.
 
         ``stop_callback`` (``provider.stop``) *blocks* — up to ~5 s waiting on the
         capture subprocess to flush and exit — so it runs on a background thread, not
         the event loop: doing it inline would freeze the whole TUI for those seconds
         and, worse, deaden this very binding so the impatient second Ctrl-C could not
         force an exit. The teardown finishes on its own; the meeting thread then
-        finalizes and exits the app.
+        finalizes and dismisses the screen.
         """
         if self._phase is Phase.CAPTURING and self.stop_callback is not None:
             self._phase = Phase.FINALIZING
             self._render_header()
             threading.Thread(target=self._invoke_stop, name="tui-stop", daemon=True).start()
         else:
-            self.exit()
+            self._leave()
+
+    def _leave(self) -> None:
+        """Return control to whoever showed the screen (the two-entry rule).
+
+        Pushed by the launcher (something is under it on the stack): dismiss
+        back with the finalized transcript — or ``None`` if the meeting never
+        produced one — as the screen result. Run as the app's default screen
+        (``steno start``): there is nothing under it to return to, so leaving
+        exits the whole app.
+        """
+        if len(self.app.screen_stack) > 1:
+            self.dismiss(self._transcript)
+        else:
+            self.app.exit()
 
     def _invoke_stop(self) -> None:
         """Run the blocking capture teardown off the event loop (see action_stop)."""
@@ -341,17 +366,19 @@ class LiveApp(App[None]):
             self.stop_callback()  # type: ignore[misc]  # guarded by action_stop
         except Exception as exc:  # never let a stop error wedge the UI
             with contextlib.suppress(Exception):  # the app may already be gone
-                self.call_from_thread(self.push_error, f"stop failed: {exc}")
+                self.app.call_from_thread(self.push_error, f"stop failed: {exc}")
 
 
 class TextualLiveView(LiveView):
-    """LiveView backed by :class:`LiveApp`, marshalling events onto its event loop.
+    """LiveView backed by :class:`MeetingScreen`, marshalling events onto its loop.
 
     Construct with the meeting profile, then :meth:`serve` a ``meeting`` callable
-    (typically ``recorder.run(..., live=True, view=self, ...)``): the app runs on
-    the calling (main) thread while the meeting runs on a background thread, and
-    the orchestrator's structured events cross back to the UI thread. ``serve``
-    returns the meeting's result (the authoritative transcript) once the app exits.
+    (typically ``recorder.run(..., live=True, view=self, ...)``): a
+    :class:`StenografApp` runs on the calling (main) thread with the meeting
+    screen as its root while the meeting runs on a background thread, and the
+    orchestrator's structured events cross back to the UI thread. ``serve``
+    returns the meeting's result (the authoritative transcript) once the app
+    exits.
     """
 
     def __init__(
@@ -368,33 +395,38 @@ class TextualLiveView(LiveView):
         # screen (crash/force-quit there must not lose it). Exceptions are
         # surfaced via :meth:`error`, never raised — the caller retries after
         # :meth:`serve` returns.
-        self._app = LiveApp(profile=profile, language=language, stop=stop)
+        self._screen = MeetingScreen(profile=profile, language=language, stop=stop)
+        self._app = StenografApp(initial=self._screen)
         self._persist = persist
         self._meeting_thread: threading.Thread | None = None
 
     @property
-    def app(self) -> LiveApp:
+    def app(self) -> StenografApp:
         return self._app
 
+    @property
+    def screen(self) -> MeetingScreen:
+        return self._screen
+
     def set_stop(self, stop: Callable[[], None]) -> None:
-        self._app.stop_callback = stop
+        self._screen.stop_callback = stop
 
     # -- LiveView events → UI thread --------------------------------------
 
     def commit(self, channel: Channel, words: Sequence[Word]) -> None:
-        self._marshal(self._app.push_committed, channel, tuple(words))
+        self._marshal(self._screen.push_committed, channel, tuple(words))
 
     def interim(self, channel: Channel, text: str) -> None:
-        self._marshal(self._app.push_interim, channel, text)
+        self._marshal(self._screen.push_interim, channel, text)
 
     def status(self, message: str) -> None:
-        self._marshal(self._app.push_status, message)
+        self._marshal(self._screen.push_status, message)
 
     def language(self, language: Language) -> None:
-        self._marshal(self._app.push_language, language)
+        self._marshal(self._screen.push_language, language)
 
     def finalizing(self) -> None:
-        self._marshal(self._app.push_finalizing)
+        self._marshal(self._screen.push_finalizing)
 
     def finalized(self, transcript: Transcript) -> None:
         if self._persist is not None:
@@ -402,20 +434,20 @@ class TextualLiveView(LiveView):
                 self._persist(transcript)
             except Exception as exc:  # noqa: BLE001 — persistence must not sink the result
                 self.error(f"could not write the transcript yet ({exc}); retrying on exit")
-        self._marshal(self._app.push_finalized, transcript)
+        self._marshal(self._screen.push_finalized, transcript)
 
     def error(self, message: str) -> None:
-        self._marshal(self._app.push_error, message)
+        self._marshal(self._screen.push_error, message)
 
     def _marshal(self, fn: Callable[..., object], *args: object) -> None:
-        """Run a UI mutation on the app's event loop; drop it if the app isn't live.
+        """Run a UI mutation on the app's event loop; drop it if the screen isn't live.
 
         ``call_from_thread`` is Textual's thread-safe hop onto its event loop
         (``loop.call_soon_threadsafe`` under the hood). It refuses to run on the
         app's own thread and raises once the loop is gone; both are fine to ignore —
         the UI is provisional and the finalize pass is the real transcript.
         """
-        if not self._app.ready.is_set():
+        if not self._screen.ready.is_set():
             return
         # best-effort UI: call_from_thread raises once the loop is gone or if run
         # off a worker thread — either way the finalize pass is the real transcript.
@@ -428,8 +460,8 @@ class TextualLiveView(LiveView):
         """Run the TUI (this thread) while ``meeting`` runs on a background thread.
 
         Returns the meeting's transcript once the app exits; re-raises whatever the
-        meeting raised. The background thread renders the finalize swap and exits
-        the app when the meeting returns (capture stopped and finalized).
+        meeting raised. The background thread renders the finalize swap and leaves
+        the screen when the meeting returns (capture stopped and finalized).
         """
         result: dict[str, object] = {}
         self._arm_meeting(meeting, result)
@@ -465,7 +497,7 @@ class TextualLiveView(LiveView):
                 # Show the result only while the app is still up; if it already
                 # exited (force-quit), skip the UI hop and the wait for it.
                 if self._app.is_running:
-                    self._app.ready.wait(timeout=5)  # don't finish before the app mounts
+                    self._screen.ready.wait(timeout=5)  # don't finish before the mount
                     with contextlib.suppress(Exception):  # app already gone
                         self._app.call_from_thread(self._finish, result)
 
@@ -475,25 +507,25 @@ class TextualLiveView(LiveView):
             )
             self._meeting_thread.start()
 
-        self._app._on_ready = start_meeting
+        self._screen._on_ready = start_meeting
 
     def _finish(self, result: dict[str, object]) -> None:
         """On the UI thread: ensure the finalize result is shown, then wait to quit.
 
         The orchestrator emits ``finalized`` itself now (``run`` calls
         ``view.finalized`` before returning), so on the normal path the swap has
-        already happened and the app is in the ``done`` phase — nothing to do but
-        keep the app up for the user to read and dismiss. The push here is a
+        already happened and the screen is in the ``done`` phase — nothing to do but
+        keep it up for the user to read and dismiss. The push here is a
         fallback for a meeting that returns a transcript without emitting the
         event (e.g. a test stand-in). A meeting that raised has nothing to show, so
-        the app exits.
+        the screen leaves (which exits the app when it is the root).
         """
         transcript = result.get("transcript")
         if isinstance(transcript, Transcript):
-            if self._app._phase is not Phase.DONE:
-                self._app.push_finalized(transcript)
-        else:  # the meeting raised — nothing to show, so just exit
-            self._app.exit()
+            if self._screen._phase is not Phase.DONE:
+                self._screen.push_finalized(transcript)
+        else:  # the meeting raised — nothing to show, so just leave
+            self._screen._leave()
 
 
-__all__ = ["LiveApp", "Phase", "TextualLiveView"]
+__all__ = ["MeetingScreen", "Phase", "TextualLiveView"]
