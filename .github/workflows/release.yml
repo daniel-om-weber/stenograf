@@ -1,9 +1,9 @@
 name: release
 
-# Tag v<version> → build the wheel matrix, smoke-test clean installs on both
-# OSes, publish to PyPI (Trusted Publishing/OIDC — no token secrets) and attach
-# the artifacts to a GitHub release. workflow_dispatch runs everything except
-# the publish step, as a dry run.
+# Tag v<version> → build the wheel matrix, smoke-test a clean install on every
+# supported OS, publish to PyPI (Trusted Publishing/OIDC — no token secrets) and
+# attach the artifacts to a GitHub release. workflow_dispatch runs everything
+# except the publish step, as a dry run.
 
 on:
   push:
@@ -110,8 +110,60 @@ jobs:
       # installs, the CLI runs, and the headless model download works.
       - run: steno setup --models-only
 
+  smoke-windows:
+    # Windows ships the same pure wheel Linux does (no native helpers), so there
+    # is nothing extra to *build* — but nothing verified a clean Windows install
+    # before publish either, which is how 0.2.1 shipped a launcher that died on
+    # every meeting start. The launcher/TUI itself is covered by the headless
+    # real-stack smoke in ci.yml's windows unit job; this leg is the *installed
+    # artifact* check: the wheel installs, the CLI renders through a redirected
+    # stdout, and the pipeline runs end to end from a file.
+    needs: build-linux
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash # wheel globs + $HOME; the runner ships Git bash
+    steps:
+      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-linux
+          path: dist
+      # uv installs tool executables to ~/.local/bin on Windows too.
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: uv tool install -p 3.13 ./dist/stenograf-*py3-none-any.whl
+      - run: steno --version
+      # ffmpeg is the bundled imageio-ffmpeg binary here — nothing to install.
+      - run: steno setup --models-only
+      - name: The report renders through a redirected stdout
+        # doctor *exits 1* on a runner by design: it has no audio endpoint, so
+        # the (non-optional) capture check fails. What this asserts is that the
+        # report renders at all — piped Windows stdout uses the legacy code page,
+        # and click.echo once crashed outright on the ✓/✗ glyphs (fixed by
+        # reconfiguring the streams with errors="replace"; this pins it down).
+        run: |
+          steno doctor > doctor.txt 2>&1 || true
+          cat doctor.txt
+          grep -q "ASR backend" doctor.txt
+          grep -q "ffmpeg" doctor.txt
+      - name: Pipeline smoke on a synthetic WAV
+        # Live WASAPI capture needs hardware no runner has; --replay drives the
+        # same pipeline from a file.
+        run: |
+          uv run --no-project --python 3.13 python - <<'EOF'
+          import math, struct, wave
+          with wave.open("smoke.wav", "wb") as w:
+              w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+              w.writeframes(b"".join(
+                  struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / 16000)))
+                  for i in range(16000 * 3)))
+          EOF
+          steno start --replay smoke.wav --local 1 --remote 0 --lang en --out smoke-out
+          test -f smoke-out/transcript.json
+
   publish:
-    needs: [smoke-macos, smoke-linux]
+    needs: [smoke-macos, smoke-linux, smoke-windows]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15

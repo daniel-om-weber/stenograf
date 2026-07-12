@@ -1094,6 +1094,21 @@ at 8.6× RT (≥4× bar cleared).
    (`tool install --upgrade stenograf`, ends in `setup`).
 3. README: a Windows install section — the one-liner, the privacy-toggle
    note, Windows Terminal recommended.
+4. **Done (2026-07-13).** `release.yml` gained a `smoke-windows` leg and
+   `publish` now waits on it: a clean `uv tool install` of the pure wheel on
+   `windows-latest`, then `steno --version`, `setup --models-only`, a doctor
+   render, and a `--replay` pipeline run asserting `transcript.json`. Windows
+   builds nothing of its own (it ships the same pure wheel as Linux), so the
+   gap was never in *building* — it was that **no Windows install was exercised
+   before PyPI**, which is how 0.2.1 published a launcher that died on every
+   meeting start. Two notes for whoever touches this job: `steno doctor` exits
+   **1** on a runner by design (no audio endpoint → the non-optional capture
+   check fails), so the step tolerates that and asserts only that the report
+   *renders* — piped Windows stdout is legacy-code-page, the bug class that once
+   crashed `click.echo` on the ✓ glyph; and the replay clip is a 440 Hz tone, so
+   it finalizes to **0 entries** — the assertion is that the transcript is
+   written at all, not its content. The launcher/TUI stays covered by ci.yml's
+   windows unit job (headless real-stack smoke), not here.
 
 Exit: on a fresh VM (or fresh user account), the one-liner reaches
 "setup complete" and drops the Desktop launcher.
