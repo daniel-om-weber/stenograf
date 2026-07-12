@@ -229,7 +229,7 @@ Order matters; each step is committable alone.
   blocks (`cli.py:833-869` — ~18 lines each differing only in module +
   label) into one helper taking the provider class, `default_devices`, and
   error type.
-- [ ] **C6 — data-driven settings table.** `_settings_rows`
+- [x] **C6 — data-driven settings table.** `_settings_rows`
   (`cli.py:1843-1931`, 88 lines) hand-builds rows with per-backend defaults
   resolved via `if notes_backend == ...` chains with inline imports. Replace
   with row descriptors iterated once; per-backend defaults become a

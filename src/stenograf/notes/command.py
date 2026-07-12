@@ -60,6 +60,15 @@ class CommandBackend:
             max_input_chars=settings.max_input_chars,
         )
 
+    @classmethod
+    def settings_defaults(cls) -> dict[str, object]:
+        # No "model": it is a provenance label with no default here — the CLI
+        # renders its explanatory placeholder instead.
+        return {
+            "timeout_s": DEFAULT_TIMEOUT_S,
+            "max_input_chars": DEFAULT_MAX_INPUT_CHARS,
+        }
+
     def is_available(self) -> bool:
         return shutil.which(self.argv[0]) is not None
 

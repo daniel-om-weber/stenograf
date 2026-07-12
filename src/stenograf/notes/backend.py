@@ -49,6 +49,14 @@ class NotesBackend(Protocol):
 
     def complete(self, messages: list[dict[str, str]], schema: dict) -> str: ...
 
+    @classmethod
+    def settings_defaults(cls) -> dict[str, object]:
+        """Built-in defaults for the ``[notes]`` keys this backend defines,
+        for display by ``steno settings show`` (see :func:`settings_defaults`).
+        Keys the backend has no say over (e.g. ``thinking`` off mlx) are
+        absent — the CLI renders a which-backend placeholder for those."""
+        ...
+
 
 @dataclass(frozen=True)
 class NotesBackendSpec:
@@ -145,3 +153,14 @@ def create_backend(name: str | None, settings: NotesSettings) -> NotesBackend:
     module = importlib.import_module(spec.module)
     backend_cls = getattr(module, spec.cls)
     return backend_cls.from_settings(settings)
+
+
+def settings_defaults(name: str) -> dict[str, object]:
+    """Backend ``name``'s built-in ``[notes]`` defaults, importing only its module.
+
+    The display seam behind ``steno settings show``: per-backend defaults come
+    from the backend class itself instead of an ``if backend == …`` chain in
+    the CLI."""
+    spec = get_spec(name)
+    module = importlib.import_module(spec.module)
+    return getattr(module, spec.cls).settings_defaults()

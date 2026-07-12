@@ -91,6 +91,14 @@ class MlxBackend:
             thinking=settings.thinking,
         )
 
+    @classmethod
+    def settings_defaults(cls) -> dict[str, object]:
+        return {
+            "model": DEFAULT_MODEL,
+            "max_input_chars": DEFAULT_MAX_INPUT_CHARS,
+            "thinking": DEFAULT_THINKING,
+        }
+
     def is_available(self) -> bool:
         try:
             return importlib.util.find_spec("mlx_lm") is not None

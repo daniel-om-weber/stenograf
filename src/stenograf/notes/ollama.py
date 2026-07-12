@@ -54,6 +54,13 @@ class OllamaBackend:
             max_input_chars=settings.max_input_chars,
         )
 
+    @classmethod
+    def settings_defaults(cls) -> dict[str, object]:
+        return {
+            "model": DEFAULT_MODEL,
+            "max_input_chars": DEFAULT_MAX_INPUT_CHARS,
+        }
+
     def is_available(self) -> bool:
         try:
             self._get("/api/version")
