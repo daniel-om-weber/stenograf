@@ -125,7 +125,8 @@ class Transcript:
         lines = []
         for entry in self.entries:
             marker = " *(overlap)*" if entry.provisional else ""
-            lines.append(f"**{entry.speaker}** [{_fmt(entry.start)}]{marker}: {entry.text}")
+            stamp = format_timestamp(entry.start)
+            lines.append(f"**{entry.speaker}** [{stamp}]{marker}: {entry.text}")
         return "\n\n".join(lines) + "\n"
 
     def to_text(self) -> str:
@@ -303,7 +304,9 @@ def _ts(seconds: float, sep: str) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
 
 
-def _fmt(seconds: float) -> str:
+def format_timestamp(seconds: float) -> str:
+    """``h:mm:ss`` (or ``m:ss`` under an hour) — the one human-facing
+    timestamp format, shared by every transcript/notes renderer."""
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"

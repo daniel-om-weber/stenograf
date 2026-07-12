@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 
+from stenograf.transcript import format_timestamp
+
 
 @dataclass(frozen=True)
 class ActionItem:
@@ -136,11 +138,5 @@ def _action_item_line(item: ActionItem) -> str:
     if item.due:
         parts.append(f"(due {item.due})")
     if item.timestamp is not None:
-        parts.append(f"[{_fmt(item.timestamp)}]")
+        parts.append(f"[{format_timestamp(item.timestamp)}]")
     return " ".join(parts)
-
-
-def _fmt(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"

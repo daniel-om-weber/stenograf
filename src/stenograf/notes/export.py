@@ -15,7 +15,7 @@ from pathlib import Path
 
 from stenograf.notes.model import ActionItem, MeetingNotes
 from stenograf.output import atomic_write_text
-from stenograf.transcript import Transcript
+from stenograf.transcript import Transcript, format_timestamp
 
 _SLUG_MAX_CHARS = 80
 _STRIP = re.compile(r"[][#^|]")  # markdown/Obsidian link syntax — drop silently
@@ -104,7 +104,8 @@ def _quoted_transcript(transcript: Transcript) -> list[str]:
     lines = []
     for entry in transcript.entries:
         marker = " *(overlap)*" if entry.provisional else ""
-        lines.append(f"> **{entry.speaker}** [{_fmt(entry.start)}]{marker}: {entry.text}")
+        stamp = format_timestamp(entry.start)
+        lines.append(f"> **{entry.speaker}** [{stamp}]{marker}: {entry.text}")
         lines.append(">")
     if lines:
         lines.pop()  # no trailing empty quote line
@@ -117,8 +118,3 @@ def _slug(title: str) -> str:
     slug = " ".join(slug.split())
     return slug[:_SLUG_MAX_CHARS].rstrip() or "Meeting"
 
-
-def _fmt(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"

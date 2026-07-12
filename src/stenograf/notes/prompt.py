@@ -10,7 +10,7 @@ survive customization (PLAN.md §5 D4).
 from __future__ import annotations
 
 from stenograf.config import Language
-from stenograf.transcript import Transcript, TranscriptEntry
+from stenograf.transcript import Transcript, TranscriptEntry, format_timestamp
 
 NOTES_SCHEMA: dict = {
     "type": "object",
@@ -175,10 +175,5 @@ def _render_entries(entries: list[TranscriptEntry]) -> str:
 
 
 def _render_entry(entry: TranscriptEntry) -> str:
-    return f"{entry.speaker} [{_fmt(entry.start)}]: {entry.text}"
+    return f"{entry.speaker} [{format_timestamp(entry.start)}]: {entry.text}"
 
-
-def _fmt(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"

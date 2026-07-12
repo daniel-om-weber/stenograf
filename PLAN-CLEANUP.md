@@ -140,7 +140,7 @@ delete the copies, keep behavior identical.
   `os.replace`, no parent mkdir) vs `profiles.py:134-139` and
   `models.py:90/107` (`NamedTemporaryFile(".part")` + `.replace`, with
   mkdir). One implementation, parent-mkdir included.
-- [ ] **T4 — `format_timestamp(seconds)`** — byte-identical 4-line divmod
+- [x] **T4 — `format_timestamp(seconds)`** — byte-identical 4-line divmod
   formatter exists in `transcript.py:305`, `notes/prompt.py:173`,
   `notes/export.py:127`, `notes/model.py:143`. Canonical home:
   `transcript.py`; others import.
