@@ -9,6 +9,14 @@ Until their screens exist (Tasks 2–5), workflow buttons are stubs: pressing
 one shows a notice naming the CLI command that already does the job. The
 notices are mirrored on :attr:`HomeScreen.notices` so tests assert behaviour
 without scraping toast widgets (the plain-text-mirror rule).
+
+Keyboard model: focus starts on the first button (the scroll container is
+made non-focusable so it never swallows the initial focus), and the arrow
+keys move focus between buttons — as *priority* screen bindings, because the
+scroll container between the focused button and the screen binds the same
+keys to scrolling and would win the normal bottom-up lookup. Moving focus
+auto-scrolls the focused button into view, so a short terminal stays fully
+reachable without dedicated scroll keys.
 """
 
 from __future__ import annotations
@@ -56,14 +64,21 @@ class HomeScreen(Screen[None]):
     #menu .desc { color: $text-muted; margin: 0 0 1 2; }
     """
 
-    BINDINGS = [Binding("q,escape", "app.quit", "Quit", show=True)]
+    BINDINGS = [
+        Binding("q,escape", "app.quit", "Quit", show=True),
+        # priority=True: beat #menu's own up/down→scroll bindings (see module doc).
+        Binding("down", "app.focus_next", "Down", show=False, priority=True),
+        Binding("up", "app.focus_previous", "Up", show=False, priority=True),
+    ]
 
     def __init__(self) -> None:
         super().__init__()
         self.notices: list[str] = []  # plain-text mirror of the toasts shown
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="menu"):
+        menu = VerticalScroll(id="menu")
+        menu.can_focus = False  # focus belongs to the buttons; wheel/focus-follow scroll
+        with menu:
             yield Static("stenograf", id="menu-title")
             yield Static("local meeting transcription", id="menu-tagline")
             for button_id, label, description in _MENU:

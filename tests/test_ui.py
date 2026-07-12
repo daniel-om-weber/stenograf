@@ -8,6 +8,10 @@ Same harness as test_tui.py: each test wraps an async body driving Textual's
 - Home is the default screen and offers every workflow as a clickable button;
 - stubbed buttons point at the CLI command that already does the job (and
   mirror the notice on ``notices`` — the plain-text-mirror rule);
+- the menu is fully keyboard-drivable: focus starts on the first button and
+  the arrow keys walk the buttons (they must NOT be swallowed as scroll keys
+  by the menu container), Enter activates — even on a terminal too short to
+  show the whole menu;
 - quit works by button and by key.
 """
 
@@ -71,6 +75,36 @@ class TestHomeScreen:
                 await pilot.click("#quit")
                 await pilot.pause()
                 assert not app.is_running
+
+        _run(body)
+
+    def test_focus_starts_on_the_first_button(self):
+        async def body():
+            app = StenografApp()
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                assert app.focused is not None
+                assert app.focused.id == _MENU[0][0]  # not the scroll container
+
+        _run(body)
+
+    def test_arrow_keys_walk_the_buttons_and_enter_activates(self):
+        # Deliberately on a short terminal: the lower buttons start scrolled out
+        # of view, and arrow-key traversal must still reach them (focus-follow
+        # scrolling) — arrows may not be captured as scroll keys by #menu.
+        async def body():
+            app = StenografApp()
+            async with app.run_test(size=(80, 24)) as pilot:
+                home = app.screen
+                await pilot.pause()
+                for entry_id, _, _ in _MENU[1:]:
+                    await pilot.press("down")
+                    assert app.focused.id == entry_id
+                await pilot.press("up")
+                assert app.focused.id == _MENU[-2][0]
+                await pilot.press("enter")
+                await pilot.pause()
+                assert _STUB_HINT[_MENU[-2][0]] in home.notices[-1]
 
         _run(body)
 
