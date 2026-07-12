@@ -27,18 +27,6 @@ Bumped only on a *breaking* change; additive fields are read back with
 """
 
 
-FORMATS: dict[str, str] = {
-    "md": "to_markdown",
-    "json": "to_json",
-    "txt": "to_text",
-    "srt": "to_srt",
-    "vtt": "to_vtt",
-}
-"""Every transcript format stenograf can emit: extension → the :class:`Transcript`
-method that renders it. The single registry behind ``--format`` and the
-``[transcript] formats`` setting — adding a renderer here makes it available
-everywhere at once."""
-
 DEFAULT_FORMATS: tuple[str, ...] = ("md", "json", "txt")
 """The formats written when neither ``--format`` nor ``[transcript] formats`` says
 otherwise. Subtitles (srt/vtt) stay opt-in."""
@@ -152,6 +140,19 @@ class Transcript:
                 payload = f"<v {_escape_vtt(cue.speaker)}>{payload}</v>"
             blocks.append(f"{_ts(cue.start, '.')} --> {_ts(cue.end, '.')}\n{payload}\n")
         return "\n".join(blocks)
+
+
+FORMATS: dict[str, Callable[[Transcript], str]] = {
+    "md": Transcript.to_markdown,
+    "json": Transcript.to_json,
+    "txt": Transcript.to_text,
+    "srt": Transcript.to_srt,
+    "vtt": Transcript.to_vtt,
+}
+"""Every transcript format stenograf can emit: extension → the renderer that
+emits it. The single registry behind ``--format`` and the ``[transcript]
+formats`` setting — adding a renderer here makes it available everywhere at
+once."""
 
 
 def _language_from_json(value: str | None) -> Language | None:

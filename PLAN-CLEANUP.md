@@ -234,7 +234,10 @@ Order matters; each step is committable alone.
   resolved via `if notes_backend == ...` chains with inline imports. Replace
   with row descriptors iterated once; per-backend defaults become a
   `settings_defaults()` classmethod on each notes backend.
-- [ ] **C7 — split into a `cli/` package.** Only after C1–C6 (the bodies are
+- [x] **C7 — split into a `cli/` package.** *(done; `_prepare_output` stayed
+  CLI-side in `cli/run.py` — its --out/--force overwrite guard is flag UX, and
+  moving it would have put a ClickException in library code. start.py/
+  transcribe.py exceed ~300 lines only through their click option blocks.)* Only after C1–C6 (the bodies are
   then small): `cli/__init__.py` (thin `main` + group), `cli/start.py`,
   `cli/transcribe.py`, `cli/notes.py`, `cli/profiles.py`,
   `cli/settings_cmd.py`, `cli/doctor_cmd.py`, `cli/format.py`
@@ -248,13 +251,11 @@ Order matters; each step is committable alone.
   with fakes injected via the new loaders/factory seams. Tests should get
   simpler, not just move.
 
-Low/cosmetic (fold into whichever commit touches the line): map
-`transcript.FORMATS` to callables instead of method-name strings dispatched
-via `getattr` (`transcript.py:29-35`, `cli.py:1484`); fix stale "archiving"
-docstring in `_make_tee` (`cli.py:764-766`); `_prepare_output`'s discarded
-3rd tuple element (`cli.py:1138`); `doctor`'s lone `raise SystemExit(1)`
-(`cli.py:1532`) — leave if the silent-table contract requires it, but note
-why in a comment.
+Low/cosmetic (fold into whichever commit touches the line): ~~map
+`transcript.FORMATS` to callables~~ (done, C7); ~~stale "archiving"
+docstring in `_make_tee`~~ (done, C5); `_prepare_output`'s discarded
+3rd tuple element (still discarded in `cli/transcribe.py`); ~~`doctor`'s
+lone `raise SystemExit(1)`~~ (kept, comment added — C7).
 
 **Definition of done for Pass 2:** no file in `cli/` exceeds ~300 lines; the
 mixed vs split transcribe paths call the same library function; no CLI

@@ -23,14 +23,23 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from stenograf.transcript import Transcript
 
 TRANSCRIPT_STEM = "transcript"
 """Basename (without extension) of the transcript files in a meeting dir."""
 
 AUDIO_NAME = "audio.wav"
 """Name of the opt-in ``--record-audio`` WAV inside a meeting dir."""
+
+CHECKPOINT_FORMATS = ("md", "json", "txt")
+"""Crash checkpoints render these (no subtitles — pointless for a partial
+transcript). :func:`cleanup_checkpoints` must remove exactly this set."""
 
 _DIR_TIMESTAMP = re.compile(r"^meeting-(\d{8})-(\d{6})")
 
@@ -93,6 +102,54 @@ def latest_meeting_dir(home: Path) -> Path | None:
         ):
             return child
     return None
+
+
+def write_transcript(
+    transcript: Transcript,
+    out_dir: Path,
+    basename: str,
+    formats: tuple[str, ...] | list[str] | None = None,
+) -> list[Path]:
+    """Write the transcript in each requested format; returns the written paths.
+
+    ``basename`` is the full file stem (extension excluded) — ``transcript`` for
+    a meeting folder, or e.g. ``transcript.partial`` for a crash checkpoint.
+    Markdown + JSON + plain text are the default (the only files stenograf
+    emits unless the user asks for subtitles); SRT/VTT are opt-in via ``--format``.
+    """
+    from stenograf.transcript import DEFAULT_FORMATS, FORMATS
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for fmt in DEFAULT_FORMATS if formats is None else formats:
+        path = out_dir / f"{basename}.{fmt}"
+        atomic_write_text(path, FORMATS[fmt](transcript))
+        paths.append(path)
+    return paths
+
+
+def cleanup_checkpoints(out_dir: Path, basename: str) -> None:
+    """Remove the crash-recovery checkpoints once the final transcript is written."""
+    for fmt in CHECKPOINT_FORMATS:
+        (out_dir / f"{basename}.partial.{fmt}").unlink(missing_ok=True)
+
+
+def checkpoint_writer(
+    out_dir: Path, basename: str, announce: Callable[[str], None] | None = None
+) -> Callable[[Transcript], None]:
+    """Build the ``on_checkpoint`` sink that writes the ``.partial`` crash file.
+
+    Live views keep the caption stream clean (``announce=None`` → write silently);
+    the batch path narrates each write, as it always has. The final transcript
+    supersedes these files, which :func:`cleanup_checkpoints` then removes.
+    """
+
+    def on_checkpoint(transcript: Transcript) -> None:
+        md = write_transcript(transcript, out_dir, f"{basename}.partial", CHECKPOINT_FORMATS)[0]
+        if announce is not None:
+            announce(f"checkpoint: {md.name} ({len(transcript.entries)} entries)")
+
+    return on_checkpoint
 
 
 def created_at_from_dir_name(name: str) -> datetime | None:

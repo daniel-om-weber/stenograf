@@ -272,8 +272,8 @@ def test_doctor_exit_gate_ignores_optional_failures(monkeypatch):
     opt = doctor.Check(name="B", ok=False, detail="absent", optional=True)
     hard = doctor.Check(name="C", ok=False, detail="broken")
 
-    monkeypatch.setattr(cli, "run_checks", lambda: [ok, opt])
+    monkeypatch.setattr(cli.doctor_cmd, "run_checks", lambda: [ok, opt])
     assert CliRunner().invoke(cli.main, ["doctor"]).exit_code == 0
 
-    monkeypatch.setattr(cli, "run_checks", lambda: [ok, opt, hard])
+    monkeypatch.setattr(cli.doctor_cmd, "run_checks", lambda: [ok, opt, hard])
     assert CliRunner().invoke(cli.main, ["doctor"]).exit_code == 1

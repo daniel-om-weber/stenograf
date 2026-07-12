@@ -181,7 +181,7 @@ def test_notes_reports_a_bug_as_a_traceback_not_a_clean_error(tmp_path, monkeypa
     def buggy(*args, **kwargs):
         raise AttributeError("'NoneType' object has no attribute 'entries'")
 
-    monkeypatch.setattr(cli, "_generate_and_write_notes", buggy)
+    monkeypatch.setattr(cli.notes, "_generate_and_write_notes", buggy)
     path = tmp_path / "transcript.json"
     write_transcript_json(path)
 

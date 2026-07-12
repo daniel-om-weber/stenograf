@@ -9,7 +9,7 @@ import pytest
 from click.testing import CliRunner
 from conftest import write_wav
 
-from stenograf import cli
+from stenograf import cli, output
 from stenograf.asr.base import Segment, Word
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.view import LiveView
@@ -173,14 +173,14 @@ def test_transcribe_no_diarization_conflicts_with_a_speaker_count(tmp_path, monk
 
 def test_apply_no_diarization_preserves_a_disabled_channel():
     # --local 0 (listen-only) stays off; unknown counts collapse to 1 (no estimate).
-    assert cli._apply_no_diarization(True, 0, None) == (0, 1)
-    assert cli._apply_no_diarization(False, None, 3) == (None, 3)
+    assert cli.run._apply_no_diarization(True, 0, None) == (0, 1)
+    assert cli.run._apply_no_diarization(False, None, 3) == (None, 3)
 
 
 def test_cleanup_checkpoints_removes_every_checkpoint_format(tmp_path):
     for fmt in ("md", "json", "txt"):
         (tmp_path / f"transcript.partial.{fmt}").write_text("x", encoding="utf-8")
-    cli._cleanup_checkpoints(tmp_path, "transcript")
+    output.cleanup_checkpoints(tmp_path, "transcript")
     assert not list(tmp_path.glob("transcript.partial.*"))
 
 
@@ -553,16 +553,16 @@ def test_resolve_flush_interval_defaults_are_mode_aware():
     # The live checkpoint is zero-inference file I/O → tight default; the batch
     # checkpoint runs VAD+ASR over the tail → sparse default. Explicit values
     # (including 0 = disabled) win in both modes.
-    assert cli._resolve_flush_interval(None, live=True) == 15.0
-    assert cli._resolve_flush_interval(None, live=False) == 180.0
-    assert cli._resolve_flush_interval(45.0, live=True) == 45.0
-    assert cli._resolve_flush_interval(0.0, live=True) == 0.0
+    assert cli.start._resolve_flush_interval(None, live=True) == 15.0
+    assert cli.start._resolve_flush_interval(None, live=False) == 180.0
+    assert cli.start._resolve_flush_interval(45.0, live=True) == 45.0
+    assert cli.start._resolve_flush_interval(0.0, live=True) == 0.0
 
 
 def test_persist_once_writes_once_and_replays_paths():
     sentinel = object()
     calls = []
-    persist = cli._PersistOnce(lambda t: calls.append(t) or [Path("t.md")])
+    persist = cli.start._PersistOnce(lambda t: calls.append(t) or [Path("t.md")])
     assert persist(sentinel) == [Path("t.md")]
     assert persist(sentinel) == [Path("t.md")]  # second call replays, no rewrite
     assert calls == [sentinel]
@@ -577,7 +577,7 @@ def test_persist_once_retries_after_a_failed_write():
             raise OSError("disk full")
         return [Path("t.md")]
 
-    persist = cli._PersistOnce(flaky)
+    persist = cli.start._PersistOnce(flaky)
     with pytest.raises(OSError):
         persist(object())  # the event-time write fails...
     assert persist.paths is None  # ...and is not marked done
@@ -597,7 +597,7 @@ def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
             return meeting()
 
     monkeypatch.setattr(cli.loaders, "load_backends", fake_load_backends)
-    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: True)  # pretend we're on a terminal
+    monkeypatch.setattr(cli.start, "_stdout_is_tty", lambda: True)  # pretend we're on a terminal
     monkeypatch.setattr("stenograf.tui.TextualLiveView", FakeTUI)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
@@ -792,16 +792,16 @@ class TestSpeakerCountHints:
     """
 
     def test_lock_hint_clamps_and_guards(self):
-        assert cli._lock_hint(0, 8) is None  # no speech found → nothing to lock
-        assert cli._lock_hint(1, 8) == (1, False)
-        assert cli._lock_hint(3, 8) == (3, False)
-        assert cli._lock_hint(13, 8) == (8, True)  # over-cluster → clamp to the max
+        assert cli.format._lock_hint(0, 8) is None  # no speech found → nothing to lock
+        assert cli.format._lock_hint(1, 8) == (1, False)
+        assert cli.format._lock_hint(3, 8) == (3, False)
+        assert cli.format._lock_hint(13, 8) == (8, True)  # over-cluster → clamp to the max
 
     def test_silent_channel_gives_no_bogus_zero_hint(self, capsys):
         from stenograf.capture.base import Channel
         from stenograf.session import SpeakerCount
 
-        cli._report_speaker_counts([SpeakerCount(Channel.MIC, None, 0)])
+        cli.format._report_speaker_counts([SpeakerCount(Channel.MIC, None, 0)])
         out = capsys.readouterr().out
         assert "0 local (detected)" in out
         assert "re-run with" not in out  # never suggests the nonsensical `--local 0`
@@ -810,7 +810,7 @@ class TestSpeakerCountHints:
         from stenograf.capture.base import Channel
         from stenograf.session import SpeakerCount
 
-        cli._report_speaker_counts([SpeakerCount(Channel.MIC, None, 13)])
+        cli.format._report_speaker_counts([SpeakerCount(Channel.MIC, None, 13)])
         out = capsys.readouterr().out
         assert "13 local (detected)" in out  # the raw estimate is still shown
         assert "re-run with --local 8" in out  # clamped to the settable max
