@@ -2,21 +2,23 @@
 
 Accuracy-first, fully local meeting transcription for **German** and **English**
 (one language per meeting), with speaker labels. Audio is processed entirely
-**in memory** — it never touches disk; only the transcript is persisted.
+**in memory** — nothing lands on disk but the transcript, unless you
+explicitly opt into keeping a recording.
 
 Built for Apple Silicon (M-series) first; Linux and Windows support is designed
 in from the start.
 
-> **Status: pre-alpha.** On macOS and Linux the pipeline is complete end to
-> end: live system-audio + microphone capture, live captions, and the
-> high-accuracy speaker-labelled finalize pass, plus meeting notes. See
-> [PLAN.md](PLAN.md).
+> **Status: early release.** On macOS and Linux the pipeline is complete end
+> to end: live system-audio + microphone capture, live captions, and the
+> high-accuracy speaker-labelled finalize pass, plus meeting notes. Windows
+> support is in progress. See [PLAN.md](PLAN.md).
 
 ## Why another transcription tool?
 
-- **No audio on disk, ever.** Live transcription of a meeting has far lighter
+- **No audio on disk.** Live transcription of a meeting has far lighter
   legal requirements than recording it. stenograf keeps the session's audio in
-  RAM only and writes nothing but text.
+  RAM only and writes nothing but text; keeping a WAV is a per-run opt-in
+  (`--record-audio`).
 - **Accuracy first.** A two-pass design: fast live captions while the meeting
   runs, then a high-accuracy re-transcription of the full in-memory buffer the
   moment it ends. German is a first-class citizen, not an afterthought.
@@ -38,10 +40,10 @@ downloads, and a desktop launcher:
 curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh
 ```
 
-That's the only terminal moment. Afterwards, double-click **Stenograf** on
-your Desktop (macOS) or start **Stenograf** from the application menu (Linux)
-to open the interactive launcher — every workflow below is reachable there
-with the mouse. Re-running the command upgrades stenograf.
+That's the only command you have to type. Afterwards, double-click
+**Stenograf** on your Desktop (macOS) or start **Stenograf** from the
+application menu (Linux) to open the launcher — every workflow below is
+reachable there with the mouse. Re-running the command upgrades stenograf.
 
 Works on macOS 14.4+ on Apple Silicon (the wheel ships the signed capture
 helper — no toolchain needed) and Linux with PipeWire or PulseAudio (capture
@@ -79,12 +81,28 @@ uv run steno setup
 
 Every command below is then `uv run steno …` from the repo.
 
+## The launcher
+
+Double-click **Stenograf** (the Desktop icon on macOS, the application-menu
+entry on Linux) — or run bare `steno` in a terminal — and a mouse-driven
+launcher opens:
+
+- **Start meeting** — capture this meeting with live captions; the
+  speaker-labelled transcript replaces them the moment you stop.
+- **Transcribe a recording** — turn an existing audio file into a transcript.
+- **Generate notes** — summarize a finished meeting's transcript.
+- **Settings** — show the active configuration.
+- **Check setup** — verify models, permissions, and audio devices.
+
+Everything the launcher does is also a plain CLI command — the rest of this
+document — so terminal users and scripts lose nothing.
+
 ## Usage
 
 ```sh
-uv run steno start                                 # live captions, everything auto-detected
-uv run steno start --lang de --local 3 --remote 2  # hybrid meeting, German
-uv run steno transcribe recording.mov              # batch-transcribe an existing file
+steno start                                 # live captions, everything auto-detected
+steno start --lang de --local 3 --remote 2  # hybrid meeting, German
+steno transcribe recording.mov              # batch-transcribe an existing file
 ```
 
 `steno start` streams **live captions** while the meeting runs — a full-screen
@@ -183,8 +201,11 @@ dir = "~/Documents/Obsidian/Meetings"   # optional: also write one combined
 With `[notes.export]` set, every summarized meeting also produces a single
 self-contained markdown note (frontmatter, summary, action items, collapsible
 transcript) — drop the dir inside an Obsidian vault and meetings file
-themselves. Notes never run unless you ask (`--notes` or `steno notes`), and a
-notes failure never touches the transcript.
+themselves. Two more levers in `[notes]`: `instructions = "~/style.md"`
+appends your house style to the built-in prompt, and `thinking = false` skips
+the mlx model's reasoning pass (faster, less careful). Notes never run unless
+you ask (`--notes` or `steno notes`), and a notes failure never touches the
+transcript.
 
 ## Naming speakers across meetings
 
@@ -193,6 +214,7 @@ Enroll a voice once and every later meeting relabels that speaker automatically
 
 ```sh
 steno profiles enroll Daniel daniel-sample.wav   # a short clip of one speaker
+steno profiles enroll Daniel more.wav --reinforce  # fold in another sample
 steno profiles list                              # show enrolled voiceprints
 steno profiles rename Daniel "Daniel W."
 steno profiles remove Daniel
@@ -228,14 +250,17 @@ spoken as one word, but not a term split across word boundaries.
 
 Standing preferences live in `settings.toml` in the platform data dir
 (`~/Library/Application Support/stenograf/` on macOS) so you stop re-typing
-them. A flag always beats the file; the file beats the built-in default.
+them. A flag always beats an environment variable (`STENOGRAF_ASR_BACKEND`,
+`STENOGRAF_NOTES_BACKEND`, …), which beats the file, which beats the built-in
+default — `steno settings show` labels where every value came from.
 
 ```sh
 steno settings show   # effective configuration + where each value comes from
 steno settings edit   # open in $EDITOR (template on first run), validate on save
 ```
 
-All keys are optional:
+The first `steno settings edit` writes a fully commented template documenting
+every key. All keys are optional; the ones you're most likely to want:
 
 ```toml
 [transcript]
@@ -257,6 +282,8 @@ profile_store = "~/steno/profiles.json"
 
 [asr]
 backend = "parakeet"
+provider = "cpu"                  # ONNX execution provider for parakeet-onnx:
+                                  # cpu | dml (DX12 GPUs, Windows) | cuda | auto
 
 [notes]                           # see "Meeting notes" above
 backend = "mlx"
