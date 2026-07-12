@@ -183,11 +183,12 @@ def _plan_corrections(cores: list[str], terms: list[_Term], threshold: float) ->
 
 
 def _best_term(window: str, terms: list[_Term], threshold: float) -> _Term | None:
+    """The highest-scoring term at/above ``threshold``; first term wins ties."""
     best: _Term | None = None
     best_score = threshold
     for term in terms:
         score = SequenceMatcher(None, window, term.norm).ratio()
-        if score >= best_score and (best is None or score > best_score):
+        if score >= threshold and (best is None or score > best_score):
             best, best_score = term, score
     return best
 

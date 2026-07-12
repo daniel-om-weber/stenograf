@@ -188,14 +188,11 @@ def finalize_file(
 
 
 def _shift(seg: Segment, offset: float) -> Segment:
-    return Segment(
-        text=seg.text,
+    return replace(
+        seg,
         start=seg.start + offset,
         end=seg.end + offset,
-        words=tuple(
-            Word(text=w.text, start=w.start + offset, end=w.end + offset, confidence=w.confidence)
-            for w in seg.words
-        ),
+        words=tuple(replace(w, start=w.start + offset, end=w.end + offset) for w in seg.words),
     )
 
 

@@ -65,10 +65,18 @@ class ParakeetMLXBackend(ASRBackend):
     def __init__(self, model_id: str = MODEL_ID) -> None:
         self.model_id = model_id
         self._model = None
+        # MLX must not import at module top (Apple-Silicon-only); load() binds
+        # these once instead of re-importing on every transcribe call.
+        self._mx = None
+        self._get_logmel = None
 
     def load(self) -> None:
         import mlx.core as mx
         from parakeet_mlx import from_pretrained
+        from parakeet_mlx.audio import get_logmel
+
+        self._mx = mx
+        self._get_logmel = get_logmel
 
         # Load from the local cache when it's complete (no network, no Hub
         # warning); from_pretrained treats a directory path like a repo id.
@@ -92,10 +100,8 @@ class ParakeetMLXBackend(ASRBackend):
         # is intentionally unused (may be None until LID runs over the text).
         if self._model is None:
             self.load()
-        model = self._model
-        assert model is not None  # load() sets it or raises
-        import mlx.core as mx
-        from parakeet_mlx.audio import get_logmel
+        model, mx, get_logmel = self._model, self._mx, self._get_logmel
+        assert model is not None and mx is not None and get_logmel is not None  # set by load()
 
         audio = mx.array(to_float32(samples))
         mel = get_logmel(audio, model.preprocessor_config)
@@ -118,6 +124,5 @@ class ParakeetMLXBackend(ASRBackend):
 
     def unload(self) -> None:
         self._model = None
-        import mlx.core as mx
-
-        mx.clear_cache()
+        if self._mx is not None:  # never loaded → nothing cached
+            self._mx.clear_cache()
