@@ -112,18 +112,12 @@ class MeetingNotes:
 
     def to_markdown(self) -> str:
         lines = [f"# {self.title}", "", self.summary.rstrip()]
-        if self.decisions:
-            lines += ["", "## Decisions", ""]
-            lines += [f"- {d}" for d in self.decisions]
-        if self.action_items:
-            lines += ["", "## Action items", ""]
-            lines += [_action_item_line(a) for a in self.action_items]
-        if self.highlights:
-            lines += ["", "## Highlights", ""]
-            lines += [f"- **{h.speaker}**: {h.highlight}" for h in self.highlights]
-        if self.open_questions:
-            lines += ["", "## Open questions", ""]
-            lines += [f"- {q}" for q in self.open_questions]
+        lines += markdown_section("Decisions", [f"- {d}" for d in self.decisions])
+        lines += markdown_section("Action items", [action_item_line(a) for a in self.action_items])
+        lines += markdown_section(
+            "Highlights", [f"- **{h.speaker}**: {h.highlight}" for h in self.highlights]
+        )
+        lines += markdown_section("Open questions", [f"- {q}" for q in self.open_questions])
         if self.provenance is not None:
             p = self.provenance
             model = f" ({p.model})" if p.model else ""
@@ -131,12 +125,26 @@ class MeetingNotes:
         return "\n".join(lines) + "\n"
 
 
-def _action_item_line(item: ActionItem) -> str:
+def markdown_section(title: str, bullets: list[str]) -> list[str]:
+    """A ``## title`` section for a bullet list; empty content emits nothing.
+
+    The one skeleton both notes renderers (this sibling ``.notes.md`` and the
+    combined-note export) build their sections from."""
+    return ["", f"## {title}", "", *bullets] if bullets else []
+
+
+def action_item_line(
+    item: ActionItem, *, with_owner: bool = True, with_timestamp: bool = True
+) -> str:
+    """One ``- [ ]`` checkbox line for an action item.
+
+    The export groups items under owner headings and hides timestamps, so it
+    turns those parts off; the sibling ``.notes.md`` renders them inline."""
     parts = [f"- [ ] {item.task}"]
-    if item.owner:
+    if with_owner and item.owner:
         parts.append(f"— **{item.owner}**")
     if item.due:
         parts.append(f"(due {item.due})")
-    if item.timestamp is not None:
+    if with_timestamp and item.timestamp is not None:
         parts.append(f"[{format_timestamp(item.timestamp)}]")
     return " ".join(parts)

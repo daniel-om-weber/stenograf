@@ -13,7 +13,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from stenograf.notes.model import ActionItem, MeetingNotes
+from stenograf.notes.model import ActionItem, MeetingNotes, action_item_line, markdown_section
 from stenograf.output import atomic_write_text
 from stenograf.transcript import Transcript, format_timestamp
 
@@ -57,15 +57,9 @@ def render_note(transcript: Transcript, notes: MeetingNotes, *, created_at: date
     if transcript.language is not None:
         lines.append(f"language: {transcript.language.value}")
     lines += ["tags: [meeting]", "---", "", f"# {notes.title}", "", notes.summary.rstrip()]
-    if notes.decisions:
-        lines += ["", "## Decisions", ""]
-        lines += [f"- {d}" for d in notes.decisions]
-    if notes.action_items:
-        lines += ["", "## Action items", ""]
-        lines += _action_items_by_owner(notes.action_items)
-    if notes.open_questions:
-        lines += ["", "## Open questions", ""]
-        lines += [f"- {q}" for q in notes.open_questions]
+    lines += markdown_section("Decisions", [f"- {d}" for d in notes.decisions])
+    lines += markdown_section("Action items", _action_items_by_owner(notes.action_items))
+    lines += markdown_section("Open questions", [f"- {q}" for q in notes.open_questions])
     lines += ["", "> [!quote]- Transcript"]
     lines += _quoted_transcript(transcript)
     return "\n".join(lines) + "\n"
@@ -94,10 +88,8 @@ def _action_items_by_owner(items: tuple[ActionItem, ...]) -> list[str]:
 
 
 def _item_line(item: ActionItem) -> str:
-    line = f"- [ ] {item.task}"
-    if item.due:
-        line += f" (due {item.due})"
-    return line
+    # Owner shows as the group heading; timestamps stay out of the vault note.
+    return action_item_line(item, with_owner=False, with_timestamp=False)
 
 
 def _quoted_transcript(transcript: Transcript) -> list[str]:

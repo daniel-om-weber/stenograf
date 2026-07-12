@@ -94,18 +94,13 @@ the mapping obvious.
 - Write the notes in {language}."""
 
 
-def build_messages(
-    transcript: Transcript,
-    *,
-    instructions: str | None = None,
-    entries: list[TranscriptEntry] | None = None,
-    partial: bool = False,
-) -> list[dict[str, str]]:
-    """Chat messages asking for notes over ``entries`` (default: the whole
-    transcript). ``partial=True`` marks a map-reduce chunk, whose notes are
-    later merged — the model is told not to pad missing context."""
-    language = _language_name(transcript.language)
-    system = _SYSTEM.format(language=language)
+def _system_prompt(
+    transcript: Transcript, *, instructions: str | None, partial: bool = False
+) -> str:
+    """The system message every notes request shares — assembled once, here,
+    so the anti-hallucination rules can never differ between the map and
+    reduce steps of a long meeting."""
+    system = _SYSTEM.format(language=_language_name(transcript.language))
     context = _context_lines(transcript)
     if context:
         system += "\n\nMeeting context:\n" + "\n".join(context)
@@ -116,6 +111,20 @@ def build_messages(
         )
     if instructions:
         system += "\n\nAdditional instructions from the user:\n" + instructions.strip()
+    return system
+
+
+def build_messages(
+    transcript: Transcript,
+    *,
+    instructions: str | None = None,
+    entries: list[TranscriptEntry] | None = None,
+    partial: bool = False,
+) -> list[dict[str, str]]:
+    """Chat messages asking for notes over ``entries`` (default: the whole
+    transcript). ``partial=True`` marks a map-reduce chunk, whose notes are
+    later merged — the model is told not to pad missing context."""
+    system = _system_prompt(transcript, instructions=instructions, partial=partial)
     body = _render_entries(entries if entries is not None else transcript.entries)
     return [
         {"role": "system", "content": system},
@@ -130,13 +139,7 @@ def build_reduce_messages(
     instructions: str | None = None,
 ) -> list[dict[str, str]]:
     """The reduce step: merge per-chunk notes JSON into one set of notes."""
-    language = _language_name(transcript.language)
-    system = _SYSTEM.format(language=language)
-    context = _context_lines(transcript)
-    if context:
-        system += "\n\nMeeting context:\n" + "\n".join(context)
-    if instructions:
-        system += "\n\nAdditional instructions from the user:\n" + instructions.strip()
+    system = _system_prompt(transcript, instructions=instructions)
     joined = "\n\n".join(
         f"Portion {i} notes:\n{partial}" for i, partial in enumerate(partials, start=1)
     )

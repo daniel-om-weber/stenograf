@@ -1,11 +1,11 @@
 # Code cleanup & maintainability plan
 
-> **Status: not started (authored 2026-07-12).** Produced by a six-subsystem
-> deep review (CLI, live orchestration, audio/capture, ML pipeline,
-> notes/config, eval/native/tests). No pass has begun. Work top to bottom:
-> §2 bugs first, then passes in order (§3 → §4 → §5 → §6). §4 (capture) may
-> be pulled forward to precede the Phase 5 CachyOS capture work — see the
-> note there. Tick checkboxes and update this blockquote as tasks land.
+> **Status: §2 bugs (B1–B5) and Pass 1 (§3, T1–T10) COMPLETE 2026-07-12.**
+> Produced by a six-subsystem deep review (CLI, live orchestration,
+> audio/capture, ML pipeline, notes/config, eval/native/tests). Next: Pass 2
+> (§4, dismantle cli.py), then §5 capture (ideally before the Phase 5
+> CachyOS capture work), then §6. Tick checkboxes and update this
+> blockquote as tasks land.
 
 This document is the backlog for making the codebase clean and maintainable.
 It is **behavior-preserving by charter**: no task here changes what stenograf
@@ -173,7 +173,7 @@ delete the copies, keep behavior identical.
   (package-free vs package-importing scripts) in `common.py`'s docstring —
   its "deliberately does not import stenograf" claim is contradicted by
   `parity.py`/`live.py`/`diarize.py`.
-- [ ] **T10 — notes markdown/dedup cleanups.** Consolidate the drifted
+- [x] **T10 — notes markdown/dedup cleanups.** Consolidate the drifted
   action-item formatters (`notes/export.py` `_item_line` vs
   `notes/model.py` `_action_item_line`) and the shared `## Decisions` /
   `## Action items` / `## Open questions` section skeleton
