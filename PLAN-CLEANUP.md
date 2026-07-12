@@ -99,7 +99,7 @@ Real defects found during review. Each is a standalone commit with a test.
   `doctor._notes_check` already uses — and let the rest propagate.
   (`_notes_after_run`'s bare except at `cli.py:2147` is contractually
   non-fatal and stays.)
-- [ ] **B5 — `ollama_url` is an undocumented setting** — defined
+- [x] **B5 — `ollama_url` is an undocumented setting** — defined
   `settings.py:171`, read `settings.py:386`, consumed `notes/ollama.py:50`,
   but absent from the schema docstring (`settings.py:34-46`) and
   `SETTINGS_TEMPLATE` (`settings.py:110-119`), which promise to be the

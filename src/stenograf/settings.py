@@ -41,6 +41,8 @@ optional; a missing file is simply all defaults. The full schema::
     instructions = "~/notes-style.md"   # appended to the built-in system prompt
     thinking = false                    # mlx backend: skip the model's reasoning
                                         # pass — faster, less careful (default true)
+    ollama_url = "http://localhost:11434"  # ollama backend: server base URL
+                                           # (default from OLLAMA_HOST, else local)
 
     [notes.export]
     dir = "~/Obsidian/Meetings"         # combined-note export target (unset = off)
@@ -114,6 +116,7 @@ SETTINGS_TEMPLATE = """\
 # timeout_s = 600                          # command backend time limit
 # instructions = "~/notes-style.md"        # appended to the system prompt
 # thinking = true                          # mlx: run the model's reasoning pass
+# ollama_url = "http://localhost:11434"    # ollama server base URL
 
 [notes.export]
 # dir = "~/Obsidian/Meetings"              # also write one combined note here
