@@ -21,7 +21,6 @@ from stenograf.diarization.base import DiarizationResult, SpeakerTurn
 from stenograf.diarization.speakrs import (
     DiarizerHelperNotFoundError,
     SpeakrsCliDiarizer,
-    _to_int16,
     find_stenodiar,
 )
 
@@ -132,12 +131,3 @@ def test_find_stenodiar_env_override_and_not_found(tmp_path, monkeypatch):
     )
     with pytest.raises(DiarizerHelperNotFoundError, match="build.sh"):
         find_stenodiar()
-
-
-def test_to_int16_passthrough_and_clipping():
-    ints = np.array([-32768, 0, 32767], dtype=np.int16)
-    assert _to_int16(ints) is ints
-    floats = np.array([-2.0, -1.0, 0.0, 0.5, 2.0], dtype=np.float32)
-    converted = _to_int16(floats)
-    assert converted.dtype == np.int16
-    assert list(converted) == [-32767, -32767, 0, 16383, 32767]

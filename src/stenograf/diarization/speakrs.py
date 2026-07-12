@@ -26,6 +26,7 @@ from pathlib import Path
 
 import numpy as np
 
+from stenograf.audio import to_int16
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.diarization.sherpa import SherpaOnnxDiarizer, cluster_embeddings
 
@@ -102,7 +103,7 @@ class SpeakrsCliDiarizer(Diarizer):
 
     def _run_helper(self, samples: np.ndarray) -> list[SpeakerTurn]:
         command = self._command or [str(find_stenodiar())]
-        pcm = _to_int16(samples).tobytes()
+        pcm = to_int16(samples).tobytes()
         try:
             proc = subprocess.run(
                 [*command, "--mode", self._mode, "--stdin"],
@@ -139,9 +140,3 @@ def _normalize_label(label: str) -> str:
     if prefix == "SPEAKER" and index.isdigit():
         return f"S{int(index)}"
     return label
-
-
-def _to_int16(samples: np.ndarray) -> np.ndarray:
-    if samples.dtype == np.int16:
-        return samples
-    return (np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0) * 32767.0).astype(np.int16)
