@@ -32,6 +32,14 @@ larger backward jump means the stream desynced, and appending the frame anyway
 would silently misalign everything after it (see SessionStore / WavTee)."""
 
 
+class CaptureUnavailableError(RuntimeError):
+    """Live capture cannot run here — missing capture stack (parec/pactl, the
+    soundcard package), no default device, or OS privacy settings deny access.
+
+    One class for every platform backend, so callers (CLI channel preview,
+    doctor) can catch it without knowing which provider raised it."""
+
+
 class Channel(StrEnum):
     MIC = "mic"  # local speaker(s)
     SYSTEM = "system"  # remote speakers (meeting-app output)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-SAMPLE_RATE = 16_000
+from stenograf.capture.base import SAMPLE_RATE  # one owner; re-exported for DSP callers
 
 
 def to_float32(samples: np.ndarray) -> np.ndarray:

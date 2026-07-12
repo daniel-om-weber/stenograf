@@ -144,14 +144,14 @@ delete the copies, keep behavior identical.
   formatter exists in `transcript.py:305`, `notes/prompt.py:173`,
   `notes/export.py:127`, `notes/model.py:143`. Canonical home:
   `transcript.py`; others import.
-- [ ] **T5 — one `SAMPLE_RATE`.** `capture/base.py:25` and `audio.py:18`
+- [x] **T5 — one `SAMPLE_RATE`.** `capture/base.py:25` and `audio.py:18`
   both define `16_000` independently. Owner: `capture/base.py`; `audio.py`
   re-exports for its callers.
-- [ ] **T6 — one `CaptureUnavailableError`** in `capture/base.py`.
+- [x] **T6 — one `CaptureUnavailableError`** in `capture/base.py`.
   `linux.py:59` and `windows.py:71` currently define two distinct classes —
   a latent trap for any shared CLI error handler. Consider making macOS's
   `HelperNotFoundError` a subclass.
-- [ ] **T7 — one float→int16 conversion.** `windows.py:304` uses `*32767.0`
+- [x] **T7 — one float→int16 conversion.** `windows.py:304` uses `*32767.0`
   while the canonical `audio.to_int16` (`audio.py:36`) uses `*32768.0` (the
   exact inverse of `to_float32`). Windows calls
   `to_int16(block.mean(axis=1))`; the divergent copy is deleted. (Tiny

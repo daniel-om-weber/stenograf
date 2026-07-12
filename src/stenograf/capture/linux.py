@@ -44,7 +44,13 @@ from queue import SimpleQueue
 
 import numpy as np
 
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.capture.base import (
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureProvider,
+    CaptureUnavailableError,
+    Channel,
+)
 
 DEFAULT_FRAME_MS = 200
 """Frame size delivered to the core (~200 ms, matching the macOS helper)."""
@@ -54,10 +60,6 @@ _PAREC_LATENCY_MS = 100
 frame size so a frame's arrival time tracks its capture time."""
 
 _CHANNEL_DEVICE = {Channel.MIC: "@DEFAULT_SOURCE@", Channel.SYSTEM: "@DEFAULT_MONITOR@"}
-
-
-class CaptureUnavailableError(RuntimeError):
-    """Live capture cannot run here (no parec/pactl, no server, no device)."""
 
 
 def default_devices(channels: set[Channel]) -> dict[Channel, str]:

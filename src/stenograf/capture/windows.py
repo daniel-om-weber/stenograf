@@ -48,7 +48,14 @@ from queue import SimpleQueue
 
 import numpy as np
 
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.audio import to_int16
+from stenograf.capture.base import (
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureProvider,
+    CaptureUnavailableError,
+    Channel,
+)
 
 DEFAULT_FRAME_MS = 200
 """Frame size delivered to the core (~200 ms, matching the other providers)."""
@@ -66,11 +73,6 @@ _SILENT_MIC_WARN_S = 5.0
 microphones have a noise floor well above one int16 step, so a run of digital
 zeros this long means the stream is dead (hardware mute, a privacy toggle the
 consent-store check missed, a broken device) — never a quiet room."""
-
-
-class CaptureUnavailableError(RuntimeError):
-    """Live capture cannot run here (no soundcard package, no default device,
-    or Windows privacy settings deny microphone access)."""
 
 
 def _import_soundcard():
@@ -301,4 +303,4 @@ class WindowsCaptureProvider(CaptureProvider):
 def _to_mono_int16(block: np.ndarray) -> np.ndarray:
     """Downmix a float32 frames×channels block to the wire format."""
     mono = block.mean(axis=1) if block.ndim == 2 else block
-    return np.rint(np.clip(mono, -1.0, 1.0) * 32767.0).astype(np.int16)
+    return to_int16(mono)
