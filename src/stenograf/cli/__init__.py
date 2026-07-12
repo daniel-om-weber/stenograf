@@ -29,10 +29,14 @@ from stenograf.cli import (  # noqa: F401
 )
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(__version__, prog_name="stenograf")
-def main() -> None:
-    """Accuracy-first local meeting transcription. Audio never touches disk."""
+@click.pass_context
+def main(ctx: click.Context) -> None:
+    """Accuracy-first local meeting transcription. Audio never touches disk.
+
+    Run without a subcommand in a terminal to open the interactive launcher.
+    """
     # Windows pipes/redirects default to the legacy code page (cp1252), and a
     # single ✓/← in our output would then crash click.echo with a
     # UnicodeEncodeError. Degrade unencodable glyphs to "?" instead; the
@@ -41,6 +45,22 @@ def main() -> None:
     for stream in (sys.stdout, sys.stderr):
         if sys.platform == "win32" and hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
+
+    # Bare `steno` in a terminal opens the launcher (PLAN.md §5, Phase 7); in a
+    # pipe or script it prints help instead — Textual needs a real TTY, and a
+    # script author hitting this by accident wants the usage text, not an app.
+    if ctx.invoked_subcommand is None:
+        if _interactive_terminal():
+            from stenograf.ui import run_launcher
+
+            run_launcher()
+        else:
+            click.echo(ctx.get_help())
+
+
+def _interactive_terminal() -> bool:
+    """Both ends of the session are a TTY (patchable seam, like `_stdout_is_tty`)."""
+    return sys.stdout.isatty() and sys.stdin.isatty()
 
 
 main.add_command(start.start)

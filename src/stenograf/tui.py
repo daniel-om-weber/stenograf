@@ -11,8 +11,9 @@ Design constraints from the plan:
   the header's elapsed time and flushes an idle open caption line); everything
   else updates on an event. Animations are
   disabled (``animation_level = "none"``) and the frame cap is pinned low
-  (``TEXTUAL_FPS=15``, applied before textual is imported — the value is baked
-  into ``Screen.UPDATE_PERIOD`` at import time).
+  (``TEXTUAL_FPS=15`` via :mod:`stenograf.ui._fps`, which must be imported
+  before textual — the value is baked into ``Screen.UPDATE_PERIOD`` at import
+  time).
 - **Worker → UI crossing.** The live worker calls the view from its own thread;
   every UI mutation is marshalled onto the Textual event loop via
   :meth:`App.call_from_thread` (Textual's supported ``loop.call_soon_threadsafe``
@@ -30,40 +31,25 @@ the TUI is actually used.
 
 from __future__ import annotations
 
-import os
+import stenograf.ui._fps  # noqa: F401  — must precede the textual imports (frame cap)
 
-# Must precede the textual import: textual reads TEXTUAL_FPS once, at import, into
-# constants.MAX_FPS and Screen.UPDATE_PERIOD. Honour a value the user already set
-# (setdefault) but otherwise pin the low frame cap the minimal-redraw budget wants
-# (PLAN.md §5). Re-pinned defensively just below in case textual was imported first.
-os.environ.setdefault("TEXTUAL_FPS", "15")
+# isort: split
 
-import contextlib  # noqa: E402
-import threading  # noqa: E402
-import time  # noqa: E402
-from collections.abc import Callable, Sequence  # noqa: E402
-from enum import Enum  # noqa: E402
+import contextlib
+import threading
+import time
+from collections.abc import Callable, Sequence
+from enum import Enum
 
-import textual.constants  # noqa: E402
-import textual.screen  # noqa: E402
-from textual.app import App, ComposeResult  # noqa: E402
-from textual.binding import Binding  # noqa: E402
-from textual.widgets import Footer, RichLog, Static  # noqa: E402
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.widgets import Footer, RichLog, Static
 
-from stenograf.asr.base import Word  # noqa: E402
-from stenograf.capture.base import Channel  # noqa: E402
-from stenograf.config import Language, MeetingProfile  # noqa: E402
-from stenograf.transcript import Transcript  # noqa: E402
-from stenograf.view import LiveView  # noqa: E402
-
-# Re-pin the frame cap regardless of import order: MAX_FPS/UPDATE_PERIOD are baked
-# from the env var at textual import time, so an earlier import would leave them at
-# the 60 fps default. UPDATE_PERIOD is the screen-refresh interval, read only when
-# the app first builds its update timer (not yet — no app is running at import), so
-# assigning it here reliably bounds the redraw rate.
-_FPS = int(os.environ["TEXTUAL_FPS"])
-textual.constants.MAX_FPS = _FPS
-textual.screen.UPDATE_PERIOD = 1 / _FPS
+from stenograf.asr.base import Word
+from stenograf.capture.base import Channel
+from stenograf.config import Language, MeetingProfile
+from stenograf.transcript import Transcript
+from stenograf.view import LiveView
 
 _LIVE_LABEL = {Channel.MIC: "You", Channel.SYSTEM: "Remote"}
 _LABEL_STYLE = {Channel.MIC: "bold cyan", Channel.SYSTEM: "bold magenta"}

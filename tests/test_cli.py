@@ -1250,3 +1250,43 @@ def test_settings_edit_keeps_and_reports_a_bad_save(tmp_path, monkeypatch):
     # The bad content was not reverted — the user's work survives the failure.
     path = tmp_path / "steno-data" / "settings.toml"
     assert "glossry_file" in path.read_text(encoding="utf-8")
+
+
+# -- bare invocation (Phase 7: the launcher entry) ---------------------------
+
+
+def test_bare_invocation_without_a_tty_prints_help():
+    # A pipe/script hitting bare `steno` wants usage text, not a Textual app
+    # (which needs a real TTY anyway). CliRunner streams are never TTYs.
+    result = CliRunner().invoke(cli.main, [])
+
+    assert result.exit_code == 0
+    assert "Usage:" in result.output
+    assert "transcribe" in result.output  # the subcommands are listed
+
+
+def test_bare_invocation_on_a_tty_opens_the_launcher(monkeypatch):
+    import stenograf.ui
+
+    calls = []
+    monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
+    monkeypatch.setattr(stenograf.ui, "run_launcher", lambda: calls.append(1))
+
+    result = CliRunner().invoke(cli.main, [])
+
+    assert result.exit_code == 0
+    assert calls == [1]
+    assert "Usage:" not in result.output
+
+
+def test_subcommands_never_open_the_launcher(monkeypatch):
+    import stenograf.ui
+
+    monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
+    monkeypatch.setattr(
+        stenograf.ui, "run_launcher", lambda: (_ for _ in ()).throw(AssertionError)
+    )
+
+    result = CliRunner().invoke(cli.main, ["profiles", "list"])
+
+    assert result.exit_code == 0
