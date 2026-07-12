@@ -1,6 +1,5 @@
-import wave
-
 import numpy as np
+from conftest import write_wav
 
 from stenograf.audio import (
     SAMPLE_RATE,
@@ -11,14 +10,6 @@ from stenograf.audio import (
     to_float32,
     to_int16,
 )
-
-
-def write_wav(path, samples: np.ndarray, rate: int = SAMPLE_RATE, channels: int = 1) -> None:
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(channels)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(samples.tobytes())
 
 
 def test_to_float32_scales_int16():

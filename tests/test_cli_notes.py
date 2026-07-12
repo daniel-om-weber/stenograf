@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from test_cli import fake_load_backends, write_wav
+from conftest import write_wav
+from test_cli import fake_load_backends
 
 from stenograf import cli
 from stenograf import notes as notes_pkg

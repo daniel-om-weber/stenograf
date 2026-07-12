@@ -12,6 +12,7 @@ These exercise the threaded plumbing, not the LiveDecoder's caption quality
 import threading
 
 import numpy as np
+from conftest import FakeASR
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
@@ -55,21 +56,6 @@ class StubDecoder:
 
     def drop_window(self) -> None:
         self.dropped += 1
-
-
-class FakeASR(ASRBackend):
-    """One word per transcribed window (same stub the session tests use)."""
-
-    name = "fake"
-
-    def load(self) -> None:
-        pass
-
-    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
-        return [Segment(text="wort", start=0.1, end=0.5, words=(Word("wort", 0.1, 0.5),))]
-
-    def unload(self) -> None:
-        pass
 
 
 class ListProvider(CaptureProvider):

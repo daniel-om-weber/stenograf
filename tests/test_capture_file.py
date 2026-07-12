@@ -1,18 +1,10 @@
 import time
-import wave
 
 import numpy as np
+from conftest import write_wav
 
 from stenograf.capture.base import SAMPLE_RATE, Channel
 from stenograf.capture.file import FileCaptureProvider
-
-
-def write_wav(path, samples: np.ndarray) -> None:
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        w.writeframes(samples.tobytes())
 
 
 def test_replays_two_channels_in_timestamp_order(tmp_path):

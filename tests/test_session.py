@@ -4,6 +4,7 @@ import time
 
 import numpy as np
 import pytest
+from conftest import FakeASR, FakeDiarizer, RaisingDiarizer
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
@@ -232,64 +233,35 @@ def test_interleave_orders_channels_by_start():
     assert [e.text for e in interleave(entries)] == ["a", "b", "c"]
 
 
-class FakeASR(ASRBackend):
-    """One word per transcribed window, at a fixed offset within it."""
-
-    name = "fake"
-
-    def load(self) -> None:
-        pass
-
-    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
-        return [Segment(text="wort", start=0.1, end=0.5, words=(Word("wort", 0.1, 0.5),))]
-
-    def unload(self) -> None:
-        pass
-
-
-class GermanASR(ASRBackend):
+class GermanASR(FakeASR):
     """Transcribes to German text, for language-detection tests."""
 
     name = "german"
-
-    def load(self) -> None:
-        pass
 
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
         text = "und das ist wirklich eine gute idee für uns"
         return [Segment(text=text, start=0.1, end=1.0, words=(Word(text, 0.1, 1.0),))]
 
-    def unload(self) -> None:
-        pass
 
-
-class RecordingASR(ASRBackend):
+class RecordingASR(FakeASR):
     """Records the length of every buffer it transcribes (proves tail exactly-once)."""
 
     name = "recording"
 
     def __init__(self) -> None:
+        super().__init__()
         self.lengths: list[int] = []
-
-    def load(self) -> None:
-        pass
 
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
         self.lengths.append(len(samples))
         return [Segment(text="w", start=0.0, end=0.1, words=(Word("w", 0.0, 0.1),))]
 
-    def unload(self) -> None:
-        pass
 
-
-class TwoSpeakerASR(ASRBackend):
+class TwoSpeakerASR(FakeASR):
     """Emits two well-separated words so a two-cluster diarization yields two
     distinct entries (FakeASR's single word always lands in one cluster)."""
 
     name = "twospeaker"
-
-    def load(self) -> None:
-        pass
 
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
         return [
@@ -301,9 +273,6 @@ class TwoSpeakerASR(ASRBackend):
             )
         ]
 
-    def unload(self) -> None:
-        pass
-
 
 class CommittedWords:
     """A stand-in decoder exposing only the committed words a checkpoint reads."""
@@ -314,16 +283,6 @@ class CommittedWords:
     @property
     def committed_words(self) -> tuple[Word, ...]:
         return self._words
-
-
-class FakeDiarizer(Diarizer):
-    def __init__(self, turns: list[SpeakerTurn]):
-        self.turns = turns
-        self.seen_num_speakers: object = "unset"
-
-    def diarize(self, samples, num_speakers=None):
-        self.seen_num_speakers = num_speakers
-        return self.turns
 
 
 class EmbeddingDiarizer(Diarizer):
@@ -338,17 +297,6 @@ class EmbeddingDiarizer(Diarizer):
 
     def diarize_with_embeddings(self, samples, num_speakers=None):
         return DiarizationResult(turns=self.turns, embeddings=self.embeddings)
-
-
-class RaisingDiarizer(Diarizer):
-    """Throws on every diarize call — stands in for a mid-meeting backend fault."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def diarize(self, samples, num_speakers=None):
-        self.calls += 1
-        raise RuntimeError("diarizer exploded")
 
 
 class ListProvider(CaptureProvider):

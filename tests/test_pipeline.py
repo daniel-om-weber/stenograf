@@ -1,6 +1,7 @@
 import numpy as np
+from conftest import FakeASR, FakeDiarizer, RaisingDiarizer
 
-from stenograf.asr.base import ASRBackend, Segment, Word
+from stenograf.asr.base import Segment, Word
 from stenograf.audio import SAMPLE_RATE
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.pipeline import (
@@ -123,80 +124,24 @@ def test_relabel_speakers_preserves_words():
     assert [w.text for e in entries for w in e.words] == ["b", "a"]
 
 
-class FakeASR(ASRBackend):
-    name = "fake"
-
-    def __init__(self):
-        self.calls: list[int] = []
-
-    def load(self) -> None:
-        pass
-
-    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
-        self.calls.append(len(samples))
-        # One word per call, timestamped relative to the window start.
-        return [
-            Segment(
-                text="wort",
-                start=0.1,
-                end=0.5,
-                words=(Word(text="wort", start=0.1, end=0.5),),
-            )
-        ]
-
-    def unload(self) -> None:
-        pass
-
-
-class WordlessASR(ASRBackend):
+class WordlessASR(FakeASR):
     """Emits segment text but no word timestamps (e.g. a Whisper/Voxtral path)."""
 
     name = "wordless"
 
-    def load(self) -> None:
-        pass
-
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        self.calls.append(len(samples))
         return [Segment(text="ganzer satz", start=0.1, end=1.0, words=())]
 
-    def unload(self) -> None:
-        pass
 
-
-class SilentASR(ASRBackend):
+class SilentASR(FakeASR):
     """Finds no speech — returns no segments for any window."""
 
     name = "silent"
 
-    def load(self) -> None:
-        pass
-
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        self.calls.append(len(samples))
         return []
-
-    def unload(self) -> None:
-        pass
-
-
-class FakeDiarizer(Diarizer):
-    def __init__(self, turns):
-        self.turns = turns
-        self.seen_num_speakers = None
-
-    def diarize(self, samples, num_speakers=None):
-        self.seen_num_speakers = num_speakers
-        return self.turns
-
-
-class RaisingDiarizer(Diarizer):
-    """Fails on every call — stands in for a backend that throws on odd input."""
-
-    def __init__(self):
-        self.called = False
-
-    def diarize(self, samples, num_speakers=None):
-        self.called = True
-        raise RuntimeError("diarizer exploded")
 
 
 def test_diarizer_default_embeddings_are_empty():
@@ -236,7 +181,7 @@ class TestFinalizeChannel:
         entries = finalize_channel(
             samples, asr=asr, language=None, diarizer=diarizer, num_speakers=1
         )
-        assert diarizer.seen_num_speakers is None  # never called
+        assert diarizer.seen_num_speakers == "unset"  # never called
         assert entries[0].speaker == "S0"
 
     def test_empty_audio_yields_no_entries(self):
@@ -291,7 +236,7 @@ class TestFinalizeChannelReuse:
             precomputed_words=(),
         )
         assert entries == []
-        assert asr.calls == [] and diarizer.seen_num_speakers is None
+        assert asr.calls == [] and diarizer.seen_num_speakers == "unset"
 
     def test_silent_channel_skips_diarization(self):
         # No speech → no words. Diarizing an empty channel is wasted work and can
@@ -304,7 +249,7 @@ class TestFinalizeChannelReuse:
             samples, asr=asr, language=None, diarizer=diarizer, num_speakers=2
         )
         assert entries == []
-        assert not diarizer.called
+        assert diarizer.calls == 0
 
     def test_single_speaker_entries_retain_words(self):
         asr = FakeASR()

@@ -118,7 +118,7 @@ Real defects found during review. Each is a standalone commit with a test.
 
 ### 3.2 Test infrastructure
 
-- [ ] **T2 — create `tests/conftest.py`.** Zero shared fixtures exist across
+- [x] **T2 — create `tests/conftest.py`.** Zero shared fixtures exist across
   42 files today. Consolidate the copy-pasted doubles: base
   `FakeASR(ASRBackend)` (currently reimplemented near-verbatim in
   `test_pipeline.py:126`, `test_session.py:235`, `test_cli.py:31`,

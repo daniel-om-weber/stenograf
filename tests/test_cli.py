@@ -3,12 +3,14 @@ import sys
 import wave
 from pathlib import Path
 
+import conftest
 import numpy as np
 import pytest
 from click.testing import CliRunner
+from conftest import write_wav
 
 from stenograf import cli
-from stenograf.asr.base import ASRBackend, Segment, Word
+from stenograf.asr.base import Segment, Word
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.view import LiveView
 
@@ -28,14 +30,10 @@ def _isolate_data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings-home")
 
 
-class FakeASR(ASRBackend):
+class FakeASR(conftest.FakeASR):
     """Returns fixed German text so the whole CLI path (incl. LID) runs offline."""
 
-    name = "fake"
     model_id = "fake/model"
-
-    def load(self) -> None:
-        pass
 
     def transcribe(self, samples, language) -> list[Segment]:
         return [
@@ -46,9 +44,6 @@ class FakeASR(ASRBackend):
                 words=(Word("und", 0.1, 0.3), Word("das", 0.3, 0.6)),
             )
         ]
-
-    def unload(self) -> None:
-        pass
 
 
 class FakeDiarizer(Diarizer):
@@ -74,14 +69,6 @@ class FakeDiarizer(Diarizer):
 def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None):
     # No VAD (whole buffer is one window) and no diarizer (single speaker).
     return FakeASR(), None, None
-
-
-def write_wav(path, seconds=1.0):
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(16_000)
-        w.writeframes(np.zeros(int(16_000 * seconds), dtype=np.int16).tobytes())
 
 
 def test_transcribe_writes_outputs_and_detects_language(tmp_path, monkeypatch):
@@ -227,7 +214,7 @@ def test_transcribe_glossary_corrects_the_transcript(tmp_path, monkeypatch):
     assert "gute Idee für" in md
 
 
-class ChannelASR(ASRBackend):
+class ChannelASR(conftest.FakeASR):
     """Decodes each buffer's peak amplitude into a channel-specific word stem.
 
     A split run's mic (amplitude 1000) decodes to ``foxtrot…`` and its system
@@ -238,12 +225,6 @@ class ChannelASR(ASRBackend):
 
     name = "channel"
     model_id = "fake/channel"
-
-    def load(self) -> None:
-        pass
-
-    def unload(self) -> None:
-        pass
 
     def transcribe(self, samples, language) -> list[Segment]:
         pcm = np.asarray(samples)
