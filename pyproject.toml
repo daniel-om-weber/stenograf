@@ -1,7 +1,7 @@
 [project]
 name = "stenograf"
-version = "0.1.0"
-description = "Accuracy-first local meeting transcription for German and English. Audio never touches disk."
+version = "0.2.0"
+description = "Accuracy-first local meeting transcription for German and English. Audio stays in RAM; only text is written."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -12,7 +12,7 @@ requires-python = ">=3.12,<3.14"
 authors = [{ name = "Daniel Weber", email = "danielusweber@gmail.com" }]
 keywords = ["transcription", "meetings", "speech-to-text", "diarization", "local", "privacy"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Operating System :: MacOS",
     "Operating System :: POSIX :: Linux",
