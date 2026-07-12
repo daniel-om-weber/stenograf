@@ -88,7 +88,8 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
         self.notices: list[str] = []  # plain-text mirror of the toasts shown
 
     def compose(self) -> ComposeResult:
-        diarize = self._diarize_default()
+        standing = self._standing_settings()
+        diarize = standing.speakers.diarization is True
         with FormScroll(id="form"):  # arrows walk the fields, not the scrollbar
             yield Static("Start meeting", id="form-title")
             with Horizontal(classes="switch-row"):
@@ -119,28 +120,28 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
                 yield Switch(value=False, id="record")
                 yield Static("Keep the audio recording (audio.wav)")
             with Horizontal(classes="switch-row"):
-                yield Switch(value=False, id="notes")
+                yield Switch(value=standing.notes.auto is True, id="notes")
                 yield Static("Generate notes after the meeting")
             with Horizontal(id="actions"):
                 yield Button("Start", variant="success", id="go")
                 yield Button("Back", id="back")
         yield Footer()
 
-    def _diarize_default(self) -> bool:
-        """Whether the "tell speakers apart" switch starts on.
+    def _standing_settings(self) -> Settings:
+        """The settings the form's switches start from.
 
-        Diarization is off by default; only ``[speakers] diarization = true``
-        turns it on as a standing choice. The switch beats the settings the
-        same way a CLI flag does, for this one meeting. A broken settings
-        file behaves like the defaults — :meth:`_submit` is where it is
-        reported.
+        Both standing choices are off by default; only ``[speakers]
+        diarization = true`` and ``[notes] auto = true`` pre-set their switch.
+        A switch beats the settings the same way a CLI flag does, for this one
+        meeting. A broken settings file behaves like the defaults —
+        :meth:`_submit` is where it is reported.
         """
-        from stenograf.settings import SettingsError, load_settings
+        from stenograf.settings import Settings, SettingsError, load_settings
 
         try:
-            return load_settings().speakers.diarization is True
+            return load_settings()
         except SettingsError:
-            return False
+            return Settings()
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         if event.switch.id == "diarize":

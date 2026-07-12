@@ -77,6 +77,17 @@ def test_wrong_typed_timeout_is_rejected(tmp_path):
         load_settings(path)
 
 
+def test_notes_auto_defaults_to_off_and_rejects_junk(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text("[notes]\n", encoding="utf-8")
+    assert load_settings(path).notes.auto is None  # shipped default: notes are opt-in
+    path.write_text("[notes]\nauto = true\n", encoding="utf-8")
+    assert load_settings(path).notes.auto is True
+    path.write_text('[notes]\nauto = "yes"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match="auto"):
+        load_settings(path)
+
+
 def test_thinking_defaults_to_none_and_rejects_junk(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text("[notes]\n", encoding="utf-8")

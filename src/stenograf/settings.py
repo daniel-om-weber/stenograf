@@ -40,6 +40,12 @@ optional; a missing file is simply all defaults. The full schema::
                                         # if the provider can't run the model
 
     [notes]
+    auto = true                         # generate notes after every meeting.
+                                        # Off by default: notes are opt-in per run
+                                        # (--notes on the CLI, the setup form's
+                                        # switch in the launcher). On, both entries
+                                        # default to generating them; --no-notes
+                                        # (or the switch) still skips one run.
     backend = "command"                 # "mlx" (default on Apple Silicon),
                                         # "ollama" (default elsewhere), "command"
     model = "claude-opus-4-8"           # HF repo id (mlx) / Ollama tag /
@@ -122,6 +128,9 @@ SETTINGS_TEMPLATE = """\
 # provider = "cpu"                         # cpu | dml (Windows GPU) | cuda | auto
 
 [notes]
+# auto = true                              # generate notes after every meeting
+#                                          # (off by default: --notes / the launcher
+#                                          # switch asks for them per run)
 # backend = "mlx"                          # mlx | ollama | command
 # model = "Qwen/Qwen3-8B-MLX-4bit"         # HF repo id (mlx) / Ollama tag
 # command = ["claude", "-p"]               # argv for backend = "command"
@@ -183,6 +192,12 @@ class AsrSettings:
 
 @dataclass(frozen=True)
 class NotesSettings:
+    auto: bool | None = None
+    """``True`` generates notes after every meeting. Unset (``None``) or
+    ``False`` = off, the built-in default: notes are asked for per run — the
+    ``--notes`` flag, or the launcher setup form's switch, which starts on when
+    this is ``True``. An explicit ``--no-notes`` (or the switch, turned off)
+    still skips them for one run."""
     backend: str | None = None
     model: str | None = None
     command: tuple[str, ...] = ()
@@ -405,6 +420,7 @@ def _notes_from_table(data: dict) -> NotesSettings:
             )
     export = _Table("notes.export", t.table("export"))
     settings = NotesSettings(
+        auto=t.bool_("auto"),
         backend=backend,
         model=t.str_("model"),
         command=t.str_list("command"),

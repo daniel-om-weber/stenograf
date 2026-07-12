@@ -246,6 +246,46 @@ def test_transcribe_with_notes_flag_writes_notes(tmp_path, monkeypatch, fake_bac
     assert "notes: wrote" in result.output
 
 
+def test_settings_notes_auto_generates_notes_without_the_flag(tmp_path, monkeypatch, fake_backend):
+    # [notes] auto = true is the standing "always summarize" choice: no --notes.
+    import os
+
+    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text("[notes]\nauto = true\n", encoding="utf-8")
+    monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "transcript.notes.md").exists()
+
+
+def test_no_notes_beats_settings_notes_auto(tmp_path, monkeypatch):
+    # The per-run flag wins outright — auto = true still yields to --no-notes.
+    import os
+
+    def explode(name, settings):
+        raise AssertionError("--no-notes was given; no backend may be created")
+
+    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text("[notes]\nauto = true\n", encoding="utf-8")
+    monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
+    monkeypatch.setattr(notes_pkg, "create_backend", explode)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--no-notes"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "transcript.notes.md").exists()
+
+
 def test_transcribe_notes_failure_is_nonfatal(tmp_path, monkeypatch):
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
     monkeypatch.setattr(

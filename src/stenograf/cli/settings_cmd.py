@@ -121,6 +121,7 @@ def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
         ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
         ("asr", "backend", settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"),
         ("asr", "provider", settings.asr.provider, "cpu", "STENOGRAF_ASR_PROVIDER"),
+        ("notes", "auto", settings.notes.auto, False, None),
         ("notes", "backend", settings.notes.backend, notes_backend, "STENOGRAF_NOTES_BACKEND"),
         (
             "notes",

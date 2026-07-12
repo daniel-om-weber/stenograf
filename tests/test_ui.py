@@ -249,6 +249,29 @@ class TestMeetingSetupScreen:
 
         _run(body)
 
+    def test_settings_notes_auto_defaults_the_switch_to_on(self, tmp_path, monkeypatch):
+        # [notes] auto = true is the standing "always summarize" choice: the
+        # launcher's notes switch starts on, so a plain Start asks for notes.
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text("[notes]\nauto = true\n", encoding="utf-8")
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            results = []
+            async with app.run_test(size=(80, 50)) as pilot:
+                screen = MeetingSetupScreen()
+                app.push_screen(screen, results.append)
+                await pilot.pause()
+                await _click_start(pilot, screen)
+                await pilot.pause()
+                assert len(results) == 1
+                assert results[0].notes is True
+
+        _run(body)
+
     def test_impossible_profile_keeps_the_form_open(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         from textual.widgets import Switch

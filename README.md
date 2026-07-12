@@ -201,11 +201,14 @@ dir = "~/Documents/Obsidian/Meetings"   # optional: also write one combined
 With `[notes.export]` set, every summarized meeting also produces a single
 self-contained markdown note (frontmatter, summary, action items, collapsible
 transcript) — drop the dir inside an Obsidian vault and meetings file
-themselves. Two more levers in `[notes]`: `instructions = "~/style.md"`
-appends your house style to the built-in prompt, and `thinking = false` skips
-the mlx model's reasoning pass (faster, less careful). Notes never run unless
-you ask (`--notes` or `steno notes`), and a notes failure never touches the
-transcript.
+themselves. Three more levers in `[notes]`: `instructions = "~/style.md"`
+appends your house style to the built-in prompt, `thinking = false` skips the
+mlx model's reasoning pass (faster, less careful), and `auto = true` makes
+notes the default for every meeting — `steno start` summarizes without
+`--notes`, and the launcher's "Generate notes after the meeting" switch starts
+on. Out of the box notes never run unless you ask (`--notes`, the launcher
+switch, or `steno notes` afterwards); with `auto = true`, `--no-notes` still
+skips them for one run. A notes failure never touches the transcript.
 
 ## Naming speakers across meetings
 

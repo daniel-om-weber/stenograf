@@ -133,7 +133,7 @@ def transcribe(
     attendee: tuple[str, ...],
     glossary_threshold: float | None,
     profile_store: Path | None,
-    notes_flag: bool,
+    notes_flag: bool | None,
     print_markdown: bool,
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).

@@ -95,13 +95,16 @@ def _finish_run(
     *,
     created_at: datetime,
     settings,
-    notes_flag: bool,
+    notes_flag: bool | None,
     print_markdown: bool,
 ) -> None:
-    """The tail both commands share: optional notes, optional stdout print."""
+    """The tail both commands share: optional notes, optional stdout print.
+
+    Notes run when ``--notes`` asked for them, or — with no flag either way —
+    when ``[notes] auto`` is on; ``--no-notes`` skips them even then."""
     from stenograf.cli.notes import _notes_after_run
 
-    if notes_flag:
+    if notes_flag if notes_flag is not None else settings.notes.auto is True:
         _notes_after_run(
             transcript,
             out_dir,
@@ -250,12 +253,13 @@ def _notes_options(func: Callable) -> Callable:
     for option in reversed(
         (
             click.option(
-                "--notes",
+                "--notes/--no-notes",
                 "notes_flag",
-                is_flag=True,
+                default=None,
                 help="After the transcript is written, generate LLM meeting notes "
                 "(summary, decisions, action items) with the backend configured in "
-                "settings.toml. Non-fatal: a notes failure never loses the transcript.",
+                "settings.toml. Non-fatal: a notes failure never loses the transcript "
+                "[default: [notes] auto in settings.toml, else off].",
             ),
             click.option(
                 "--print", "print_markdown", is_flag=True, help="Also print the transcript."

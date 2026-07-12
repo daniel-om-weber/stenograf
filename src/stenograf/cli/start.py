@@ -213,7 +213,7 @@ def start(
     glossary_threshold: float | None,
     profile_store: Path | None,
     full_finalize: bool,
-    notes_flag: bool,
+    notes_flag: bool | None,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
