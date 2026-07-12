@@ -37,6 +37,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import threading
+import time
+from collections.abc import Callable
 
 import numpy as np
 
@@ -101,6 +103,8 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
     ``command`` overrides the parec launch command (a path or an argv prefix)
     — used to point at a fake in tests; production requires ``parec`` on PATH
     and fails at construction otherwise, mirroring ``find_helper`` on macOS.
+    ``clock`` overrides the session clock (tests script it to pin the anchor
+    formula deterministically).
 
     Each channel gets its own reader thread that slices the byte stream into
     ~200 ms frames and stamps them onto the shared session clock; ``frames()``
@@ -111,8 +115,14 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
 
     _thread_prefix = "parec"
 
-    def __init__(self, *, command: str | list[str] | None = None, frame_ms: int = DEFAULT_FRAME_MS):
-        super().__init__(frame_ms=frame_ms)
+    def __init__(
+        self,
+        *,
+        command: str | list[str] | None = None,
+        frame_ms: int = DEFAULT_FRAME_MS,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        super().__init__(frame_ms=frame_ms, clock=clock)
         if command is None:
             if shutil.which("parec") is None:
                 raise CaptureUnavailableError(

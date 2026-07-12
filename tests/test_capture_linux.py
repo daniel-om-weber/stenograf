@@ -42,6 +42,20 @@ class TestLinuxCaptureProvider:
         assert np.allclose(deltas, len(frames[0].samples) / SAMPLE_RATE)
         assert frames[0].timestamp < 0.5  # anchored near session start
 
+    def test_anchor_is_arrival_minus_frame_duration(self):
+        # Deterministic anchor test (the Windows suite's equivalent drives an
+        # injected clock too): the session clock is read once at start() and
+        # once per frame, and fake_parec's 0.4 s burst is exactly two 200 ms
+        # frames, so a scripted clock pins every timestamp exactly. The first
+        # frame anchors at arrival minus its own duration (0.25 - 0.2); the
+        # second sits one frame later regardless of its arrival reading.
+        ticks = iter([100.0, 100.25, 100.45])
+        provider = LinuxCaptureProvider(command=FAKE, clock=lambda: next(ticks))
+        provider.start({Channel.MIC})
+        frames = list(provider.frames())
+        provider.stop()
+        assert [f.timestamp for f in frames] == pytest.approx([0.05, 0.25])
+
     def test_only_requested_channel_is_started(self):
         provider = LinuxCaptureProvider(command=FAKE)
         provider.start({Channel.MIC})  # in-room: no system capture
