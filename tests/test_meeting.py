@@ -407,7 +407,7 @@ class TestServeIntegration:
                 return transcript
 
             result: dict[str, object] = {}
-            view._arm_meeting(meeting, result)  # the same wiring serve() uses
+            view.arm_meeting(meeting, result)  # the same wiring serve() uses
             async with view.app.run_test() as pilot:
                 for _ in range(200):
                     await pilot.pause()
@@ -443,7 +443,7 @@ class TestServeIntegration:
                 return transcript
 
             result: dict[str, object] = {}
-            view._arm_meeting(meeting, result)  # the same wiring serve() uses
+            view.arm_meeting(meeting, result)  # the same wiring serve() uses
             async with view.app.run_test() as pilot:
                 await pilot.press("ctrl+c")  # → finalizing
                 await pilot.press("ctrl+c")  # impatient → force-exit while finalizing

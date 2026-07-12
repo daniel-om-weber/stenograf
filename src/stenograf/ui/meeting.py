@@ -388,6 +388,7 @@ class TextualLiveView(LiveView):
         language: Language | None = None,
         stop: Callable[[], None] | None = None,
         persist: Callable[[Transcript], object] | None = None,
+        app: StenografApp | None = None,
     ) -> None:
         # ``persist`` runs on the meeting thread at the ``finalized`` event,
         # before the UI swap: the CLI wires its write-transcript-files closure
@@ -395,8 +396,13 @@ class TextualLiveView(LiveView):
         # screen (crash/force-quit there must not lose it). Exceptions are
         # surfaced via :meth:`error`, never raised — the caller retries after
         # :meth:`serve` returns.
+        #
+        # ``app`` selects the entry mode: None (the CLI) builds a private shell
+        # with the meeting screen as its root and :meth:`serve` runs it; the
+        # launcher passes its already-running app instead, pushes
+        # :attr:`screen` itself, and must NOT call :meth:`serve`.
         self._screen = MeetingScreen(profile=profile, language=language, stop=stop)
-        self._app = StenografApp(initial=self._screen)
+        self._app = app if app is not None else StenografApp(initial=self._screen)
         self._persist = persist
         self._meeting_thread: threading.Thread | None = None
 
@@ -464,7 +470,7 @@ class TextualLiveView(LiveView):
         the screen when the meeting returns (capture stopped and finalized).
         """
         result: dict[str, object] = {}
-        self._arm_meeting(meeting, result)
+        self.arm_meeting(meeting, result)
         self._app.run()
 
         # The UI has exited, but the meeting thread may still be running the on-stop
@@ -478,14 +484,16 @@ class TextualLiveView(LiveView):
             raise result["error"]  # type: ignore[misc]
         return result.get("transcript")  # type: ignore[return-value]
 
-    def _arm_meeting(self, meeting: Callable[[], Transcript], result: dict[str, object]) -> None:
+    def arm_meeting(self, meeting: Callable[[], Transcript], result: dict[str, object]) -> None:
         """Wire ``on_ready`` to run ``meeting`` on a background thread once mounted.
 
-        Split out of :meth:`serve` so the meeting → finalize → exit flow is
-        exercisable under Textual's ``run_test`` harness (which drives the loop
-        itself instead of calling :meth:`serve`'s blocking ``run``). The thread is
-        held on ``self._meeting_thread`` so :meth:`serve` can join it before reading
-        the result.
+        :meth:`serve` (the CLI) calls this itself; the launcher flow calls it
+        directly before pushing :attr:`screen`, then reads ``result`` in the
+        screen's dismiss callback. Also the seam that makes the
+        meeting → finalize → exit flow exercisable under Textual's ``run_test``
+        harness (which drives the loop itself instead of :meth:`serve`'s
+        blocking ``run``). The thread is held on ``self._meeting_thread`` so
+        :meth:`serve` can join it before reading the result.
         """
 
         def run_meeting() -> None:

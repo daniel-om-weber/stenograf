@@ -3,6 +3,7 @@ commands share."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -149,6 +150,7 @@ def _generate_and_write_notes(
     export_dir: Path | None = None,
     no_export: bool = False,
     notes_settings=None,
+    on_progress: Callable[[str], None] | None = None,
 ):
     """Generate notes and write ``<basename>.notes.md``/``.notes.json`` (plus the
     combined-note export when a target dir is configured). Returns
@@ -156,7 +158,9 @@ def _generate_and_write_notes(
 
     ``notes_settings`` is the ``[notes]`` table a command already loaded at its
     start (so a ``--notes`` run uses the values in force when the meeting began);
-    ``None`` loads it here (the standalone ``steno notes`` path)."""
+    ``None`` loads it here (the standalone ``steno notes`` path). ``on_progress``
+    overrides the click-echoed progress line — the launcher routes it to the
+    meeting screen's header, where an echo would corrupt the raw-mode terminal."""
     import dataclasses
 
     from stenograf.notes import create_backend
@@ -188,7 +192,7 @@ def _generate_and_write_notes(
         transcript,
         backend,
         instructions=instructions,
-        on_progress=lambda message: click.echo(f"notes: {message}"),
+        on_progress=on_progress or (lambda message: click.echo(f"notes: {message}")),
     )
 
     md_path = out_dir / f"{basename}.notes.md"

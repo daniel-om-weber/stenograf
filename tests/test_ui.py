@@ -117,3 +117,134 @@ class TestHomeScreen:
                 assert not app.is_running
 
         _run(body)
+
+
+class TestMeetingSetupScreen:
+    def test_submit_defaults_to_an_auto_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            results = []
+            async with app.run_test(size=(80, 40)) as pilot:
+                app.push_screen(MeetingSetupScreen(), results.append)
+                await pilot.pause()
+                await pilot.click("#go")
+                await pilot.pause()
+                assert len(results) == 1
+                request = results[0]
+                assert request.profile.local_speakers is None  # auto-detect
+                assert request.profile.remote_speakers is None
+                assert request.profile.language is None
+                assert request.notes is False
+
+        _run(body)
+
+    def test_impossible_profile_keeps_the_form_open(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        from textual.widgets import Select
+
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            results = []
+            async with app.run_test(size=(80, 40)) as pilot:
+                screen = MeetingSetupScreen()
+                app.push_screen(screen, results.append)
+                await pilot.pause()
+                screen.query_one("#local", Select).value = 0
+                screen.query_one("#remote", Select).value = 0
+                await pilot.click("#go")
+                await pilot.pause()
+                assert results == []  # not dismissed — the form keeps the input
+                assert app.screen is screen
+                assert "at least one speaker" in screen.notices[-1]
+
+        _run(body)
+
+    def test_back_cancels(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        async def body():
+            app = StenografApp()
+            results = []
+            async with app.run_test(size=(80, 40)) as pilot:
+                app.push_screen(MeetingSetupScreen(), results.append)
+                await pilot.pause()
+                await pilot.click("#back")
+                await pilot.pause()
+                assert results == [None]
+                assert isinstance(app.screen, HomeScreen)
+
+        _run(body)
+
+
+class TestMeetingFlow:
+    def test_start_meeting_runs_end_to_end_from_home(self, tmp_path, monkeypatch):
+        # The whole launcher path with offline fakes: Home → setup form →
+        # meeting screen runs a (replayed, silent) meeting through the real
+        # recorder → done → q → back Home with the transcript on disk.
+        import conftest
+        from textual.widgets import Select
+
+        from stenograf import loaders, output
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+        from stenograf.ui.meeting import MeetingScreen, Phase
+        from stenograf.ui.setup import MeetingSetupScreen
+
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        home_dir = tmp_path / "meetings"
+        monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
+        mic = tmp_path / "mic.wav"
+        conftest.write_wav(mic)
+        monkeypatch.setattr(
+            loaders,
+            "load_backends",
+            lambda *, need_diarizer, asr_backend=None, asr_provider=None: (
+                conftest.FakeASR(),
+                None,
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            loaders,
+            "make_provider",
+            lambda replay, plans, *, paced=False, aec=True, aec_dump=None: FileCaptureProvider(
+                {Channel.MIC: mic}
+            ),
+        )
+
+        async def body():
+            app = StenografApp()
+            async with app.run_test(size=(80, 40)) as pilot:
+                await pilot.click("#start")
+                await pilot.pause()
+                assert isinstance(app.screen, MeetingSetupScreen)
+                app.screen.query_one("#local", Select).value = 1
+                app.screen.query_one("#remote", Select).value = 0
+                await pilot.click("#go")
+                for _ in range(100):  # the dismiss callback pushes the meeting screen
+                    await pilot.pause(0.05)
+                    if isinstance(app.screen, MeetingScreen):
+                        break
+                meeting_screen = app.screen
+                assert isinstance(meeting_screen, MeetingScreen)
+                for _ in range(400):  # fake pipeline: capture+finalize well within this
+                    await pilot.pause(0.05)
+                    if meeting_screen._phase is Phase.DONE and "saved" in meeting_screen._status:
+                        break
+                assert meeting_screen._phase is Phase.DONE
+                assert meeting_screen.committed_lines  # the finalize swap rendered
+                await pilot.press("q")
+                await pilot.pause()
+                assert isinstance(app.screen, HomeScreen)  # dismissed, app still up
+                assert app.is_running
+
+        _run(body)
+        transcripts = list(home_dir.glob("*/transcript.md"))
+        assert len(transcripts) == 1, "the meeting folder should hold one transcript"
+        assert "wort" in transcripts[0].read_text(encoding="utf-8")
