@@ -33,6 +33,7 @@ from pathlib import Path
 import numpy as np
 
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.capture.streaming import read_exact
 
 _HEADER = struct.Struct("<BdI")  # channel u8, timestamp f64, count u32
 _CHANNEL_CODE = {0: Channel.MIC, 1: Channel.SYSTEM}
@@ -142,28 +143,15 @@ class MacOSCaptureProvider(CaptureProvider):
         # read on another thread, and the helper's exit already ends the stream.
 
 
-def _read_exact(stream, n: int) -> bytes | None:
-    """Read exactly ``n`` bytes, or return ``None`` at a clean end of stream."""
-    chunks = []
-    remaining = n
-    while remaining:
-        chunk = stream.read(remaining)
-        if not chunk:
-            return None  # EOF; a partial read here means the helper died mid-frame
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-
 def read_frame(stream) -> AudioFrame | None:
     """Parse one frame from the helper's stdout, or ``None`` at end of stream."""
-    header = _read_exact(stream, _HEADER.size)
+    header = read_exact(stream, _HEADER.size)
     if header is None:
         return None
     code, timestamp, count = _HEADER.unpack(header)
     if code not in _CHANNEL_CODE or count > _MAX_FRAME_SAMPLES:
         raise ValueError(f"malformed capture frame: channel={code} count={count}")
-    payload = _read_exact(stream, count * 2)
+    payload = read_exact(stream, count * 2)
     if payload is None:
         return None
     samples = np.frombuffer(payload, dtype="<i2").astype(np.int16)

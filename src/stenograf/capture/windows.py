@@ -49,14 +49,12 @@ import numpy as np
 
 from stenograf.audio import to_int16
 from stenograf.capture.base import (
+    DEFAULT_FRAME_MS,
     SAMPLE_RATE,
     CaptureUnavailableError,
     Channel,
 )
 from stenograf.capture.streaming import QueueStreamingProvider
-
-DEFAULT_FRAME_MS = 200
-"""Frame size delivered to the core (~200 ms, matching the other providers)."""
 
 _REANCHOR_TOLERANCE_S = 0.5
 """How far a channel's sample-derived clock may fall behind its

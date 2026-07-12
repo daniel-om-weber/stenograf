@@ -17,6 +17,9 @@ session time. The one sanctioned exception is the forward re-anchor for
 transports whose sample stream can under-run session time (WASAPI loopback
 wall-clock-estimates silence gaps); ``reanchor_tolerance_s`` is ``inf``
 everywhere else.
+
+Also home to the pipe readers shared by the subprocess transports (parec on
+Linux, the stenocap helper on macOS).
 """
 
 from __future__ import annotations
@@ -27,10 +30,40 @@ import time
 from abc import abstractmethod
 from collections.abc import Callable, Iterator
 from queue import SimpleQueue
+from typing import IO
 
 import numpy as np
 
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.capture.base import (
+    DEFAULT_FRAME_MS,
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureProvider,
+    Channel,
+    frame_samples,
+)
+
+
+def read_up_to(stream: IO[bytes], n: int) -> bytes:
+    """Read ``n`` bytes, or whatever remains before end of stream."""
+    chunks = []
+    remaining = n
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def read_exact(stream: IO[bytes], n: int) -> bytes | None:
+    """Read exactly ``n`` bytes, or ``None`` at end of stream.
+
+    A partial tail is discarded — it means the writer died mid-record, and no
+    caller can use half a frame."""
+    data = read_up_to(stream, n)
+    return data if len(data) == n else None
 
 
 class SessionClock:
@@ -117,11 +150,11 @@ class QueueStreamingProvider[TransportT](CaptureProvider):
     def __init__(
         self,
         *,
-        frame_ms: int,
+        frame_ms: int = DEFAULT_FRAME_MS,
         clock: Callable[[], float] = time.monotonic,
         reanchor_tolerance_s: float = math.inf,
     ) -> None:
-        self._frame_samples = max(1, SAMPLE_RATE * frame_ms // 1000)
+        self._frame_samples = frame_samples(frame_ms)
         self._clock = SessionClock(clock=clock, reanchor_tolerance_s=reanchor_tolerance_s)
         self._queue: SimpleQueue[AudioFrame | Channel] = SimpleQueue()
         self._started: set[Channel] = set()

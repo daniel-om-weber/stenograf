@@ -20,10 +20,14 @@ from pathlib import Path
 import numpy as np
 
 from stenograf.audio import load_audio, to_int16
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
-
-DEFAULT_FRAME_MS = 200
-"""Chunk size the real helper streams (~200 ms; PLAN.md §2)."""
+from stenograf.capture.base import (
+    DEFAULT_FRAME_MS,
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureProvider,
+    Channel,
+    frame_samples,
+)
 
 
 class FileCaptureProvider(CaptureProvider):
@@ -37,7 +41,7 @@ class FileCaptureProvider(CaptureProvider):
         paced: bool = False,
     ):
         self._sources = {ch: Path(p) for ch, p in sources.items()}
-        self._frame = max(1, int(SAMPLE_RATE * frame_ms / 1000))
+        self._frame = frame_samples(frame_ms)
         self._paced = paced
         self._loaded: dict[Channel, np.ndarray] = {}
         self._stopped = False

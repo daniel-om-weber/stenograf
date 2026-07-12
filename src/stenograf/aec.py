@@ -305,6 +305,7 @@ class EchoCancellingProvider(CaptureProvider):
         self._dump_dir = dump_dir
         self._dump: AecDump | None = None
         self._canceller: EchoCanceller | None = None
+        self._iterating = False
 
     @property
     def canceller(self) -> EchoCanceller | None:
@@ -323,6 +324,10 @@ class EchoCancellingProvider(CaptureProvider):
 
     def frames(self) -> Iterator[AudioFrame]:
         assert self._canceller is not None, "frames() called before start()"
+        # This iterator owns the dump while it runs: a stop() mid-meeting must
+        # not close the WAVs under it — the canceller tail drained after the
+        # inner stream ends still lands in enh.wav.
+        self._iterating = True
         try:
             for frame in self._inner.frames():
                 if self._dump is not None:
@@ -336,9 +341,17 @@ class EchoCancellingProvider(CaptureProvider):
                     self._dump.add_output(produced)
                 yield produced
         finally:
-            if self._dump is not None:
-                self._dump.close()
-                self._dump = None
+            self._iterating = False
+            self._close_dump()
 
     def stop(self) -> None:
         self._inner.stop()
+        # start() → stop() without ever iterating frames(): nobody else will
+        # close the dump's three WAV handles.
+        if not self._iterating:
+            self._close_dump()
+
+    def _close_dump(self) -> None:
+        dump, self._dump = self._dump, None
+        if dump is not None:
+            dump.close()

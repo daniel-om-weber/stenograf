@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import wave
+
 import numpy as np
 import pytest
 
@@ -255,6 +257,18 @@ class TestDump:
         produced = np.concatenate([f.samples for f in out if f.channel is Channel.MIC])
         assert np.array_equal(enh[lead:], produced)
         assert enh.size == mic.size, "enh and mic must cover the same span"
+
+    def test_stop_without_iterating_frames_closes_the_dump(self, tmp_path) -> None:
+        # start() → stop() with frames() never consumed: stop must release the
+        # three WAV handles (when frames() runs, its iterator owns the dump).
+        provider = EchoCancellingProvider(_FakeProvider([]), cancel=False, dump_dir=tmp_path)
+        provider.start(BOTH)
+        provider.stop()
+
+        assert provider._dump is None
+        for name in ("mic.wav", "lpb.wav", "enh.wav"):
+            with wave.open(str(tmp_path / name), "rb") as w:
+                assert w.getnframes() == 0  # finalized, empty
 
     def test_no_cancel_baseline_records_the_raw_mic_as_enh(self, tmp_path) -> None:
         near, far, out, mic, lpb, enh = self._run(tmp_path, cancel=False)

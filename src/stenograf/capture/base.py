@@ -29,6 +29,14 @@ import numpy as np
 SAMPLE_RATE = 16_000
 """All frames carry mono int16 PCM at this rate; providers resample."""
 
+DEFAULT_FRAME_MS = 200
+"""Frame size providers deliver to the core (~200 ms; PLAN.md §2)."""
+
+
+def frame_samples(frame_ms: int) -> int:
+    """Samples per delivered frame — the one frame-size computation."""
+    return max(1, SAMPLE_RATE * frame_ms // 1000)
+
 ORDER_TOLERANCE_SAMPLES = SAMPLE_RATE // 100  # 10 ms
 """Backward timestamp jitter tolerated before a frame is treated as a
 stream-ordering error. Providers deliver frames monotonically per channel; a
@@ -116,7 +124,16 @@ class GapPaddedBuffer(ABC):
 
 
 class CaptureProvider(ABC):
-    """Delivers live audio frames for the requested channels."""
+    """Delivers live audio frames for the requested channels.
+
+    Platform modules where the OS offers a device *choice* (linux, windows)
+    additionally expose a module-level ``default_devices(channels)`` preflight
+    that names what a meeting would record. Deliberately not part of this ABC:
+    it must run before construction (a missing capture stack fails there, and
+    the CLI reports it before models load), and macOS/file have no equivalent
+    (the signed helper owns device selection; file replay has no devices).
+    ``stenograf.loaders`` dispatches it per platform.
+    """
 
     @abstractmethod
     def start(self, channels: set[Channel]) -> None:

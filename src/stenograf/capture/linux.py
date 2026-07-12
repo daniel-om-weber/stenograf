@@ -39,18 +39,17 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 
 from stenograf.capture.base import (
+    DEFAULT_FRAME_MS,
     SAMPLE_RATE,
     CaptureUnavailableError,
     Channel,
 )
-from stenograf.capture.streaming import QueueStreamingProvider
-
-DEFAULT_FRAME_MS = 200
-"""Frame size delivered to the core (~200 ms, matching the macOS helper)."""
+from stenograf.capture.streaming import QueueStreamingProvider, read_up_to
 
 _PAREC_LATENCY_MS = 100
 """Target stream latency asked of the server — keeps delivery well under the
@@ -118,7 +117,7 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
     def __init__(
         self,
         *,
-        command: str | list[str] | None = None,
+        command: str | Path | list[str] | None = None,
         frame_ms: int = DEFAULT_FRAME_MS,
         clock: Callable[[], float] = time.monotonic,
     ):
@@ -171,7 +170,7 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
         frame_bytes = self._frame_samples * 2
         try:
             while True:
-                data = _read_up_to(stream, frame_bytes)
+                data = read_up_to(stream, frame_bytes)
                 if len(data) < 2:
                     return
                 samples = np.frombuffer(data[: len(data) & ~1], dtype="<i2").astype(np.int16)
@@ -192,16 +191,3 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
-
-
-def _read_up_to(stream, n: int) -> bytes:
-    """Read ``n`` bytes, or whatever remains before end of stream."""
-    chunks = []
-    remaining = n
-    while remaining:
-        chunk = stream.read(remaining)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
