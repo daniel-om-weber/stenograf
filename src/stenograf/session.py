@@ -640,25 +640,32 @@ class _TailCheckpointer(threading.Thread):
     not the old whole-buffer re-finalize's O(n²); running on its own thread means a
     slow finalize never stalls capture, which on a live device would drop audio.
 
-    The checkpoint is channel-coarse and un-diarized (``recorder._tail_entries``):
-    diarizing each tail independently would renumber speakers every tail. The
-    authoritative on-stop :meth:`MeetingRecorder.finalize` diarizes the whole
-    buffer and supersedes it. On close the worker exits without finalizing the
-    final sub-interval tail — a clean stop supersedes the checkpoint anyway, and a
-    crash is defined to lose at most one interval of finalized text (PLAN.md §3).
+    The checkpoint is channel-coarse and un-diarized (``finalize_tail`` is
+    :meth:`MeetingRecorder.tail_entries`): diarizing each tail independently
+    would renumber speakers every tail. The authoritative on-stop
+    :meth:`MeetingRecorder.finalize` diarizes the whole buffer and supersedes
+    it. On close the worker exits without finalizing the final sub-interval
+    tail — a clean stop supersedes the checkpoint anyway, and a crash is
+    defined to lose at most one interval of finalized text (PLAN.md §3).
+
+    Depends on the recorder only through the two bound callables, so it can be
+    driven (and tested) without one.
     """
 
     def __init__(
         self,
-        recorder: MeetingRecorder,
         store: SessionStore,
         plans: list[ChannelPlan],
         bus: AudioBus,
+        *,
+        finalize_tail: Callable[[SessionStore, ChannelPlan, float, float], list[TranscriptEntry]],
+        wrap_checkpoint: Callable[[list[TranscriptEntry]], Transcript],
         on_checkpoint: Callable[[Transcript], None],
         interval: float,
     ) -> None:
         super().__init__(name="tail-checkpoint", daemon=True)
-        self._recorder = recorder
+        self._finalize_tail = finalize_tail
+        self._wrap_checkpoint = wrap_checkpoint
         self._store = store
         self._plans = plans
         self._bus = bus
@@ -685,16 +692,14 @@ class _TailCheckpointer(threading.Thread):
                 for plan in self._plans:
                     ch = plan.channel
                     if marks[ch] >= next_cp[ch]:
-                        tail = self._recorder._tail_entries(
-                            self._store, plan, finalized[ch], marks[ch]
-                        )
+                        tail = self._finalize_tail(self._store, plan, finalized[ch], marks[ch])
                         self._entries.extend(tail)
                         finalized[ch] = marks[ch]
                         while marks[ch] >= next_cp[ch]:
                             next_cp[ch] += self._interval
                         flushed = True
                 if flushed:
-                    self._on_checkpoint(self._recorder._checkpoint_transcript(self._entries))
+                    self._on_checkpoint(self._wrap_checkpoint(self._entries))
                 if closed:
                     return
         except Exception as exc:  # surfaced on join, like the capture thread
@@ -866,7 +871,13 @@ class MeetingRecorder:
         provider.start(set(channels))
         if bus is not None and on_checkpoint is not None:
             checkpointer = _TailCheckpointer(
-                self, store, plans, bus, on_checkpoint, checkpoint_interval
+                store,
+                plans,
+                bus,
+                finalize_tail=self.tail_entries,
+                wrap_checkpoint=self.checkpoint_transcript,
+                on_checkpoint=on_checkpoint,
+                interval=checkpoint_interval,
             )
             checkpointer.start()
         capture_error: BaseException | None = None
@@ -949,7 +960,7 @@ class MeetingRecorder:
         inference_lock = threading.Lock()
 
         def flush_checkpoint() -> None:
-            transcript = self._live_checkpoint(decoders)
+            transcript = self.live_checkpoint(decoders)
             if transcript.entries:
                 on_checkpoint(transcript)  # type: ignore[misc]  # None-guarded below
 
@@ -1205,7 +1216,7 @@ class MeetingRecorder:
                 view.error(f"{plan.channel}: finalize failed ({exc2}); skipping channel")
                 return []
 
-    def _live_checkpoint(self, decoders: dict[Channel, LiveDecoder]) -> Transcript:
+    def live_checkpoint(self, decoders: dict[Channel, LiveDecoder]) -> Transcript:
         """A crash checkpoint from the live pass's already-committed words.
 
         Zero inference: the words are read straight off each channel's decoder and
@@ -1215,9 +1226,9 @@ class MeetingRecorder:
         entries: list[TranscriptEntry] = []
         for channel, decoder in decoders.items():
             entries.extend(group_words(list(decoder.committed_words), _CHANNEL_COARSE[channel]))
-        return self._checkpoint_transcript(entries)
+        return self.checkpoint_transcript(entries)
 
-    def _tail_entries(
+    def tail_entries(
         self, store: SessionStore, plan: ChannelPlan, start_s: float, end_s: float
     ) -> list[TranscriptEntry]:
         """Finalize one channel's ``[start_s, end_s)`` tail into coarse entries.
@@ -1251,7 +1262,7 @@ class MeetingRecorder:
             for e in raw
         ]
 
-    def _checkpoint_transcript(self, entries: list[TranscriptEntry]) -> Transcript:
+    def checkpoint_transcript(self, entries: list[TranscriptEntry]) -> Transcript:
         """Wrap accumulated coarse checkpoint entries into an ordered transcript.
 
         Keeps ``self.language`` as-is (explicit setting or ``None``): a checkpoint

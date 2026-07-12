@@ -606,7 +606,13 @@ class TestMeetingRecorder:
         )
         store = SessionStore({Channel.MIC})
         checkpointer = _TailCheckpointer(
-            recorder, store, plan_channels(recorder.profile), bus, lambda t: None, 180.0
+            store,
+            plan_channels(recorder.profile),
+            bus,
+            finalize_tail=recorder.tail_entries,
+            wrap_checkpoint=recorder.checkpoint_transcript,
+            on_checkpoint=lambda t: None,
+            interval=180.0,
         )
         checkpointer.start()
         bus.advance(Channel.MIC, 1.0)  # far below the interval: nothing to do yet
@@ -619,7 +625,7 @@ class TestMeetingRecorder:
             f"checkpointer woke {bus.wait_returns} times for a single frame — busy-spinning"
         )
 
-    def test_tail_entries_shift_onto_the_session_clock_with_a_coarse_label(self):
+    def testtail_entries_shift_onto_the_session_clock_with_a_coarse_label(self):
         store = SessionStore({Channel.MIC})
         for t in range(3):
             store.append(frame(Channel.MIC, float(t), np.ones(SAMPLE_RATE, dtype=np.int16)))
@@ -627,12 +633,12 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         plan = plan_channels(recorder.profile)[0]
-        entries = recorder._tail_entries(store, plan, 1.0, 2.0)
+        entries = recorder.tail_entries(store, plan, 1.0, 2.0)
         assert entries
         assert all(e.speaker == "Local" for e in entries)  # coarse, not diarized Local-1
         assert all(e.start >= 1.0 for e in entries)  # word times shifted into the tail
 
-    def test_live_checkpoint_groups_committed_words_by_channel(self):
+    def testlive_checkpoint_groups_committed_words_by_channel(self):
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=1), asr=FakeASR()
         )
@@ -640,17 +646,17 @@ class TestMeetingRecorder:
             Channel.MIC: CommittedWords([Word("hallo", 0.1, 0.5), Word("welt", 0.6, 0.9)]),
             Channel.SYSTEM: CommittedWords([Word("guten", 0.2, 0.6)]),
         }
-        transcript = recorder._live_checkpoint(decoders)
+        transcript = recorder.live_checkpoint(decoders)
         by_speaker = {e.speaker: e.text for e in transcript.entries}
         assert by_speaker == {"Local": "hallo welt", "Remote": "guten"}
         # Interleaved by start time across channels (mic 0.1 before system 0.2).
         assert [e.speaker for e in transcript.entries] == ["Local", "Remote"]
 
-    def test_live_checkpoint_is_empty_before_anything_commits(self):
+    def testlive_checkpoint_is_empty_before_anything_commits(self):
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
-        transcript = recorder._live_checkpoint({Channel.MIC: CommittedWords([])})
+        transcript = recorder.live_checkpoint({Channel.MIC: CommittedWords([])})
         assert transcript.entries == []
 
     def test_checkpointing_disabled_by_default_interval_zero(self):
@@ -694,7 +700,15 @@ class TestTailCheckpointer:
         recorder = MeetingRecorder(MeetingProfile(local_speakers=1, remote_speakers=0), asr=asr)
         plans = plan_channels(recorder.profile)
         writes: list[Transcript] = []
-        checkpointer = _TailCheckpointer(recorder, store, plans, bus, writes.append, 1.0)
+        checkpointer = _TailCheckpointer(
+            store,
+            plans,
+            bus,
+            finalize_tail=recorder.tail_entries,
+            wrap_checkpoint=recorder.checkpoint_transcript,
+            on_checkpoint=writes.append,
+            interval=1.0,
+        )
         checkpointer.start()
         bus.advance(Channel.MIC, store.duration(Channel.MIC))
         bus.close()
