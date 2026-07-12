@@ -224,7 +224,7 @@ Order matters; each step is committable alone.
   (`asr/base.py:43-64`) an optional `status() -> dict[str, str]`
   (default `{}`); the CLI renders whatever is present. The bare-string
   attribute docstrings at `asr/parakeet_onnx.py:55-60` become real members.
-- [ ] **C5 — extract a capture-provider factory.** Move `_make_provider` /
+- [x] **C5 — extract a capture-provider factory.** Move `_make_provider` /
   `_base_provider` out of the CLI; collapse the near-duplicate Linux/Windows
   blocks (`cli.py:833-869` — ~18 lines each differing only in module +
   label) into one helper taking the provider class, `default_devices`, and

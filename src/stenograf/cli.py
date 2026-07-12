@@ -524,7 +524,7 @@ def start(
     plans = plan_channels(profile)
     # Pace file replay to wall-clock only when it feeds the live pass, so
     # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
-    provider = _make_provider(replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump)
+    provider = loaders.make_provider(replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump)
     if aec_dump is not None:
         from stenograf.aec import EchoCancellingProvider
 
@@ -835,8 +835,8 @@ def _make_tee(record_audio: str | None, default_path: Path, plans):
     """Create the audio tee if --record-audio was given, with a loud banner.
 
     ``default_path`` is where a bare ``--record-audio`` (no value) writes — the
-    managed ``audio.wav`` when archiving, else ``<stem>.wav``; an explicit
-    ``--record-audio PATH`` overrides it.
+    meeting folder's ``audio.wav``; an explicit ``--record-audio PATH``
+    overrides it.
     """
     if record_audio is None:
         return None
@@ -851,101 +851,6 @@ def _make_tee(record_audio: str | None, default_path: Path, plans):
         bold=True,
     )
     return tee
-
-
-def _make_provider(
-    replay: str | None,
-    plans,
-    *,
-    paced: bool = False,
-    aec: bool = True,
-    aec_dump: Path | None = None,
-):
-    """Build the capture provider: file replay if given, else the native helper.
-
-    When both channels are captured, the mic is echo-cancelled against the system
-    channel — without it, remote participants coming out of the speakers land on
-    the mic channel and get transcribed as the local speaker. ``aec_dump`` wraps
-    even with ``--no-aec`` so the eval rig can record the uncancelled baseline.
-    """
-    from stenograf.capture.base import Channel
-
-    provider = _base_provider(replay, plans, paced=paced)
-    channels = {plan.channel for plan in plans}
-    if (aec or aec_dump is not None) and {Channel.MIC, Channel.SYSTEM} <= channels:
-        from stenograf.aec import EchoCancellingProvider
-
-        return EchoCancellingProvider(provider, cancel=aec, dump_dir=aec_dump)
-    return provider
-
-
-def _base_provider(replay: str | None, plans, *, paced: bool = False):
-    from stenograf.capture.base import Channel
-
-    if replay is not None:
-        from stenograf.capture.file import FileCaptureProvider
-
-        paths = [p.strip() for p in replay.split(",") if p.strip()]
-        channel_order = [Channel.MIC, Channel.SYSTEM]
-        sources = dict(zip(channel_order, paths, strict=False))
-        planned = {p.channel for p in plans}
-        ignored = [ch.value for ch in sources if ch not in planned]
-        if ignored:
-            click.echo(f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}")
-        return FileCaptureProvider(
-            {ch: p for ch, p in sources.items() if ch in planned}, paced=paced
-        )
-
-    if sys.platform == "darwin":
-        from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
-
-        try:
-            return MacOSCaptureProvider()
-        except HelperNotFoundError as exc:
-            raise click.ClickException(str(exc)) from exc
-
-    if sys.platform.startswith("linux"):
-        from stenograf.capture.linux import (
-            CaptureUnavailableError,
-            LinuxCaptureProvider,
-            default_devices,
-        )
-
-        try:
-            provider = LinuxCaptureProvider()
-            # Resolve the default devices now so a broken audio stack fails
-            # before capture (and models) start, and say what will be recorded —
-            # the monitor-of-default-sink choice is invisible otherwise.
-            devices = default_devices({p.channel for p in plans})
-        except CaptureUnavailableError as exc:
-            raise click.ClickException(str(exc)) from exc
-        for channel, device in devices.items():
-            click.echo(f"capture: {channel.value} ← {device}")
-        return provider
-
-    if sys.platform == "win32":
-        from stenograf.capture.windows import (
-            CaptureUnavailableError,
-            WindowsCaptureProvider,
-            default_devices,
-        )
-
-        try:
-            provider = WindowsCaptureProvider()
-            # Resolve the default devices now so a broken audio setup fails
-            # before capture (and models) start, and say what will be recorded —
-            # the loopback-of-default-output choice is invisible otherwise.
-            devices = default_devices({p.channel for p in plans})
-        except CaptureUnavailableError as exc:
-            raise click.ClickException(str(exc)) from exc
-        for channel, device in devices.items():
-            click.echo(f"capture: {channel.value} ← {device}")
-        return provider
-
-    raise click.ClickException(
-        "live capture is supported on macOS, Linux, and Windows; here, transcribe "
-        "a recorded file with `steno transcribe`, or use `steno start --replay`."
-    )
 
 
 def _resolve_split_channels(

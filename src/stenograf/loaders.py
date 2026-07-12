@@ -1,17 +1,19 @@
-"""Backend factory for the CLI: settings/env in, loaded backends out.
+"""Backend and capture-provider factory for the CLI: settings/env in, loaded objects out.
 
 One place turns backend *names* into loaded backend objects with the
-committed defaults (parakeet, Silero VAD, sherpa+speakrs diarization), so
-``start``, ``transcribe``, ``setup``, and ``profiles enroll`` can never
-disagree about selection, gating, or first-run downloads. Like
-:mod:`stenograf.view` this is CLI-support code — it reports progress via
-click and raises ``click.ClickException`` for user errors; the pure
-selection seams it drives live in the library
-(:func:`stenograf.diarization.build_diarizer`, the ASR registry).
+committed defaults (parakeet, Silero VAD, sherpa+speakrs diarization) and
+builds the platform capture provider, so ``start``, ``transcribe``,
+``setup``, and ``profiles enroll`` can never disagree about selection,
+gating, or first-run downloads. Like :mod:`stenograf.view` this is
+CLI-support code — it reports progress via click and raises
+``click.ClickException`` for user errors; the pure selection seams it
+drives live in the library (:func:`stenograf.diarization.build_diarizer`,
+the ASR registry).
 """
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 import click
@@ -113,6 +115,93 @@ def load_reid(*, enabled: bool, threshold: float | None, store_path: Path | None
     if not store.for_model(model):
         return None
     return SpeakerReID(store, model, threshold=threshold)
+
+
+def make_provider(
+    replay: str | None,
+    plans,
+    *,
+    paced: bool = False,
+    aec: bool = True,
+    aec_dump: Path | None = None,
+):
+    """Build the capture provider: file replay if given, else the native helper.
+
+    When both channels are captured, the mic is echo-cancelled against the system
+    channel — without it, remote participants coming out of the speakers land on
+    the mic channel and get transcribed as the local speaker. ``aec_dump`` wraps
+    even with ``--no-aec`` so the eval rig can record the uncancelled baseline.
+    """
+    from stenograf.capture.base import Channel
+
+    provider = _base_provider(replay, plans, paced=paced)
+    channels = {plan.channel for plan in plans}
+    if (aec or aec_dump is not None) and {Channel.MIC, Channel.SYSTEM} <= channels:
+        from stenograf.aec import EchoCancellingProvider
+
+        return EchoCancellingProvider(provider, cancel=aec, dump_dir=aec_dump)
+    return provider
+
+
+def _base_provider(replay: str | None, plans, *, paced: bool = False):
+    from stenograf.capture.base import Channel
+
+    if replay is not None:
+        from stenograf.capture.file import FileCaptureProvider
+
+        paths = [p.strip() for p in replay.split(",") if p.strip()]
+        channel_order = [Channel.MIC, Channel.SYSTEM]
+        sources = dict(zip(channel_order, paths, strict=False))
+        planned = {p.channel for p in plans}
+        ignored = [ch.value for ch in sources if ch not in planned]
+        if ignored:
+            click.echo(f"note: ignoring replay for un-recorded channel(s): {', '.join(ignored)}")
+        return FileCaptureProvider(
+            {ch: p for ch, p in sources.items() if ch in planned}, paced=paced
+        )
+
+    if sys.platform == "darwin":
+        from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
+
+        try:
+            return MacOSCaptureProvider()
+        except HelperNotFoundError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+    if sys.platform.startswith("linux"):
+        from stenograf.capture.linux import LinuxCaptureProvider, default_devices
+
+        return _native_provider(LinuxCaptureProvider, default_devices, plans)
+
+    if sys.platform == "win32":
+        from stenograf.capture.windows import WindowsCaptureProvider, default_devices
+
+        return _native_provider(WindowsCaptureProvider, default_devices, plans)
+
+    raise click.ClickException(
+        "live capture is supported on macOS, Linux, and Windows; here, transcribe "
+        "a recorded file with `steno transcribe`, or use `steno start --replay`."
+    )
+
+
+def _native_provider(provider_cls, default_devices, plans):
+    """Construct a queue-streaming native provider and announce its devices.
+
+    Resolves the default devices up front so a broken audio stack fails before
+    capture (and models) start, and says what will be recorded — the
+    monitor-of-default-sink (Linux) / loopback-of-default-output (Windows)
+    choice is invisible otherwise.
+    """
+    from stenograf.capture.base import CaptureUnavailableError
+
+    try:
+        provider = provider_cls()
+        devices = default_devices({p.channel for p in plans})
+    except CaptureUnavailableError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for channel, device in devices.items():
+        click.echo(f"capture: {channel.value} ← {device}")
+    return provider
 
 
 def prefetch_models() -> None:
