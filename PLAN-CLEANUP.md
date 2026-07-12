@@ -163,7 +163,7 @@ delete the copies, keep behavior identical.
   `notes/mlx.py:166-170` and `notes/command.py:98-104`. Both grammarless
   backends call the shared helper; Ollama correctly keeps not using it
   (server-side `format=`).
-- [ ] **T9 — eval I/O helpers in `eval/common.py`.**
+- [x] **T9 — eval I/O helpers in `eval/common.py`.**
   `to_wav16k(src, dst, start=None, end=None)` replaces the open-coded
   ffmpeg `-ac 1 -ar 16000 -c:a pcm_s16le` invocation in `extract.py:23`,
   `extract.py:54`, `scan_languages.py:46`, `backends.py:150` (the

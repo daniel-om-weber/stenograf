@@ -136,23 +136,18 @@ class VoxtralMLX(Backend):
         self._processor = VoxtralProcessor.from_pretrained(self.model_id)
 
     def transcribe(self, wav: Path, language: str | None) -> Result:
-        import subprocess
         import tempfile
 
-        from common import split_at_silences
+        from common import split_at_silences, to_wav16k
 
         if language is None:
             raise ValueError("voxtral needs an explicit language; set it in manifest.json")
         texts = []
         with tempfile.TemporaryDirectory() as tmp:
             for i, (start, end) in enumerate(split_at_silences(wav)):
+                # The input is already the eval wire format, so this is a pure cut.
                 chunk = Path(tmp) / f"chunk{i}.wav"
-                subprocess.run(
-                    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                     "-ss", str(start), "-to", str(end), "-i", str(wav),
-                     "-c:a", "pcm_s16le", str(chunk)],
-                    check=True,
-                )
+                to_wav16k(wav, chunk, start=start, end=end)
                 texts.append(self._transcribe_chunk(chunk, language, end - start))
         return {"text": " ".join(t for t in texts if t), "segments": [], "detected_language": None}
 

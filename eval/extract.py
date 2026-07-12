@@ -13,28 +13,13 @@ Output: mono 16 kHz s16 WAV in eval/audio/ (gitignored — private content).
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 
-from common import AUDIO_DIR, EXAMPLES_DIR, EvalSegment, load_manifest
+from common import AUDIO_DIR, EXAMPLES_DIR, EvalSegment, load_manifest, to_wav16k
 
 
 def ffmpeg_extract(segment: EvalSegment) -> None:
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "error",
-        "-y",
-        "-ss", str(segment.start),
-        "-to", str(segment.end),
-        "-i", str(segment.source_path),
-        "-vn",
-        "-ac", "1",
-        "-ar", "16000",
-        "-c:a", "pcm_s16le",
-        str(segment.wav_path),
-    ]
-    subprocess.run(cmd, check=True)
+    to_wav16k(segment.source_path, segment.wav_path, start=segment.start, end=segment.end)
 
 
 def main() -> int:
@@ -51,11 +36,7 @@ def main() -> int:
             print(f"not found: {source}", file=sys.stderr)
             return 1
         out = AUDIO_DIR / f"full-{source.stem}.wav"
-        subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out)],
-            check=True,
-        )
+        to_wav16k(source, out)
         print(f"wrote {out}")
         return 0
 

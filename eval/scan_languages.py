@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 import mlx_whisper
-from common import EXAMPLES_DIR, OUT_DIR
+from common import EXAMPLES_DIR, OUT_DIR, to_wav16k
 
 PROBE_MODEL = "mlx-community/whisper-tiny"
 AUDIO_SUFFIXES = {".mov", ".m4a", ".mp3", ".mp4", ".wav"}
@@ -43,12 +43,7 @@ def main() -> int:
             probes = []
             for fraction in (0.25, 0.75):
                 start = duration * fraction
-                subprocess.run(
-                    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-                     "-ss", str(start), "-t", "30", "-i", str(path),
-                     "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(snippet)],
-                    check=True,
-                )
+                to_wav16k(path, snippet, start=start, duration=30)
                 raw = mlx_whisper.transcribe(str(snippet), path_or_hf_repo=PROBE_MODEL)
                 probes.append(
                     {

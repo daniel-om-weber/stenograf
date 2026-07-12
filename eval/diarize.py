@@ -29,10 +29,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import wave
 
-import numpy as np
-from common import OUT_DIR, REFS_DIR, load_manifest
+from common import OUT_DIR, REFS_DIR, load_manifest, read_pcm16
 from rttm import Turn, write_rttm
 
 from stenograf import models
@@ -61,11 +59,6 @@ def _build_diarizer(*, sherpa_only: bool):
         print("stenodiar not built — falling back to sherpa estimate mode", file=sys.stderr)
         return sherpa
     return SpeakrsCliDiarizer(sherpa)
-
-
-def _load_pcm(path) -> np.ndarray:
-    with wave.open(str(path), "rb") as wv:
-        return np.frombuffer(wv.readframes(wv.getnframes()), dtype=np.int16)
 
 
 def _words_json(entries) -> dict:
@@ -122,7 +115,7 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for segment in segments:
-        pcm = _load_pcm(segment.wav_path)
+        pcm = read_pcm16(segment.wav_path)
         language = Language(segment.language) if segment.language else None
 
         turns = diarizer.diarize(pcm, args.num_speakers)

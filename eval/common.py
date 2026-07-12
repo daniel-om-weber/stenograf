@@ -1,15 +1,25 @@
-"""Shared paths and manifest access for the Phase 0 eval harness.
+"""Shared paths, manifest access, and audio I/O for the eval harness.
 
-The harness is standalone tooling (``uv run --group eval eval/<script>.py``);
-it deliberately does not import the stenograf package.
+The harness (``uv run --group eval eval/<script>.py``) has two tiers: the
+Phase 0 candidate-comparison scripts (score, extract, adjudicate, …) are
+standalone and deliberately do not import the stenograf package, so they can
+evaluate candidates the package never shipped; the verification scripts
+(parity, live, diarize) exist precisely to exercise the *real* package
+backends and import it on purpose. This module serves both, so it stays
+package-free.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
 
 EVAL_DIR = Path(__file__).parent
 EXAMPLES_DIR = EVAL_DIR.parent / "examples"
@@ -53,6 +63,40 @@ def load_manifest() -> list[EvalSegment]:
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate segment ids in manifest.json")
     return segments
+
+
+def to_wav16k(
+    src: Path,
+    dst: Path,
+    *,
+    start: float | None = None,
+    end: float | None = None,
+    duration: float | None = None,
+) -> None:
+    """ffmpeg any input → mono 16 kHz s16 WAV, optionally cutting a window.
+
+    The one encoding every eval artifact uses — the same wire format the
+    package captures. ``start``/``end`` bound the cut; ``duration`` is the
+    ``-t`` alternative to ``end`` for fixed-length probes."""
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
+    if start is not None:
+        cmd += ["-ss", str(start)]
+    if end is not None:
+        cmd += ["-to", str(end)]
+    if duration is not None:
+        cmd += ["-t", str(duration)]
+    cmd += ["-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dst)]
+    subprocess.run(cmd, check=True)
+
+
+def read_pcm16(path: Path) -> np.ndarray:
+    """A mono 16 kHz s16 WAV as an int16 array; raises ValueError otherwise."""
+    import numpy as np
+
+    with wave.open(str(path), "rb") as w:
+        if w.getnchannels() != 1 or w.getframerate() != 16_000 or w.getsampwidth() != 2:
+            raise ValueError(f"{path} is not a mono 16 kHz int16 WAV")
+        return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
 
 
 def wav_duration(path: Path) -> float:

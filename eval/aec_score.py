@@ -26,10 +26,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import wave
 from pathlib import Path
 
 import numpy as np
+from common import read_pcm16
 
 SAMPLE_RATE = 16000
 FRAME = SAMPLE_RATE // 100  # 10 ms, the AEC tick
@@ -43,10 +43,10 @@ TRIPLE = ("mic", "lpb", "enh")
 
 
 def read_wav(path: Path) -> np.ndarray:
-    with wave.open(str(path), "rb") as w:
-        if w.getnchannels() != 1 or w.getframerate() != SAMPLE_RATE or w.getsampwidth() != 2:
-            raise SystemExit(f"{path} is not the mono 16 kHz int16 WAV --aec-dump writes")
-        return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    try:
+        return read_pcm16(path)
+    except ValueError:
+        raise SystemExit(f"{path} is not the mono 16 kHz int16 WAV --aec-dump writes") from None
 
 
 def frame_energies(x: np.ndarray) -> np.ndarray:

@@ -80,7 +80,7 @@ def main() -> int:
             "speed_x_rt": round(audio_s / wall_s, 1),
             "load_s": round(load_s, 1),
             "peak_rss_mb": round(peak_rss_mb()),
-            "mlx_peak_mb": mlx_peak_mb() and round(mlx_peak_mb()),
+            "mlx_peak_mb": round(peak) if (peak := mlx_peak_mb()) else peak,
             "text": result["text"],
             "segments": result["segments"],
         }

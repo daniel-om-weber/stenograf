@@ -43,8 +43,7 @@ from pathlib import Path
 import aec_score
 from common import AUDIO_DIR
 
-EVAL_DIR = Path(__file__).parent
-OUT_DIR = EVAL_DIR / "out" / "aec"
+AEC_OUT_DIR = Path(__file__).parent / "out" / "aec"
 DEFAULT_SOURCE = AUDIO_DIR / "en-1.wav"
 
 SCENARIOS = {
@@ -167,7 +166,7 @@ def main() -> None:
     label = args.scenario if args.aec else f"{args.scenario}-noaec"
     if args.live:
         label += "-live"
-    run_dir = OUT_DIR / f"{label}-{stamp}"
+    run_dir = AEC_OUT_DIR / f"{label}-{stamp}"
     dump_dir = run_dir / "dump"
     run_dir.mkdir(parents=True)
 

@@ -25,13 +25,13 @@ from __future__ import annotations
 
 import sys
 import time
-import wave
 from pathlib import Path
 
 import jiwer
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
+from common import read_pcm16  # noqa: E402
 from score import normalize  # noqa: E402
 
 from stenograf.asr import create_backend  # noqa: E402
@@ -40,12 +40,6 @@ DEFAULT_WAVS = sorted((Path(__file__).parent / "audio").glob("*.wav"))
 
 WER_THRESHOLD = 0.08
 DELTA_THRESHOLD = 0.12  # seconds; TDT timestamps are 80 ms frames
-
-
-def read_wav(path: Path) -> np.ndarray:
-    with wave.open(str(path), "rb") as w:
-        assert w.getframerate() == 16000 and w.getnchannels() == 1
-        return np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
 
 
 def run_backend(backend, samples: np.ndarray) -> tuple[list, float]:
@@ -110,7 +104,7 @@ def main() -> int:
     all_ok = True
     print(f"{'file':<14} {'xWER':>6} {'medΔ':>6} {'p95Δ':>6} {'mlx':>7} {'onnx':>7}  verdict")
     for wav in wavs:
-        samples = read_wav(wav)
+        samples = read_pcm16(wav)
         duration = len(samples) / 16000
         mlx_words, mlx_dt = run_backend(mlx, samples)
         onnx_words, onnx_dt = run_backend(onnx, samples)
