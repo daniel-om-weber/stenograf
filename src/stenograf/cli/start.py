@@ -7,8 +7,12 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from stenograf.session import MeetingResult
 
 from stenograf import loaders
 from stenograf.cli.format import _MEETING_MAX_SPEAKERS, _report_speaker_counts
@@ -346,7 +350,7 @@ def start(
         state = "on" if use_aec else "off"
         click.echo(f"echo cancellation: {state} (mic cancelled against system audio)")
     try:
-        transcript = _run_meeting(
+        result = _run_meeting(
             recorder,
             provider,
             live=live,
@@ -364,15 +368,23 @@ def start(
             tee.close()
             click.echo(f"recorded audio: {tee.path}")
 
+    if result is None:
+        # Defensive: a live view exited without producing a transcript. There is
+        # nothing authoritative to write; leave any .partial checkpoint in place
+        # for recovery rather than deleting it or crashing on None.
+        raise click.ClickException(
+            "meeting ended before a transcript was produced; any .partial checkpoint is kept"
+        )
+
     # The canceller counts every 10 ms mic tick it had to cancel against silence
     # because the system reference never arrived. A stalled tap degrades to "no
     # cancellation" by design — but silently, so say how much of the meeting ran
     # unprotected, and whether the armed text backstop had to clean up after it.
     canceller = getattr(provider, "canceller", None)
     if canceller is not None and canceller.far_end_missing_ticks > 0:
-        if recorder.dropped_echo_lines:
+        if result.dropped_echo_lines:
             backstop = (
-                f"; the text backstop removed {recorder.dropped_echo_lines} mic "
+                f"; the text backstop removed {result.dropped_echo_lines} mic "
                 "line(s) that duplicated remote speech"
             )
         else:
@@ -384,21 +396,14 @@ def start(
             fg="yellow",
         )
 
-    if transcript is None:
-        # Defensive: a live view exited without producing a transcript. There is
-        # nothing authoritative to write; leave any .partial checkpoint in place
-        # for recovery rather than deleting it or crashing on None.
-        raise click.ClickException(
-            "meeting ended before a transcript was produced; any .partial checkpoint is kept"
-        )
-
+    transcript = result.transcript
     # Usually already persisted at the ``finalized`` event (the TUI path writes
     # while the app still shows the "done" screen); this is the no-op replay
     # then, and the write for the plain/batch paths — or the retry if the
     # event-time write failed, surfacing the error as a normal CLI error here.
     paths = persist(transcript)
     elapsed = time.monotonic() - started
-    _report_speaker_counts(recorder.speaker_counts)
+    _report_speaker_counts(result.speaker_counts)
     click.echo(f"wrote {', '.join(p.name for p in paths)} → {out_dir} ({elapsed:.1f}s)")
     _finish_run(
         transcript,
@@ -424,8 +429,8 @@ def _run_meeting(
     flush_interval: float,
     max_seconds: float | None,
     persist: Callable[[Transcript], object] | None = None,
-) -> Transcript:
-    """Run the capture session through the right live view and return the transcript.
+) -> MeetingResult | None:
+    """Run the capture session through the right live view and return its result.
 
     Three shapes behind one call:
 
@@ -450,8 +455,12 @@ def _run_meeting(
         view = TextualLiveView(
             profile, language=profile.language, stop=provider.stop, persist=persist
         )
-        return view.serve(
-            lambda: recorder.run(
+        # The TUI speaks Transcript (that is what it renders); the run report
+        # travels back to this caller beside it.
+        results: list[MeetingResult] = []
+
+        def meeting() -> Transcript:
+            result = recorder.run(
                 provider,
                 live=True,
                 view=view,
@@ -459,7 +468,11 @@ def _run_meeting(
                 checkpoint=checkpoint,
                 max_seconds=max_seconds,
             )
-        )
+            results.append(result)
+            return result.transcript
+
+        view.serve(meeting)
+        return results[-1] if results else None
     if live:
         from stenograf.view import PlainLiveView
 

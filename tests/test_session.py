@@ -328,7 +328,7 @@ class TestMeetingRecorder:
             asr=FakeASR(),
             diarizer=diarizer,
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
 
         assert provider.started_channels == {Channel.MIC, Channel.SYSTEM}
         assert provider.stopped
@@ -357,7 +357,7 @@ class TestMeetingRecorder:
             diarizer=diarizer,
             reid=reid,
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
         assert {e.speaker for e in transcript.entries} == {"Daniel"}
 
     def test_no_reid_configured_keeps_channel_labels(self):
@@ -372,7 +372,7 @@ class TestMeetingRecorder:
             asr=FakeASR(),
             diarizer=diarizer,
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
         assert {e.speaker for e in transcript.entries} == {"Remote-1"}
 
     @staticmethod
@@ -380,7 +380,7 @@ class TestMeetingRecorder:
         """A meeting where both channels decode to the same five words (a perfect
         echo textually). ``missing_ticks`` simulates the canceller's report of
         reference loss; None runs a plain provider with no canceller at all.
-        Returns (transcript, recorder)."""
+        Returns the run's MeetingResult."""
 
         class EchoedASR(ASRBackend):
             name = "echoed"
@@ -406,33 +406,33 @@ class TestMeetingRecorder:
             )()
         profile = MeetingProfile(local_speakers=1, remote_speakers=1)
         recorder = MeetingRecorder(profile, asr=EchoedASR(), dedup_echo=dedup)
-        return recorder.run(provider), recorder
+        return recorder.run(provider)
 
     def test_dedup_echo_off_never_drops_a_mic_line(self):
         """--no-aec means 'the mic exactly as captured' — including its transcript.
         With the backstop allowed (and the reference state unknown → conservatively
         armed), the mic copy of the echoed line drops; with dedup_echo=False both
         lines must survive."""
-        armed, _ = self._run_echoed(dedup=True)
-        assert [e.speaker for e in armed.entries] == ["Remote-1"]
-        off, _ = self._run_echoed(dedup=False)
-        assert sorted(e.speaker for e in off.entries) == ["Local-1", "Remote-1"]
+        armed = self._run_echoed(dedup=True)
+        assert [e.speaker for e in armed.transcript.entries] == ["Remote-1"]
+        off = self._run_echoed(dedup=False)
+        assert sorted(e.speaker for e in off.transcript.entries) == ["Local-1", "Remote-1"]
 
     def test_backstop_disarms_when_the_canceller_kept_its_reference(self):
         """A healthy canceller leaks nothing decodeable, so identical text on both
         channels is a verbatim local repeat, not echo — it must survive."""
-        transcript, recorder = self._run_echoed(dedup=True, missing_ticks=0)
-        assert sorted(e.speaker for e in transcript.entries) == ["Local-1", "Remote-1"]
-        assert recorder.reference_gap_s == 0.0
-        assert recorder.dropped_echo_lines == 0
+        result = self._run_echoed(dedup=True, missing_ticks=0)
+        assert sorted(e.speaker for e in result.transcript.entries) == ["Local-1", "Remote-1"]
+        assert result.reference_gap_s == 0.0
+        assert result.dropped_echo_lines == 0
 
     def test_backstop_arms_when_the_reference_was_lost(self):
         """With the reference gone the mic ran uncancelled: the duplicate is echo,
         and the drop is recorded for the CLI's degraded-reference warning."""
-        transcript, recorder = self._run_echoed(dedup=True, missing_ticks=250)
-        assert [e.speaker for e in transcript.entries] == ["Remote-1"]
-        assert recorder.reference_gap_s == pytest.approx(2.5)
-        assert recorder.dropped_echo_lines == 1
+        result = self._run_echoed(dedup=True, missing_ticks=250)
+        assert [e.speaker for e in result.transcript.entries] == ["Remote-1"]
+        assert result.reference_gap_s == pytest.approx(2.5)
+        assert result.dropped_echo_lines == 1
 
     def test_finalize_records_requested_and_detected_speaker_counts(self):
         # Local unspecified (estimate), remote given as 2. The diarizer finds two
@@ -447,9 +447,9 @@ class TestMeetingRecorder:
             asr=TwoSpeakerASR(),
             diarizer=diarizer,
         )
-        recorder.run(provider)
+        result = recorder.run(provider)
 
-        by_channel = {c.channel: c for c in recorder.speaker_counts}
+        by_channel = {c.channel: c for c in result.speaker_counts}
         assert by_channel[Channel.MIC] == SpeakerCount(Channel.MIC, None, 2)
         assert by_channel[Channel.SYSTEM] == SpeakerCount(Channel.SYSTEM, 2, 2)
 
@@ -465,7 +465,7 @@ class TestMeetingRecorder:
             asr=TwoSpeakerASR(),
             diarizer=diarizer,
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
 
         params = transcript.parameters
         assert params is not None
@@ -485,7 +485,7 @@ class TestMeetingRecorder:
             asr=FakeASR(),
             diarizer=diarizer,
         )
-        transcript = recorder.run(provider)  # must not raise
+        transcript = recorder.run(provider).transcript  # must not raise
 
         assert diarizer.calls == 1  # the system channel actually attempted to diarize
         # Mic (Local-1, no diarization) and system (Remote-1, un-diarized fallback)
@@ -501,7 +501,7 @@ class TestMeetingRecorder:
             asr=FakeASR(),
             diarizer=diarizer,
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
         assert diarizer.seen_num_speakers == "unset"  # never called
 
@@ -515,7 +515,7 @@ class TestMeetingRecorder:
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
 
@@ -533,7 +533,7 @@ class TestMeetingRecorder:
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
-        transcript = recorder.run(provider, view=CallbackView(on_status=errors.append))
+        transcript = recorder.run(provider, view=CallbackView(on_status=errors.append)).transcript
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]  # first frame finalized
         assert any("capture stopped early" in m for m in errors)
@@ -547,7 +547,8 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         checkpoints: list[Transcript] = []
-        transcript = recorder.run(provider, checkpoint=CheckpointConfig(checkpoints.append, 1.0))
+        result = recorder.run(provider, checkpoint=CheckpointConfig(checkpoints.append, 1.0))
+        transcript = result.transcript
         # The tail checkpoint runs off-thread and coalesces, so the *count* is
         # timing-dependent — but at least one always fires for 3 s at interval 1.
         assert checkpoints
@@ -672,7 +673,7 @@ class TestMeetingRecorder:
         recorder = MeetingRecorder(
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=GermanASR()
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
         assert transcript.language == Language.GERMAN
 
     def test_explicit_language_is_never_overridden_by_detection(self):
@@ -681,8 +682,30 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0, language=Language.ENGLISH),
             asr=GermanASR(),  # German text, but the user forced English → English wins
         )
-        transcript = recorder.run(provider)
+        transcript = recorder.run(provider).transcript
         assert transcript.language == Language.ENGLISH
+
+    def test_recorder_is_reentrant_across_runs(self):
+        # The recorder carries configuration only; results (detected language,
+        # speaker counts, backstop drops) travel on each run's MeetingResult, so
+        # a second meeting on the same recorder starts from a clean slate.
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0), asr=GermanASR()
+        )
+
+        def one_run():
+            provider = ListProvider(
+                [frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))]
+            )
+            return recorder.run(provider)
+
+        first, second = one_run(), one_run()
+        assert first.transcript.language == Language.GERMAN
+        assert second.transcript.language == Language.GERMAN
+        assert second.transcript.entries == first.transcript.entries
+        assert second.speaker_counts == first.speaker_counts
+        # Detection never locks onto the recorder — the configured language stays unset.
+        assert recorder.language is None
 
 
 class TestTailCheckpointer:

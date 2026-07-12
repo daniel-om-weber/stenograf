@@ -304,7 +304,7 @@ class TestMeetingRecorderLive:
         updates: list[tuple[Channel, StreamingUpdate]] = []
         transcript = self._recorder().run(
             provider, live=True, view=CallbackView(on_update=lambda ch, u: updates.append((ch, u)))
-        )
+        ).transcript
         # The finalize pass still produced the authoritative transcript.
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
         assert provider.stopped
@@ -314,7 +314,7 @@ class TestMeetingRecorderLive:
 
     def test_live_run_stops_at_max_seconds(self):
         provider = ListProvider(_one_second_frames(10))
-        transcript = self._recorder().run(provider, live=True, max_seconds=3.0)
+        transcript = self._recorder().run(provider, live=True, max_seconds=3.0).transcript
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
 
@@ -323,7 +323,7 @@ class TestMeetingRecorderLive:
         checkpoints: list[object] = []
         transcript = self._recorder().run(
             provider, live=True, checkpoint=CheckpointConfig(checkpoints.append, 1.0)
-        )
+        ).transcript
         # The on-stop finalize is still the authoritative, diarized transcript.
         assert provider.stopped
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
@@ -343,7 +343,7 @@ class TestMeetingRecorderLive:
         errors: list[str] = []
         transcript = self._recorder().run(
             provider, live=True, view=CallbackView(on_status=errors.append)
-        )
+        ).transcript
         assert [e.speaker for e in transcript.entries] == ["Local-1"]  # the good second survived
         assert provider.stopped
         assert any("capture stopped early" in m for m in errors)
@@ -485,7 +485,7 @@ class TestFinalizeReuse:
         asr = CountingASR()
         spy = _SpyView(asr)
         provider = ListProvider(_one_second_frames(4))
-        transcript = self._recorder(asr).run(provider, live=True, view=spy)
+        transcript = self._recorder(asr).run(provider, live=True, view=spy).transcript
         # Every decode happened in the live pass; the finalize added none.
         assert spy.decodes_at_finalizing is not None
         assert asr.calls == spy.decodes_at_finalizing
@@ -499,7 +499,8 @@ class TestFinalizeReuse:
         spy = _SpyView(asr)
         recorder = self._recorder(asr)
         recorder.reuse_live_finalize = False  # the --full-finalize escape hatch
-        transcript = recorder.run(ListProvider(_one_second_frames(4)), live=True, view=spy)
+        result = recorder.run(ListProvider(_one_second_frames(4)), live=True, view=spy)
+        transcript = result.transcript
         assert asr.calls > spy.decodes_at_finalizing  # finalize decoded again
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
 
@@ -676,15 +677,15 @@ class TestTwoChannelLive:
         # and pure offline batch must produce the same transcript for the same
         # two-channel audio, overlapping speech included.
         reuse_asr = AmplitudeASR()
-        reused = self._recorder(reuse_asr).run(self._provider(), live=True)
+        reused = self._recorder(reuse_asr).run(self._provider(), live=True).transcript
 
         full_asr = AmplitudeASR()
         recorder = self._recorder(full_asr)
         recorder.reuse_live_finalize = False
-        full = recorder.run(self._provider(), live=True)
+        full = recorder.run(self._provider(), live=True).transcript
 
         batch_asr = AmplitudeASR()
-        batch = self._recorder(batch_asr).run(self._provider())
+        batch = self._recorder(batch_asr).run(self._provider()).transcript
 
         assert reused.entries == full.entries == batch.entries
         # Reuse decoded each channel's one window exactly once, in the live pass;
@@ -714,7 +715,7 @@ class TestTwoChannelLive:
             live=True,
             view=CallbackView(on_update=lambda ch, u: updates.append((ch, u))),
             checkpoint=CheckpointConfig(checkpoints.append, 1.0),
-        )
+        ).transcript
         mic_words = [w.text for ch, u in updates if ch is Channel.MIC for w in u.committed]
         sys_words = [w.text for ch, u in updates if ch is Channel.SYSTEM for w in u.committed]
         # Both channels streamed commits, each carrying its own channel's audio.
@@ -739,7 +740,7 @@ class TestTwoChannelLive:
             vad=EnergyVAD(),
             diarizer=diarizer,
         )
-        transcript = recorder.run(provider, live=True)
+        transcript = recorder.run(provider, live=True).transcript
         assert asr.calls == 2  # one live decode per channel window; finalize added none
         assert diarizer.samples_len == 6 * SAMPLE_RATE  # the whole channel, not a window
         assert diarizer.num_speakers == 2
@@ -753,10 +754,10 @@ class TestTwoChannelLive:
             pcm = _pcm_with_speech(5, [(1.0, 3.0)], 1000)
             provider = ListProvider(_interleaved_frames(pcm, pcm.copy()))
             recorder = self._recorder(AmplitudeASR(), dedup_echo=dedup)
-            return recorder.run(provider, live=True), recorder
+            return recorder.run(provider, live=True)
 
-        armed, recorder = run(dedup=True)
-        assert [e.speaker for e in armed.entries] == ["Remote-1"]
-        assert recorder.dropped_echo_lines == 1
-        off, _ = run(dedup=False)
-        assert sorted(e.speaker for e in off.entries) == ["Local-1", "Remote-1"]
+        armed = run(dedup=True)
+        assert [e.speaker for e in armed.transcript.entries] == ["Remote-1"]
+        assert armed.dropped_echo_lines == 1
+        off = run(dedup=False)
+        assert sorted(e.speaker for e in off.transcript.entries) == ["Local-1", "Remote-1"]

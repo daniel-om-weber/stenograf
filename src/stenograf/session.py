@@ -187,6 +187,30 @@ class SpeakerCount:
     detected: int
 
 
+@dataclass(frozen=True)
+class MeetingResult:
+    """Everything one :meth:`MeetingRecorder.run` / ``finalize`` call produced.
+
+    The transcript is the artifact; the rest is the run's report, surfaced by
+    the CLI (requested-vs-detected speaker counts, echo-backstop drops, how
+    long the canceller ran without its reference). Returned rather than stored
+    on the recorder, so the recorder carries configuration only and is
+    reentrant — nothing bleeds from one meeting into the next.
+    """
+
+    transcript: Transcript
+    speaker_counts: list[SpeakerCount]
+    """Per-channel requested-vs-detected counts; the CLI reports estimated
+    counts as editable."""
+    dropped_echo_lines: int = 0
+    """Mic lines the finalize dropped as echoed remote speech; the CLI folds
+    this into its degraded-reference warning."""
+    reference_gap_s: float | None = None
+    """Seconds the canceller cancelled against silence because the far-end
+    reference never arrived (see :func:`_reference_gap`); ``None`` = no
+    canceller was observed."""
+
+
 def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
     """Resolve which channels to record and each channel's speaker count.
 
@@ -735,26 +759,17 @@ class MeetingRecorder:
         The CLI ties this to ``--aec``: with cancellation off the user asked for
         the mic exactly as captured, and no transcript lines should vanish. Even
         when True the backstop only *arms* if the canceller reported losing its
-        reference (see :attr:`reference_gap_s`): a healthy canceller leaks nothing
-        the ASR can decode (measured across the PLAN-AEC.md scenario matrix), so
-        in the healthy case the backstop's one false-positive class — the local
-        speaker verbatim-repeating the remote — can never fire."""
-        self.reference_gap_s: float | None = None
-        """Seconds the canceller cancelled against silence because the far-end
-        reference never arrived (from ``far_end_missing_ticks``, recorded after
-        capture). None means unknown — no canceller was observed (direct
-        :meth:`finalize` calls, e.g. a file transcribe) — and finalize treats
-        unknown conservatively: backstop armed."""
-        self.dropped_echo_lines = 0
-        """Mic lines the last :meth:`finalize` dropped as echoed remote speech;
-        the CLI folds this into its degraded-reference warning."""
+        reference (finalize's ``reference_gap_s``): a healthy canceller leaks
+        nothing the ASR can decode (measured across the PLAN-AEC.md scenario
+        matrix), so in the healthy case the backstop's one false-positive class —
+        the local speaker verbatim-repeating the remote — can never fire."""
         self.language = language or profile.language
+        """The *configured* meeting language (explicit setting or profile), or
+        ``None`` = auto-detect per finalize. Never mutated; the resolved
+        language rides on each result's transcript."""
         self.glossary_threshold = (
             DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
         )
-        self.speaker_counts: list[SpeakerCount] = []
-        """Per-channel requested-vs-detected speaker counts from the last
-        :meth:`finalize`; the CLI reports estimated counts as editable."""
 
     def run(
         self,
@@ -765,7 +780,7 @@ class MeetingRecorder:
         checkpoint: CheckpointConfig | None = None,
         max_seconds: float | None = None,
         live: bool = False,
-    ) -> Transcript:
+    ) -> MeetingResult:
         """Capture until the provider stops (or Ctrl-C), then finalize.
 
         ``on_frame`` sees every stored frame (used by the audio tee); a
@@ -792,7 +807,8 @@ class MeetingRecorder:
         only the *new* tail since the last checkpoint is finalized (O(audio), off
         the capture thread), not the whole buffer. Either way a crash loses at
         most one interval of text, audio is never persisted, and the
-        authoritative transcript is the full finalize returned on stop.
+        authoritative transcript is the full finalize returned on stop (the
+        :class:`MeetingResult` carries it plus the run's report).
         """
         plans = plan_channels(self.profile)
         store = SessionStore({p.channel for p in plans})
@@ -818,7 +834,7 @@ class MeetingRecorder:
         view: LiveView,
         checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
-    ) -> Transcript:
+    ) -> MeetingResult:
         """Consume-thread capture + a tail-only checkpoint thread (no live view).
 
         Capture stays on this thread (so a ``KeyboardInterrupt`` in the provider
@@ -882,7 +898,7 @@ class MeetingRecorder:
         view: LiveView,
         checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
-    ) -> Transcript:
+    ) -> MeetingResult:
         """Live pass: threaded capture + one inference worker, then finalize.
 
         Capture runs on :class:`CaptureLoop` (never blocked by inference); one
@@ -998,7 +1014,7 @@ class MeetingRecorder:
         aux_error: str | None,
         live_words: dict[Channel, tuple[Word, ...]] | None = None,
         inference_lock: threading.Lock | None = None,
-    ) -> Transcript:
+    ) -> MeetingResult:
         """The shared stop→finalize tail of both run modes.
 
         Capture has stopped when this runs; the finalize is authoritative, so it
@@ -1015,24 +1031,18 @@ class MeetingRecorder:
         if aux_error is not None:
             view.error(aux_error)
         view.finalizing()
-        self._note_reference_gap(provider)
         with _shield_interrupt():
             lock = inference_lock if inference_lock is not None else contextlib.nullcontext()
             with lock:
-                transcript = self.finalize(store, plans, view=view, live_words=live_words)
-        view.finalized(transcript)
-        return transcript
-
-    def _note_reference_gap(self, provider: CaptureProvider) -> None:
-        """Record how long the canceller ran without its far-end reference.
-
-        Read after capture stops, immediately before finalize, which arms the
-        echo-text backstop on it. A provider without an enabled canceller (mic
-        only, ``--no-aec`` baselines, plain test providers) leaves the gap None.
-        """
-        canceller = getattr(provider, "canceller", None)
-        if canceller is not None and canceller.enabled:
-            self.reference_gap_s = canceller.far_end_missing_ticks / 100
+                result = self.finalize(
+                    store,
+                    plans,
+                    view=view,
+                    live_words=live_words,
+                    reference_gap_s=_reference_gap(provider),
+                )
+        view.finalized(result.transcript)
+        return result
 
     def finalize(
         self,
@@ -1041,7 +1051,8 @@ class MeetingRecorder:
         *,
         view: LiveView | None = None,
         live_words: dict[Channel, tuple[Word, ...]] | None = None,
-    ) -> Transcript:
+        reference_gap_s: float | None = None,
+    ) -> MeetingResult:
         """Run the finalize pass on every stored channel and interleave them.
 
         ``live_words`` are a channel's window-pass decodes (finalize-identical
@@ -1049,6 +1060,12 @@ class MeetingRecorder:
         present in the dict skips the VAD+ASR re-decode and goes straight to
         diarization/merge. A channel missing from the dict (or the dict being
         None — direct calls, batch mode, ``--full-finalize``) re-decodes.
+
+        ``reference_gap_s`` is how long the canceller ran without its far-end
+        reference (the run modes measure it via :func:`_reference_gap`); the
+        echo-text backstop arms on it. ``None`` means unknown — no canceller
+        was observed (direct calls, e.g. a file transcribe) — and finalize
+        treats unknown conservatively: backstop armed.
         """
         plans = plans or plan_channels(self.profile)
         view = view or LiveView()  # the bare base class is the null view
@@ -1069,13 +1086,20 @@ class MeetingRecorder:
             if plan.num_speakers is None:
                 view.status(f"{plan.channel}: detected {detected} speaker(s)")
             by_channel[plan.channel] = labeled
-        self.speaker_counts = counts
-        self._apply_echo_backstop(by_channel, view)
-        return self._assemble_transcript(plans, by_channel, counts, view)
+        dropped = self._apply_echo_backstop(by_channel, view, reference_gap_s)
+        return MeetingResult(
+            transcript=self._assemble_transcript(plans, by_channel, counts, view),
+            speaker_counts=counts,
+            dropped_echo_lines=dropped,
+            reference_gap_s=reference_gap_s,
+        )
 
     def _apply_echo_backstop(
-        self, by_channel: dict[Channel, list[TranscriptEntry]], view: LiveView
-    ) -> None:
+        self,
+        by_channel: dict[Channel, list[TranscriptEntry]],
+        view: LiveView,
+        reference_gap_s: float | None,
+    ) -> int:
         """Drop mic lines that duplicate remote speech, if the backstop is armed.
 
         The text backstop for a canceller that lost its reference (a stalled or
@@ -1084,26 +1108,26 @@ class MeetingRecorder:
         reference was degraded (or unobserved) — a healthy canceller leaks
         nothing decodeable, and never arming it then means a verbatim local
         repeat of remote speech can never be mistaken for echo. Mutates
-        ``by_channel`` in place and records :attr:`dropped_echo_lines`.
+        ``by_channel`` in place; returns the number of dropped mic lines.
         """
         mic, system = by_channel.get(Channel.MIC), by_channel.get(Channel.SYSTEM)
-        armed = self.dedup_echo and (self.reference_gap_s is None or self.reference_gap_s > 0)
-        self.dropped_echo_lines = 0
+        armed = self.dedup_echo and (reference_gap_s is None or reference_gap_s > 0)
         if not (armed and mic and system):
-            return
+            return 0
         kept = drop_echo_duplicates(mic, system)
-        if len(kept) < len(mic):
-            self.dropped_echo_lines = len(mic) - len(kept)
+        dropped = len(mic) - len(kept)
+        if dropped:
             cause = (
-                f" — the canceller ran {self.reference_gap_s:.1f}s without its reference"
-                if self.reference_gap_s
+                f" — the canceller ran {reference_gap_s:.1f}s without its reference"
+                if reference_gap_s
                 else ""
             )
             view.status(
-                f"echo backstop: dropped {self.dropped_echo_lines} mic line(s) "
+                f"echo backstop: dropped {dropped} mic line(s) "
                 f"duplicating remote speech{cause}"
             )
         by_channel[Channel.MIC] = kept
+        return dropped
 
     def _assemble_transcript(
         self,
@@ -1230,9 +1254,9 @@ class MeetingRecorder:
     def checkpoint_transcript(self, entries: list[TranscriptEntry]) -> Transcript:
         """Wrap accumulated coarse checkpoint entries into an ordered transcript.
 
-        Keeps ``self.language`` as-is (explicit setting or ``None``): a checkpoint
-        never locks the auto-detected language — that happens once, in the on-stop
-        :meth:`finalize`, over the authoritative text.
+        Carries the *configured* language (explicit setting or ``None``): a
+        checkpoint never runs language detection — that happens once, in the
+        on-stop :meth:`finalize`, over the authoritative text.
         """
         return Transcript(language=self.language, profile=self.profile, entries=interleave(entries))
 
@@ -1242,19 +1266,28 @@ class MeetingRecorder:
         *,
         view: LiveView,
     ) -> Language | None:
-        """Fill the meeting language by LID over the transcript, at most once.
-
-        An explicit user setting always wins. Otherwise detect from the
-        finalized text and lock the result on ``self.language`` so later
-        checkpoints stay consistent (PLAN.md §2 "auto-detect once … then lock").
-        """
+        """Resolve the meeting language: an explicit user setting always wins,
+        else LID over the finalized text (PLAN.md §2 "auto-detect once"). The
+        result rides on the returned transcript, never on the recorder."""
         if self.language is not None:
             return self.language
         detected = detect_language(" ".join(e.text for e in entries))
         if detected is not None:
-            self.language = detected  # lock for the session
             view.language(detected)
         return detected
+
+
+def _reference_gap(provider: CaptureProvider) -> float | None:
+    """How long the canceller ran without its far-end reference, in seconds.
+
+    Read after capture stops, immediately before finalize, which arms the
+    echo-text backstop on it. A provider without an enabled canceller (mic
+    only, ``--no-aec`` baselines, plain test providers) has no gap to report.
+    """
+    canceller = getattr(provider, "canceller", None)
+    if canceller is not None and canceller.enabled:
+        return canceller.far_end_missing_ticks / 100
+    return None
 
 
 def _speaker_note(num_speakers: int | None) -> str:

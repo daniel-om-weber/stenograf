@@ -220,7 +220,7 @@ def transcribe(
                 True, local_speakers, remote_speakers
             )
 
-    recorder = None  # bound by the split-channel branch, which reports its counts
+    meeting_result = None  # bound by the split-channel branch, which reports its counts
     if split_pcms is not None:
         duration = len(split_pcms[0]) / SAMPLE_RATE
         reason = (
@@ -244,7 +244,7 @@ def transcribe(
             speaker_profile_store=profile_store,
             title=title,
         )
-        transcript, recorder, elapsed = _transcribe_split_channels(
+        meeting_result, elapsed = _transcribe_split_channels(
             *split_pcms,
             profile=profile,
             use_reid=use_reid,
@@ -254,6 +254,7 @@ def transcribe(
             asr_provider=settings.asr.provider,
             profile_store=reid_store,
         )
+        transcript = meeting_result.transcript
     else:
         from stenograf.pipeline import STAGE_ASR, STAGE_DIARIZATION, finalize_file
 
@@ -319,8 +320,8 @@ def transcribe(
 
     paths = write_transcript(transcript, out_dir, basename, write_formats)
     speed = duration / elapsed if elapsed else 0.0
-    if recorder is not None:
-        _report_speaker_counts(recorder.speaker_counts)
+    if meeting_result is not None:
+        _report_speaker_counts(meeting_result.speaker_counts)
     elif speakers is None:
         found = len({e.speaker for e in entries})
         click.echo(f"speakers: {found} detected")
@@ -397,10 +398,11 @@ def _transcribe_split_channels(
     and diarization with the channel's speaker count, cross-channel echo-text
     dedup (armed conservatively: the recording's canceller state is unknown),
     glossary, one interleaved Local-N/Remote-N transcript — just fed from a
-    file instead of a capture session. Returns ``(transcript, recorder,
-    elapsed)``; the recorder carries the per-channel speaker counts for
-    reporting, ``elapsed`` the processing seconds (clocked after model load,
-    so a first-run weight download never masquerades as transcription speed).
+    file instead of a capture session. Returns ``(result, elapsed)``; the
+    :class:`~stenograf.session.MeetingResult` carries the per-channel speaker
+    counts for reporting, ``elapsed`` the processing seconds (clocked after
+    model load, so a first-run weight download never masquerades as
+    transcription speed).
     """
     from stenograf.audio import to_int16
     from stenograf.capture.base import AudioFrame, Channel
@@ -443,5 +445,5 @@ def _transcribe_split_channels(
     store.append(AudioFrame(Channel.MIC, 0.0, to_int16(left)))
     store.append(AudioFrame(Channel.SYSTEM, 0.0, to_int16(right)))
     started = time.monotonic()
-    transcript = recorder.finalize(store, plans, view=_StatusEcho())
-    return transcript, recorder, time.monotonic() - started
+    result = recorder.finalize(store, plans, view=_StatusEcho())
+    return result, time.monotonic() - started
