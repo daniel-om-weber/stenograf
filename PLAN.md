@@ -1375,6 +1375,29 @@ benchmark). `bias.py` drives the real shipped backend through `create_backend`.
   0.95** — the conservative end of the frontier, consistent with over-correction
   being worse than a missed correction. The rest of the frontier, if we ever want
   recall: `boost=1.5 + post` = B-WER −37.6 % for 7 false insertions on real audio.
+- **Head-to-head vs TypeWhisper's engine (`eval/bias_fluid.py`, English only).** Its
+  Parakeet plugin calls FluidAudio, which runs *the same TDT 0.6b v3 we do*, so model,
+  audio, lists and scorer are all held constant and the biasing **mechanism** is the
+  only variable: our tree over token logits *inside* the greedy loop vs their second
+  CTC model rescoring the *finished* transcript. **German is not runnable at all** —
+  their spotter (`parakeet-ctc-110m`) has 1024 tokens and *zero* non-ASCII ones, so
+  German terms tokenize to `<unk>` and are silently kept; TypeWhisper pairs it with the
+  multilingual transcriber with no language check. **As TypeWhisper ships it, the
+  vocabulary destroys the transcript**: B-WER −75.3 % bought with U-WER **+305.6 %** and
+  **375 false insertions** (287/500 utterances altered; `glowing`→`unloving`,
+  `pound`→`compound` — correct words snapped onto *distractors*). Not tuning: their own
+  defaults give 374, their documented `cbw 3.0` gives 362. **But the mechanism is fine —
+  the shipped config is the bug.** At `minSimilarity 0.85` the same engine reaches B-WER
+  **−32.2 %, U-WER +2.4 %, 8 false insertions**, i.e. *parity* with our −34.9 % / +0.0 %
+  / 2. On accuracy this benchmark does not separate the two approaches; what separates
+  them is one pass vs two models, streaming vs batch-only, and German. Two defaults do
+  the damage and both are worst where real users live: `rescorerConfig(forVocabSize:)`
+  gives **≤10 terms the *loosest* threshold (0.50)** — a real glossary is 10–30 terms —
+  and the **spotter rescue** (on by default) wrecks small lists outright (762 false
+  insertions on an oracle list of only-spoken words; `--vocab-disable-spotter-rescue`
+  drops it to 104, and minSimilarity does not gate it). Caveat, stated in the README:
+  is21's "rare words" are ordinary English words, not the entities FluidAudio is built
+  for, so this benchmark is harsher on their design than their target domain is.
 - **Glossary size is a risk knob in its own right** (`--tier distractor`, biasing
   with words known to be absent, so any change at all is a false insertion): 10
   bogus terms → **0 edits**, 50 → 2, 100 → 5, 500 → 17. Damage scales with list

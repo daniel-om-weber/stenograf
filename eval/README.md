@@ -160,7 +160,53 @@ uv run --group eval eval/bias.py --tier german --post 0.88 0.92 0.95
 
 # 4. Reachability probes (synthetic; a diagnostic, never a quality metric)
 uv run --group eval eval/bias_tts.py && uv run --group eval eval/bias.py --tier tts
+
+# 5. Head-to-head vs TypeWhisper's engine (FluidAudio), English only — see below
+uv run --group eval eval/bias_fluid.py --cli /path/to/.build/release/fluidaudiocli
 ```
+
+## The head-to-head: FluidAudio (TypeWhisper's Parakeet engine)
+
+`bias_fluid.py` runs the *same acoustic model we do* (Parakeet TDT 0.6b v3) through
+FluidAudio's context-biasing path — the engine behind TypeWhisper's Parakeet plugin —
+on the same pinned 500 utterances, the same per-utterance 100-term lists, scored by
+the same `bias_score`. Held constant: model, audio, lists, scorer. The only variable is
+the **mechanism**: our boosting tree over token logits *inside* the greedy TDT loop, vs
+their second CTC model rescoring the *finished* transcript. Each system is reported
+against **its own** unbiased baseline (their encoder is CoreML int8, ours MLX fp32 — the
+absolute WERs are not comparable; the deltas are).
+
+**English only, and that is their limit, not our choice.** Their spotter
+(`parakeet-ctc-110m`) has a 1024-token vocabulary with **zero** non-ASCII tokens, so
+German terms tokenize into `<unk>` holes and are silently kept. TypeWhisper pairs it
+with the multilingual transcriber with no language check. Our German tier has no
+opponent — that is a capability they lack, not a number they lose.
+
+**Result (2026-07-13).** As TypeWhisper ships it, the vocabulary posts a spectacular
+B-WER −75.3 % and **destroys the transcript doing it**: U-WER **+305.6 %**, **375 false
+insertions**, 287 of 500 utterances altered, with rewrites like `glowing`→`unloving`
+and `pound`→`compound` — correct common words snapped onto *distractors*, terms the
+benchmark included precisely because they are absent. Not a tuning accident: their own
+defaults give 374, their documented `cbw 3.0` gives 362.
+
+**But the mechanism is sound and the configuration is the bug.** Forced to
+`minSimilarity 0.85`, the same engine reaches **B-WER −32.2 %, U-WER +2.4 %, 8 false
+insertions** — parity with our −34.9 % / +0.0 % / 2. On accuracy alone this benchmark
+does not separate in-loop boosting from post-decode rescoring. What separates them is
+the rest of the bill: one pass vs two models, streaming vs batch-only, and German.
+
+Two defaults do the damage, both worst where real users live:
+
+| | |
+|---|---|
+| `rescorerConfig(forVocabSize:)` | minSimilarity **0.60** above 100 terms, **0.55** at 11–100, **0.50** at ≤10 — *smaller glossary, looser matching*. A real meeting glossary is 10–30 terms. |
+| **spotter rescue** (on by default) | wrecks small lists: an oracle list of only genuinely-spoken words yields **762** false insertions and U-WER +1407 %; `--vocab-disable-spotter-rescue` alone drops it to 104. minSimilarity does not gate it — 0.85 leaves the collapse intact. |
+
+**Read it fairly.** is21's "rare words" are ordinary English words (`frail`, `idly`,
+`holiness`), not the entities and jargon FluidAudio is designed for; their published
+99.3 % precision on earnings calls is plausibly true in that domain. The bounded claim:
+*on the standard biasing benchmark, at its standard list size, the configuration
+TypeWhisper ships is destructive — and the mechanism underneath it is not.*
 
 **Metrics** (`bias_score.py`, pure — pinned by `tests/test_eval_bias.py`): B-WER
 (WER over reference words in the biasing list — must fall), U-WER (every other word
