@@ -208,6 +208,35 @@ Two defaults do the damage, both worst where real users live:
 *on the standard biasing benchmark, at its standard list size, the configuration
 TypeWhisper ships is destructive — and the mechanism underneath it is not.*
 
+## The confidence gate we did NOT build (`bias_confidence.py`)
+
+The idea worth stealing from FluidAudio is the principle, not the code: **a post-hoc
+correction must answer to the audio**, which is exactly what our fuzzy layer cannot do
+and why over-correction forced the threshold to 0.95. The cheap version of that idea:
+our TDT already emits per-token confidence from the *unbiased* distribution, so gate
+corrections on it — refuse to rewrite a word the model was sure about. No second model,
+no extra compute, works in every language.
+
+`bias_confidence.py` tested the claim before anyone implemented it, and **killed it**:
+
+| | n | median conf | p10 |
+|---|---|---|---|
+| false insertions | 53 | **0.999** | 0.938 |
+| true fixes | 165 | **0.951** | 0.858 |
+
+Directionally right, practically useless. The best gate (c = 0.95) blocks 45 of 53 false
+insertions and destroys **84 of 165 true fixes**; looser points are worse. `der` → `deri`
+(false insertion) scored 1.000 and `finde` → `find` (real fix) scored 0.997 — a greedy
+RNN-T's entropy-normalized confidence saturates at ~1.0 for nearly everything, so it
+cannot carry a gate. One decode pass, no refactor, question closed.
+
+What survives is the *other* question. The gate asked "how sure was the model about the
+word it wrote?" (always: certain). The discriminative one is "how much does the model
+dislike the word we want to put there?" — scoring the **candidate** over the span,
+against the tokens actually emitted. That is FluidAudio's idea done with the right model
+(our 600M TDT, not a weak English-only 110M CTC), and it needs forced alignment through
+the joint. Unproven, unbuilt; `bias_confidence.py` is what would price it.
+
 **Metrics** (`bias_score.py`, pure — pinned by `tests/test_eval_bias.py`): B-WER
 (WER over reference words in the biasing list — must fall), U-WER (every other word
 — must **not** rise; over-boosting is visible here and nowhere else), entity

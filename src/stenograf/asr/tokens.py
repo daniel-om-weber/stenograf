@@ -36,6 +36,12 @@ class Token:
     text: str
     start: float
     end: float
+    confidence: float | None = None
+    """The model's certainty when it emitted this token, read from the *unbiased*
+    distribution (see ``parakeet._biased_decode_greedy``) — so a boosted token reports
+    what the model actually believed, not what we told it to prefer. Optional because
+    a backend may not expose it; ``merge_tokens`` then leaves the word's confidence
+    ``None`` rather than inventing one."""
 
 
 @lru_cache(maxsize=1)
@@ -90,8 +96,24 @@ def _compound_tail(sp, text: str) -> list[int] | None:
     return [sp.piece_to_id(piece) for piece in tail]
 
 
+def _weakest(left: float | None, right: float | None) -> float | None:
+    """A word is only as certain as its least certain piece.
+
+    ``min``, not a mean: a word the model was sure about *except* for one token is
+    exactly the word a glossary correction should be allowed to touch, and averaging
+    would bury that token under its confident neighbours. ``None`` (a backend that
+    reports no confidence) is not a low score — it is no score, and must not drag a
+    word's confidence down.
+    """
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)
+
+
 def merge_tokens(tokens) -> list[Word]:
-    """Merge subword tokens into words.
+    """Merge subword tokens into words, carrying each word's confidence with it.
 
     Tokens are SentencePiece pieces with the word-boundary marker rendered as
     a leading space; a token without one continues the previous word. Numbers
@@ -104,13 +126,19 @@ def merge_tokens(tokens) -> list[Word]:
     boundary = False  # a pending word break left by a bare space token
     for token in tokens:
         text = token.text.strip()
+        confidence = getattr(token, "confidence", None)
         if not text:
             boundary = boundary or bool(token.text)
             continue
         if token.text.startswith(" ") or boundary or not words:
-            words.append(Word(text=text, start=token.start, end=token.end))
+            words.append(Word(text=text, start=token.start, end=token.end, confidence=confidence))
         else:
             prev = words[-1]
-            words[-1] = Word(text=prev.text + text, start=prev.start, end=token.end)
+            words[-1] = Word(
+                text=prev.text + text,
+                start=prev.start,
+                end=token.end,
+                confidence=_weakest(prev.confidence, confidence),
+            )
         boundary = False
     return words

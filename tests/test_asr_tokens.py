@@ -12,6 +12,21 @@ def test_merge_tokens_leading_space_starts_a_word():
     assert _texts(toks) == ["hallo", "welt"]
 
 
+def test_merge_tokens_word_confidence_is_its_weakest_token():
+    # A word is only as certain as its least certain piece: averaging would bury the
+    # one token the model fumbled under its confident neighbours.
+    toks = [Token(" hal", 0.0, 0.2, 0.9), Token("lo", 0.2, 0.3, 0.4), Token(" welt", 0.4, 0.7, 0.8)]
+    words = merge_tokens(toks)
+    assert [w.confidence for w in words] == [0.4, 0.8]
+
+
+def test_merge_tokens_missing_confidence_is_absent_not_zero():
+    # A backend that reports no confidence must leave it None — not drag the word to 0.
+    assert merge_tokens([Token(" hallo", 0.0, 0.2)])[0].confidence is None
+    mixed = merge_tokens([Token(" hal", 0.0, 0.2, 0.7), Token("lo", 0.2, 0.3)])
+    assert mixed[0].confidence == 0.7
+
+
 def test_merge_tokens_bare_space_token_is_a_word_boundary():
     # Numbers arrive as a bare " " boundary token followed by digit pieces
     # (real decode of de-2: " und", " ", "1", "5", ".", "7", "."). The empty
