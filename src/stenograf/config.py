@@ -84,9 +84,9 @@ class MeetingProfile:
     local_speakers: int | None = None
     remote_speakers: int | None = None
     glossary: tuple[str, ...] = ()
-    """Domain terms to snap the finalized transcript to (Parakeet has no
-    decode-time biasing, so vocabulary is a text post-correction — see
-    ``stenograf.glossary`` and PLAN.md §5 Task 2b)."""
+    """Domain terms the transcript is steered toward: they boost the decoder as it
+    transcribes (``stenograf.asr.biasing``) and then snap near-misses in the finalized
+    text (``stenograf.glossary``)."""
     attendee_names: tuple[str, ...] = ()
     """Participant names, corrected like the glossary (also token-by-token)."""
     speaker_profile_store: Path | None = field(default=None)

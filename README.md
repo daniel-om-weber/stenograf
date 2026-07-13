@@ -251,16 +251,27 @@ dir (not the model cache) and are never uploaded.
 
 ## Vocabulary
 
-Domain terms and attendee names are corrected in the finalized transcript
-(the ASR has no decode-time biasing, so this is a post-correction pass):
+Domain terms and attendee names steer the transcript twice: they boost the
+decoder toward those spellings *while* it transcribes, and then correct the
+near-misses it still got wrong in the finalized text.
 
 ```sh
 steno transcribe rec.mov --attendee "Anja Müller" --glossary Kubernetes,gRPC
 steno transcribe rec.mov --glossary-file terms.txt
 ```
 
-A term and its transcription must share a word count — `gRPC` can fix `G R P C`
-spoken as one word, but not a term split across word boundaries.
+Write a term the way it appears in a sentence. A capitalized term (`Kubernetes`,
+`iOS`) is imposed verbatim; an all-lowercase one asserts the spelling but leaves
+the model's capitalization alone. In the correction pass a term and its
+transcription must share a word count — `gRPC` can fix `G R P C` spoken as one
+word, but not a term split across word boundaries.
+
+Both layers are on whenever there are terms. `[asr] boost` scales the decoder
+biasing (default 1.0; `0` turns it off, and much above ~3 it starts rewriting
+words that were never in your list), and `[vocab] glossary_threshold` is the
+similarity a word must reach before the correction pass touches it (default
+0.95 — deliberately strict, because a loose threshold corrupts words the model
+already had right).
 
 ## Settings
 

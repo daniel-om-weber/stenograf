@@ -171,8 +171,9 @@ def _apply_no_diarization(
 def _vocab_options(func: Callable) -> Callable:
     """Shared glossary/attendee/re-ID-store options for ``start`` and ``transcribe``.
 
-    The finalize pass has no decode-time biasing (Parakeet), so these drive the
-    deterministic text post-correction in ``stenograf.glossary`` (PLAN.md Task 2b).
+    These terms drive both vocabulary layers: they boost the decoder as it transcribes
+    (``stenograf.asr.biasing``) and then snap the near-misses it still got wrong
+    (``stenograf.glossary``).
     """
     for option in reversed(
         (
@@ -199,7 +200,7 @@ def _vocab_options(func: Callable) -> Callable:
                 type=click.FloatRange(0, 1),
                 default=None,
                 help="Similarity 0–1 required to correct a term "
-                "[default: [vocab] glossary_threshold in settings.toml, else 0.82].",
+                "[default: [vocab] glossary_threshold in settings.toml, else 0.95].",
             ),
             click.option(
                 "--profile-store",
