@@ -266,12 +266,25 @@ the model's capitalization alone. In the correction pass a term and its
 transcription must share a word count — `gRPC` can fix `G R P C` spoken as one
 word, but not a term split across word boundaries.
 
+**An acronym you pronounce as a word needs both spellings.** Biasing rewards the
+exact token path you write, so `NIRS` only ever rewards `N-I-R-S` — a spelling
+the acoustics never take when you say "nirs". List `NIRS` *and* `Nirs`: the
+decoder can reach the second, and the correction pass snaps it back to the first,
+since the two normalize to the same word. Only case variants of the same letters
+work — a respelling (`Ekmo` for `ECMO`) is reachable but never snaps back.
+
 Both layers are on whenever there are terms. `[asr] boost` scales the decoder
 biasing (default 1.0; `0` turns it off, and much above ~3 it starts rewriting
 words that were never in your list), and `[vocab] glossary_threshold` is the
 similarity a word must reach before the correction pass touches it (default
 0.95 — deliberately strict, because a loose threshold corrupts words the model
 already had right).
+
+Reach for the spellings before the knobs. On an 85-minute German meeting, adding
+the pronounceable twins fixed three more terms for four extra changed words in
+the rest of the transcript, where raising `boost` to 1.5 bought two and disturbed
+forty-six — at 2.0 the correct compound "Medizintechnikgruppe" decayed into
+"Medizinischechnikgruppe", pulled apart by a listed term it half-matched.
 
 ## Settings
 
