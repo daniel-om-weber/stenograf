@@ -57,7 +57,16 @@ At 0.95 the layer is a free win instead: it still *adds* to biasing (B-WER −30
 vs −27.0 % German, −36.3 % vs −34.9 % English) while U-WER stays flat or improves,
 false insertions land at biasing's own level (4 / 3), and on real meeting audio with
 a realistic 30-term glossary it inserts **nothing** biasing did not already insert.
-Below ~0.92 the damage climbs fast; do not lower this without re-running that tier."""
+Below ~0.92 the damage climbs fast; do not lower this without re-running that tier.
+
+Nor is the layer redundant with a better-tuned ``[asr] boost``, which is the obvious
+way to try to delete it: matched on B-WER, *lower* boost plus this layer beats higher
+boost alone on both damage metrics (at −37.6 % B-WER: 8 false insertions and U-WER
+−2.3 %, against 16 and −0.6 % for ``boost=1.75`` with no post-correction). The two
+fail differently — boost makes the decoder credulous everywhere, so its damage is
+diffuse, while matching at 0.95 fires only on near-exact strings, so its damage is
+narrow. On real audio post@0.95 adds *zero* insertions at any boost, where raising
+boost 1.0 → 1.75 takes them 2 → 11. This layer is the cheap knob; boost is not."""
 
 _MIN_TERM_CHARS = 4
 """Terms shorter than this (normalized) are too collision-prone to correct."""

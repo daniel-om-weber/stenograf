@@ -757,7 +757,13 @@ def build_configs(args) -> list[Config]:
     ``--sweep`` is one-factor-at-a-time around the shipped default, not a cartesian
     product: the full grid is 5–10 h of decoding and the questions are independent
     (what is the best boost; is our unk_score right; does compound-tail earn its
-    keep). ``--n`` repeated adds the list-size ablation.
+    keep). ``--n`` repeated adds the list-size ablation, ``--boosts`` a finer alpha
+    grid than the sweep's.
+
+    ``--post`` is the one place a cartesian product *is* affordable, and where it
+    earns its keep: it pairs **every** biasing arm with a post-corrected twin, which
+    is what settles whether the fuzzy layer contributes anything a better-tuned
+    decoder could not. It costs no decoding — the twin re-uses its arm's hypotheses.
     """
     shipped = Config(alpha=args.boost, unk=args.unk, compound=True, n=args.n[0])
     configs = [Config(alpha=0, n=args.n[0])]
@@ -767,14 +773,16 @@ def build_configs(args) -> list[Config]:
         # The two divergences from NeMo, each at the shipped boost.
         configs += [replace(shipped, unk=0.0), replace(shipped, compound=False)]
         configs += [replace(shipped, n=n) for n in args.n[1:]]
+    elif args.boosts:
+        configs += [replace(shipped, alpha=a) for a in args.boosts]
     else:
         configs += [replace(shipped, n=n) for n in args.n]
 
-    # The other layer, last so the table reads decode-time → post-hoc → both. Each
-    # threshold costs no decoding at all: post arms re-use their twin's hypotheses.
+    # The other layer, last so the table reads decode-time → post-hoc → both.
+    biased = [c for c in configs if c.alpha and not c.post]
     for threshold in args.post:
         configs.append(Config(alpha=0, n=args.n[0], post=threshold))
-        configs.append(replace(shipped, post=threshold))
+        configs += [replace(c, post=threshold) for c in biased]
     return configs
 
 
@@ -784,6 +792,12 @@ def main() -> int:
     parser.add_argument("--backend", default="parakeet", help="parakeet | parakeet-onnx")
     parser.add_argument("--n", type=int, nargs="+", default=[100], help="biasing-list size(s)")
     parser.add_argument("--boost", type=float, default=DEFAULT_ALPHA)
+    parser.add_argument(
+        "--boosts",
+        type=float,
+        nargs="+",
+        help="a finer alpha grid than --sweep's; each arm also gets a --post twin",
+    )
     parser.add_argument("--unk", type=float, default=DEFAULT_UNK_SCORE)
     parser.add_argument(
         "--sweep", action="store_true", help="ablate boost, unk_score, compound-tail"

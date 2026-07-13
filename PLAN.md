@@ -1353,6 +1353,25 @@ benchmark). `bias.py` drives the real shipped backend through `create_backend`.
   asymmetry, still open: `biasing.surface_forms` never imposes a lowercase spelling,
   while `glossary.py` imposes the term's spelling verbatim — so a user who writes
   `kubernetes` gets it forced at sentence start.)
+- **The fuzzy layer is not redundant with a better-tuned decoder — it is the
+  *cheaper* knob** (`--boosts 0.5 1.0 1.25 1.5 1.75 2.0 --post 0.95`, the question
+  "can we tune `boost` well enough to delete `glossary.py`?"). Answer: no. Matched on
+  B-WER, lower-boost+post dominates higher-boost-alone on **both** damage metrics —
+  at −37.6 % B-WER, `boost=1.5 + post` costs 8 false insertions and U-WER −2.3 %
+  where `boost=1.75` alone costs **16** and −0.6 %; at −40 %, `boost=1.75 + post`
+  (−40.7 %, U-WER −1.0 %, 16 FI) beats `boost=2.0` alone, which *fails* the U-WER
+  gate (−39.4 %, **+6.7 %**, 27 FI) to get less. The layers fail differently, which
+  is the whole point: boost makes the decoder credulous *everywhere*, so its damage
+  is diffuse (U-WER, across the transcript); post@0.95 only fires on near-exact
+  strings, so its damage is narrow. Buying a targeted fix with a diffuse knob is a
+  bad trade. On **real meeting audio** the asymmetry is starker still: post@0.95 adds
+  **0** false insertions at every boost level, while boost 1.0 → 1.75 takes them from
+  2 → 11. The fuzzy layer is free; boost is not. Only at ≈ −30 % B-WER is it a tie
+  (`boost=1.25` alone ≈ `boost=1.0 + post`), so the layer is discardable only if we
+  are content to stop there. **Shipped defaults stay at `boost = 1.0` + threshold
+  0.95** — the conservative end of the frontier, consistent with over-correction
+  being worse than a missed correction. The rest of the frontier, if we ever want
+  recall: `boost=1.5 + post` = B-WER −37.6 % for 7 false insertions on real audio.
 - **Glossary size is a risk knob in its own right** (`--tier distractor`, biasing
   with words known to be absent, so any change at all is a false insertion): 10
   bogus terms → **0 edits**, 50 → 2, 100 → 5, 500 → 17. Damage scales with list
