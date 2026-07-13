@@ -1284,6 +1284,89 @@ rest. Two naming landmines for future screens: never define `_running` or
 `_render` on a Screen — both shadow Textual internals (`MessagePump._running`,
 `Widget._render`) and break the screen silently.
 
+### Contextual-biasing evaluation harness (built 2026-07-13)
+
+Decode-time biasing (`stenograf/asr/biasing.py`, a from-scratch port of NVIDIA's
+TurboBias/GPU-PB) shipped with a tree verified against NeMo's golden vectors but
+an *effect* resting on one TTS clip and three meeting WAVs. That is enough to
+prove the mechanism fires and not enough to set `[asr] boost` or to defend the
+two places we deliberately diverge from NeMo. `eval/bias*.py` replaces the
+anecdotes with numbers, with **zero hand labeling** — every reference and word
+list comes from corpora that already ship them. Usage in `eval/README.md`.
+
+**The harness.** `bias_score.py` is a pure scorer (B-WER / U-WER / entity
+recall+precision / false insertions / surface damage), a faithful port of is21's
+own alignment — which turns the **44 hypothesis+result file pairs they publish
+into a free correctness oracle**: `tests/test_eval_bias.py` reproduces every one
+of them to the digit (skips until `bias_data.py --fetch is21` has run).
+`bias_data.py` downloads the English lists and **derives the German benchmark**
+(none exists) from MLS's free train transcripts by the identical recipe — 3,394
+utts, a 299,699-word distractor pool, 16.4 % rare-token density (vs 11 % in
+English: German compounding fattens the tail, which makes it a *better* biasing
+benchmark). `bias.py` drives the real shipped backend through `create_backend`.
+
+**What it found** (500-utt pinned subsample, `parakeet` MLX, N=100 unless noted):
+
+- **English correctness gate — PASS.** Baseline B-WER 12.73 % vs U-WER 1.03 %
+  (rare words 12× harder); biasing → **B-WER −34.9 % relative, U-WER exactly
+  flat**. The is21 authors report ~30 % relative with U-WER flat, so the port
+  reproduces the literature on a far stronger model. B-WER also degrades
+  monotonically with list size (12.22 → 12.84 % for N=100 → 2000), which is the
+  bug detector: it proves the distractors are really in the tree and competing.
+- **`boost = 1.0` CONFIRMED as the default.** German B-WER by boost: 0.5 →
+  −16.5 %, **1.0 → −27.0 % (U-WER −3.2 %, i.e. it *improves*)**, 2.0 → −39.4 %
+  but U-WER **+6.7 %** and false insertions 3 → 27, 3.0 → no further B-WER gain
+  (−39.2 %) with U-WER **+38.4 %** and 105 false insertions. The knee is exactly
+  between 1 and 2; 3 is the catastrophe NVIDIA warns about, measured.
+- **`unk_score = 1.0` (our divergence from NeMo's code) CONFIRMED.** NeMo's
+  `unk_score=0` wins on B-WER (−33.7 % vs −27.0 %) but rewrites **33 words'
+  surface forms vs our 6** — and the rewrites are exactly the predicted failure:
+  spurious capitalization (`ihrer`→`Ihrer`, `war`→`War`, `fertig`→`Fertig`),
+  because with `unk_score < context_score` the root's arcs stop being uniform and
+  the tree yanks the decoder toward glossary-ish spellings at *every word start*.
+  The `DEFAULT_UNK_SCORE` docstring predicted this mechanism; the sweep measured it.
+- **Compound-tail tokenization — NULL on this benchmark, and that is a fact about
+  the corpus, not the feature.** Identical B-WER and recall with it on and off
+  (12.22 %, 87.8 %). MLS German is 19th-century audiobook prose, where a glossary
+  term almost never appears *inside* a compound — the case the feature exists for.
+  It is confirmed elsewhere (the real-model measurement that motivated it, and the
+  TTS reachability tier) and shown here to do **no harm**. Tier 2 is simply the
+  wrong corpus to price it; a German *technical-speech* set would be the right one,
+  and none exists.
+- **Glossary size is a risk knob in its own right** (`--tier distractor`, biasing
+  with words known to be absent, so any change at all is a false insertion): 10
+  bogus terms → **0 edits**, 50 → 2, 100 → 5, 500 → 17. Damage scales with list
+  length because more phrases mean more prefixes for the decoder to fall into
+  mid-word. Real meeting glossaries are 10–30 terms, where it is clean — but this
+  is the argument for keeping them to the terms that actually come up.
+- **TTS (Tier 5) is a reachability diagnostic and cannot be more.** All four error
+  classes are reachable (casing, compound, glued, multi-token name) and the
+  absent-term probes stay clean. But the tier had to be *redesigned mid-flight*:
+  it originally demanded the term be recovered under both German and English
+  pronunciation, and measurement killed that. A German acoustic model fed English
+  phonemes can lose the word entirely ("Kafka-Consumer" → heard as "Kafketon
+  Zoomer") or produce a *different real word* — the English rendering of "Ada" is
+  heard as "Ede", so the audio genuinely says "Ede", and demanding recovery there
+  would be demanding the decoder overwrite what was said. **Requiring the fix would
+  be requiring a false insertion.** Two voices of the *same* engine also landed on
+  opposite sides of that line for one sentence. Verdict is therefore per error
+  *class*, and every non-recovery prints what the engine actually said.
+
+**Landmines paid for here.** `load_dataset(repo, config, split="test")` downloads
+the whole config — for LibriSpeech "clean" that is train-clean-360 too, 30+ GB to
+read a 350 MB test split; name the parquet instead. `datasets` ≥ 4 decodes audio
+through **torchcodec**, i.e. it would drag torch into a torch-free project — so the
+harness reads parquet with pyarrow + soundfile and decodes only the sampled rows.
+Piper's VITS decoder is **stochastic**: regenerating fixtures produced different
+audio and flipped a verdict, so synthesis noise is zeroed and the fixture set is
+pinned. `de_DE-kerstin-low` ships a 130-phoneme map with no combining cedilla — it
+cannot say the German ich-laut and Piper drops it with a log line, silently
+mangling "Ich"/"Küche"; the generator now refuses any voice that cannot render a
+fixture.
+
+**Open.** The sweep did not re-run the winning config over the *full* test set (the
+tables say so); `[asr] boost` keeps its 1.0 default, now with evidence behind it.
+
 ---
 
 ## 6. Key sources

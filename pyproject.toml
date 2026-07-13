@@ -132,6 +132,19 @@ eval = [
     "transformers>=4.55.2,<5",
     "speechmos>=0.0.1.1",
     "onnxruntime>=1.27.0",
+    # eval/bias.py reads the LibriSpeech / MLS test parquets straight from the Hub.
+    # Deliberately NOT `datasets`: since 4.0 it decodes audio through torchcodec,
+    # i.e. it would drag torch into a project that has stayed torch-free on purpose
+    # — and its loader downloads a whole config (train-clean-360 included, 30+ GB)
+    # to read one test split. pyarrow + soundfile decode only the rows we ask for.
+    # The scorer itself (eval/bias_score.py) needs none of this: it ports is21's own
+    # alignment instead of leaning on jiwer, which is what lets its oracle test run
+    # in the default (dev-only) suite.
+    "pyarrow>=15",
+    "soundfile>=0.12",
+    # eval/bias_tts.py only. Piper is GPL-3.0: it generates a diagnostic fixture
+    # set here and must never reach the shipped wheel.
+    "piper-tts>=1.2",
 ]
 # Canary-1B-v2 accuracy-ceiling reference via NeMo-on-MPS (slow, never shipped).
 # Kept apart from `eval`: NeMo's pins don't coexist with the MLX stack.

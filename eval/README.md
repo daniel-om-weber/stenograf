@@ -129,6 +129,59 @@ across runs you compare. Measured 2026-07-10 (MacBook speakers, volume 63):
 AEC on → 37.6 dB ERLE, −65 dBFS residual, AECMOS echo 4.73, **0 leaked lines
 before any text backstop**; AEC off → −27 dBFS raw echo, AECMOS echo 1.49.
 
+## Contextual-biasing evaluation (Phase 5)
+
+Decode-time biasing (`stenograf.asr.biasing`) ships with a tree verified against
+NeMo's golden vectors — but its *effect* rested on one TTS clip and three meeting
+WAVs, which is enough to prove the mechanism fires and not enough to set `[asr]
+boost` or to defend our two deliberate divergences from NeMo (`unk_score=1.0`, and
+the German compound-tail tokenization). This harness replaces the anecdotes with
+numbers, and needs **zero hand labeling**: every reference and every word list is
+derived from corpora that already ship them.
+
+```sh
+# 0. Fetch/derive the benchmarks (is21 English lists; German built from MLS)
+uv run --group eval eval/bias_data.py --fetch all --sizes 100 500 1000 2000
+
+# 1. Correctness gate — the only language with published numbers to check against
+uv run --group eval eval/bias.py --tier english --n 100
+
+# 2. The benchmark that sets the shipped defaults (ablates boost/unk/compound-tail)
+uv run --group eval eval/bias.py --tier german --sweep
+
+# 3. False insertions with ground truth: bias with words known to be ABSENT,
+#    so any change at all is a false insertion. Runs on real meeting audio.
+uv run --group eval eval/bias.py --tier distractor --wav eval/audio/*.wav
+
+# 4. Reachability probes (synthetic; a diagnostic, never a quality metric)
+uv run --group eval eval/bias_tts.py && uv run --group eval eval/bias.py --tier tts
+```
+
+**Metrics** (`bias_score.py`, pure — pinned by `tests/test_eval_bias.py`): B-WER
+(WER over reference words in the biasing list — must fall), U-WER (every other word
+— must **not** rise; over-boosting is visible here and nowhere else), entity
+recall/precision/F, false insertions, and surface damage (`Ada` → `ADA`, which every
+WER-shaped metric normalizes away before it can see it). Entity numbers are reported
+strict *and* prefix-tolerant, because in German a term survives inside an inflected
+or compounded word (`Europa` in `Europas`).
+
+The scorer is a faithful port of is21's own alignment, so their **44 published
+hypothesis/result file pairs are a free correctness oracle** — `tests/test_eval_bias.py`
+reproduces every one of them to the digit (it skips until `--fetch is21` has run).
+
+Landmines, each verified and each worth a day: Parakeet emits punctuation and case
+while LibriSpeech/MLS references do not (normalize both sides, and case-match the
+boost phrases); every German noun is capitalized, so rare-by-frequency is the only
+usable definition of a rare word; Common Voice is a dead stub on HuggingFace since
+Mozilla moved it behind their Data Collective; AMI is uppercase, unpunctuated and
+proper-noun-*sparse*, i.e. near-worthless for biasing despite being the closest
+thing to meeting audio.
+
+Sweeps run on a **pinned 500-utterance subsample** (the full grid is 5–10 h of
+decoding); only the winning config is re-run over the full test set, and every table
+states which it was. Hypotheses are cached per config, so an interrupted sweep only
+costs the configs it had not reached.
+
 ## Side quests
 
 - ~~Canary-1B-v2 runtime~~ — resolved, see above: no accelerated runtime with
