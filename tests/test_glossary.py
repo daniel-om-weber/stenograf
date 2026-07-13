@@ -2,6 +2,16 @@ from stenograf.asr.base import Word
 from stenograf.glossary import apply_glossary, build_terms
 from stenograf.transcript import TranscriptEntry
 
+LOOSE = 0.82
+"""A threshold loose enough for these fixtures' near-misses to fire.
+
+Stated explicitly, and deliberately *not* the shipped default: the tests below are
+about the mechanism — timing, punctuation, multi-word windows, wordless entries —
+and a mechanism test that silently rides on a product default breaks every time the
+default is tuned, which tells you nothing. The default's own behaviour is pinned by
+``test_default_threshold_leaves_a_distant_near_miss_alone``; 0.82 is what it used to
+be, and the eval that moved it is ``eval/bias.py --post``."""
+
 
 def _w(text: str, start: float) -> Word:
     return Word(text, start, start + 0.4)
@@ -19,7 +29,7 @@ def _entry(words: tuple[Word, ...], *, speaker: str = "S0") -> TranscriptEntry:
 
 def test_corrects_word_keeping_timing_and_punctuation():
     entry = _entry((_w("wir", 0.0), _w("waren", 0.5), _w("in", 1.0), _w("Grafswald,", 1.5)))
-    out = apply_glossary([entry], glossary=["Greifswald"])[0]
+    out = apply_glossary([entry], glossary=["Greifswald"], threshold=LOOSE)[0]
     assert out.text == "wir waren in Greifswald,"
     corrected = out.words[3]
     assert corrected.text == "Greifswald,"  # trailing comma preserved
@@ -30,7 +40,7 @@ def test_corrects_word_keeping_timing_and_punctuation():
 
 def test_corrects_attendee_name_token():
     entry = _entry((_w("danke", 0.0), _w("Danjel", 0.5)))
-    out = apply_glossary([entry], attendee_names=["Daniel Weber"])[0]
+    out = apply_glossary([entry], attendee_names=["Daniel Weber"], threshold=LOOSE)[0]
     assert out.text == "danke Daniel"
 
 
@@ -49,7 +59,7 @@ def test_does_not_overcorrect_a_dissimilar_common_word():
 def test_wordless_entry_is_corrected_via_text():
     # A Whisper/Voxtral entry carries no word timings — only its text is fixed.
     entry = TranscriptEntry("S0", "wir nutzen Kubernetis heute", 0.0, 3.0)
-    out = apply_glossary([entry], glossary=["Kubernetes"])[0]
+    out = apply_glossary([entry], glossary=["Kubernetes"], threshold=LOOSE)[0]
     assert out.text == "wir nutzen Kubernetes heute"
     assert out.words == ()
 
@@ -59,15 +69,33 @@ def test_partial_word_coverage_is_not_truncated():
     entry = TranscriptEntry(
         "S0", "in Grafswald bei allen", 1.0, 3.0, words=(_w("in", 1.0), _w("Grafswald", 1.5))
     )
-    out = apply_glossary([entry], glossary=["Greifswald"])[0]
+    out = apply_glossary([entry], glossary=["Greifswald"], threshold=LOOSE)[0]
     assert out.text == "in Greifswald bei allen"
     assert [w.text for w in out.words] == ["in", "Greifswald"]
 
 
 def test_multiword_term_matches_a_window():
     entry = _entry((_w("die", 0.0), _w("Mett", 0.5), _w("Unie", 1.0), _w("meldete", 1.5)))
-    out = apply_glossary([entry], glossary=["Met Uni"])[0]
+    out = apply_glossary([entry], glossary=["Met Uni"], threshold=LOOSE)[0]
     assert out.text == "die Met Uni meldete"
+
+
+def test_default_threshold_leaves_a_distant_near_miss_alone():
+    """The shipped default declines this correction, and that is the point.
+
+    "Grafswald" → "Greifswald" is a real misrecognition a user would want fixed, and
+    at the old 0.82 default this layer fixed it. It also, on the same setting,
+    rewrote words that were never wrong — U-WER +6.5 % on German and +86 % on
+    English, 84 false insertions against decode-time biasing's 3 (``eval/bias.py
+    --post``, 2026-07-13). Fuzzy matching answers to no acoustics, so it cannot tell
+    the two cases apart; the decoder can, which is why biasing is the layer that
+    should be catching this one, upstream, while it can still hear the audio.
+
+    So the default buys precision with recall, deliberately. If this test ever starts
+    failing because someone lowered the threshold, the number to look at is not B-WER.
+    """
+    entry = _entry((_w("wir", 0.0), _w("waren", 0.5), _w("in", 1.0), _w("Grafswald,", 1.5)))
+    assert apply_glossary([entry], glossary=["Greifswald"])[0] is entry
 
 
 def test_threshold_gates_correction():

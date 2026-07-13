@@ -285,7 +285,7 @@ formats = ["md", "json", "txt"]   # default --format list (srt/vtt for subtitles
 [vocab]                           # standing vocabulary — MERGED with per-run
 glossary_file = "~/steno/glossary.txt"     # --glossary/--attendee flags
 attendees = ["Anja Müller"]
-glossary_threshold = 0.82
+glossary_threshold = 0.95
 
 [output]
 dir = "~/Documents/Meetings"      # where meeting folders are created

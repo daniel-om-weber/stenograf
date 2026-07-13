@@ -1,12 +1,20 @@
 """Deterministic glossary + attendee-name post-correction (PLAN.md §5 Task 2b).
 
-Parakeet, the default ASR backend, has no decode-time biasing / hotword parameter
-(verified against the installed library — see PLAN.md §2 and the Phase-3
-library-constraints note), so the honest lever for domain vocabulary and attendee
-names is *text* post-correction: after the finalize pass produces the
-authoritative transcript, fuzzy/phonetically match each user-supplied term against
-the transcribed words and snap close misrecognitions to the canonical spelling.
-Deterministic (stdlib ``difflib``, no ML), model-agnostic, and testable.
+The *second* of stenograf's two glossary layers, and the one that answers to no
+acoustics. ``stenograf.asr.biasing`` steers the decoder toward the same terms while
+it transcribes, which is strictly the better place to act — it can still hear the
+audio. This layer runs after the finalize pass, over finished text: it fuzzy-matches
+each user-supplied term against the transcribed words and snaps close
+misrecognitions to the canonical spelling. Deterministic (stdlib ``difflib``, no
+ML), model-agnostic, and testable.
+
+It exists because biasing cannot reach every error. Boosting only re-ranks a token
+the decoder was already about to emit, so a term the model did not *nearly* hear —
+one glued into a neighbour, or lost to a word boundary that was never there — is
+past its reach. Text matching has no such constraint, and pays for it in the
+opposite currency: with no acoustics to answer to, it will rewrite a word that was
+correct if the spelling is close enough. Hence the deliberately high threshold, and
+hence ``eval/bias.py --post``, which prices both layers on the same benchmark.
 
 Matching is diacritic- and case-insensitive (so German umlaut/ß spellings match
 their ASCII-ish transcriptions) and operates on whole word tokens: an ``n``-word
@@ -29,11 +37,27 @@ from difflib import SequenceMatcher
 from stenograf.asr.base import Word
 from stenograf.transcript import TranscriptEntry
 
-DEFAULT_THRESHOLD = 0.82
+DEFAULT_THRESHOLD = 0.95
 """Minimum normalized similarity (0–1) for a window to be snapped to a term.
 
 High by design: over-correction (rewriting a correct common word into a glossary
-term) is worse than a missed correction. Tune per run via the CLI if needed."""
+term) is worse than a missed correction. Tune per run via the CLI if needed.
+
+**0.95, not the 0.82 this shipped with, and the gap between them is not a matter of
+taste — 0.82 fails the same acceptance bar that set `[asr] boost`** (measured
+2026-07-13, ``eval/bias.py --post``, 500-utt subsample, 100-term lists). At 0.82 the
+layer buys rare words by rewriting words that were never wrong: U-WER +6.5 % German
+and **+86 % English**, with 84–86 false insertions against decode-time biasing's 3.
+That is worse than the ``boost = 2.0`` config we rejected for exactly this failure.
+The reason is structural — fuzzy matching answers to no acoustics, so nothing stops
+it from snapping a correct common word onto a glossary term that merely looks like
+it, and B-WER alone cannot see the difference.
+
+At 0.95 the layer is a free win instead: it still *adds* to biasing (B-WER −30.3 %
+vs −27.0 % German, −36.3 % vs −34.9 % English) while U-WER stays flat or improves,
+false insertions land at biasing's own level (4 / 3), and on real meeting audio with
+a realistic 30-term glossary it inserts **nothing** biasing did not already insert.
+Below ~0.92 the damage climbs fast; do not lower this without re-running that tier."""
 
 _MIN_TERM_CHARS = 4
 """Terms shorter than this (normalized) are too collision-prone to correct."""

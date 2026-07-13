@@ -1446,7 +1446,7 @@ def test_settings_show_reports_values_and_sources(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert 'formats = ["srt"]  (settings.toml)' in result.output
-    assert "glossary_threshold = 0.82  (default)" in result.output
+    assert "glossary_threshold = 0.95  (default)" in result.output
     assert "[notes.export]" in result.output
 
     # An env override wins over the file and is attributed to the variable.

@@ -153,6 +153,11 @@ uv run --group eval eval/bias.py --tier german --sweep
 #    so any change at all is a false insertion. Runs on real meeting audio.
 uv run --group eval eval/bias.py --tier distractor --wav eval/audio/*.wav
 
+# 3b. BOTH glossary layers — decode-time biasing vs post-hoc fuzzy correction vs
+#     the stack. Works on any tier and re-decodes nothing (post-correction is a
+#     pure text transform over the arms' cached hypotheses).
+uv run --group eval eval/bias.py --tier german --post 0.88 0.92 0.95
+
 # 4. Reachability probes (synthetic; a diagnostic, never a quality metric)
 uv run --group eval eval/bias_tts.py && uv run --group eval eval/bias.py --tier tts
 ```
@@ -168,6 +173,30 @@ or compounded word (`Europa` in `Europas`).
 The scorer is a faithful port of is21's own alignment, so their **44 published
 hypothesis/result file pairs are a free correctness oracle** — `tests/test_eval_bias.py`
 reproduces every one of them to the digit (it skips until `--fetch is21` has run).
+
+**What `--post` found (2026-07-13), and why the threshold moved to 0.95.** We ship
+two glossary layers and had only ever measured one. Scored on the same terms, the
+post-correction layer at its old 0.82 default looked spectacular on B-WER (−52.8 %
+German, −55.5 % English — *twice* what decode-time biasing gets) and was in fact
+damaging the transcript: U-WER **+9.9 % German / +86.3 % English**, 85–86 false
+insertions against biasing's 3. The shipped stack (both layers, 0.82) came in at
+U-WER +6.5 % and 84 false insertions — **worse than the `boost = 2.0` config we had
+already rejected** (+6.7 %, 27 insertions). We had a bar; we had just never pointed
+it at the second layer.
+
+The cause is structural and worth remembering when adding any correction layer:
+fuzzy text matching answers to no acoustics, so nothing prevents it from snapping a
+correct common word onto a glossary term that merely looks like it, and **B-WER
+alone cannot see the difference** — only U-WER and false insertions can. At 0.95 the
+layer becomes a free win (B-WER −30.3 % German / −36.3 % English, i.e. *better* than
+biasing alone, with U-WER flat and false insertions at biasing's own level), and on
+real meeting audio with a realistic 30-term glossary it inserts nothing that biasing
+did not already insert. Two caveats on the tables: the **surface-damage column is
+meaningless for post arms on these tiers** (MLS/LibriSpeech word lists are 100 %
+lowercase, so the layer dutifully de-capitalizes German nouns ~1190 times — an
+artifact of the benchmark's casing, not of the layer); and damage scales with list
+length, so the N=100 lists overstate the risk for the 10–30-term glossaries real
+meetings use.
 
 Landmines, each verified and each worth a day: Parakeet emits punctuation and case
 while LibriSpeech/MLS references do not (normalize both sides, and case-match the

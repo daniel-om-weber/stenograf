@@ -1333,6 +1333,26 @@ benchmark). `bias.py` drives the real shipped backend through `create_backend`.
   TTS reachability tier) and shown here to do **no harm**. Tier 2 is simply the
   wrong corpus to price it; a German *technical-speech* set would be the right one,
   and none exists.
+- **The post-correction layer was over-correcting, and `glossary_threshold` moved
+  0.82 → 0.95** (`--post`, added 2026-07-13; costs no decoding — post-correction is
+  a pure text transform over the other arms' cached hypotheses). We ship *two*
+  glossary layers and had measured only one. At 0.82, post-correction posts a B-WER
+  drop twice biasing's (−52.8 % German, −55.5 % English) **and damages the
+  transcript**: U-WER +9.9 % German / **+86.3 % English**, 85 false insertions vs
+  biasing's 3. The shipped stack (both layers) was worse than the `boost = 2.0`
+  config we had already rejected for exactly this failure (+6.5 % vs +6.7 % U-WER;
+  84 vs 27 insertions). Fuzzy matching answers to no acoustics, so it cannot
+  distinguish a misrecognition from a correct word that merely looks like a term —
+  and **B-WER alone cannot see the difference**. At 0.95 the layer is a free win:
+  B-WER −30.3 % German / −36.3 % English (*better* than biasing alone: −27.0 % /
+  −34.9 %), U-WER flat or improving, false insertions at biasing's own level (4/3),
+  and zero added insertions on real meeting audio at a realistic 30-term glossary.
+  Ignore the surface-damage column for post arms here: MLS/LibriSpeech word lists
+  are 100 % lowercase, so the layer de-capitalizes German nouns ~1190 times at
+  *every* threshold — an artifact of the benchmark's casing. (It does expose a real
+  asymmetry, still open: `biasing.surface_forms` never imposes a lowercase spelling,
+  while `glossary.py` imposes the term's spelling verbatim — so a user who writes
+  `kubernetes` gets it forced at sentence start.)
 - **Glossary size is a risk knob in its own right** (`--tier distractor`, biasing
   with words known to be absent, so any change at all is a false insertion): 10
   bogus terms → **0 edits**, 50 → 2, 100 → 5, 500 → 17. Damage scales with list

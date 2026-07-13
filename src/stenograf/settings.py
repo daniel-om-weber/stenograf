@@ -11,7 +11,7 @@ optional; a missing file is simply all defaults. The full schema::
     [vocab]                             # standing vocabulary for every run
     glossary_file = "~/steno/glossary.txt"  # one term per line, # comments
     attendees = ["Ada Lovelace"]        # names corrected like glossary terms
-    glossary_threshold = 0.82           # similarity 0-1 to correct a term
+    glossary_threshold = 0.95           # similarity 0-1 to correct a term
 
     [output]
     dir = "~/Documents/Meetings"        # the output home: every run writes its
@@ -113,7 +113,8 @@ SETTINGS_TEMPLATE = """\
 [vocab]                                    # standing vocabulary — merged with
 # glossary_file = "~/steno/glossary.txt"   # per-run --glossary/--attendee flags;
 # attendees = ["Anja Müller"]              # file terms are one per line
-# glossary_threshold = 0.82                # similarity 0-1 to correct a term
+# glossary_threshold = 0.95                # similarity 0-1 to correct a term;
+#                                          # lower rewrites correct words (measured)
 #
 # Write a term the way it is SPOKEN, in the form it appears in the sentence.
 # Casing is load-bearing ("Kubernetes", not "kubernetes"), and when the model
