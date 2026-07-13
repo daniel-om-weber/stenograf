@@ -81,6 +81,7 @@ is peeled off."""
 class _Term:
     tokens: tuple[str, ...]  # canonical display spelling, per token
     norm: str  # normalized full form, for scoring
+    cased: bool = True  # the spelling carries deliberate capitals
 
     @property
     def size(self) -> int:
@@ -94,6 +95,12 @@ def build_terms(glossary: Iterable[str] = (), attendee_names: Iterable[str] = ()
     (``"Daniel"``, ``"Weber"``), since a name is usually mis-transcribed one part
     at a time. Terms are de-duplicated by their match key (first spelling wins),
     and terms too short to correct safely are dropped.
+
+    A term's capitalization is treated as *information*, exactly as
+    ``asr.biasing.surface_forms`` treats it: capitals in the written term are a
+    deliberate spelling (``Kubernetes``, ``iOS``) and are imposed on the transcript,
+    while an all-lowercase term carries no case information at all and must not
+    overwrite the case the model chose — see :func:`_recase`.
     """
     terms: dict[str, _Term] = {}
 
@@ -104,7 +111,7 @@ def build_terms(glossary: Iterable[str] = (), attendee_names: Iterable[str] = ()
         norm = _norm(phrase)
         if len(norm) < _MIN_TERM_CHARS:
             return
-        terms.setdefault(norm, _Term(tokens, norm))
+        terms.setdefault(norm, _Term(tokens, norm, cased=not phrase.islower()))
 
     for phrase in glossary:
         add(phrase)
@@ -208,11 +215,36 @@ def _plan_corrections(cores: list[str], terms: list[_Term], threshold: float) ->
             best = _best_term(window, by_size[size], threshold)
             if best is not None:
                 for j, token in enumerate(best.tokens):
-                    plan[i + j] = token
+                    plan[i + j] = _recase(token, cores[i + j], best)
                 advance = size
                 break
         i += advance
     return plan
+
+
+def _recase(token: str, core: str, term: _Term) -> str:
+    """The canonical ``token``, in the case the transcript is entitled to keep.
+
+    A term written with capitals is a deliberate spelling and wins outright: that is
+    the whole reason someone writes ``Kubernetes`` or ``iOS`` in a glossary, and it is
+    what makes ``greifswald`` → ``Greifswald`` a fix rather than a preference.
+
+    An all-lowercase term says nothing about case, so it must not overwrite the
+    model's. Parakeet-v3 is case-sensitive and capitalizes German nouns and
+    sentence-initial words correctly; imposing ``kubernetes`` on a sentence that
+    starts with it would be this layer inventing an error out of a spelling the user
+    never intended to assert. ``asr.biasing.surface_forms`` reaches the same
+    conclusion from the same premise — it boosts *both* forms of a lowercase term
+    rather than forcing one — and the two layers must not disagree about what a
+    glossary line means.
+
+    Only the first character is transferred: it is the case German (and English
+    sentence position) actually turns on, and a model-emitted ``KUBERNETES`` is a
+    shout we have no reason to reproduce.
+    """
+    if term.cased or not core[:1].isupper():
+        return token
+    return token[:1].upper() + token[1:]
 
 
 def _best_term(window: str, terms: list[_Term], threshold: float) -> _Term | None:

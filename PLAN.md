@@ -1347,12 +1347,15 @@ benchmark). `bias.py` drives the real shipped backend through `create_backend`.
   B-WER −30.3 % German / −36.3 % English (*better* than biasing alone: −27.0 % /
   −34.9 %), U-WER flat or improving, false insertions at biasing's own level (4/3),
   and zero added insertions on real meeting audio at a realistic 30-term glossary.
-  Ignore the surface-damage column for post arms here: MLS/LibriSpeech word lists
-  are 100 % lowercase, so the layer de-capitalizes German nouns ~1190 times at
-  *every* threshold — an artifact of the benchmark's casing. (It does expose a real
-  asymmetry, still open: `biasing.surface_forms` never imposes a lowercase spelling,
-  while `glossary.py` imposes the term's spelling verbatim — so a user who writes
-  `kubernetes` gets it forced at sentence start.)
+  The surface-damage column then caught a **second** bug, and was the only metric
+  that could: it sat at ~1190 for the post arms at *every* threshold, and a quantity
+  that ignores the knob gating it is not being produced by that knob. The word lists
+  are 100 % lowercase and `glossary.py` imposed a term's spelling verbatim, so it
+  de-capitalized German nouns wholesale. It now applies `biasing.surface_forms`' rule
+  — capitals in a term are a deliberate spelling and win; an all-lowercase term
+  asserts nothing about case and leaves the model's alone (`_recase`). The column
+  fell **1190 → 2 with B-WER, U-WER and false insertions bit-identical**: every
+  WER-shaped metric normalizes case away and would have shipped it.
 - **The fuzzy layer is not redundant with a better-tuned decoder — it is the
   *cheaper* knob** (`--boosts 0.5 1.0 1.25 1.5 1.75 2.0 --post 0.95`, the question
   "can we tune `boost` well enough to delete `glossary.py`?"). Answer: no. Matched on

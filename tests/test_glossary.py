@@ -50,6 +50,33 @@ def test_fixes_only_casing_when_already_spelled():
     assert out.words[1].text == "Greifswald"
 
 
+def test_lowercase_term_does_not_impose_its_case_on_the_transcript():
+    """An all-lowercase glossary line asserts spelling, not case.
+
+    Parakeet capitalizes sentence-initial words and German nouns correctly, so
+    forcing the term's own case here would *invent* an error out of a spelling the
+    user never meant to assert — and it would put this layer at odds with
+    `asr.biasing.surface_forms`, which boosts both forms of a lowercase term rather
+    than forcing one. The letters get corrected; the capital survives.
+    """
+    entry = _entry((_w("Kubernets", 0.0), _w("läuft", 0.5)))
+    out = apply_glossary([entry], glossary=["kubernetes"], threshold=LOOSE)[0]
+    assert out.words[0].text == "Kubernetes"  # not "kubernetes"
+
+    # …and mid-sentence, where the model chose lowercase, it stays lowercase.
+    mid = _entry((_w("auf", 0.0), _w("kubernets", 0.5)))
+    assert apply_glossary([mid], glossary=["kubernetes"], threshold=LOOSE)[0].words[1].text == (
+        "kubernetes"
+    )
+
+
+def test_capitalized_term_is_imposed_verbatim():
+    """The converse: capitals in the term ARE the assertion, so they win."""
+    entry = _entry((_w("wir", 0.0), _w("nutzen", 0.5), _w("kubernetes", 1.0)))
+    out = apply_glossary([entry], glossary=["Kubernetes"])[0]
+    assert out.words[2].text == "Kubernetes"
+
+
 def test_does_not_overcorrect_a_dissimilar_common_word():
     entry = _entry((_w("das", 0.0), _w("ist", 0.5), _w("gut", 1.0)))
     out = apply_glossary([entry], glossary=["Git", "GitHub"])

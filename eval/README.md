@@ -191,12 +191,19 @@ alone cannot see the difference** — only U-WER and false insertions can. At 0.
 layer becomes a free win (B-WER −30.3 % German / −36.3 % English, i.e. *better* than
 biasing alone, with U-WER flat and false insertions at biasing's own level), and on
 real meeting audio with a realistic 30-term glossary it inserts nothing that biasing
-did not already insert. Two caveats on the tables: the **surface-damage column is
-meaningless for post arms on these tiers** (MLS/LibriSpeech word lists are 100 %
-lowercase, so the layer dutifully de-capitalizes German nouns ~1190 times — an
-artifact of the benchmark's casing, not of the layer); and damage scales with list
-length, so the N=100 lists overstate the risk for the 10–30-term glossaries real
-meetings use.
+did not already insert. One caveat on the tables: damage scales with list length, so
+the N=100 lists overstate the risk for the 10–30-term glossaries real meetings use.
+
+**The surface-damage column paid for itself here.** It was the only metric that could
+see a second bug, and it sat at ~1190 for the post arms *at every threshold* — a
+quantity that ignores the knob gating it is not being produced by that knob. Cause:
+these word lists are 100 % lowercase, and `glossary.py` imposed a term's spelling
+verbatim, so it dutifully de-capitalized German nouns. Fixed by teaching it what
+`asr.biasing.surface_forms` already knew — capitals in a term are a deliberate
+spelling and win; an all-lowercase term asserts nothing about case and must not
+overwrite the model's. Re-running the tier drove the column **1190 → 2 with B-WER,
+U-WER and false insertions bit-identical** (they normalize case, so they were blind
+to the whole thing). Every WER-shaped metric would have shipped this.
 
 Landmines, each verified and each worth a day: Parakeet emits punctuation and case
 while LibriSpeech/MLS references do not (normalize both sides, and case-match the
