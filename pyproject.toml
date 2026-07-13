@@ -40,6 +40,13 @@ dependencies = [
     # eval harness compares MLX against. [hub] pins the HuggingFace download
     # path; the onnxruntime flavor is declared below, not via [cpu].
     "onnx-asr[hub]>=0.11",
+    # Parakeet's own SentencePiece tokenizer, for compiling glossary terms into
+    # the token ids the decoder emits (contextual biasing, asr/biasing.py). Both
+    # ASR backends decode SentencePiece but neither exposes an *encoder*, and an
+    # approximate segmentation would build a boosting tree whose arcs the decoder
+    # never walks — a silent no-op. It arrives transitively today; biasing is not
+    # allowed to depend on that.
+    "sentencepiece>=0.2",
     # Exactly ONE onnxruntime flavor per platform: every flavor (-directml,
     # -gpu, -openvino, …) installs the same `onnxruntime/` package directory and
     # silently clobbers the others (verified 2026-07-11) — extras can't express

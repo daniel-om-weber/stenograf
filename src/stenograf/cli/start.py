@@ -286,6 +286,9 @@ def start(
         need_diarizer=any(p.num_speakers != 1 for p in plans),
         asr_backend=settings.asr.backend,
         asr_provider=settings.asr.provider,
+        glossary=glossary_terms,
+        attendee_names=attendee_names,
+        boost=settings.asr.boost,
     )
     reid = _load_reid(diarizer, enabled=use_reid, threshold=reid_threshold, store=reid_store)
     _echo_glossary(glossary_terms, attendee_names)

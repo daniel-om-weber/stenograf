@@ -231,6 +231,7 @@ def transcribe(
             glossary_threshold=glossary_threshold,
             asr_backend=settings.asr.backend,
             asr_provider=settings.asr.provider,
+            asr_boost=settings.asr.boost,
             profile_store=reid_store,
         )
         transcript = meeting_result.transcript
@@ -253,6 +254,9 @@ def transcribe(
             need_diarizer=speakers != 1,
             asr_backend=settings.asr.backend,
             asr_provider=settings.asr.provider,
+            glossary=glossary_terms,
+            attendee_names=attendee_names,
+            boost=settings.asr.boost,
         )
         started = time.monotonic()  # post-load: the speed stat must not count a model download
         reid = _load_reid(diarizer, enabled=use_reid, threshold=reid_threshold, store=reid_store)
@@ -362,6 +366,7 @@ def _transcribe_split_channels(
     glossary_threshold: float | None,
     asr_backend: str | None = None,
     asr_provider: str | None = None,
+    asr_boost: float | None = None,
     profile_store: Path | None = None,
     view=None,
 ):
@@ -398,6 +403,9 @@ def _transcribe_split_channels(
         need_diarizer=any(p.num_speakers != 1 for p in plans),
         asr_backend=asr_backend,
         asr_provider=asr_provider,
+        glossary=profile.glossary,
+        attendee_names=profile.attendee_names,
+        boost=asr_boost,
         # An injected view means a Textual screen owns stdio — loader progress
         # must follow the status lines, not click (loaders module docstring).
         announce=None if view is None else view.status,

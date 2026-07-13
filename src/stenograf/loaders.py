@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     Announce = Callable[[str], None]
@@ -63,6 +63,9 @@ def load_backends(
     need_diarizer: bool,
     asr_backend: str | None = None,
     asr_provider: str | None = None,
+    glossary: Sequence[str] = (),
+    attendee_names: Sequence[str] = (),
+    boost: float | None = None,
     announce: Announce | None = None,
 ):
     """Load the finalize backends (ASR, VAD, and optionally the diarizer).
@@ -70,6 +73,14 @@ def load_backends(
     Shared by ``start`` and ``transcribe`` so both use the same committed
     defaults. ``asr_backend`` and ``asr_provider`` are the ``[asr]`` settings;
     ``STENOGRAF_ASR_BACKEND`` / ``STENOGRAF_ASR_PROVIDER`` still override them.
+
+    The run's ``glossary`` and ``attendee_names`` are compiled into a boosting tree
+    that steers the decoder *while* it transcribes — see ``stenograf.asr.biasing``.
+    They are passed at *load* time, not per call, because the tree is spliced into
+    the model's decode loop. The text post-correction in ``stenograf.glossary``
+    still runs afterwards, and the two are complementary: biasing wins the terms
+    the decoder can nearly hear, post-correction catches the ones it heard as some
+    other word entirely.
     """
     from stenograf import models
     from stenograf.asr import create_backend
@@ -98,7 +109,12 @@ def load_backends(
             f"{', '.join(missing)}) — reinstall stenograf, or select another backend "
             "via [asr] backend in settings.toml or STENOGRAF_ASR_BACKEND"
         )
-    asr = create_backend(name)
+    from stenograf.asr.biasing import boost_terms
+
+    kwargs: dict[str, object] = {"glossary": boost_terms(glossary, attendee_names)}
+    if boost is not None:
+        kwargs["boost"] = boost
+    asr = create_backend(name, **kwargs)
     # Only an ORT-backed backend is provider-configurable (provider != None);
     # a configured provider on a backend with its own runtime (MLX) is noted,
     # not an error, so one settings file can serve a mac and a Windows box.

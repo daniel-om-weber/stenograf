@@ -21,10 +21,14 @@ a diarization turn boundary farther than the model's real durations could.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator, Sequence
+
 import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.asr.tokens import Token, merge_tokens
+from stenograf.asr.biasing import DEFAULT_ALPHA, BoostingTree
+from stenograf.asr.biasing import build as build_tree
+from stenograf.asr.tokens import Token, load_encoder, merge_tokens
 from stenograf.audio import SAMPLE_RATE, to_float32
 from stenograf.config import Language
 
@@ -51,10 +55,14 @@ class ParakeetOnnxBackend(ASRBackend):
         *,
         quantization: str | None = None,
         provider: str | None = None,
+        glossary: Sequence[str] = (),
+        boost: float = DEFAULT_ALPHA,
     ) -> None:
         self.model_id = model_id
         self._quantization = quantization
         self._model = None
+        self._glossary = tuple(glossary)
+        self._boost = boost
         # Diagnostics surface declared on ASRBackend; "cpu" (never None)
         # marks this backend as provider-configurable.
         self.provider = provider or "cpu"
@@ -97,11 +105,30 @@ class ParakeetOnnxBackend(ASRBackend):
     def _load_with(self, providers: list[str]):
         import onnx_asr
 
-        return onnx_asr.load_model(
+        model = onnx_asr.load_model(
             self.model_id,
             quantization=self._quantization,
             providers=providers,
         ).with_timestamps()
+        self._bias(model)
+        return model
+
+    def _bias(self, model) -> None:
+        """Swap in the boosting decode loop when there is a glossary to boost.
+
+        ``with_timestamps()`` returns an adapter holding the model as ``.asr``;
+        that is the object owning the decode loop. With no glossary — or with
+        ``[asr] boost = 0``, which disables biasing outright — the stock loop stays
+        untouched, so a meeting with no vocabulary pays nothing at all: not a tree
+        lookup per token, not even the tokenizer download.
+        """
+        if not self._glossary or not self._boost:
+            return
+        asr = model.asr
+        tree = build_tree(self._glossary, load_encoder(), vocab_size=asr._blank_idx)
+        if tree is None:
+            return
+        asr._decoding = _biased_decoding(asr, tree, self._boost)
 
     def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:
         # Parakeet v3 is multilingual with no language switch; ``language``
@@ -117,6 +144,77 @@ class ParakeetOnnxBackend(ASRBackend):
 
     def unload(self) -> None:
         self._model = None
+
+
+def _biased_decoding(asr, tree: BoostingTree, alpha: float):
+    """onnx-asr's greedy transducer loop, with phrase boosting.
+
+    A line-for-line mirror of ``onnx_asr.asr._AsrWithTransducerDecoding._decoding``
+    (which offers no hook, hence the copy — ``tests/test_biasing_loops.py`` diffs
+    the two on every run, so an upstream change to the loop fails loudly instead of
+    silently un-biasing us). Everything here is upstream's except the two-stage
+    token selection and the tree's state update.
+    """
+    from onnx_asr.utils import log_softmax
+
+    blank = asr._blank_idx
+    # The boost vector spans the non-blank vocabulary, so blank has to be the last
+    # index for `logits[:blank]` to mean "every label". It is, for Parakeet-v3.
+    assert blank == asr._vocab_size - 1
+
+    def decoding(
+        encoder_out: np.ndarray, encoder_out_lens: np.ndarray, /, **kwargs: object | None
+    ) -> Iterator[tuple[Iterable[int], Iterable[int], Iterable[float] | None]]:
+        need_logprobs = kwargs.get("need_logprobs")
+        if asr.use_low_precision:
+            encoder_out_lens = np.minimum(encoder_out_lens, encoder_out.shape[1])
+
+        for encodings, encodings_len in zip(encoder_out, encoder_out_lens, strict=True):
+            prev_state = asr._create_state()
+            tokens: list[int] = []
+            timestamps: list[int] = []
+            logprobs: list[float] = []
+            # One tree state per utterance. It moves only on an emitted token, so
+            # a partial match survives blanks and TDT frame skips untouched.
+            boost, next_states = tree.advance(0)
+
+            t = 0
+            emitted_tokens = 0
+            while t < encodings_len:
+                logits, step, state = asr._decode(tokens, prev_state, encodings[t])
+                assert logits.shape[-1] <= asr._vocab_size
+
+                # Stage 1: is this frame a token at all? Decided on the *unbiased*
+                # logits, blank included. Stage 2 then re-ranks within the labels.
+                # Boosting must not be able to answer this question: the refund for
+                # abandoning a phrase is the only large negative score in play, and
+                # blank is the one token it cannot touch — fold them together and a
+                # failing match hands its frame to blank, dropping the token and
+                # shifting every timestamp after it.
+                token = int(logits.argmax())
+                if token != blank:
+                    token = int((logits[:blank] + alpha * boost).argmax())
+
+                if token != blank:
+                    prev_state = state
+                    tokens.append(token)
+                    timestamps.append(t)
+                    emitted_tokens += 1
+                    if need_logprobs:
+                        # Unbiased: this is the model's confidence, not ours.
+                        logprobs.append(log_softmax(logits)[token])
+                    boost, next_states = tree.advance(int(next_states[token]))
+
+                if step > 0:
+                    t += step
+                    emitted_tokens = 0
+                elif token == blank or emitted_tokens == asr._max_tokens_per_step:
+                    t += 1
+                    emitted_tokens = 0
+
+            yield tokens, timestamps, logprobs if need_logprobs else None
+
+    return decoding
 
 
 def _approximate_ends(texts: list[str], starts: list[float]) -> list[Token]:

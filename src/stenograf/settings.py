@@ -114,6 +114,11 @@ SETTINGS_TEMPLATE = """\
 # glossary_file = "~/steno/glossary.txt"   # per-run --glossary/--attendee flags;
 # attendees = ["Anja Müller"]              # file terms are one per line
 # glossary_threshold = 0.82                # similarity 0-1 to correct a term
+#
+# Write a term the way it is SPOKEN, in the form it appears in the sentence.
+# Casing is load-bearing ("Kubernetes", not "kubernetes"), and when the model
+# glues a term to its neighbour ("Prometheusalord"), only the compound spelling
+# reaches it: list "Prometheus-Alert", not "Alert" on its own.
 
 [output]
 # dir = "~/Documents/Meetings"             # where meeting folders are created
@@ -128,6 +133,9 @@ SETTINGS_TEMPLATE = """\
 [asr]
 # backend = "parakeet"
 # provider = "cpu"                         # cpu | dml (Windows GPU) | cuda | auto
+# boost = 1.0                              # how hard decoding is steered toward the
+#                                          # [vocab] terms; 0 = off. Above ~3 it
+#                                          # starts rewriting words you did not list.
 
 [notes]
 # auto = false                             # true = generate notes after every meeting
@@ -190,6 +198,16 @@ class AsrSettings:
     provider: str | None = None
     """ONNX Runtime execution provider for the ORT-backed backend; ``None`` =
     CPU. Backends with their own runtime (MLX) ignore it."""
+
+    boost: float | None = None
+    """How hard the decoder is steered toward ``[vocab]`` terms while it
+    transcribes (``stenograf.asr.biasing``); ``None`` = the built-in default.
+
+    A decoder knob, not vocabulary, hence ``[asr]`` and not ``[vocab]``: it prices
+    the glossary the *other* tables supply. 0 disables biasing entirely and leaves
+    the stock decode loop in place. Raising it past ~3 starts rewriting words that
+    are not in the glossary at all — the failure mode NVIDIA warns about, and the
+    reason this is a setting rather than a constant."""
 
 
 @dataclass(frozen=True)
@@ -406,8 +424,9 @@ def _asr_from_table(data: dict) -> AsrSettings:
         from stenograf.asr.providers import validate_provider_name
 
         validate_provider_name(provider)
+    boost = t.number("boost", 0, 10)
     t.reject_unknown()
-    return AsrSettings(backend=backend, provider=provider)
+    return AsrSettings(backend=backend, provider=provider, boost=boost)
 
 
 def _notes_from_table(data: dict) -> NotesSettings:

@@ -66,7 +66,7 @@ class FakeDiarizer(Diarizer):
         return DiarizationResult(turns=list(self._turns), embeddings=dict(self._embeddings))
 
 
-def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
+def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
     # No VAD (whole buffer is one window) and no diarizer (single speaker).
     return FakeASR(), None, None
 
@@ -148,7 +148,7 @@ def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
     def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
     ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -211,7 +211,7 @@ def test_transcribe_diarization_off_by_default(tmp_path, monkeypatch):
     calls = {}
 
     def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
     ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -233,7 +233,7 @@ def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, monkey
     calls = {}
 
     def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
     ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -256,7 +256,7 @@ def test_transcribe_diarization_flag_beats_settings_off(tmp_path, monkeypatch):
     calls = {}
 
     def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
     ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -281,7 +281,7 @@ def test_transcribe_explicit_count_beats_settings_off(tmp_path, monkeypatch):
     calls = {}
 
     def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
     ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -358,7 +358,9 @@ class ChannelASR(conftest.FakeASR):
         return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
 
 
-def fake_channel_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
+def fake_channel_backends(
+    *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
+):
     return ChannelASR(), None, None
 
 
@@ -535,7 +537,7 @@ def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     calls = {}
 
     def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
     ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -568,7 +570,7 @@ def test_start_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch
     calls = {}
 
     def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
     ):
         calls["need_diarizer"] = need_diarizer
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -911,7 +913,7 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     monkeypatch.setattr(
         loaders,
         "load_backends",
-        lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None: (
+        lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_: (
             FakeASR(),
             None,
             diar,
@@ -1058,7 +1060,7 @@ def test_out_overwrite_guard_ignores_partial_checkpoints(tmp_path, monkeypatch):
 
 
 def test_transcribe_out_refusal_happens_before_any_transcription(tmp_path, monkeypatch):
-    def explode(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
+    def explode(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
         raise AssertionError("backends must not load when --out is refused")
 
     monkeypatch.setattr(loaders, "load_backends", explode)
@@ -1365,7 +1367,7 @@ def test_broken_settings_fail_fast_with_a_clean_error(tmp_path, stub_backends):
 def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
     calls = {}
 
-    def recording(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None):
+    def recording(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
         calls["asr_backend"] = asr_backend
         calls["asr_provider"] = asr_provider
         return fake_load_backends(need_diarizer=need_diarizer)
@@ -1380,6 +1382,44 @@ def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert calls["asr_backend"] == "parakeet"
     assert calls["asr_provider"] == "dml"
+
+
+def test_glossary_reaches_the_loader_for_decode_time_biasing(tmp_path, monkeypatch):
+    # The glossary has two jobs, and this is the one that is invisible when it
+    # breaks: the terms must reach the ASR *loader*, which compiles them into the
+    # boosting tree that steers decoding. Post-correction would still run and the
+    # transcript would still look plausible, so nothing else here would notice.
+    calls = {}
+
+    def recording(*, need_diarizer, glossary=(), attendee_names=(), boost=None, **_):
+        calls.update(glossary=tuple(glossary), attendee_names=tuple(attendee_names), boost=boost)
+        return fake_load_backends(need_diarizer=need_diarizer)
+
+    monkeypatch.setattr(loaders, "load_backends", recording)
+    _write_settings(tmp_path, "[asr]\nboost = 2.0\n")
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main,
+        # fmt: off
+        [
+            "transcribe",
+            str(audio),
+            "--out",
+            str(tmp_path),
+            "--glossary",
+            "Grafana",
+            "--attendee",
+            "Ada Lovelace",
+        ],
+        # fmt: on
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["glossary"] == ("Grafana",)
+    assert calls["attendee_names"] == ("Ada Lovelace",)
+    assert calls["boost"] == 2.0
 
 
 def test_settings_profile_store_stays_off_the_transcript(tmp_path, stub_backends):
@@ -1491,9 +1531,7 @@ def test_subcommands_never_open_the_launcher(monkeypatch):
     import stenograf.ui
 
     monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
-    monkeypatch.setattr(
-        stenograf.ui, "run_launcher", lambda: (_ for _ in ()).throw(AssertionError)
-    )
+    monkeypatch.setattr(stenograf.ui, "run_launcher", lambda: (_ for _ in ()).throw(AssertionError))
 
     result = CliRunner().invoke(cli.main, ["profiles", "list"])
 
