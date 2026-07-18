@@ -1104,6 +1104,30 @@ def test_record_audio_lands_in_the_meeting_folder(tmp_path, monkeypatch):
     assert (meeting_dir / "audio.wav").exists()
 
 
+def test_output_record_audio_setting_keeps_audio_without_a_flag(tmp_path, monkeypatch):
+    _write_settings(tmp_path, "[output]\nrecord_audio = true\n")
+    result = _start_batch(tmp_path, monkeypatch)
+    assert result.exit_code == 0, result.output
+
+    (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
+    assert (meeting_dir / "audio.wav").exists()
+
+
+def test_no_record_audio_opts_out_of_the_standing_default(tmp_path, monkeypatch):
+    _write_settings(tmp_path, "[output]\nrecord_audio = true\n")
+    result = _start_batch(tmp_path, monkeypatch, "--no-record-audio")
+    assert result.exit_code == 0, result.output
+
+    (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
+    assert not (meeting_dir / "audio.wav").exists()
+
+
+def test_record_audio_and_no_record_audio_conflict(tmp_path, monkeypatch):
+    result = _start_batch(tmp_path, monkeypatch, "--record-audio", "--no-record-audio")
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output
+
+
 def _helper_wrapper(tmp_path, *forced_args):
     """An executable stand-in for stenocap; forced_args replace the real argv."""
     fake = Path(__file__).parent / "fake_stenocap.py"

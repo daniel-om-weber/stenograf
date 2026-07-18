@@ -122,6 +122,7 @@ glossary_threshold = 0.9
 
 [output]
 dir = "~/Documents/Meetings"
+record_audio = true
 
 [speakers]
 diarization = false
@@ -140,6 +141,7 @@ provider = "dml"
     assert s.vocab.attendees == ("Ada Lovelace", "Grace Hopper")
     assert s.vocab.glossary_threshold == 0.9
     assert s.output.dir == Path("~/Documents/Meetings").expanduser()
+    assert s.output.record_audio is True
     assert s.speakers.diarization is False
     assert s.speakers.reid_threshold == 0.6
     assert s.speakers.profile_store == Path("~/steno/profiles.json").expanduser()

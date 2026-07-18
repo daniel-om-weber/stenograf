@@ -17,6 +17,12 @@ optional; a missing file is simply all defaults. The full schema::
     dir = "~/Documents/Meetings"        # the output home: every run writes its
                                         # own meeting-YYYYMMDD-HHMMSS/ folder
                                         # here (--out bypasses it for one run)
+    record_audio = false                # keep the raw captured audio as the
+                                        # meeting folder's audio.wav, exactly as a
+                                        # bare --record-audio would. Off by
+                                        # default: audio otherwise never touches
+                                        # disk. --record-audio PATH still redirects
+                                        # a single run to another file.
 
     [speakers]
     diarization = true                  # separate speakers within each channel.
@@ -123,6 +129,9 @@ SETTINGS_TEMPLATE = """\
 
 [output]
 # dir = "~/Documents/Meetings"             # where meeting folders are created
+# record_audio = false                     # true = keep audio.wav (raw capture)
+#                                          # in every meeting folder, like a bare
+#                                          # --record-audio
 
 [speakers]
 # diarization = false                      # true = separate speakers within a channel
@@ -179,6 +188,11 @@ class OutputSettings:
     """The output home meeting folders are created in; ``None`` = the default
     (``~/Documents/Meetings``, :func:`stenograf.output.default_output_home`).
     Not one meeting's dir — ``--out`` is that — but the folder of folders."""
+    record_audio: bool | None = None
+    """``True`` keeps the raw captured audio as each meeting folder's
+    ``audio.wav``, exactly as a bare ``--record-audio`` does. Unset (``None``)
+    or ``False`` = off, the built-in default: audio never touches disk. A
+    ``--record-audio PATH`` still redirects a single run to another file."""
 
 
 @dataclass(frozen=True)
@@ -394,7 +408,7 @@ def _vocab_from_table(data: dict) -> VocabSettings:
 
 def _output_from_table(data: dict) -> OutputSettings:
     t = _Table("output", data)
-    settings = OutputSettings(dir=t.path("dir"))
+    settings = OutputSettings(dir=t.path("dir"), record_audio=t.bool_("record_audio"))
     t.reject_unknown()
     return settings
 

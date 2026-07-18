@@ -123,8 +123,15 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     default=None,
     metavar="[PATH]",
     help="Also save the raw captured audio to a WAV (mic left, system right). "
-    "Off by default — audio otherwise never touches disk. Give a PATH or omit it "
-    "to write <transcript>.wav.",
+    "Off by default (unless [output] record_audio is set) — audio otherwise never "
+    "touches disk. Give a PATH or omit it to write <transcript>.wav.",
+)
+@click.option(
+    "--no-record-audio",
+    "no_record_audio",
+    is_flag=True,
+    help="Do not save the audio for this run, even when [output] record_audio is "
+    "set. The per-run opt-out of the standing default.",
 )
 @click.option(
     "--flush-interval",
@@ -198,6 +205,7 @@ def start(
     force: bool,
     title: str | None,
     record_audio: str | None,
+    no_record_audio: bool,
     flush_interval: float | None,
     max_seconds: float | None,
     live: bool,
@@ -218,6 +226,9 @@ def start(
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
     from stenograf.session import MeetingRecorder, plan_channels
+
+    if no_record_audio and record_audio is not None:  # before any model loads
+        raise click.UsageError("--record-audio and --no-record-audio are mutually exclusive")
 
     cfg = _resolve_run_config(
         formats=formats,
@@ -304,6 +315,12 @@ def start(
     )
     recorder.reuse_live_finalize = not full_finalize
 
+    # A bare --record-audio wins; absent one, [output] record_audio makes the
+    # meeting folder's audio.wav the standing default (same loud banner in the
+    # tee). --no-record-audio is the per-run opt-out of that default (the two are
+    # rejected together up top).
+    if not no_record_audio and record_audio is None and settings.output.record_audio:
+        record_audio = _RECORD_DEFAULT
     tee = _make_tee(record_audio, audio_default, plans)
     flush_interval = _resolve_flush_interval(flush_interval, live=live)
 

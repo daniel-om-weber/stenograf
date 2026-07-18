@@ -117,7 +117,7 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
             yield Static("Title (optional; used by notes)", classes="field-label")
             yield Input(placeholder="e.g. Weekly sync", id="title")
             with Horizontal(classes="switch-row"):
-                yield Switch(value=False, id="record")
+                yield Switch(value=standing.output.record_audio is True, id="record")
                 yield Static("Keep the audio recording (audio.wav)")
             with Horizontal(classes="switch-row"):
                 yield Switch(value=standing.notes.auto is True, id="notes")
@@ -130,11 +130,11 @@ class MeetingSetupScreen(Screen[MeetingRequest | None]):
     def _standing_settings(self) -> Settings:
         """The settings the form's switches start from.
 
-        Both standing choices are off by default; only ``[speakers]
-        diarization = true`` and ``[notes] auto = true`` pre-set their switch.
-        A switch beats the settings the same way a CLI flag does, for this one
-        meeting. A broken settings file behaves like the defaults —
-        :meth:`_submit` is where it is reported.
+        The standing switches are off by default; only ``[speakers]
+        diarization = true``, ``[output] record_audio = true`` and ``[notes]
+        auto = true`` pre-set theirs. A switch beats the settings the same way a
+        CLI flag does, for this one meeting. A broken settings file behaves like
+        the defaults — :meth:`_submit` is where it is reported.
         """
         from stenograf.settings import Settings, SettingsError, load_settings
 
