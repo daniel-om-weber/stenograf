@@ -743,6 +743,32 @@ def test_persist_once_retries_after_a_failed_write():
     assert persist(object()) == [Path("t.md")]  # the exit-path call retries
 
 
+def test_capture_log_buffers_chatter_and_surfaces_problems(capsys):
+    # The TUI's stderr sink: routine transport chatter (formats, stopped) is
+    # buffered and never reaches the terminal — it used to be painted straight
+    # over the Textual screen. Problem lines flash in the view's header live
+    # and replay onto the scrollback after the app exits.
+    class RecordingView(LiveView):
+        def __init__(self):
+            self.errors = []
+
+        def error(self, message):
+            self.errors.append(message)
+
+    log = loaders.CaptureLog()
+    log("stenocap: mic format: 48000.0 Hz, 1 ch")  # arrives before the view exists
+    log.view = RecordingView()
+    log("stenocap: WARNING channel 0 drifted 40 ms from wall clock")
+    log("stenocap: stopped")
+    assert log.view.errors == ["stenocap: WARNING channel 0 drifted 40 ms from wall clock"]
+    assert capsys.readouterr().err == ""  # nothing touches the terminal while buffering
+
+    log.replay()
+    err = capsys.readouterr().err
+    assert "drifted" in err  # the problem survives onto the scrollback
+    assert "mic format" not in err and "stopped" not in err  # routine stays buffered
+
+
 def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
     served = []
 
@@ -1578,7 +1604,8 @@ def test_native_provider_with_announce_never_touches_click(monkeypatch):
     monkeypatch.setattr(click, "secho", boom)
 
     class FakeProvider:
-        pass
+        def __init__(self, *, on_log=None):
+            self.on_log = on_log
 
     lines = []
     plans = plan_channels(MeetingProfile(local_speakers=1, remote_speakers=1))

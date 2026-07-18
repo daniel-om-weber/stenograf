@@ -43,6 +43,57 @@ def _say(announce: Announce | None, message: str, *, warn: bool = False) -> None
         click.echo(message)
 
 
+_PROBLEM_MARKERS = ("fatal", "warning", "error", "denied", "failed", "died", "silence")
+"""Substrings (case-insensitive) that mark a capture-transport line as a
+problem the user must see, vs. routine chatter (formats, started/stopped)."""
+
+
+class CaptureLog:
+    """Capture-transport diagnostics, kept off the terminal while a TUI owns it.
+
+    The native transports (stenocap, parec) normally inherit stderr, so their
+    status lines land on the terminal — which is right for the plain CLI but
+    stomps Textual's screen: the helper's device-format lines at launch and its
+    "stopped" at Ctrl-C were painted straight over the captions and looked like
+    rendering bugs. Passed as ``on_log`` to :func:`make_provider`, this sink
+    buffers every line instead. Lines that look like problems (permission
+    denied, a stream dying) are forwarded to the attached ``view``'s header the
+    moment they arrive, so a mid-meeting capture failure stays as visible as it
+    was on stderr; :meth:`replay` echoes them once more after the TUI has
+    released the terminal, so they survive on the scrollback too.
+
+    Called from the transports' relay threads; the list append is atomic and
+    ``view.error`` marshals itself onto the UI loop, so no lock is needed.
+    """
+
+    def __init__(self, view=None) -> None:
+        self.lines: list[str] = []
+        self.view = view
+        """A LiveView (or None until the CLI builds one); gets problem lines."""
+
+    def __call__(self, line: str) -> None:
+        self.lines.append(line)
+        if self.view is not None and self._is_problem(line):
+            self.view.error(line)
+
+    @staticmethod
+    def _is_problem(line: str) -> bool:
+        lowered = line.lower()
+        return any(marker in lowered for marker in _PROBLEM_MARKERS)
+
+    def problems(self) -> list[str]:
+        return [line for line in self.lines if self._is_problem(line)]
+
+    def replay(self) -> None:
+        """Echo the buffered problem lines, for after the TUI exits.
+
+        Routine chatter (formats, started/stopped) stays buffered-only: it was
+        never information the meeting flow needed, just transport logging.
+        """
+        for line in self.problems():
+            click.secho(line, fg="yellow", err=True)
+
+
 def download_progress(announce: Announce | None):
     """ProgressHook that announces a model download once, at its start."""
 
@@ -173,6 +224,7 @@ def make_provider(
     aec: bool = True,
     aec_dump: Path | None = None,
     announce: Announce | None = None,
+    on_log: Announce | None = None,
 ):
     """Build the capture provider: file replay if given, else the native helper.
 
@@ -180,10 +232,14 @@ def make_provider(
     channel — without it, remote participants coming out of the speakers land on
     the mic channel and get transcribed as the local speaker. ``aec_dump`` wraps
     even with ``--no-aec`` so the eval rig can record the uncancelled baseline.
+
+    ``on_log`` is the capture transports' diagnostic sink (a :class:`CaptureLog`
+    for the TUIs). ``None`` keeps the transports' stderr on the terminal — right
+    for the plain CLI, screen-corrupting under Textual.
     """
     from stenograf.capture.base import Channel
 
-    provider = _base_provider(replay, plans, paced=paced, announce=announce)
+    provider = _base_provider(replay, plans, paced=paced, announce=announce, on_log=on_log)
     channels = {plan.channel for plan in plans}
     if (aec or aec_dump is not None) and {Channel.MIC, Channel.SYSTEM} <= channels:
         from stenograf.aec import EchoCancellingProvider
@@ -192,7 +248,7 @@ def make_provider(
     return provider
 
 
-def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=None):
+def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=None, on_log=None):
     from stenograf.capture.base import Channel
 
     if replay is not None:
@@ -216,19 +272,19 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=N
         from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
 
         try:
-            return MacOSCaptureProvider()
+            return MacOSCaptureProvider(on_log=on_log)
         except HelperNotFoundError as exc:
             raise click.ClickException(str(exc)) from exc
 
     if sys.platform.startswith("linux"):
         from stenograf.capture.linux import LinuxCaptureProvider, default_devices
 
-        return _native_provider(LinuxCaptureProvider, default_devices, plans, announce)
+        return _native_provider(LinuxCaptureProvider, default_devices, plans, announce, on_log)
 
     if sys.platform == "win32":
         from stenograf.capture.windows import WindowsCaptureProvider, default_devices
 
-        return _native_provider(WindowsCaptureProvider, default_devices, plans, announce)
+        return _native_provider(WindowsCaptureProvider, default_devices, plans, announce, on_log)
 
     raise click.ClickException(
         "live capture is supported on macOS, Linux, and Windows; here, transcribe "
@@ -236,7 +292,7 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=N
     )
 
 
-def _native_provider(provider_cls, default_devices, plans, announce=None):
+def _native_provider(provider_cls, default_devices, plans, announce=None, on_log=None):
     """Construct a queue-streaming native provider and announce its devices.
 
     Resolves the default devices up front so a broken audio stack fails before
@@ -247,7 +303,7 @@ def _native_provider(provider_cls, default_devices, plans, announce=None):
     from stenograf.capture.base import CaptureUnavailableError
 
     try:
-        provider = provider_cls()
+        provider = provider_cls(on_log=on_log)
         devices = default_devices({p.channel for p in plans})
     except CaptureUnavailableError as exc:
         raise click.ClickException(str(exc)) from exc

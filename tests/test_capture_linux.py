@@ -87,6 +87,31 @@ class TestLinuxCaptureProvider:
         assert any(f.channel is Channel.MIC for f in frames)
         assert provider._procs == {}
 
+    def test_on_log_keeps_parec_stderr_off_the_terminal(self, monkeypatch, capfd):
+        # The TUI path: server messages must reach the sink per line, never the
+        # real stderr, where they would be painted over the Textual screen.
+        monkeypatch.setenv("FAKE_PAREC_CHATTER", "1")
+        lines = []
+        provider = LinuxCaptureProvider(command=FAKE, on_log=lines.append)
+        provider.start({Channel.MIC, Channel.SYSTEM})
+        list(provider.frames())
+        provider.stop()
+        assert sorted(lines) == [
+            "fake-parec: Connection failure: @DEFAULT_MONITOR@",
+            "fake-parec: Connection failure: @DEFAULT_SOURCE@",
+        ]
+        assert capfd.readouterr().err == ""
+
+    def test_parec_stderr_is_inherited_by_default(self, monkeypatch, capfd):
+        # The plain CLI keeps today's behaviour: no sink, server messages land
+        # on the terminal's stderr where they have always been visible.
+        monkeypatch.setenv("FAKE_PAREC_CHATTER", "1")
+        provider = LinuxCaptureProvider(command=FAKE)
+        provider.start({Channel.MIC})
+        list(provider.frames())
+        provider.stop()
+        assert "fake-parec: Connection failure" in capfd.readouterr().err
+
     def test_frames_before_start_raises(self):
         provider = LinuxCaptureProvider(command=FAKE)
         with pytest.raises(RuntimeError):

@@ -7,7 +7,9 @@ every sample with a channel-distinct value so tests can assert routing.
 Duration comes from the environment: ``FAKE_PAREC_SECONDS`` (default 0.4s,
 then a clean EOF), overridable per channel via ``FAKE_PAREC_MIC_SECONDS`` /
 ``FAKE_PAREC_SYSTEM_SECONDS``; a negative value streams forever (until the
-provider terminates the process, like real parec).
+provider terminates the process, like real parec). ``FAKE_PAREC_CHATTER``
+makes it log a line to stderr like a real parec's server messages, to test
+the stderr routing.
 """
 
 import os
@@ -23,6 +25,9 @@ sample = int(value).to_bytes(2, "little", signed=True)
 
 key = "FAKE_PAREC_MIC_SECONDS" if mic else "FAKE_PAREC_SYSTEM_SECONDS"
 seconds = float(os.environ.get(key, os.environ.get("FAKE_PAREC_SECONDS", "0.4")))
+
+if os.environ.get("FAKE_PAREC_CHATTER"):
+    print(f"fake-parec: Connection failure: {device}", file=sys.stderr, flush=True)
 
 out = sys.stdout.buffer
 if seconds < 0:

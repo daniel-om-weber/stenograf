@@ -49,7 +49,7 @@ from stenograf.capture.base import (
     CaptureUnavailableError,
     Channel,
 )
-from stenograf.capture.streaming import QueueStreamingProvider, read_up_to
+from stenograf.capture.streaming import QueueStreamingProvider, read_up_to, relay_lines
 
 _PAREC_LATENCY_MS = 100
 """Target stream latency asked of the server — keeps delivery well under the
@@ -120,8 +120,9 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
         command: str | Path | list[str] | None = None,
         frame_ms: int = DEFAULT_FRAME_MS,
         clock: Callable[[], float] = time.monotonic,
+        on_log: Callable[[str], None] | None = None,
     ):
-        super().__init__(frame_ms=frame_ms, clock=clock)
+        super().__init__(frame_ms=frame_ms, clock=clock, on_log=on_log)
         if command is None:
             if shutil.which("parec") is None:
                 raise CaptureUnavailableError(
@@ -134,6 +135,7 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
         else:
             self._prefix = [str(command)]
         self._procs: dict[Channel, subprocess.Popen[bytes]] = {}
+        self._log_relays: list[threading.Thread] = []
         # stop() is called from several threads (the capture loop on max_seconds,
         # the meeting thread on close, the TUI's quit binding, and a reader on an
         # unexpected stream death), so serialize claiming the processes.
@@ -151,9 +153,21 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
             "--client-name=stenograf",
             f"--stream-name={channel.value}",
         ]
-        # stdout is the raw PCM stream; stderr (server errors) is inherited
-        # so the user sees why a stream died on their terminal.
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
+        # stdout is the raw PCM stream. stderr (server errors) is inherited by
+        # default so the plain CLI's user sees why a stream died — but with an
+        # on_log sink it is piped and relayed line-by-line instead, keeping
+        # parec's chatter off the TUI's screen (streaming._log docstring).
+        stderr = None if self._on_log is None else subprocess.PIPE
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=stderr)
+        if proc.stderr is not None:
+            relay = threading.Thread(
+                target=relay_lines,
+                args=(proc.stderr, self._on_log),
+                name=f"parec-log-{channel.value}",
+                daemon=True,
+            )
+            relay.start()
+            self._log_relays.append(relay)
         self._procs[channel] = proc
         return proc
 
@@ -191,3 +205,9 @@ class LinuxCaptureProvider(QueueStreamingProvider[subprocess.Popen[bytes]]):
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     proc.wait()
+        # The processes are gone, so the stderr relays are at EOF; join them so
+        # parec's last lines have reached the sink before stop() returns — the
+        # CLI replays buffered problems right after. (Relays never call stop,
+        # so this can't self-join; pumps drain stdout, a different pipe.)
+        for relay in self._log_relays:
+            relay.join(timeout=5)

@@ -450,9 +450,10 @@ class TestMeetingFlow:
             return conftest.FakeASR(), None, None
 
         def fake_make_provider(
-            replay, plans, *, paced=False, aec=True, aec_dump=None, announce=None
+            replay, plans, *, paced=False, aec=True, aec_dump=None, announce=None, on_log=None
         ):
             announced["make_provider"] = announce
+            announced["on_log"] = on_log
             return FileCaptureProvider({Channel.MIC: mic})
 
         monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
@@ -496,6 +497,10 @@ class TestMeetingFlow:
         # proxy against the real console) and the meeting dies before capture.
         assert callable(announced["make_provider"])
         assert callable(announced["load_backends"])
+        # Capture-transport stderr must be routed off the running app's screen,
+        # with problems surfaced in this meeting's header.
+        assert isinstance(announced["on_log"], loaders.CaptureLog)
+        assert announced["on_log"].view is not None  # problems reach the header
 
 
 class TestTranscribeScreen:

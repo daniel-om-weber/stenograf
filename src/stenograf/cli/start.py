@@ -268,9 +268,17 @@ def start(
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
 
     plans = plan_channels(profile)
+    # The full-screen TUI owns the terminal, so it can only run on a real TTY
+    # and unless the user forced the plain stream (or turned live off entirely).
+    # Decided before the provider exists: the TUI also needs the capture
+    # transports' stderr chatter kept off its screen (CaptureLog below).
+    use_tui = live and not plain and _stdout_is_tty()
+    capture_log = loaders.CaptureLog() if use_tui else None
     # Pace file replay to wall-clock only when it feeds the live pass, so
     # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
-    provider = loaders.make_provider(replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump)
+    provider = loaders.make_provider(
+        replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump, on_log=capture_log
+    )
     if aec_dump is not None:
         from stenograf.aec import EchoCancellingProvider
 
@@ -332,9 +340,6 @@ def start(
 
     persist = _PersistOnce(_persist_files)
 
-    # The full-screen TUI owns the terminal, so it can only run on a real TTY and
-    # unless the user forced the plain stream (or turned live off entirely).
-    use_tui = live and not plain and _stdout_is_tty()
     channels = ", ".join(p.channel.value for p in plans)
     if not use_tui:  # the TUI header shows REC / elapsed instead of this hint
         stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
@@ -355,11 +360,17 @@ def start(
             flush_interval=flush_interval,
             max_seconds=max_seconds,
             persist=persist,
+            capture_log=capture_log,
         )
     finally:
         if tee is not None:
             tee.close()
             click.echo(f"recorded audio: {tee.path}")
+        if capture_log is not None:
+            # The TUI has released the terminal — repeat any capture problems
+            # (already flashed in its header) on the scrollback, where they can
+            # actually be read. Routine transport chatter stays buffered-only.
+            capture_log.replay()
 
     if result is None:
         # Defensive: a live view exited without producing a transcript. There is
@@ -423,6 +434,7 @@ def _run_meeting(
     flush_interval: float,
     max_seconds: float | None,
     persist: Callable[[Transcript], object] | None = None,
+    capture_log=None,
 ) -> MeetingResult | None:
     """Run the capture session through the right live view and return its result.
 
@@ -449,6 +461,10 @@ def _run_meeting(
         view = TextualLiveView(
             profile, language=profile.language, stop=provider.stop, persist=persist
         )
+        if capture_log is not None:
+            # From here, capture problems flash in the meeting header live;
+            # the caller replays them onto the scrollback after the app exits.
+            capture_log.view = view
         # The TUI speaks Transcript (that is what it renders); the run report
         # travels back to this caller beside it.
         results: list[MeetingResult] = []

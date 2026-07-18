@@ -30,11 +30,15 @@ import threading
 from collections.abc import Iterator
 from importlib import resources
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
-from stenograf.capture.streaming import read_exact
+from stenograf.capture.streaming import read_exact, relay_lines
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _HEADER = struct.Struct("<BdI")  # channel u8, timestamp f64, count u32
 _CHANNEL_CODE = {0: Channel.MIC, 1: Channel.SYSTEM}
@@ -82,6 +86,13 @@ class MacOSCaptureProvider(CaptureProvider):
     to point at a fake helper in tests; production locates the signed binary via
     :func:`find_helper`.
 
+    ``on_log`` receives the helper's stderr, one decoded line at a time.
+    ``None`` (the plain CLI) inherits stderr so capture errors land on the
+    terminal as ever; the full-screen TUI installs a sink instead, because a
+    raw stderr write while Textual owns the terminal is painted straight over
+    the captions — the helper's format/started lines at launch and its
+    "stopped" at Ctrl-C looked like rendering bugs.
+
     Echo cancellation is *not* done here. The helper used to expose a ``--aec``
     flag backed by Voice Processing IO; measured on macOS 26 it emitted no mic
     frames at all and attenuated the system channel by ~36 dB, so it was removed
@@ -89,16 +100,23 @@ class MacOSCaptureProvider(CaptureProvider):
     as the far-end reference.
     """
 
-    def __init__(self, *, command: str | Path | list[str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        command: str | Path | list[str] | None = None,
+        on_log: Callable[[str], None] | None = None,
+    ) -> None:
         if command is None:
             self._prefix = [str(find_helper())]
         elif isinstance(command, list):
             self._prefix = command
         else:
             self._prefix = [str(command)]
+        self._on_log = on_log
         self._proc: subprocess.Popen[bytes] | None = None
         self._queue: queue.SimpleQueue[AudioFrame | Exception | None] | None = None
         self._drainer: threading.Thread | None = None
+        self._log_relay: threading.Thread | None = None
         # stop() is called from several threads (the capture loop on max_seconds,
         # the meeting thread on close, and the TUI's quit binding), so serialize it.
         self._stop_lock = threading.Lock()
@@ -106,10 +124,22 @@ class MacOSCaptureProvider(CaptureProvider):
     def start(self, channels: set[Channel]) -> None:
         argv = list(self._prefix)
         argv += [_CHANNEL_FLAG[ch] for ch in (Channel.MIC, Channel.SYSTEM) if ch in channels]
-        # stdout is the binary frame stream; stderr (status/prompts) is inherited
-        # so the user sees TCC prompts and any capture errors on their terminal.
-        self._proc = subprocess.Popen(argv, stdout=subprocess.PIPE)
+        # stdout is the binary frame stream. stderr (status/errors) is inherited
+        # by default so capture errors land on the plain CLI's terminal — but
+        # with an on_log sink it is piped and relayed line-by-line instead,
+        # keeping the helper's chatter off the TUI's screen (class docstring).
+        stderr = None if self._on_log is None else subprocess.PIPE
+        self._proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=stderr)
         assert self._proc.stdout is not None
+        if self._on_log is not None:
+            assert self._proc.stderr is not None
+            self._log_relay = threading.Thread(
+                target=relay_lines,
+                args=(self._proc.stderr, self._on_log),
+                name="stenocap-log",
+                daemon=True,
+            )
+            self._log_relay.start()
         # The pipe is drained on a dedicated thread, whatever the consumer does.
         # If the consumer stalls with the pipe full (it holds 64 KB ≈ 1 s of
         # frames), the helper blocks in write(), Core Audio decides its IO
@@ -156,9 +186,12 @@ class MacOSCaptureProvider(CaptureProvider):
                 proc.wait()
         # The helper's exit ends the stream: the drain thread sees EOF, queues
         # the end-of-stream marker for frames(), closes the pipe, and exits.
-        drainer = self._drainer
-        if drainer is not None:
-            drainer.join(timeout=5)
+        # The stderr relay (if piping) sees EOF the same way; join it too so
+        # the helper's last lines ("stopped") reach the sink before stop()
+        # returns — the CLI replays buffered problems right after.
+        for thread in (self._drainer, self._log_relay):
+            if thread is not None:
+                thread.join(timeout=5)
 
 
 def _drain_pipe(stream, out: queue.SimpleQueue) -> None:

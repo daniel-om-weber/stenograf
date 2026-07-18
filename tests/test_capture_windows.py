@@ -241,6 +241,20 @@ class TestWindowsCaptureProvider:
         assert len(frames) == 30  # the stream keeps flowing; only a warning
         assert capsys.readouterr().err.count("only silence") == 1
 
+    def test_on_log_keeps_diagnostics_off_the_terminal(self, capsys):
+        # The TUI path: with a sink installed, the pump's diagnostics must go
+        # there and never to stderr, where they would be painted over the
+        # Textual screen (parity with the subprocess transports' stderr pipe).
+        lines = []
+        provider = WindowsCaptureProvider(
+            backend=fake_backend(mic_script=[0.0] * 30), frame_ms=200, on_log=lines.append
+        )
+        provider.start({Channel.MIC})
+        list(provider.frames())
+        provider.stop()
+        assert sum("only silence" in line for line in lines) == 1
+        assert capsys.readouterr().err == ""
+
     def test_silent_system_channel_is_normal(self, capsys):
         # Loopback delivers zeros whenever nothing plays; never warn there.
         provider = WindowsCaptureProvider(

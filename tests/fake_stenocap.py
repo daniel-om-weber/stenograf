@@ -6,7 +6,9 @@ until SIGINT (to test stop()); with --frames N it emits N frames per channel as
 fast as it can and exits (to test the drain thread against a stalled consumer);
 with --malformed it emits one valid frame, then a garbage header (to test that
 stream desync reaches the consumer); otherwise it emits a few frames and exits
-(to test natural end-of-stream).
+(to test natural end-of-stream). With --chatter it also logs status lines to
+stderr the way the real helper does (format info at start, a WARNING, and
+"stopped" at exit), to test the stderr routing.
 """
 
 import signal
@@ -26,11 +28,25 @@ def emit(code: int, index: int) -> None:
     sys.stdout.buffer.flush()
 
 
+def log(message: str) -> None:
+    print(f"fake-stenocap: {message}", file=sys.stderr, flush=True)
+
+
 def main() -> None:
-    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    chatter = "--chatter" in sys.argv[1:]
+
+    def bail(*_: object) -> None:
+        if chatter:  # the real helper logs "stopped" on its way out
+            log("stopped")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, bail)
+    signal.signal(signal.SIGTERM, bail)
     channels = [CODE[a] for a in sys.argv[1:] if a in CODE]
     forever = "--forever" in sys.argv[1:]
+    if chatter:
+        log("mic format: 48000.0 Hz, 1 ch")
+        log("WARNING channel 0 drifted 12 ms from wall clock")
     total = 3
     if "--frames" in sys.argv[1:]:
         total = int(sys.argv[sys.argv.index("--frames") + 1])
@@ -47,6 +63,8 @@ def main() -> None:
             emit(code, index)
         index += 1
         if not forever and index >= total:
+            if chatter:
+                log("stopped")
             return
         if forever:
             time.sleep(0.02)

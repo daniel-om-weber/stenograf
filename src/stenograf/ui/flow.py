@@ -82,7 +82,16 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
         # announce=view.status everywhere below: loader progress must go to
         # the header, never through click — Textual owns stdio here, and on
         # Windows click.echo dies probing its proxy (loaders module docstring).
-        provider = loaders.make_provider(None, plans, paced=True, aec=True, announce=view.status)
+        # on_log likewise: the capture transports' stderr chatter must not be
+        # written over the running app; problems reach the header instead.
+        provider = loaders.make_provider(
+            None,
+            plans,
+            paced=True,
+            aec=True,
+            announce=view.status,
+            on_log=loaders.CaptureLog(view=view),
+        )
         view.set_stop(provider.stop)  # Stop/Ctrl-C crosses to capture from here on
         tee = None
         if request.record_audio:

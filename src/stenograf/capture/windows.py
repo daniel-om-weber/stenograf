@@ -195,9 +195,13 @@ class WindowsCaptureProvider(QueueStreamingProvider[None]):
         backend=None,
         frame_ms: int = DEFAULT_FRAME_MS,
         clock: Callable[[], float] = time.monotonic,
+        on_log: Callable[[str], None] | None = None,
     ):
         super().__init__(
-            frame_ms=frame_ms, clock=clock, reanchor_tolerance_s=_REANCHOR_TOLERANCE_S
+            frame_ms=frame_ms,
+            clock=clock,
+            reanchor_tolerance_s=_REANCHOR_TOLERANCE_S,
+            on_log=on_log,
         )
         self._soundcard = backend if backend is not None else _import_soundcard()
 
@@ -228,18 +232,18 @@ class WindowsCaptureProvider(QueueStreamingProvider[None]):
                         zero_run = zero_run + len(samples) if not samples.any() else 0
                         if not warned_silent and zero_run >= _SILENT_MIC_WARN_S * SAMPLE_RATE:
                             warned_silent = True
-                            print(
+                            self._log(
                                 f"stenograf: the microphone has delivered only silence for "
                                 f"{_SILENT_MIC_WARN_S:.0f}s — check the input volume and "
                                 "Windows privacy settings "
-                                "(Settings > Privacy & security > Microphone)",
-                                file=sys.stderr,
+                                "(Settings > Privacy & security > Microphone)"
                             )
                     self._emit(channel, samples)
         except Exception as exc:
-            # The other providers inherit their subprocess's stderr; this is
-            # the in-process equivalent so the user sees why a stream died.
-            print(f"stenograf: {channel.value} capture stream died: {exc}", file=sys.stderr)
+            # The other providers route their subprocess's stderr through
+            # _log's sink-or-stderr choice; this is the in-process equivalent
+            # so the user sees why a stream died.
+            self._log(f"stenograf: {channel.value} capture stream died: {exc}")
 
     def _stop_transport(self) -> None:
         # Pumps notice the stop event within one frame read (~frame_ms +

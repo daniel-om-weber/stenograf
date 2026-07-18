@@ -103,6 +103,38 @@ class TestMacOSCaptureProvider:
             list(provider.frames())
         provider.stop()
 
+    def test_on_log_keeps_helper_stderr_off_the_terminal(self, capfd):
+        # The TUI path: helper chatter must reach the sink line-by-line and
+        # never the real stderr, where it would be painted over the Textual
+        # screen (the "device format at start / stopped at Ctrl-C" bug).
+        lines = []
+        provider = MacOSCaptureProvider(command=[*FAKE, "--chatter"], on_log=lines.append)
+        provider.start({Channel.MIC})
+        list(provider.frames())
+        provider.stop()  # joins the relay: the final lines are in by now
+        assert "fake-stenocap: mic format: 48000.0 Hz, 1 ch" in lines
+        assert "fake-stenocap: stopped" in lines
+        assert capfd.readouterr().err == ""
+
+    def test_helper_stderr_is_inherited_by_default(self, capfd):
+        # The plain CLI keeps today's behaviour: no sink, chatter lands on the
+        # terminal's stderr where capture errors have always been visible.
+        provider = MacOSCaptureProvider(command=[*FAKE, "--chatter"])
+        provider.start({Channel.MIC})
+        list(provider.frames())
+        provider.stop()
+        assert "fake-stenocap: mic format" in capfd.readouterr().err
+
+    def test_a_raising_sink_does_not_break_capture(self):
+        def bad_sink(line: str) -> None:
+            raise RuntimeError("sink is broken")
+
+        provider = MacOSCaptureProvider(command=[*FAKE, "--chatter"], on_log=bad_sink)
+        provider.start({Channel.MIC})
+        frames = list(provider.frames())
+        provider.stop()
+        assert len(frames) == 3  # audio unaffected by the sink's failures
+
     def test_stop_does_not_close_the_pipe_under_a_paused_reader(self):
         # stop() may fire (max_seconds, TUI quit) while the consumer sits between
         # yields; the read that resumes afterwards must end at clean EOF, not

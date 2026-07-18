@@ -24,7 +24,9 @@ Linux, the stenocap helper on macOS).
 
 from __future__ import annotations
 
+import contextlib
 import math
+import sys
 import threading
 import time
 from abc import abstractmethod
@@ -64,6 +66,26 @@ def read_exact(stream: IO[bytes], n: int) -> bytes | None:
     caller can use half a frame."""
     data = read_up_to(stream, n)
     return data if len(data) == n else None
+
+
+def relay_lines(stream: IO[bytes], sink: Callable[[str], None]) -> None:
+    """Forward a transport's piped stderr to ``sink``, one decoded line at a time.
+
+    Runs on a daemon thread and owns the stream: it reads until EOF (the
+    process exiting closes the write end) and closes the read end on the way
+    out. Decoding is permissive and a raising sink is swallowed per line —
+    diagnostics must never stall the transport (an undrained pipe would
+    eventually block the helper's own writes).
+    """
+    try:
+        for raw in iter(stream.readline, b""):
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if not line:
+                continue
+            with contextlib.suppress(Exception):  # a broken sink must not kill the drain
+                sink(line)
+    finally:
+        stream.close()
 
 
 class SessionClock:
@@ -153,12 +175,28 @@ class QueueStreamingProvider[TransportT](CaptureProvider):
         frame_ms: int = DEFAULT_FRAME_MS,
         clock: Callable[[], float] = time.monotonic,
         reanchor_tolerance_s: float = math.inf,
+        on_log: Callable[[str], None] | None = None,
     ) -> None:
         self._frame_samples = frame_samples(frame_ms)
         self._clock = SessionClock(clock=clock, reanchor_tolerance_s=reanchor_tolerance_s)
         self._queue: SimpleQueue[AudioFrame | Channel] = SimpleQueue()
         self._threads: dict[Channel, threading.Thread] = {}
         self._stop_event = threading.Event()
+        self._on_log = on_log
+        """Diagnostic sink; ``None`` means stderr (see :meth:`_log`)."""
+
+    def _log(self, message: str) -> None:
+        """One transport diagnostic: the installed sink, or stderr for the plain CLI.
+
+        ``on_log`` exists because the full-screen TUI owns the terminal — a raw
+        stderr write while it runs is painted straight over the captions and
+        reads as a rendering bug, so TUI callers install a sink that routes
+        the line somewhere visible instead.
+        """
+        if self._on_log is not None:
+            self._on_log(message)
+        else:
+            print(message, file=sys.stderr)
 
     def start(self, channels: set[Channel]) -> None:
         self._clock.start()
