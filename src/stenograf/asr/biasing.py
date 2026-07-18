@@ -44,7 +44,7 @@ the rule the settings scaffold states: write terms as they appear in the sentenc
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -315,7 +315,7 @@ def boost_terms(glossary: Iterable[str], attendee_names: Iterable[str] = ()) -> 
 
 def build(
     terms: Iterable[str],
-    tokenize: object,
+    tokenize: Callable[[str], list[list[int]]],
     *,
     vocab_size: int,
     context_score: float = DEFAULT_CONTEXT_SCORE,

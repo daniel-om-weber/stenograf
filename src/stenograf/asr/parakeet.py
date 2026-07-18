@@ -214,13 +214,13 @@ class ParakeetMLXBackend(ASRBackend):
         # outright — the stock loop stays untouched and the run pays nothing: not a
         # tree lookup per token, not even the tokenizer download.
         if self._glossary and self._boost:
-            tree = build_tree(
-                self._glossary, load_encoder(), vocab_size=len(self._model.vocabulary)
-            )
+            model = self._model
+            assert model is not None  # loaded just above
+            vocab = model.vocabulary
+            assert vocab is not None  # a loaded model always has its vocabulary
+            tree = build_tree(self._glossary, load_encoder(), vocab_size=len(vocab))
             if tree is not None:
-                self._model.decode_greedy = _biased_decode_greedy(
-                    self._model, tree, self._boost, mx
-                )
+                model.decode_greedy = _biased_decode_greedy(model, tree, self._boost, mx)
 
     def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:
         # Parakeet v3 is multilingual with no language switch; ``language``

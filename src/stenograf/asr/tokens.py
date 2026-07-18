@@ -67,10 +67,12 @@ def load_encoder() -> Callable[[str], list[list[int]]]:
     from huggingface_hub import hf_hub_download
 
     path = hf_hub_download(TOKENIZER_REPO, TOKENIZER_FILE)
-    sp = sentencepiece.SentencePieceProcessor(model_file=path)
+    # sentencepiece is SWIG-generated: the model_file kwarg and the snake_case
+    # encode alias are injected at runtime, so static analysis can't see them.
+    sp = sentencepiece.SentencePieceProcessor(model_file=path)  # pyright: ignore[reportCallIssue]
 
     def encode(text: str) -> list[list[int]]:
-        forms = [sp.encode(text)]
+        forms = [sp.encode(text)]  # pyright: ignore[reportAttributeAccessIssue]
         tail = _compound_tail(sp, text)
         if tail is not None and tail != forms[0]:
             forms.append(tail)
