@@ -311,13 +311,6 @@ overhang moves the unstable tail past the cut, into audio whose words are
 dropped again (their midpoint lies beyond ``cut_end``), so the kept text no
 longer sits in the danger zone. Same move, mirrored, for a cut *start*."""
 
-MAX_DECODE_S = 35.0
-"""Ceiling on a decode slice's length (s). The window budget (30 s) exists
-because decode quality is only trusted up to roughly that length; cut repair
-must not silently re-inflate slices past it. Sized so a full-budget window cut
-at both ends still gets ``OVERHANG_S`` of repair on each side."""
-
-
 def context_start(start: float, end: float, *, cut: bool = False) -> float:
     """Where the decode slice for the packed window ``[start, end)`` begins.
 
@@ -327,12 +320,17 @@ def context_start(start: float, end: float, *, cut: bool = False) -> float:
     preceding audio, silence included (splicing distant speech across the gap
     measured worse — the seam costs accuracy), and the caller drops the words
     whose midpoint falls before the window's keep bound. A **cut-started**
-    window (``cut=True``) gets left context regardless of its length — its
-    first words sit right at a forced mid-speech cut — but only as much as
-    keeps the whole slice within ``MAX_DECODE_S`` (with ``OVERHANG_S`` of
-    right-overhang room reserved). Other long windows decode exactly their
-    span. Window packing is untouched: this changes only what the model reads,
-    never the window bounds.
+    long window (``cut=True``) reaches back ``OVERHANG_S`` — its first words
+    sit right at a forced mid-speech cut, and the earlier window's keep rule
+    hands them to this decode, so it must not start mid-phrase. The reach is
+    deliberately NOT the short-window context: the A/B study measured added
+    left context on ≥8 s windows as a null (26:29), so on long windows it is
+    cut repair, not accuracy priming, and the busy channels where cuts chain
+    window-to-window cannot afford 7–15 s of re-read per window (measured
+    10.2 % of total audio vs 4 % with the symmetric reach). Other long
+    windows decode exactly their span; no slice ever exceeds the 30 s budget
+    plus one overhang per cut edge (≤ 35 s). Window packing is untouched:
+    this changes only what the model reads, never the window bounds.
 
     Both decode paths — ``pipeline._decode`` and
     ``WindowedLiveDecoder._decode_window`` — and the byte-identity test reach
@@ -342,8 +340,7 @@ def context_start(start: float, end: float, *, cut: bool = False) -> float:
     if end - start < SHORT_WINDOW_S:
         return max(0.0, start - DECODE_CONTEXT_S)
     if cut:
-        reach = min(DECODE_CONTEXT_S, max(0.0, MAX_DECODE_S - OVERHANG_S - (end - start)))
-        return max(0.0, start - reach)
+        return max(0.0, start - OVERHANG_S)
     return start
 
 

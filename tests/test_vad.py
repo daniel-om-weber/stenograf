@@ -8,7 +8,6 @@ from stenograf import models
 from stenograf.audio import SAMPLE_RATE
 from stenograf.vad import (
     DECODE_CONTEXT_S,
-    MAX_DECODE_S,
     OVERHANG_S,
     SileroVAD,
     SpeechSegment,
@@ -112,16 +111,17 @@ class TestDecodeSlice:
         assert hi == 30.0 + OVERHANG_S
         assert keep_hi == 30.2
 
-    def test_cut_started_long_window_reads_context_within_the_decode_budget(self):
-        # A full-budget window cut at both ends still fits MAX_DECODE_S: the
-        # left reach shrinks to the room the overhang leaves.
+    def test_cut_started_long_window_reads_the_symmetric_overhang(self):
+        # Long cut-started windows get cut repair, not the short-window context
+        # (added context on >=8 s windows measured null; busy channels chain
+        # cuts window-to-window, so the reach is the decode-cost lever).
         win = Window(30.0, 60.0, cut_start=29.9, cut_end=60.1)
         ctx, hi, keep_lo, keep_hi = decode_slice(win)
-        assert ctx == 30.0 - (MAX_DECODE_S - OVERHANG_S - 30.0)
-        assert hi - ctx <= MAX_DECODE_S
+        assert ctx == 30.0 - OVERHANG_S
+        assert hi - ctx <= 30.0 + 2 * OVERHANG_S  # slices never outgrow the budget much
         assert (keep_lo, keep_hi) == (29.9, 60.1)
-        # A shorter cut-started window gets up to the full measured context.
-        ctx, _, _, _ = decode_slice(Window(30.0, 45.0, cut_start=29.9))
+        # A short cut-started window keeps the full measured context reach.
+        ctx, _, _, _ = decode_slice(Window(30.0, 35.0, cut_start=29.9))
         assert ctx == 30.0 - DECODE_CONTEXT_S
 
     def test_keep_intervals_are_exact_complements_at_a_cut(self):
