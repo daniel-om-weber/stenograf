@@ -37,7 +37,8 @@ from common import OUT_DIR, load_manifest  # noqa: E402
 from stenograf import models  # noqa: E402
 from stenograf.asr import create_backend  # noqa: E402
 from stenograf.audio import SAMPLE_RATE, sample_index, to_float32  # noqa: E402
-from stenograf.vad import SileroVAD, pack_windows  # noqa: E402
+from stenograf.pipeline import _clip_context, _shift  # noqa: E402
+from stenograf.vad import SileroVAD, context_start, pack_windows  # noqa: E402
 
 BACKEND_DIR = "parakeet-win"
 
@@ -53,21 +54,33 @@ def read_mono16k(path: Path) -> np.ndarray:
 
 
 def decode_windowed(asr, vad: SileroVAD, samples: np.ndarray, language):
-    """pipeline._decode, with the window spans kept."""
+    """pipeline._decode, with the window spans kept.
+
+    The decode arithmetic — the context slice (``context_start``) and the
+    context-word clipping (``_clip_context``/``_shift``) — is imported from
+    the package, never re-implemented here: this script's whole point is to
+    record what the *real* decode path produces, so any local copy of that
+    logic silently rots (it did once: the 2026-07-19 context-carry fix landed
+    in the package while this loop still decoded bare windows).
+    """
     duration = len(samples) / SAMPLE_RATE
     windows = pack_windows(vad.speech_segments(samples), duration)
     segments = []
     for i, (start, end) in enumerate(windows):
-        window = samples[sample_index(start) : sample_index(end)]
+        ctx = context_start(start, end)
+        window = samples[sample_index(ctx) : sample_index(end)]
         for seg in asr.transcribe(window, language):
+            clipped = _clip_context(_shift(seg, ctx), start)
+            if clipped is None:
+                continue
             segments.append(
                 {
-                    "text": seg.text,
-                    "start": seg.start + start,
-                    "end": seg.end + start,
+                    "text": clipped.text,
+                    "start": clipped.start,
+                    "end": clipped.end,
                     "words": [
-                        {"text": w.text, "start": w.start + start, "end": w.end + start}
-                        for w in seg.words
+                        {"text": w.text, "start": w.start, "end": w.end}
+                        for w in clipped.words
                     ],
                 }
             )

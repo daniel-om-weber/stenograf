@@ -8,7 +8,13 @@ from stenograf import models
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE, sample_index
 from stenograf.live import LiveDecoder, WindowedLiveDecoder
-from stenograf.vad import SileroVAD, SpeechSegment, pack_windows
+from stenograf.vad import (
+    DECODE_CONTEXT_S,
+    SileroVAD,
+    SpeechSegment,
+    context_start,
+    pack_windows,
+)
 
 # en-2 on purpose: it contains a >30 s unbroken speech run, so it exercises the
 # oversized hard-split path on top of ordinary gap/budget packing.
@@ -393,7 +399,11 @@ class TestWindowedDecoder:
     """The window pass: decode exactly the windows pack_windows would build."""
 
     def test_window_closes_max_gap_after_speech(self):
-        asr = ScriptedASR([[w("hallo", 0.3, 0.9), w("welt", 1.0, 2.0)]])
+        # The window spans [0.7, 3.3] (speech 1.0–3.0 plus pad). Short window ⇒
+        # the decode slice reaches back to the context start (clamped to the
+        # buffer origin, 0.0 here), so scripted times are relative to 0.0 and
+        # a word wholly inside the context region must NOT be committed.
+        asr = ScriptedASR([[w("kontext", 0.1, 0.5), w("hallo", 1.0, 1.6), w("welt", 1.7, 2.6)]])
         vad = PackingFakeVAD(
             [
                 ([SpeechSegment(1.0, 3.0)], None),  # run closed, silence follows
@@ -408,9 +418,8 @@ class TestWindowedDecoder:
         assert dec.decodes == 0  # 5 s: not yet beyond max_gap
         update = dec.feed(pcm(1.0), 8.0)
         assert dec.decodes == 1  # 6 s of silence closed the window
-        # The decode span starts at 1.0 - pad = 0.85; scripted times shift by it.
         assert [x.text for x in update.committed] == ["hallo", "welt"]
-        assert abs(update.committed[0].start - (0.85 + 0.3)) < 1e-6
+        assert abs(update.committed[0].start - 1.0) < 1e-6
 
     def test_budget_split_matches_pack_windows(self):
         asr = ScriptedASR([[w("a", 1.0, 2.0)]])
@@ -473,7 +482,8 @@ class TestWindowedDecoder:
         for i in range(20):
             dec.feed(pcm(1.0), float(i))
         assert asr.calls == 0 and dec.decodes == 0
-        assert dec.buffered_seconds <= 2.0  # trimmed to the silence guard
+        # Trimmed to the silence guard plus the retained decode context.
+        assert dec.buffered_seconds <= DECODE_CONTEXT_S + 2.0
         assert dec.flush().committed == ()
 
     def test_drop_window_abandons_the_pending_window(self):
@@ -524,7 +534,9 @@ def test_windowed_slices_are_byte_identical_to_the_batch_pass():
 
     vad = SileroVAD(models.cached_path(models.SILERO_VAD))
     batch = pack_windows(vad.speech_segments(audio), len(audio) / SAMPLE_RATE)
-    batch_slices = [audio[sample_index(a) : sample_index(b)] for a, b in batch]
+    # Short windows decode from their context start — the batch slice the live
+    # pass must reproduce byte for byte (pipeline._decode does the same).
+    batch_slices = [audio[sample_index(context_start(a, b)) : sample_index(b)] for a, b in batch]
     assert len(batch_slices) >= 3, "the clip should pack several windows"
 
     asr = SliceRecorder()

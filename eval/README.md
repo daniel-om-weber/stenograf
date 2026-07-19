@@ -119,6 +119,25 @@ test). Results in `out/context-ab.md`:
    detector misses quiet short interjections at threshold level (mic channel
    almost exclusively; these are the user's own "ja/genau/okay" turns).
 
+**Fixes shipped + verified (2026-07-19).** Windows under 8 s decode with up to
+15 s of contiguous left context (`vad.context_start`, mirrored by
+`pipeline._decode` and `WindowedLiveDecoder._decode_window`; window bounds
+untouched), VAD threshold 0.5 → 0.4, window pad 0.15 → 0.3 s. Verification:
+byte-identity + full suite green, `live.py --mode window` at **0.0 % WER**
+vs finalize on both clips (reuse guarantee intact), and re-running
+`context_ab.py` against the fixed pipeline collapses the raw-context arm to
+**2–4 % changed with a null referee** on the short buckets (the product now
+*is* the context decode; the splice arm now *loses* to it, 10:4 / 26:20 —
+contiguous-beats-splice reconfirmed) while the ≥8 s control is unchanged.
+The VAD-drop check improves from 56 likely-real lost spans to 39 (confirmed
+drop mass 48.5 s → 30.4 s); the remainder sit below even the 0.4 gate —
+re-run the same harness before dropping the threshold further, the trade is
+noise admission on the system channel. One meta-lesson is recorded in
+`windows.py`: its decode loop once re-implemented the pipeline's slice
+arithmetic and silently went stale when the fix landed — it now imports
+`context_start`/`_clip_context` from the package, so the eval measures the
+real decode path by construction.
+
 Measures the *diarizer*, not the ASR: **DER** (Diarization Error Rate) and
 **word attribution** (of the finalized words, the fraction placed on the right
 speaker). Nothing speaker-centric — re-ID threshold tuning, clustering/embedding

@@ -323,6 +323,20 @@ fallback ladder with `compression_ratio_threshold≈2.4`, `logprob_threshold≈-
 `no_speech_threshold≈0.6`, `hallucination_silence_threshold≈2–8 s`, plus a post-filter
 blacklist for phantom phrases during silence.
 
+**Short-utterance accuracy (settled 2026-07-19, eval/README.md "window-length
+study"):** an isolated short utterance packs into its own tiny VAD window and
+context-starves the model — measured label-free (disagreement density 9.2 vs
+3.9 sites/100 words, <3 s vs ≥8 s windows) and then causally (same model with
+left context added wins the pivot referee ~2.5:1 below 8 s, null above).
+Fixes shipped: windows under 8 s decode with up to 15 s of *contiguous*
+preceding audio and the context words are dropped again (`vad.context_start`,
+mirrored in `pipeline._decode` and `WindowedLiveDecoder._decode_window` —
+window bounds and the reuse guarantee unchanged; splicing distant speech
+across the gap measured worse than contiguous silence). VAD retuned:
+threshold 0.5 → 0.4 (the drop check found real quiet interjections missed at
+threshold level, 48.5 s confirmed lost over 5.2 h) and window pad 0.15 →
+0.3 s (disagreements were ~3× over-represented in a window's first 0.5 s).
+
 **In-memory guarantee:** the default mode holds audio only in bounded ring buffers +
 the session PCM store in RAM; no code path writes audio to disk. (OS-level swap/crash
 dumps are outside app control — worth a note in docs, not an app concern.)

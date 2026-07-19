@@ -42,11 +42,17 @@ class SileroVAD:
         self,
         model_path: Path,
         *,
-        threshold: float = 0.5,
+        threshold: float = 0.4,
         min_silence: float = 0.5,
         min_speech: float = 0.25,
         max_speech: float = 28.0,
     ) -> None:
+        # threshold 0.4 (was 0.5): the short-utterance study's VAD-drop check
+        # (eval/context_ab.py, 2026-07-19) found the detector missing real
+        # quiet interjections at threshold level — 20 confirmed drops (48.5 s)
+        # plus ~36 likely, almost all on the mic channel; only 1 site was under
+        # min_speech, so the floor stays. Parakeet decodes admitted borderline
+        # audio to nothing, which bounds the cost of the looser gate.
         import sherpa_onnx
 
         self._config = sherpa_onnx.VadModelConfig(
@@ -174,7 +180,7 @@ def pack_windows(
     *,
     max_window: float = 30.0,
     max_gap: float = 5.0,
-    pad: float = 0.15,
+    pad: float = 0.3,
 ) -> list[tuple[float, float]]:
     """Merge speech segments into ASR windows of at most ``max_window`` s.
 
@@ -188,6 +194,9 @@ def pack_windows(
     join it), so live windows equal this function's output and the finalize
     pass can reuse the live decodes verbatim.
     """
+    # pad 0.3 (was 0.15): Silero reports onsets late by ~0.1-0.2 s, and the
+    # short-utterance study measured disagreement sites ~3x over-represented in
+    # a window's first 0.5 s (eval/out/window-report.md, 2026-07-19).
     windows: list[list[float]] = []
     for seg in segments:
         # Oversized run (VAD's max_speech_duration should prevent this):
@@ -215,3 +224,35 @@ def pack_windows(
         end = min(total_duration, end + pad)
         padded.append((start, end))
     return padded
+
+
+DECODE_CONTEXT_S = 15.0
+"""Contiguous left context (s) a short window's decode reads (:func:`context_start`)."""
+
+SHORT_WINDOW_S = 8.0
+"""Windows shorter than this decode with left context. The bound is measured:
+below it, the same model with context added wins the pivot referee ~2.5:1
+(23:9 under 3 s, 29:15 at 3–8 s); at or above it the effect is null (26:29)
+— eval/context_ab.py, 2026-07-19."""
+
+
+def context_start(start: float, end: float) -> float:
+    """Where the decode slice for the packed window ``[start, end)`` begins.
+
+    A short, isolated window starves the model of acoustic context — the
+    dominant accuracy loss on short utterances (eval/out/context-ab.md). Short
+    windows therefore decode from up to ``DECODE_CONTEXT_S`` of *contiguous*
+    preceding audio, silence included (splicing distant speech across the gap
+    measured worse — the seam costs accuracy), and the caller drops the words
+    whose midpoint falls before ``start``. Long windows decode exactly their
+    span. Window packing is untouched: this changes only what the model reads,
+    never the window bounds.
+
+    Both decode paths — ``pipeline._decode`` and
+    ``WindowedLiveDecoder._decode_window`` — and the byte-identity test call
+    this one function; diverging from it silently breaks the finalize pass's
+    reuse of live decodes.
+    """
+    if end - start < SHORT_WINDOW_S:
+        return max(0.0, start - DECODE_CONTEXT_S)
+    return start

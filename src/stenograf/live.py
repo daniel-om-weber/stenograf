@@ -47,7 +47,7 @@ import numpy as np
 from stenograf.asr.base import ASRBackend, Word
 from stenograf.audio import SAMPLE_RATE, sample_index, to_float32
 from stenograf.config import Language
-from stenograf.vad import SileroVAD, SpeechSegment
+from stenograf.vad import DECODE_CONTEXT_S, SileroVAD, SpeechSegment, context_start
 
 _WORD_KEY = re.compile(r"\W+", re.UNICODE)
 
@@ -473,7 +473,9 @@ class WindowedLiveDecoder:
     reuse it and skip its own ASR pass entirely.
 
     Cost: each second of speech is decoded exactly once, in finalize-sized
-    windows — the same total ASR work the finalize pass alone would do.
+    windows — the same total ASR work the finalize pass alone would do (short
+    windows additionally re-read their left context, discarded again; see
+    ``vad.context_start`` — the batch pass pays the same).
     Captions land a window at a time (up to ``max_window`` s of speech plus
     ``max_gap`` of silence behind the live edge); there is no interim text.
     Chosen as the product default because the live view runs in the background
@@ -494,7 +496,7 @@ class WindowedLiveDecoder:
         language: Language | None = None,
         max_window: float = 30.0,
         max_gap: float = 5.0,
-        pad: float = 0.15,
+        pad: float = 0.3,
         silence_guard: float = 1.0,
     ) -> None:
         if not hasattr(vad, "stream"):
@@ -617,36 +619,50 @@ class WindowedLiveDecoder:
         return committed
 
     def _decode_window(self) -> list[Word]:
-        """Decode the open window over its padded span; commit every word.
+        """Decode the open window over its padded span; commit its words.
 
         The span floats and their sample_index() conversion mirror pack_windows
         + finalize_channel operation for operation, so the extracted slice is
-        byte-identical to the batch pass's — the reuse guarantee.
+        byte-identical to the batch pass's — the reuse guarantee. A short
+        window's slice additionally reaches back into contiguous left context
+        (``vad.context_start``, same function as the batch pass), and the
+        re-read context words — midpoint before the span — are dropped again.
         """
         start, end = self._pending[0].start, self._pending[-1].end
         self._pending = []
         a = max(self._window.start or 0.0, start - self.pad, self._decoded_to)
         b = min(self._window.end(), end + self.pad)
         self._decoded_to = b
+        ctx = max(self._window.start or 0.0, context_start(a, b))
         self.decodes += 1
         origin = self._window.start_idx or 0
-        lo = max(0, sample_index(a) - origin)
+        lo = max(0, sample_index(ctx) - origin)
         hi = sample_index(b) - origin
         words = [
-            Word(w.text, w.start + a, w.end + a, w.confidence)
+            Word(w.text, w.start + ctx, w.end + ctx, w.confidence)
             for seg in self._asr.transcribe(self._window.samples[lo:hi], self._language)
             for w in seg.words
+            if (w.start + w.end) / 2 + ctx >= a
         ]
         return _extend_committed(self._committed, words)
 
     def _retain(self, open_seg: SpeechSegment | None) -> None:
-        """Trim decoded/silent audio; keep the open window (plus its pad)."""
+        """Trim decoded/silent audio; keep the open window, its pad, and the
+        decode context behind it.
+
+        Every branch reaches ``DECODE_CONTEXT_S`` further back than the span it
+        protects: whether the eventual window closes short is unknown until it
+        closes, and if it does, ``_decode_window`` needs that context in the
+        buffer to reproduce the batch slice (~1 MB of extra float32 per
+        channel at 15 s). The silence branch keeps the guard's onset-latency
+        margin on top, exactly as before.
+        """
         if self._pending:
-            keep_from = self._pending[0].start - self.pad
+            keep_from = self._pending[0].start - self.pad - DECODE_CONTEXT_S
         elif open_seg is not None:
-            keep_from = open_seg.start - self.pad
+            keep_from = open_seg.start - self.pad - DECODE_CONTEXT_S
         else:
-            keep_from = self._window.end() - self.silence_guard
+            keep_from = self._window.end() - self.silence_guard - DECODE_CONTEXT_S
         if self._window.start_idx is None:
             return
         self._window.trim_before(keep_from)
