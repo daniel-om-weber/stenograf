@@ -2,11 +2,15 @@
 
 The finalize pass never feeds raw sliding windows to the ASR model: Silero
 VAD finds speech, and ``pack_windows`` merges adjacent speech runs into
-windows of at most ~30 s that always cut in silence (PLAN.md §2).
+windows of at most ~30 s that cut in silence wherever possible (PLAN.md §2).
+Where a cut is forced into speech anyway (budget close, oversized hard
+split) the window edge is flagged (:class:`Window`) and repaired at decode
+time with overlap (:func:`decode_slice`) — never by moving the bounds.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +23,25 @@ from stenograf.audio import SAMPLE_RATE
 class SpeechSegment:
     start: float
     end: float
+
+
+@dataclass(frozen=True)
+class Window:
+    """One packed ASR window: its padded span plus cut classification.
+
+    ``cut_start``/``cut_end`` are ``None`` at a natural silence close, or the
+    shared **cut time** where the window boundary was a forced mid-speech cut
+    (budget close with speech resuming within :data:`CUT_LOOKAHEAD_S`, or the
+    oversized hard split). Two windows meeting at a cut carry the *identical*
+    value — ``cut_end`` of the earlier equals ``cut_start`` of the later — so
+    the keep-rules on both sides (:func:`decode_slice`) are exact complements:
+    every decoded word lands in exactly one window.
+    """
+
+    start: float
+    end: float
+    cut_start: float | None = None
+    cut_end: float | None = None
 
 
 def _drain_vad(vad, origin: float = 0.0) -> list[SpeechSegment]:
@@ -179,6 +202,21 @@ class SileroVADStream:
         self._segments.extend(_drain_vad(self._vad, self._origin))
 
 
+def cut_boundary(prev_end: float, next_start: float) -> float | None:
+    """The shared cut time for a window boundary, or ``None`` if it is natural.
+
+    A boundary is a **cut** when speech resumes within
+    :data:`CUT_LOOKAHEAD_S` of the earlier window's (unpadded) end — exactly
+    the budget-close and hard-split boundaries, since a gap close needs more
+    than ``max_gap`` of silence. The cut time is the midpoint of the non-speech
+    gap (the hard split's zero gap degenerates to the split time itself), so
+    both adjoining windows derive the identical value from the same two floats
+    — the batch packer from adjacent windows, the online packer at close time.
+    """
+    gap = next_start - prev_end
+    return (prev_end + next_start) / 2 if gap <= CUT_LOOKAHEAD_S else None
+
+
 def pack_windows(
     segments: list[SpeechSegment],
     total_duration: float,
@@ -186,13 +224,16 @@ def pack_windows(
     max_window: float = 30.0,
     max_gap: float = 5.0,
     pad: float = 0.15,
-) -> list[tuple[float, float]]:
+) -> list[Window]:
     """Merge speech segments into ASR windows of at most ``max_window`` s.
 
     Consecutive speech runs share a window while they fit and the silence
     between them stays within ``max_gap``; each window is padded slightly into
     the surrounding silence so VAD onset jitter never clips a word. Returned
-    windows are disjoint and sorted.
+    windows are disjoint and sorted, and each edge is classified as a natural
+    close or a forced mid-speech cut (:class:`Window`, :func:`cut_boundary`) —
+    the decode paths repair cuts with overlap (:func:`decode_slice`) instead
+    of ever moving these bounds.
 
     The ``max_gap`` bound exists for the live window pass: it lets an online
     packer close a window ``max_gap`` after speech stops (nothing later can
@@ -223,15 +264,26 @@ def pack_windows(
         else:
             windows.append([seg.start, seg.end])
 
-    padded: list[tuple[float, float]] = []
-    for start, end in windows:
+    # Cut classification runs on the unpadded bounds: a boundary is a cut iff
+    # the next window's speech starts within CUT_LOOKAHEAD_S of this one's end.
+    boundaries = [cut_boundary(windows[i][1], windows[i + 1][0]) for i in range(len(windows) - 1)]
+
+    padded: list[Window] = []
+    for i, (start, end) in enumerate(windows):
         start = max(0.0, start - pad)
         if padded:
             # Keep windows disjoint: hard-split neighbours touch, so the pad
             # must not reach back into the previous window.
-            start = max(start, padded[-1][1])
+            start = max(start, padded[-1].end)
         end = min(total_duration, end + pad)
-        padded.append((start, end))
+        padded.append(
+            Window(
+                start,
+                end,
+                cut_start=boundaries[i - 1] if i > 0 else None,
+                cut_end=boundaries[i] if i < len(boundaries) else None,
+            )
+        )
     return padded
 
 
@@ -244,8 +296,29 @@ below it, the same model with context added wins the pivot referee ~2.5:1
 (23:9 under 3 s, 29:15 at 3–8 s); at or above it the effect is null (26:29)
 — eval/context_ab.py, 2026-07-19."""
 
+CUT_LOOKAHEAD_S = 1.0
+"""A window edge with speech resuming within this is a forced mid-speech cut
+(:func:`cut_boundary`). Gap closes need > ``max_gap`` of silence, so only the
+budget close and the oversized hard split can produce such an edge."""
 
-def context_start(start: float, end: float) -> float:
+OVERHANG_S = 2.5
+"""Extra audio (s) a cut-ended window's decode slice reads past its end.
+
+The greedy TDT decode is knife-edge unstable at the very tail of its slice —
+the same span decodes completely or drops ~10 trailing words on a
+millisecond-level bound shift (eval/README.md "window-length study"). The
+overhang moves the unstable tail past the cut, into audio whose words are
+dropped again (their midpoint lies beyond ``cut_end``), so the kept text no
+longer sits in the danger zone. Same move, mirrored, for a cut *start*."""
+
+MAX_DECODE_S = 35.0
+"""Ceiling on a decode slice's length (s). The window budget (30 s) exists
+because decode quality is only trusted up to roughly that length; cut repair
+must not silently re-inflate slices past it. Sized so a full-budget window cut
+at both ends still gets ``OVERHANG_S`` of repair on each side."""
+
+
+def context_start(start: float, end: float, *, cut: bool = False) -> float:
     """Where the decode slice for the packed window ``[start, end)`` begins.
 
     A short, isolated window starves the model of acoustic context — the
@@ -253,15 +326,42 @@ def context_start(start: float, end: float) -> float:
     windows therefore decode from up to ``DECODE_CONTEXT_S`` of *contiguous*
     preceding audio, silence included (splicing distant speech across the gap
     measured worse — the seam costs accuracy), and the caller drops the words
-    whose midpoint falls before ``start``. Long windows decode exactly their
+    whose midpoint falls before the window's keep bound. A **cut-started**
+    window (``cut=True``) gets left context regardless of its length — its
+    first words sit right at a forced mid-speech cut — but only as much as
+    keeps the whole slice within ``MAX_DECODE_S`` (with ``OVERHANG_S`` of
+    right-overhang room reserved). Other long windows decode exactly their
     span. Window packing is untouched: this changes only what the model reads,
     never the window bounds.
 
     Both decode paths — ``pipeline._decode`` and
-    ``WindowedLiveDecoder._decode_window`` — and the byte-identity test call
-    this one function; diverging from it silently breaks the finalize pass's
-    reuse of live decodes.
+    ``WindowedLiveDecoder._decode_window`` — and the byte-identity test reach
+    this one function (via :func:`decode_slice`); diverging from it silently
+    breaks the finalize pass's reuse of live decodes.
     """
     if end - start < SHORT_WINDOW_S:
         return max(0.0, start - DECODE_CONTEXT_S)
+    if cut:
+        reach = min(DECODE_CONTEXT_S, max(0.0, MAX_DECODE_S - OVERHANG_S - (end - start)))
+        return max(0.0, start - reach)
     return start
+
+
+def decode_slice(window: Window) -> tuple[float, float, float, float]:
+    """``(slice_start, slice_end, keep_lo, keep_hi)`` for one packed window.
+
+    The single rule both decode paths share: the model reads
+    ``[slice_start, slice_end)`` (callers clamp ``slice_end`` to the audio
+    they actually have) and keeps exactly the words whose midpoint falls in
+    ``[keep_lo, keep_hi)``. A cut-ended window reads ``OVERHANG_S`` past its
+    end; a cut-started window reads left context (:func:`context_start`). The
+    keep bounds are the shared cut times, so adjoining windows' keep intervals
+    tile the timeline — half-open on the same side everywhere, meaning a word
+    with its midpoint exactly on a cut belongs to the *later* window (the one
+    that decodes it with left context rather than in its unstable tail).
+    """
+    ctx = context_start(window.start, window.end, cut=window.cut_start is not None)
+    hi = window.end + OVERHANG_S if window.cut_end is not None else window.end
+    keep_lo = window.start if window.cut_start is None else window.cut_start
+    keep_hi = math.inf if window.cut_end is None else window.cut_end
+    return ctx, hi, keep_lo, keep_hi

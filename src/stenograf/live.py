@@ -47,7 +47,15 @@ import numpy as np
 from stenograf.asr.base import ASRBackend, Word
 from stenograf.audio import SAMPLE_RATE, sample_index, to_float32
 from stenograf.config import Language
-from stenograf.vad import DECODE_CONTEXT_S, SileroVAD, SpeechSegment, context_start
+from stenograf.vad import (
+    DECODE_CONTEXT_S,
+    OVERHANG_S,
+    SileroVAD,
+    SpeechSegment,
+    Window,
+    cut_boundary,
+    decode_slice,
+)
 
 _WORD_KEY = re.compile(r"\W+", re.UNICODE)
 
@@ -477,7 +485,9 @@ class WindowedLiveDecoder:
     windows additionally re-read their left context, discarded again; see
     ``vad.context_start`` — the batch pass pays the same).
     Captions land a window at a time (up to ``max_window`` s of speech plus
-    ``max_gap`` of silence behind the live edge); there is no interim text.
+    ``max_gap`` of silence behind the live edge, and a cut-ended window waits
+    a further ``OVERHANG_S`` for the future audio its decode overlaps into);
+    there is no interim text.
     Chosen as the product default because the live view runs in the background
     (efficiency outranks caption latency).
 
@@ -519,8 +529,22 @@ class WindowedLiveDecoder:
         self._window = _CaptionBuffer(vad)
         self._committed: list[Word] = []
         self._pending: list[SpeechSegment] = []  # closed runs of the open window
+        # Windows that closed but have not decoded yet (unpadded spans + cut
+        # classification). A cut-ended window's decode reads OVERHANG_S past
+        # its end — future audio — so it waits here until the buffer reaches
+        # that far (bounded extra caption latency, cut windows only). Decoded
+        # strictly FIFO: _extend_committed drops out-of-order words, so a
+        # younger window must never decode ahead of an older one.
+        self._deferred: list[Window] = []
+        # The cut time the previous window closed at, inherited as the next
+        # window's cut_start (None after a natural close) — the online mirror
+        # of pack_windows' adjacent-boundary classification.
+        self._next_cut_start: float | None = None
         self._decoded_to = 0.0  # padded end of the last decoded window
         self.decodes = 0
+        # Decoded windows in batch-comparable form (padded spans + cuts): the
+        # flag-parity test checks this equals pack_windows on the same audio.
+        self.decoded_windows: list[Window] = []
 
     def feed(self, samples: np.ndarray, t_offset: float) -> StreamingUpdate:
         """Add audio; decode (only) the windows that closed since the last feed."""
@@ -529,9 +553,8 @@ class WindowedLiveDecoder:
             self._window.quantize_origin()
         if len(self._window) == 0 or self._window.vad_stream is None:
             return StreamingUpdate((), "")
-        committed: list[Word] = []
         for seg in self._window.vad_stream.take_completed():
-            committed.extend(self._absorb(seg))
+            self._absorb(seg)
         open_seg = self._window.vad_stream.open_segment()
         if self._pending:
             # The window also closes once nothing can join it any more — exactly
@@ -543,7 +566,12 @@ class WindowedLiveDecoder:
             if next_start - self._pending[-1].end > self.max_gap or (
                 open_seg is not None and open_seg.end - self._pending[0].start > self.max_window
             ):
-                committed.extend(self._decode_window())
+                # Either the next speech is known (the open run: budget close,
+                # possibly a cut) or only silence follows for > max_gap — then
+                # cut_boundary on the buffer edge is None like pack_windows'
+                # would be on any future run.
+                self._close_window(next_start)
+        committed = self._drain(force=False)
         self._retain(open_seg)
         return StreamingUpdate(tuple(committed), "")
 
@@ -552,18 +580,19 @@ class WindowedLiveDecoder:
         stream = self._window.vad_stream
         if stream is None or len(self._window) == 0:
             return StreamingUpdate((), "")
-        committed: list[Word] = []
         finish = getattr(stream, "finish", None)
         if finish is not None:
             finish()  # remainder + detector flush → the open run completes
         for seg in stream.take_completed():
-            committed.extend(self._absorb(seg))
+            self._absorb(seg)
         if finish is None:
             open_seg = stream.open_segment()
             if open_seg is not None:
-                committed.extend(self._absorb(open_seg))
+                self._absorb(open_seg)
         if self._pending:
-            committed.extend(self._decode_window())
+            self._close_window(None)  # end of stream: a natural close
+        committed = self._drain(force=True)
+        self._next_cut_start = None
         self._window.reset_to_preroll(self.pre_roll)
         return StreamingUpdate(tuple(committed), "")
 
@@ -572,10 +601,14 @@ class WindowedLiveDecoder:
 
         Committed history is left intact and still monotonic; the abandoned
         audio becomes a caption gap the finalize pass fills on stop (see
-        :meth:`LiveDecoder.drop_window`).
+        :meth:`LiveDecoder.drop_window`). Deferred windows go with the buffer —
+        their overhang/context audio is gone — and the next window starts
+        clean, with no cut inherited across the gap.
         """
         self._window.drop()
         self._pending = []
+        self._deferred = []
+        self._next_cut_start = None
 
     @property
     def committed_words(self) -> tuple[Word, ...]:
@@ -592,57 +625,93 @@ class WindowedLiveDecoder:
 
     # -- online pack_windows -------------------------------------------------
 
-    def _absorb(self, seg: SpeechSegment) -> list[Word]:
+    def _absorb(self, seg: SpeechSegment) -> None:
         """Add one speech run to the open window, closing it first if needed."""
-        committed: list[Word] = []
         if seg.end - seg.start > self.max_window:
             # Oversized run (sherpa's max_speech_duration is a soft bound —
             # 31 s runs happen): replicate pack_windows' hard split exactly.
             # Each cut is its own window; the previous window never absorbs the
             # run, and only the last piece stays open for later runs to join.
             if self._pending:
-                committed.extend(self._decode_window())
+                self._close_window(seg.start)
             cuts = np.arange(seg.start, seg.end, self.max_window)
             for i, cut in enumerate(cuts):
                 self._pending = [
                     SpeechSegment(float(cut), float(min(cut + self.max_window, seg.end)))
                 ]
                 if i < len(cuts) - 1:
-                    committed.extend(self._decode_window())
-            return committed
+                    self._close_window(float(cuts[i + 1]))
+            return
         if self._pending and (
             seg.end - self._pending[0].start > self.max_window
             or seg.start - self._pending[-1].end > self.max_gap
         ):
-            committed = self._decode_window()
+            self._close_window(seg.start)
         self._pending.append(seg)
-        return committed
 
-    def _decode_window(self) -> list[Word]:
-        """Decode the open window over its padded span; commit its words.
+    def _close_window(self, next_start: float | None) -> None:
+        """Close the open window: classify its end edge and queue its decode.
 
-        The span floats and their sample_index() conversion mirror pack_windows
-        + finalize_channel operation for operation, so the extracted slice is
-        byte-identical to the batch pass's — the reuse guarantee. A short
-        window's slice additionally reaches back into contiguous left context
-        (``vad.context_start``, same function as the batch pass), and the
-        re-read context words — midpoint before the span — are dropped again.
+        ``next_start`` is where the next speech is known to begin (a run start
+        for budget/hard-split closes, the buffer edge for a silence close) or
+        ``None`` at end of stream. ``cut_boundary`` on it yields exactly the
+        flag pack_windows derives from the adjacent windows afterwards — the
+        gap and the two floats are the same — which the flag-parity test pins.
         """
         start, end = self._pending[0].start, self._pending[-1].end
         self._pending = []
-        a = max(self._window.start or 0.0, start - self.pad, self._decoded_to)
-        b = min(self._window.end(), end + self.pad)
+        cut = cut_boundary(end, next_start) if next_start is not None else None
+        self._deferred.append(Window(start, end, self._next_cut_start, cut))
+        self._next_cut_start = cut
+
+    def _drain(self, *, force: bool) -> list[Word]:
+        """Decode the queued windows whose audio has fully arrived, in order.
+
+        A cut-ended window waits for its overhang span (``end + pad +
+        OVERHANG_S``); others just for their pad. ``force`` (end of stream)
+        decodes everything, clamped to the audio that exists — the batch pass
+        clamps to the same total duration, so parity holds there too.
+        """
+        committed: list[Word] = []
+        while self._deferred:
+            win = self._deferred[0]
+            needed = win.end + self.pad + (OVERHANG_S if win.cut_end is not None else 0.0)
+            if not force and self._window.end() < needed:
+                break
+            committed.extend(self._decode_window(self._deferred.pop(0)))
+        return committed
+
+    def _decode_window(self, win: Window) -> list[Word]:
+        """Decode one closed window over its padded span; commit its words.
+
+        The span floats and their sample_index() conversion mirror pack_windows
+        + finalize_channel operation for operation, so the extracted slice is
+        byte-identical to the batch pass's — the reuse guarantee. The slice may
+        read past the span on both sides — left context for short/cut-started
+        windows, OVERHANG_S past a cut end — and the words outside the keep
+        interval are dropped again (``vad.decode_slice``, same function as the
+        batch pass).
+        """
+        buf_start = self._window.start or 0.0
+        a = max(buf_start, win.start - self.pad, self._decoded_to)
+        b = min(self._window.end(), win.end + self.pad)
+        # _decoded_to guards the next window's *span*; slices may re-read, so
+        # the overhang past b must not push it forward.
         self._decoded_to = b
-        ctx = max(self._window.start or 0.0, context_start(a, b))
+        padded = Window(a, b, win.cut_start, win.cut_end)
+        ctx, hi, keep_lo, keep_hi = decode_slice(padded)
+        ctx = max(buf_start, ctx)
+        hi = min(self._window.end(), hi)
         self.decodes += 1
+        self.decoded_windows.append(padded)
         origin = self._window.start_idx or 0
-        lo = max(0, sample_index(ctx) - origin)
-        hi = sample_index(b) - origin
+        lo_idx = max(0, sample_index(ctx) - origin)
+        hi_idx = sample_index(hi) - origin
         words = [
             Word(w.text, w.start + ctx, w.end + ctx, w.confidence)
-            for seg in self._asr.transcribe(self._window.samples[lo:hi], self._language)
+            for seg in self._asr.transcribe(self._window.samples[lo_idx:hi_idx], self._language)
             for w in seg.words
-            if (w.start + w.end) / 2 + ctx >= a
+            if keep_lo <= (w.start + w.end) / 2 + ctx < keep_hi
         ]
         return _extend_committed(self._committed, words)
 
@@ -655,9 +724,12 @@ class WindowedLiveDecoder:
         closes, and if it does, ``_decode_window`` needs that context in the
         buffer to reproduce the batch slice (~1 MB of extra float32 per
         channel at 15 s). The silence branch keeps the guard's onset-latency
-        margin on top, exactly as before.
+        margin on top, exactly as before. A deferred window is older than
+        anything pending, so its bound wins when present.
         """
-        if self._pending:
+        if self._deferred:
+            keep_from = self._deferred[0].start - self.pad - DECODE_CONTEXT_S
+        elif self._pending:
             keep_from = self._pending[0].start - self.pad - DECODE_CONTEXT_S
         elif open_seg is not None:
             keep_from = open_seg.start - self.pad - DECODE_CONTEXT_S
