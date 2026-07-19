@@ -148,11 +148,29 @@ code is −17). Root cause, directly observed: the greedy TDT decode is
 decodes completely or drops ~10 trailing words on a few-millisecond bound
 shift — so ANY change to window bounds re-rolls every tail, and bounds that
 end nearer to speech systematically lose. Standing rule: fix onset clipping
-and interjection drops with decode-side changes (cut-overlap decoding —
-decode past a forced cut, drop words beyond it, symmetric to context-carry;
-open, not built), never by moving window bounds. The tail instability
-predates this study and explains occasional hard-split boundary losses in
-every earlier transcript.
+and interjection drops with decode-side changes, never by moving window
+bounds. The tail instability predates this study and explains occasional
+hard-split boundary losses in every earlier transcript.
+
+**Cut-overlap decoding: SHIPPED 2026-07-19** (the decode-side fix the rule
+demanded; full design + numbers in PLAN.md §5 "Cut-overlap decoding").
+`pack_windows` classifies every window edge (cut vs natural close) and
+carries the window's own VAD runs; forced cuts are repaired at decode time
+with a 2.5 s overhang (plus a symmetric left reach for true mid-speech
+starts only) and complementary midpoint keep-rules, and a decode leaving
+≥1.5 s of the window's own speech uncovered retries the exact pre-change
+slice, better coverage winning. Two intermediate designs were measured and
+rejected on this harness before the shipped one: overhang-only (−497 words
+net vs the stored transcripts, vs −272 for the pre-change control — the
+overhang *re-rolls* the knife-edge rather than removing it, and skips can
+land mid-window) and a tail-anchored retry (−462: skips hide behind words
+that still reach the cut). The shipped version measures −235 (better than
+the control), +27 non-filler words in a direct arm-to-arm diff, ≥5-word
+loss regions 17→2, recovers the ~2935 s en-0713-sys sentence, and costs
+~4.2 % extra decode. `windows.py` now drives `pipeline._decode_one`
+wholesale and records per-window cut flags + speech runs;
+`context_ab.py` gained experiment 3, a ±50 ms jitter probe over cut-ended
+windows whose shipped arm models the full retry path.
 
 Measures the *diarizer*, not the ASR: **DER** (Diarization Error Rate) and
 **word attribution** (of the finalized words, the fraction placed on the right

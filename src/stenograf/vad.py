@@ -87,8 +87,10 @@ class SileroVAD:
         # (re-transcribing en-0713: −260 words, whole Whisper-confirmed
         # sentences gone; eval/README.md "window-length study"). A window tail
         # in a natural pause loses nothing; a tail in speech loses text.
-        # Recovering the interjections needs cut-overlap decoding, not a
-        # looser gate.
+        # Cut-overlap decoding + the skip retry (2026-07-19) repair such cuts
+        # now, so a 0.4 re-attempt is unlocked — but only behind the full
+        # re-transcription battery (PLAN.md §5 "Cut-overlap decoding"), never
+        # as a bare retune.
         import sherpa_onnx
 
         self._config = sherpa_onnx.VadModelConfig(
