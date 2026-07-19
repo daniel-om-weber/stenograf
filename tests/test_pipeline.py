@@ -6,7 +6,6 @@ from stenograf.audio import SAMPLE_RATE
 from stenograf.config import Language, MeetingProfile, Provenance
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.pipeline import (
-    _decode_one,
     finalize_channel,
     finalize_file,
     group_words,
@@ -14,7 +13,6 @@ from stenograf.pipeline import (
     relabel_speakers,
 )
 from stenograf.transcript import TranscriptEntry
-from stenograf.vad import OVERHANG_S, SpeechSegment, Window
 
 
 def word(text: str, start: float, end: float) -> Word:
@@ -23,67 +21,6 @@ def word(text: str, start: float, end: float) -> Word:
 
 def turn(speaker: str, start: float, end: float) -> SpeakerTurn:
     return SpeakerTurn(speaker=speaker, start=start, end=end)
-
-
-class QueuedASR(FakeASR):
-    """Returns queued segment lists per call (last repeats); records slice sizes."""
-
-    def __init__(self, responses: list[list[Segment]]) -> None:
-        super().__init__()
-        self._responses = responses
-
-    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
-        self.calls.append(len(samples))
-        return self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
-
-
-def seg_of(*words: Word) -> Segment:
-    return Segment(
-        text=" ".join(w.text for w in words), start=words[0].start, end=words[-1].end, words=words
-    )
-
-
-class TestDecodeCutWindow:
-    """Batch skip retry — pipeline._decode_one, in lockstep with the live path."""
-
-    def test_speech_hole_retries_the_pre_change_slice_and_better_coverage_wins(self):
-        samples = np.zeros(int(30.0 * SAMPLE_RATE), dtype=np.float32)
-        win = Window(0.0, 20.0, cut_end=20.25, speech=(SpeechSegment(0.3, 20.0),))
-        asr = QueuedASR(
-            [
-                [seg_of(word("half", 0.4, 10.0))],  # overlap decode: skipped the rest
-                [seg_of(word("half", 0.4, 10.0), word("rest", 10.2, 19.9))],  # bare decode
-            ]
-        )
-        segments = _decode_one(samples, win, asr=asr, language=None, duration=30.0)
-        assert [w.text for s in segments for w in s.words] == ["half", "rest"]
-        # Exactly two decodes: the overhang slice, then the pre-change span.
-        assert asr.calls == [int((20.0 + OVERHANG_S) * SAMPLE_RATE), int(20.0 * SAMPLE_RATE)]
-
-    def test_retry_keeps_the_primary_when_coverage_is_no_better(self):
-        samples = np.zeros(int(30.0 * SAMPLE_RATE), dtype=np.float32)
-        win = Window(0.0, 20.0, cut_end=20.25, speech=(SpeechSegment(0.3, 20.0),))
-        asr = QueuedASR([[seg_of(word("half", 0.4, 10.0))]])  # both decodes identical
-        segments = _decode_one(samples, win, asr=asr, language=None, duration=30.0)
-        assert len(asr.calls) == 2
-        assert [w.text for s in segments for w in s.words] == ["half"]
-
-    def test_no_retry_when_the_speech_is_covered(self):
-        samples = np.zeros(int(30.0 * SAMPLE_RATE), dtype=np.float32)
-        win = Window(0.0, 20.0, cut_end=20.25, speech=(SpeechSegment(0.3, 20.0),))
-        asr = QueuedASR([[seg_of(word("all", 0.4, 19.9))]])
-        segments = _decode_one(samples, win, asr=asr, language=None, duration=30.0)
-        assert len(asr.calls) == 1
-        assert [w.text for s in segments for w in s.words] == ["all"]
-
-    def test_no_retry_on_a_natural_window_even_with_a_hole(self):
-        # A natural window's overlap slice IS the pre-change slice — there is
-        # no second variant to re-roll, so a hole cannot trigger a decode.
-        samples = np.zeros(int(30.0 * SAMPLE_RATE), dtype=np.float32)
-        win = Window(0.0, 20.0, speech=(SpeechSegment(0.3, 20.0),))
-        asr = QueuedASR([[seg_of(word("half", 0.4, 10.0))]])
-        _decode_one(samples, win, asr=asr, language=None, duration=30.0)
-        assert asr.calls == [int(20.0 * SAMPLE_RATE)]  # exact span, one decode
 
 
 class TestMergeWordsTurns:

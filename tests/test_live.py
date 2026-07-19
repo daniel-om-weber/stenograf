@@ -6,13 +6,13 @@ import pytest
 
 from stenograf import models
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.audio import SAMPLE_RATE
+from stenograf.audio import SAMPLE_RATE, sample_index
 from stenograf.live import LiveDecoder, WindowedLiveDecoder
-from stenograf.pipeline import _decode
 from stenograf.vad import (
     DECODE_CONTEXT_S,
     SileroVAD,
     SpeechSegment,
+    context_start,
     pack_windows,
 )
 
@@ -440,9 +440,7 @@ class TestWindowedDecoder:
         assert flushed.committed  # words from the second window
 
     def test_open_run_past_budget_closes_the_window_early(self):
-        # The scripted word covers the window's speech run so the cut-ended
-        # decode sees no skip hole (a retry would double the decode count).
-        asr = ScriptedASR([[w("a", 0.1, 5.4)]])
+        asr = ScriptedASR([[w("a", 1.0, 2.0)]])
         vad = PackingFakeVAD(
             [
                 ([SpeechSegment(0.0, 5.0)], None),
@@ -461,11 +459,8 @@ class TestWindowedDecoder:
     def test_oversized_run_is_hard_split_like_pack_windows(self):
         # sherpa's max_speech_duration is a soft bound; a 31 s unbroken run must
         # split at the max_window grid exactly as pack_windows would, with the
-        # last (short) piece staying open for later runs to join. The split is
-        # a mid-speech cut, so the [0, 30] piece's decode reads OVERHANG_S past
-        # its end and waits for that audio (32.65 s) before decoding. (The
-        # scripted word covers the piece's run — no skip hole, no retry.)
-        asr = ScriptedASR([[w("a", 0.1, 29.9)]])
+        # last (short) piece staying open for later runs to join.
+        asr = ScriptedASR([[w("a", 1.0, 2.0)]])
         vad = PackingFakeVAD(
             [
                 ([SpeechSegment(0.0, 31.0)], None),
@@ -475,114 +470,11 @@ class TestWindowedDecoder:
         )
         dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
         dec.feed(pcm(32.0), 0.0)
-        assert dec.decodes == 0  # [0, 30] closed at a cut: overhang not buffered yet
+        assert dec.decodes == 1  # the [0, 30] piece decoded immediately
         dec.feed(pcm(3.0), 32.0)
-        assert dec.decodes == 1  # overhang arrived; [30, 31] + [33, 34] pend together
-        assert dec.decoded_windows[0].cut_end == 30.0
+        assert dec.decodes == 1  # [30, 31] + [33, 34] still pending together
         dec.flush()
         assert dec.decodes == 2
-        assert dec.decoded_windows[1].cut_start == 30.0
-
-    def test_cut_ended_window_defers_decode_until_the_overhang_arrives(self):
-        # [0, 20] closes on budget when [20.5, 31] arrives (31 s span > budget)
-        # with only 0.5 s of silence at the boundary — a cut at the gap midpoint.
-        # Its decode reads OVERHANG_S past the padded window end, so it must
-        # wait until the buffer reaches 20.15 + 2.5 = 22.65 s. (The scripted
-        # word covers the window's run — no skip hole, no retry decode.)
-        asr = ScriptedASR([[w("a", 0.2, 19.9)]])
-        vad = PackingFakeVAD(
-            [
-                ([SpeechSegment(0.0, 20.0)], None),
-                ([SpeechSegment(20.5, 31.0)], None),
-                ([], None),
-            ]
-        )
-        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
-        dec.feed(pcm(21.0), 0.0)
-        assert dec.decodes == 0
-        held = dec.feed(pcm(1.5), 21.0)  # buffer 22.5 s < 22.65 s: still deferred
-        assert dec.decodes == 0 and held.committed == ()
-        update = dec.feed(pcm(1.0), 22.5)  # 23.5 s: overhang buffered → decode
-        assert dec.decodes == 1 and update.committed
-        assert dec.decoded_windows[0].cut_end == 20.25
-        dec.flush()
-        assert dec.decoded_windows[1].cut_start == 20.25
-        assert dec.decoded_windows[1].cut_end is None
-
-    def test_speech_hole_triggers_a_pre_change_retry_that_wins(self):
-        # The overlap decode skips most of the window's own VAD speech
-        # (greedy-TDT pathology). The decoder must detect the hole against
-        # the run, re-decode the pre-change slice, and keep the variant that
-        # covers more speech — the mechanism that recovers skipped sentences.
-        asr = ScriptedASR(
-            [
-                [w("early", 1.0, 2.0)],  # overlap slice: speech skipped
-                [w("early", 1.0, 2.0), w("late", 19.5, 20.1)],  # pre-change slice
-            ]
-        )
-        vad = PackingFakeVAD(
-            [
-                ([SpeechSegment(0.0, 20.0)], None),
-                ([SpeechSegment(20.5, 31.0)], None),
-                ([], None),
-            ]
-        )
-        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
-        dec.feed(pcm(21.0), 0.0)
-        update = dec.feed(pcm(3.0), 21.0)
-        assert dec.decodes == 2  # overhang decode + bare retry
-        assert [x.text for x in update.committed] == ["early", "late"]
-
-    def test_speech_hole_retry_keeps_the_primary_when_no_better(self):
-        # Both decodes leave the same hole (genuinely odd audio): the retry
-        # must not make things worse — the primary's words stand.
-        asr = ScriptedASR([[w("early", 1.0, 2.0)]])  # same answer for both decodes
-        vad = PackingFakeVAD(
-            [
-                ([SpeechSegment(0.0, 20.0)], None),
-                ([SpeechSegment(20.5, 31.0)], None),
-                ([], None),
-            ]
-        )
-        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
-        dec.feed(pcm(21.0), 0.0)
-        update = dec.feed(pcm(3.0), 21.0)
-        assert dec.decodes == 2
-        assert [x.text for x in update.committed] == ["early"]
-
-    def test_keep_rules_are_exact_complements_at_a_cut(self):
-        # Words straddling a cut: the left window's overhang decode and the
-        # right window's context decode both read the same audio; every word
-        # must commit exactly once, split by midpoint against the shared cut
-        # time 20.25 (keep is [lo, hi); the exact-tie case is pinned float-safe
-        # in test_vad.py's complement test).
-        asr = ScriptedASR(
-            [
-                # window A [0, 20]: slice [0, 22.65), times relative to ctx=0.
-                # "all" covers the run so the skip detector stays quiet.
-                [
-                    w("all", 0.1, 19.4),
-                    w("tail", 19.5, 20.1),
-                    w("boundary", 20.3, 20.4),
-                    w("next", 21.0, 22.0),
-                ],
-                # window B: short span → slice starts at ctx=5.35; rel = abs − 5.35
-                [w("tail", 14.15, 14.75), w("boundary", 14.95, 15.05), w("next", 15.65, 16.65)],
-            ]
-        )
-        vad = PackingFakeVAD(
-            [
-                ([SpeechSegment(0.0, 20.0)], None),
-                ([SpeechSegment(20.5, 31.0)], None),
-                ([], None),
-            ]
-        )
-        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
-        dec.feed(pcm(21.0), 0.0)
-        dec.feed(pcm(3.0), 21.0)  # 24 s ≥ 22.65 s → window A decodes with overhang
-        assert [x.text for x in dec.committed_words] == ["all", "tail"]
-        dec.flush()
-        assert [x.text for x in dec.committed_words] == ["all", "tail", "boundary", "next"]
 
     def test_silence_costs_no_decodes_and_keeps_memory_bounded(self):
         asr = ScriptedASR([[w("x", 0.1, 0.4)]])
@@ -625,67 +517,39 @@ class SliceRecorder(ASRBackend):
         return []
 
 
-def _eval_clip() -> np.ndarray:
-    with wave.open(str(_EVAL_WAV)) as wv:
-        raw = np.frombuffer(wv.readframes(wv.getnframes()), dtype=np.int16)
-        if wv.getnchannels() == 2:
-            raw = raw[::2]
-    return raw[: 160 * SAMPLE_RATE].astype(np.float32) / 32768.0
-
-
-def _drive_windowed(audio: np.ndarray, vad: SileroVAD) -> tuple[SliceRecorder, WindowedLiveDecoder]:
-    asr = SliceRecorder()
-    dec = WindowedLiveDecoder(asr, vad=vad)
-    step = SAMPLE_RATE // 5  # ~200 ms live frames
-    for pos in range(0, len(audio), step):
-        dec.feed(audio[pos : pos + step], pos / SAMPLE_RATE)
-    dec.flush()
-    return asr, dec
-
-
 @pytest.mark.skipif(
     models.cached_path(models.SILERO_VAD) is None or not _EVAL_WAV.exists(),
     reason="needs the cached silero model and the eval audio",
 )
 def test_windowed_slices_are_byte_identical_to_the_batch_pass():
     # The finalize pass reuses the window pass's decodes verbatim, which is only
-    # sound if both passes hand the model the very same bytes. This drives the
-    # REAL batch decode loop (pipeline._decode) and the live decoder over the
-    # same audio with a slice recorder, pinning the whole chain — streaming
-    # VAD, online packing, sample_index() slicing, context/overhang reads, and
-    # the tail-hole retry (a word-less recorder makes every cut-ended window
-    # retry in BOTH passes, so the retry slices are compared too).
-    audio = _eval_clip()
-    vad = SileroVAD(models.cached_path(models.SILERO_VAD))
-    batch_asr = SliceRecorder()
-    _decode(audio, asr=batch_asr, language=None, vad=vad, on_progress=None)
-    assert len(batch_asr.slices) >= 3, "the clip should pack several windows"
+    # sound if both passes hand the model the very same bytes. This pins the
+    # whole chain — streaming VAD, online packing, sample_index() slicing —
+    # against pack_windows + the batch slice arithmetic on real speech.
+    with wave.open(str(_EVAL_WAV)) as wv:
+        raw = np.frombuffer(wv.readframes(wv.getnframes()), dtype=np.int16)
+        if wv.getnchannels() == 2:
+            raw = raw[::2]
+    audio = raw[: 160 * SAMPLE_RATE].astype(np.float32) / 32768.0
 
-    asr, dec = _drive_windowed(audio, vad)
-    # en-2 contains a >30 s unbroken run, so cut edges (and their overhang and
-    # retry slices) are genuinely exercised, not vacuously equal.
-    assert any(w.cut_end is not None for w in dec.decoded_windows), "the clip should force a cut"
-    assert len(asr.slices) == len(batch_asr.slices)
-    for i, (live, ref) in enumerate(zip(asr.slices, batch_asr.slices, strict=True)):
-        assert live.shape == ref.shape, f"slice {i} length differs"
-        assert np.array_equal(live, ref), f"slice {i} bytes differ"
-
-
-@pytest.mark.skipif(
-    models.cached_path(models.SILERO_VAD) is None or not _EVAL_WAV.exists(),
-    reason="needs the cached silero model and the eval audio",
-)
-def test_windowed_cut_flags_match_the_batch_pass():
-    # The online packer derives each window's cut classification at close time
-    # (it knows *why* it closed); pack_windows derives it afterwards from the
-    # adjacent bounds. Same audio ⇒ identical records — spans AND cut times —
-    # or the finalize pass would clip reused live decodes differently than its
-    # own batch decode would have.
-    audio = _eval_clip()
     vad = SileroVAD(models.cached_path(models.SILERO_VAD))
     batch = pack_windows(vad.speech_segments(audio), len(audio) / SAMPLE_RATE)
-    _, dec = _drive_windowed(audio, vad)
-    assert dec.decoded_windows == batch
+    # Short windows decode from their context start — the batch slice the live
+    # pass must reproduce byte for byte (pipeline._decode does the same).
+    batch_slices = [audio[sample_index(context_start(a, b)) : sample_index(b)] for a, b in batch]
+    assert len(batch_slices) >= 3, "the clip should pack several windows"
+
+    asr = SliceRecorder()
+    dec = WindowedLiveDecoder(asr, vad=vad)
+    step = SAMPLE_RATE // 5  # ~200 ms live frames
+    for pos in range(0, len(audio), step):
+        dec.feed(audio[pos : pos + step], pos / SAMPLE_RATE)
+    dec.flush()
+
+    assert len(asr.slices) == len(batch_slices)
+    for i, (live, ref) in enumerate(zip(asr.slices, batch_slices, strict=True)):
+        assert live.shape == ref.shape, f"window {i} length differs"
+        assert np.array_equal(live, ref), f"window {i} bytes differ"
 
 
 class TestUtteranceMode:

@@ -19,19 +19,6 @@ Parakeet, so style-anchor bias mostly cancels and the referee only breaks the
 tie. Long windows (≥8 s) are sampled as the control arm — context should
 change little there.
 
-Experiment 3 — tail-jitter probe (added with cut-overlap decoding). The
-greedy TDT decode is knife-edge unstable at the slice tail: the same span
-decodes completely or drops ~10 trailing words on a millisecond-level bound
-shift. For every *cut-ended* window (``cut_end`` in the windows.py record)
-the probe decodes the slice three times with the end bound shifted ±50 ms
-and counts the kept words, in two arms: "bare" = the pre-fix slice (ends at
-the window end, no right clip) and "shipped" = the product's cut-overlap
-decode (OVERHANG_S past the cut, words beyond the cut dropped, plus the
-speech-coverage skip retry — an overhang-only arm measured WORSE than bare:
-the overhang re-rolls the knife-edge rather than removing it, and a skip
-can land inside the kept region). The kept-word-count range across the
-three decodes is the instability measure — expect ≈0 for the shipped arm.
-
 Experiment 2 — VAD-drop check. Disagreement sites covered by NO decode window
 ("none" in window-report.md) are spans where the pivot heard words but the
 pipeline decoded nothing. Decoding each span (±0.5 s pad) with Parakeet
@@ -51,7 +38,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import sys
 from pathlib import Path
@@ -66,15 +52,7 @@ from score import normalize  # noqa: E402
 from windows import read_mono16k  # noqa: E402
 
 from stenograf.asr import create_backend  # noqa: E402
-from stenograf.audio import SAMPLE_RATE, sample_index  # noqa: E402
-from stenograf.vad import (  # noqa: E402
-    SPEECH_HOLE_S,
-    SpeechSegment,
-    Window,
-    bare_slice,
-    decode_slice,
-    speech_hole,
-)
+from stenograf.audio import sample_index  # noqa: E402
 
 CTX_RAW_S = 15.0
 CTX_PREV_S = 10.0
@@ -82,7 +60,6 @@ SHORT_S = 8.0  # A/B every window below this; sample above as control
 CONTROL_PER_SEGMENT = 8
 PAD_NONE_S = 0.5
 MATCH_WER = 0.6  # exp 2: hyp-vs-pivot WER at or below this = "same speech"
-JITTER_S = 0.05  # exp 3: slice-end bound shift (±)
 SEED = 20260719
 
 
@@ -191,81 +168,6 @@ def run_context_ab(asr, segments, rng) -> tuple[list[str], list[dict]]:
     return lines, examples
 
 
-def run_jitter(asr, segments) -> list[str]:
-    header = ["## Experiment 3 — tail-jitter probe on cut-ended windows", ""]
-    tallies: dict[str, list[int]] = {"bare": [], "shipped": []}
-    retries = holes_left = 0
-    for _segment, samples, record, _ in segments:
-        wins = record["windows"]
-        if wins and "cut_end" not in wins[0]:
-            return header + [
-                "windows.py records predate cut classification — re-run windows.py --force."
-            ]
-        duration = len(samples) / SAMPLE_RATE
-        for wrec in wins:
-            if wrec["cut_end"] is None:
-                continue
-            win = Window(
-                wrec["start"],
-                wrec["end"],
-                wrec["cut_start"],
-                wrec["cut_end"],
-                speech=tuple(SpeechSegment(s["start"], s["end"]) for s in wrec["speech"]),
-            )
-            ctx, hi, keep_lo, keep_hi = decode_slice(win)
-            bare_ctx, bare_end = bare_slice(win)
-
-            def kept(lo_t, base_end, hi_bound, *, _s=samples, _d=duration, _lo=keep_lo):
-                clip = _s[sample_index(lo_t) : sample_index(min(_d, base_end))]
-                return [
-                    w
-                    for w in transcribe_words(asr, clip, None, lo_t)
-                    if _lo <= (w["start"] + w["end"]) / 2 < hi_bound
-                ]
-
-            def hole_of(words, _win=win):
-                return speech_hole([(w["start"], w["end"]) for w in words], _win.speech)
-
-            bare_counts, shipped_counts = [], []
-            for shift in (-JITTER_S, 0.0, JITTER_S):
-                bare_counts.append(len(kept(bare_ctx, bare_end + shift, math.inf)))
-                # The shipped path (pipeline._decode_one): overlap decode +
-                # skip retry on the pre-change slice, better coverage wins.
-                words = kept(ctx, hi + shift, keep_hi)
-                hole = hole_of(words)
-                if hole > SPEECH_HOLE_S:
-                    retries += 1
-                    retry = kept(bare_ctx, bare_end + shift, keep_hi)
-                    if hole_of(retry) < hole:
-                        words = retry
-                    if hole_of(words) > SPEECH_HOLE_S:
-                        holes_left += 1
-                shipped_counts.append(len(words))
-            tallies["bare"].append(max(bare_counts) - min(bare_counts))
-            tallies["shipped"].append(max(shipped_counts) - min(shipped_counts))
-    lines = header + [
-        "Every cut-ended window decoded 3× with the window-end bound shifted ±50 ms;",
-        "the kept-word-count range across the three decodes measures tail",
-        "instability (0 = the bound shift changes nothing). bare = the pre-fix",
-        "slice; shipped = overlap + speech-coverage skip retry (the product decode).",
-        "",
-        "| arm | windows | unstable (range>0) | Σ range | max range |",
-        "|---|---|---|---|---|",
-    ]
-    for arm, ranges in tallies.items():
-        unstable = sum(1 for r in ranges if r > 0)
-        worst = max(ranges, default=0)
-        lines.append(f"| {arm} | {len(ranges)} | {unstable} | {sum(ranges)} | {worst} |")
-    lines.append("")
-    lines.append(
-        f"Shipped arm: {retries} tail-hole retries across {len(tallies['shipped']) * 3} decodes; "
-        f"{holes_left} holes left after retry."
-    )
-    if not tallies["bare"]:
-        lines.append("No cut-ended windows in any segment — nothing to probe.")
-    return lines
-
-
 def run_vad_drop(asr, segments) -> list[str]:
     counts = {"dropped-speech": 0, "hallucination": 0, "disputed": 0}
     tiny = 0  # confirmed drops short enough to blame min_speech
@@ -334,7 +236,9 @@ def main() -> int:
             continue
         record = json.loads((OUT_DIR / WINDOWED / f"{segment.id}.json").read_text())
         whisper_words = [
-            w for seg in json.loads(whisper_path.read_text())["segments"] for w in seg["words"]
+            w
+            for seg in json.loads(whisper_path.read_text())["segments"]
+            for w in seg["words"]
         ]
         loaded.append((segment, read_mono16k(segment.wav_path), record, whisper_words))
     if not loaded:
@@ -346,7 +250,6 @@ def main() -> int:
     rng = random.Random(SEED)
 
     exp1, examples = run_context_ab(asr, loaded, rng)
-    exp3 = run_jitter(asr, loaded)
     exp2 = run_vad_drop(asr, loaded)
 
     lines = ["# Context A/B + VAD-drop report", ""] + exp1 + [""]
@@ -360,7 +263,7 @@ def main() -> int:
                 f"  - ref: “{ex['ref']}”",
             ]
         lines += [""]
-    lines += exp3 + [""] + exp2
+    lines += exp2
     report = "\n".join(lines) + "\n"
     out = OUT_DIR / "context-ab.md"
     out.write_text(report)

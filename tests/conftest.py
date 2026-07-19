@@ -89,14 +89,8 @@ class RaisingDiarizer(Diarizer):
         raise RuntimeError("diarizer exploded")
 
 
-def write_wav(
-    path,
-    samples: np.ndarray | None = None,
-    *,
-    seconds: float = 1.0,
-    rate: int = SAMPLE_RATE,
-    channels: int = 1,
-) -> None:
+def write_wav(path, samples: np.ndarray | None = None, *, seconds: float = 1.0,
+              rate: int = SAMPLE_RATE, channels: int = 1) -> None:
     """Write an int16 WAV; ``samples=None`` writes ``seconds`` of silence."""
     if samples is None:
         samples = np.zeros(int(rate * seconds), dtype=np.int16)

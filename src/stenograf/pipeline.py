@@ -22,15 +22,7 @@ from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
 from stenograf.transcript import Transcript, TranscriptEntry
-from stenograf.vad import (
-    SPEECH_HOLE_S,
-    SileroVAD,
-    Window,
-    bare_slice,
-    decode_slice,
-    pack_windows,
-    speech_hole,
-)
+from stenograf.vad import SileroVAD, context_start, pack_windows
 
 MAX_ENTRY_GAP = 1.5
 """Silence (s) between words of one speaker that still reads as one entry."""
@@ -124,70 +116,34 @@ def _decode(
     if vad is not None:
         windows = pack_windows(vad.speech_segments(samples), duration)
     else:
-        windows = [Window(0.0, duration)] if duration > 0 else []
+        windows = [(0.0, duration)] if duration > 0 else []
     segments: list[Segment] = []
-    for i, win in enumerate(windows):
+    for i, (start, end) in enumerate(windows):
         if on_progress is not None:
             on_progress(STAGE_ASR, i, len(windows))
-        segments.extend(_decode_one(samples, win, asr=asr, language=language, duration=duration))
+        # Short windows decode with contiguous left context (vad.context_start);
+        # the re-read context words are dropped again below. Mirrored operation
+        # for operation by WindowedLiveDecoder._decode_window (reuse guarantee).
+        ctx = context_start(start, end)
+        window = samples[sample_index(ctx) : sample_index(end)]
+        for seg in asr.transcribe(window, language):
+            clipped = _clip_context(_shift(seg, ctx), start)
+            if clipped is not None:
+                segments.append(clipped)
     segments.sort(key=lambda seg: seg.start)
     return segments
 
 
-def _decode_one(
-    samples, win: Window, *, asr: ASRBackend, language, duration: float
-) -> list[Segment]:
-    """Decode one packed window into its kept segments.
+def _clip_context(seg: Segment, start: float) -> Segment | None:
+    """Drop the left-context words a context-carried decode re-read.
 
-    The decode slice may read more than the window span — left context for
-    short windows, overlap past a cut edge — and the words outside the keep
-    interval are dropped again. One shared rule (``vad.decode_slice``),
-    mirrored operation for operation by
-    ``WindowedLiveDecoder._decode_window`` (reuse guarantee) — including the
-    skip retry: a decode leaving a multi-second stretch of the window's own
-    VAD speech uncovered skipped it (``vad.speech_hole``), so the window
-    re-decodes over the pre-change slice (``vad.bare_slice``) and the variant
-    covering more of the speech wins.
+    A word belongs to the window containing its midpoint (the rule speaker
+    attribution uses). Most segments lie wholly inside the window and pass
+    through untouched (keeping the model's own sentence text); a segment
+    straddling the context boundary is rebuilt from its kept words, and one
+    entirely inside the context disappears — its window already emitted it.
     """
-    ctx, hi, keep_lo, keep_hi = decode_slice(win)
-
-    def run(lo_t: float, hi_t: float) -> list[Segment]:
-        out = []
-        for seg in asr.transcribe(samples[sample_index(lo_t) : sample_index(hi_t)], language):
-            clipped = _clip_window(_shift(seg, lo_t), keep_lo, keep_hi)
-            if clipped is not None:
-                out.append(clipped)
-        return out
-
-    hi = min(hi, duration)
-    segments = run(ctx, hi)
-    bare_ctx, bare_hi = bare_slice(win)
-    bare_hi = min(bare_hi, duration)
-    if (bare_ctx, bare_hi) != (ctx, hi):
-        hole = speech_hole(_word_spans(segments), win.speech)
-        if hole > SPEECH_HOLE_S:
-            retry = run(bare_ctx, bare_hi)
-            if speech_hole(_word_spans(retry), win.speech) < hole:
-                return retry
-    return segments
-
-
-def _word_spans(segments: list[Segment]) -> list[tuple[float, float]]:
-    return [(w.start, w.end) for seg in segments for w in seg.words]
-
-
-def _clip_window(seg: Segment, keep_lo: float, keep_hi: float) -> Segment | None:
-    """Drop the words a decode read outside its window's keep interval —
-    re-read left context and the overhang past a cut.
-
-    A word belongs to the window whose keep interval contains its midpoint
-    (the rule speaker attribution uses; bounds from ``vad.decode_slice``).
-    Most segments lie wholly inside the window and pass through untouched
-    (keeping the model's own sentence text); a segment straddling a bound is
-    rebuilt from its kept words, and one entirely outside disappears — a
-    neighbouring window's decode owns it.
-    """
-    kept = tuple(w for w in seg.words if keep_lo <= (w.start + w.end) / 2 < keep_hi)
+    kept = tuple(w for w in seg.words if (w.start + w.end) / 2 >= start)
     if len(kept) == len(seg.words):
         return seg
     if not kept:

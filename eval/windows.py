@@ -9,9 +9,8 @@ whole segment at once, so its output says nothing about how the product's
 windowing affects accuracy.
 
 Output: eval/out/parakeet-win/<id>.json in the transcribe.py record shape,
-plus ``windows``: the padded [start, end] spans actually decoded (with their
-cut_start/cut_end classification, see stenograf.vad.Window), in seconds on
-the segment clock. adjudicate.py joins disagreement sites against these
+plus ``windows``: the padded [start, end] spans actually decoded, in seconds
+on the segment clock. adjudicate.py joins disagreement sites against these
 spans to slice model errors by window length (the short-utterance study).
 
 The backend runs WITHOUT the user glossary/biasing on purpose: the study
@@ -37,9 +36,9 @@ from common import OUT_DIR, load_manifest  # noqa: E402
 
 from stenograf import models  # noqa: E402
 from stenograf.asr import create_backend  # noqa: E402
-from stenograf.audio import SAMPLE_RATE, to_float32  # noqa: E402
-from stenograf.pipeline import _decode_one  # noqa: E402
-from stenograf.vad import SileroVAD, pack_windows  # noqa: E402
+from stenograf.audio import SAMPLE_RATE, sample_index, to_float32  # noqa: E402
+from stenograf.pipeline import _clip_context, _shift  # noqa: E402
+from stenograf.vad import SileroVAD, context_start, pack_windows  # noqa: E402
 
 BACKEND_DIR = "parakeet-win"
 
@@ -57,40 +56,37 @@ def read_mono16k(path: Path) -> np.ndarray:
 def decode_windowed(asr, vad: SileroVAD, samples: np.ndarray, language):
     """pipeline._decode, with the window spans kept.
 
-    The whole per-window decode — slice bounds, keep clipping, skip retry —
-    is the package's own ``pipeline._decode_one``, never re-implemented here:
-    this script's whole point is to record what the *real* decode path
-    produces, so any local copy of that logic silently rots (it did once: the
-    2026-07-19 context-carry fix landed in the package while this loop still
-    decoded bare windows).
+    The decode arithmetic — the context slice (``context_start``) and the
+    context-word clipping (``_clip_context``/``_shift``) — is imported from
+    the package, never re-implemented here: this script's whole point is to
+    record what the *real* decode path produces, so any local copy of that
+    logic silently rots (it did once: the 2026-07-19 context-carry fix landed
+    in the package while this loop still decoded bare windows).
     """
     duration = len(samples) / SAMPLE_RATE
     windows = pack_windows(vad.speech_segments(samples), duration)
     segments = []
-    for i, win in enumerate(windows):
-        for clipped in _decode_one(samples, win, asr=asr, language=language, duration=duration):
+    for i, (start, end) in enumerate(windows):
+        ctx = context_start(start, end)
+        window = samples[sample_index(ctx) : sample_index(end)]
+        for seg in asr.transcribe(window, language):
+            clipped = _clip_context(_shift(seg, ctx), start)
+            if clipped is None:
+                continue
             segments.append(
                 {
                     "text": clipped.text,
                     "start": clipped.start,
                     "end": clipped.end,
                     "words": [
-                        {"text": w.text, "start": w.start, "end": w.end} for w in clipped.words
+                        {"text": w.text, "start": w.start, "end": w.end}
+                        for w in clipped.words
                     ],
                 }
             )
-        print(f"    window {i + 1}/{len(windows)} [{win.start:7.1f}s–{win.end:7.1f}s]", end="\r")
+        print(f"    window {i + 1}/{len(windows)} [{start:7.1f}s–{end:7.1f}s]", end="\r")
     segments.sort(key=lambda s: s["start"])
-    return segments, [
-        {
-            "start": w.start,
-            "end": w.end,
-            "cut_start": w.cut_start,
-            "cut_end": w.cut_end,
-            "speech": [{"start": s.start, "end": s.end} for s in w.speech],
-        }
-        for w in windows
-    ]
+    return segments, [{"start": start, "end": end} for start, end in windows]
 
 
 def main() -> int:

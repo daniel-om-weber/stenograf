@@ -343,10 +343,10 @@ with context-carry held constant). Context-carry alone is loss-free (−17
 words net on the same meeting, referee-positive). The standing lesson:
 window bounds are a sensitive parameter; fix onset clipping and interjection
 drops with decode-side changes, never by moving bounds. Cut-overlap decoding
-(SHIPPED 2026-07-19, see §5 "Cut-overlap decoding") is that decode-side fix:
-forced mid-speech window cuts are classified and repaired with overlap plus
-a speech-coverage skip retry, measured better than the pre-change batch on
-the six stored meetings.
+(shipped then REVERTED same day, 2026-07-19 — see §5 "Cut-overlap decoding")
+was the attempted decode-side fix; per-site ear adjudication showed a coin
+flip plus a new language-flip failure mode, and the whole mechanism was
+removed for simplicity.
 
 **In-memory guarantee:** the default mode holds audio only in bounded ring buffers +
 the session PCM store in RAM; no code path writes audio to disk. (OS-level swap/crash
@@ -662,7 +662,34 @@ stable-distro; nothing in the design touches ALSA directly, so these suffice.
 
 ---
 
-### Cut-overlap decoding — SHIPPED 2026-07-19
+### Cut-overlap decoding — SHIPPED 2026-07-19, REVERTED 2026-07-19
+
+**REVERTED same day** (src/tests/eval restored to the pre-change state,
+56cc2d3; formatting-only tweaks and the independent eval-harness
+improvements from the same commits kept). What triggered it: Daniel
+ear-adjudicated the per-site before/after (audio clips embedded in the
+comparison artifact) and the change is a coin flip at the sentence level —
+6 attributable gains vs 5 attributable losses, Whisper-refereed changed
+regions dead even at 61:61, and the aggregate win only +24 non-filler
+words over 61 k. Worse, the always-on overhang introduced a **new failure
+mode: language flips** — healthy German windows re-rolled into English
+("Kann ich dazu sagen…" → "and 1.2. Can I?", all in de-0714-160212) —
+which the speech-coverage chooser cannot see (both variants cover the
+speech; one is in the wrong language). Two recorded battery claims also
+did not survive re-measurement: fully-removed ≥5-word regions are 5
+(control) vs 7 (shipped), not 17→2, and the ~2935 s acceptance sentence
+was never lost in production (stored + both arms all have it; v1 lost it
+only in the jitter probe). Given a per-site wash, a real new failure mode,
+and Daniel's simplicity mandate, the mechanism (cut classification, keep
+complements, overhang, coverage retry, live deferral) was deleted rather
+than patched with a language tiebreak. The design record below is kept
+for history; the residual idea worth anything is *repair-only overhang*
+(default decode = exact pre-change slice, overhang only on a detected
+≥1.5 s speech hole, chooser unchanged) — structurally immune to the flip
+sites because they had no hole — if cut holes ever justify complexity
+again.
+
+---
 
 The follow-up the window-length study earned (§2 "Short-utterance accuracy",
 eval/README.md). The driving facts: the greedy TDT decode is knife-edge
@@ -728,12 +755,13 @@ invisible to coverage checks — a model-quality coin flip, not a cut loss;
 and 19/567 probe decodes keep a hole after retry (both variants skip on the
 same odd audio).
 
-**Unlocked next, as separate gated steps:** re-attempt VAD threshold 0.4
-for the quiet-interjection drops (~18 confirmed real drops / ~41 s over
-5.2 h, mostly Daniel's own mic-channel "ja/okay/gut" turns) — safe now that
-mid-speech cuts are repaired and skip-checked; and optionally a small
-always-on left slice overhang (~0.5 s) as the bound-safe replacement for
-the rejected pad widening. Each re-runs the same battery
+**Follow-ups, re-scoped by the revert:** the VAD threshold 0.4 re-attempt
+(quiet-interjection drops, ~18 confirmed / ~41 s over 5.2 h, mostly
+Daniel's own mic-channel "ja/okay/gut" turns) is NOT safe anymore — its
+known cost is more forced mid-speech budget cuts, which are now unrepaired
+again; it would need the repair-only-overhang idea (above) first. The
+small always-on left slice overhang (~0.5 s) remains a candidate on its
+own merits. Any such change re-runs the same battery
 (`eval/live.py --mode window` → `eval/windows.py --force` +
 `eval/context_ab.py` → `eval/retranscribe_compare.py` vs a control
 worktree).
