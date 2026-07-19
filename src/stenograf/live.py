@@ -496,7 +496,7 @@ class WindowedLiveDecoder:
         language: Language | None = None,
         max_window: float = 30.0,
         max_gap: float = 5.0,
-        pad: float = 0.3,
+        pad: float = 0.15,
         silence_guard: float = 1.0,
     ) -> None:
         if not hasattr(vad, "stream"):

@@ -332,10 +332,18 @@ Fixes shipped: windows under 8 s decode with up to 15 s of *contiguous*
 preceding audio and the context words are dropped again (`vad.context_start`,
 mirrored in `pipeline._decode` and `WindowedLiveDecoder._decode_window` —
 window bounds and the reuse guarantee unchanged; splicing distant speech
-across the gap measured worse than contiguous silence). VAD retuned:
-threshold 0.5 → 0.4 (the drop check found real quiet interjections missed at
-threshold level, 48.5 s confirmed lost over 5.2 h) and window pad 0.15 →
-0.3 s (disagreements were ~3× over-represented in a window's first 0.5 s).
+across the gap measured worse than contiguous silence). Two VAD edge
+retunes were tried alongside it and **both reverted after the systematic
+re-transcription comparison caught them losing text**: threshold 0.5 → 0.4
+(recovers quiet interjections, but busy channels then lose their silence
+closes, windows pack wall-to-wall and cut mid-speech at the 30 s budget)
+and pad 0.15 → 0.3 s (shifting every window boundary re-rolls the greedy
+TDT's knife-edge tail decode — bisected at −302 words on one 87-min meeting
+with context-carry held constant). Context-carry alone is loss-free (−17
+words net on the same meeting, referee-positive). The standing lesson:
+window bounds are a sensitive parameter; fix onset clipping and interjection
+drops with decode-side changes (cut-overlap decoding — open), never by
+moving bounds.
 
 **In-memory guarantee:** the default mode holds audio only in bounded ring buffers +
 the session PCM store in RAM; no code path writes audio to disk. (OS-level swap/crash

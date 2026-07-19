@@ -42,17 +42,22 @@ class SileroVAD:
         self,
         model_path: Path,
         *,
-        threshold: float = 0.4,
+        threshold: float = 0.5,
         min_silence: float = 0.5,
         min_speech: float = 0.25,
         max_speech: float = 28.0,
     ) -> None:
-        # threshold 0.4 (was 0.5): the short-utterance study's VAD-drop check
-        # (eval/context_ab.py, 2026-07-19) found the detector missing real
-        # quiet interjections at threshold level — 20 confirmed drops (48.5 s)
-        # plus ~36 likely, almost all on the mic channel; only 1 site was under
-        # min_speech, so the floor stays. Parakeet decodes admitted borderline
-        # audio to nothing, which bounds the cost of the looser gate.
+        # threshold 0.5: 0.4 was tried (2026-07-19, to recover quiet mic
+        # interjections the drop check found missed) and REVERTED the same day.
+        # On a busy channel the looser gate stops yielding the min_silence
+        # pauses that close a run, runs slam into max_speech, and pack_windows
+        # cuts windows mid-speech at the budget — where the greedy TDT decode
+        # is knife-edge unstable at the window tail and loses real words
+        # (re-transcribing en-0713: −260 words, whole Whisper-confirmed
+        # sentences gone; eval/README.md "window-length study"). A window tail
+        # in a natural pause loses nothing; a tail in speech loses text.
+        # Recovering the interjections needs cut-overlap decoding, not a
+        # looser gate.
         import sherpa_onnx
 
         self._config = sherpa_onnx.VadModelConfig(
@@ -180,7 +185,7 @@ def pack_windows(
     *,
     max_window: float = 30.0,
     max_gap: float = 5.0,
-    pad: float = 0.3,
+    pad: float = 0.15,
 ) -> list[tuple[float, float]]:
     """Merge speech segments into ASR windows of at most ``max_window`` s.
 
@@ -194,9 +199,13 @@ def pack_windows(
     join it), so live windows equal this function's output and the finalize
     pass can reuse the live decodes verbatim.
     """
-    # pad 0.3 (was 0.15): Silero reports onsets late by ~0.1-0.2 s, and the
-    # short-utterance study measured disagreement sites ~3x over-represented in
-    # a window's first 0.5 s (eval/out/window-report.md, 2026-07-19).
+    # pad 0.15: widening to 0.3 was tried (2026-07-19; onsets were measurably
+    # over-represented among errors) and REVERTED — shifting every window
+    # boundary re-rolls the greedy TDT's knife-edge tail decode, and the wider
+    # pad systematically lost: −302 words net vs the same code at 0.15 on one
+    # 87-min meeting, whole Whisper-confirmed sentences gone (bisected with
+    # context-carry held constant; eval/README.md "window-length study").
+    # Onset clipping is real but must be fixed without moving window bounds.
     windows: list[list[float]] = []
     for seg in segments:
         # Oversized run (VAD's max_speech_duration should prevent this):

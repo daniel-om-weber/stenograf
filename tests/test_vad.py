@@ -23,15 +23,15 @@ def test_short_segments_share_a_window():
     windows = pack_windows([seg(1, 5), seg(6, 10), seg(12, 20)], total_duration=30.0)
     assert len(windows) == 1
     start, end = windows[0]
-    assert start == 0.7  # 1.0 - pad
-    assert end == 20.3
+    assert start == 0.85  # 1.0 - pad
+    assert end == 20.15
 
 
 def test_window_budget_starts_new_window():
     windows = pack_windows([seg(0, 20), seg(25, 45)], total_duration=60.0, max_window=30.0)
     assert len(windows) == 2
     # Second window starts at the second segment, not at a hard cut.
-    assert windows[1][0] == 25.0 - 0.3
+    assert windows[1][0] == 25.0 - 0.15
 
 
 def test_oversized_segment_is_hard_split():

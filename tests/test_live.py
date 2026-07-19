@@ -399,7 +399,7 @@ class TestWindowedDecoder:
     """The window pass: decode exactly the windows pack_windows would build."""
 
     def test_window_closes_max_gap_after_speech(self):
-        # The window spans [0.7, 3.3] (speech 1.0–3.0 plus pad). Short window ⇒
+        # The window spans [0.85, 3.15] (speech 1.0–3.0 plus pad). Short window ⇒
         # the decode slice reaches back to the context start (clamped to the
         # buffer origin, 0.0 here), so scripted times are relative to 0.0 and
         # a word wholly inside the context region must NOT be committed.
