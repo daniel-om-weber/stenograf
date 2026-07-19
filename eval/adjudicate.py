@@ -124,6 +124,8 @@ def build_sites(
     windows: list[tuple[float, float]] | None = None,
 ) -> list[dict]:
     pivot_words = load_pivot_words(segment_id)
+    if not pivot_words:
+        return []
     pivot_norms = [w.norm for w in pivot_words]
 
     # align every backend once; collect contested pivot spans
@@ -189,6 +191,7 @@ def build_sites(
                 "after": " ".join(w.display for w in pivot_words[e:ctx_hi]),
                 "t0": max(0.0, t0 - SNIPPET_PAD_S),
                 "t1": t1 + SNIPPET_PAD_S,
+                "span": [round(site_start, 2), round(site_end, 2)],
                 "win_len": win_len,
                 "win_off": win_off,
                 "variants": list(unique.values()),

@@ -88,10 +88,36 @@ uv run --group eval eval/adjudicate.py --score ~/Downloads/adjudication-results.
 **Label-free result (2026-07-19, 5.2 h of channel audio + Phase 0 segments):**
 disagreement density falls monotonically with window length — **9.2 sites/100
 words in <3 s windows, 5.1 in 3–8 s, 3.9 in ≥8 s** — and sites are ~3×
-over-represented in the first 0.5 s of a window. 74 pivot-only sites (speech
-the VAD dropped entirely, or pivot hallucination) await judging. Mic channels
-are the short-window regime (de-0717s-mic: median window 1.8 s; system
-channels ~25 s).
+over-represented in the first 0.5 s of a window. Mic channels are the
+short-window regime (de-0717s-mic: median window 1.8 s; system channels
+~25 s).
+
+**Causal confirmation without human judging (`context_ab.py`, 2026-07-19).**
+Human adjudication was replaced by two automated experiments (model juries
+were rejected: the Phase 0 jurors are ~coin-flips on contested sites, and
+juror difficulty correlates with exactly the short-utterance audio under
+test). Results in `out/context-ab.md`:
+
+1. **Context A/B** — every <8 s window re-decoded by the *same* Parakeet with
+   left context added, Whisper refereeing only the changed spans (same model +
+   same audio ⇒ any change is windowing-caused; same-model variants ⇒ referee
+   style-anchor bias cancels). With contiguous preceding audio ("raw", what a
+   fix would decode): pivot sides with added context **23:9 in <3 s windows,
+   29:15 in 3–8 s, and 26:29 (null, as predicted) in the ≥8 s control**.
+   Splicing the previous window across the gap is weaker (15:6 / 21:17) — the
+   seam costs accuracy, so the fix should extend windows into *contiguous*
+   preceding audio (silence included) and drop the pre-span words, NOT splice
+   distant speech. That changes only the decode step (pipeline `_decode` +
+   `WindowedLiveDecoder._decode_window`, in lockstep for the reuse guarantee)
+   — window spans and pack_windows stay untouched.
+2. **VAD-drop check** — the 74 pivot-only spans decoded by Parakeet with no
+   VAD gate: **20 confirmed drops of real speech (48.5 s lost)**, 18 Whisper
+   hallucinations, 36 disputed — but the disputed examples are mostly real
+   interjections both models hear ("ja", "okay", "gut") differing only in
+   wording, so ~3/4 of the spans are genuinely lost speech. Only 1 drop is
+   under 0.3 s: the `min_speech=0.25` floor is NOT the main culprit — the
+   detector misses quiet short interjections at threshold level (mic channel
+   almost exclusively; these are the user's own "ja/genau/okay" turns).
 
 Measures the *diarizer*, not the ASR: **DER** (Diarization Error Rate) and
 **word attribution** (of the finalized words, the fraction placed on the right
