@@ -19,7 +19,13 @@ from common import AUDIO_DIR, EXAMPLES_DIR, EvalSegment, load_manifest, to_wav16
 
 
 def ffmpeg_extract(segment: EvalSegment) -> None:
-    to_wav16k(segment.source_path, segment.wav_path, start=segment.start, end=segment.end)
+    to_wav16k(
+        segment.source_path,
+        segment.wav_path,
+        start=segment.start,
+        end=segment.end,
+        channel=segment.channel,
+    )
 
 
 def main() -> int:

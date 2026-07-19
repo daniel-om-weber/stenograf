@@ -61,7 +61,37 @@ uv run --group eval eval/score.py     # → eval/out/report.md
 Target coverage: ~10 min hand-corrected reference per language (German +
 English), including one in-room far-field sample, per PLAN.md Phase 0.
 
-## Diarization scoring (Phase 3, Task 0d)
+## Short-utterance / window-length study (2026-07-19)
+
+Tests whether the product's windowing hurts short, isolated utterances: the
+finalize pass decodes VAD-packed windows and reuses them verbatim, so an
+utterance with >5 s silence around it becomes its own tiny window with no
+acoustic context. `windows.py` decodes eval segments through the *real*
+pipeline path (VAD → `pack_windows` → Parakeet per window, byte-identical
+slices) and records which window produced which words; `adjudicate.py` joins
+disagreement sites (vs the Whisper pivot) against those spans, reports
+disagreement density per window-length bucket, and carries the tags into
+blind judging. Full recorded meetings (`--record-audio` WAVs, one manifest
+entry per channel via the `channel` field) supply the short-window data the
+300 s Phase 0 segments barely contain.
+
+```sh
+uv run --group eval eval/extract.py       # includes the meeting-channel cuts
+uv run --group eval eval/windows.py       # → out/parakeet-win/<id>.json (+ window spans)
+uv run --group eval eval/transcribe.py --backend whisper --segments <new ids>
+uv run --group eval eval/adjudicate.py --backends parakeet-win,whisper --max-sites 20
+#   → out/window-report.md (label-free density table) + adjudication.html
+uv run --group eval eval/adjudicate.py --score ~/Downloads/adjudication-results.json
+#   → adds a per-bucket correctness table for parakeet-win
+```
+
+**Label-free result (2026-07-19, 5.2 h of channel audio + Phase 0 segments):**
+disagreement density falls monotonically with window length — **9.2 sites/100
+words in <3 s windows, 5.1 in 3–8 s, 3.9 in ≥8 s** — and sites are ~3×
+over-represented in the first 0.5 s of a window. 74 pivot-only sites (speech
+the VAD dropped entirely, or pivot hallucination) await judging. Mic channels
+are the short-window regime (de-0717s-mic: median window 1.8 s; system
+channels ~25 s).
 
 Measures the *diarizer*, not the ASR: **DER** (Diarization Error Rate) and
 **word attribution** (of the finalized words, the fraction placed on the right

@@ -36,6 +36,31 @@ PIVOT = "whisper"  # only backend with reliable word-level timestamps in its out
 CONTEXT_WORDS = 3
 SNIPPET_PAD_S = 0.4
 
+WINDOWED = "parakeet-win"  # the backend whose records carry window provenance
+BUCKETS = ((3.0, "<3s"), (8.0, "3-8s"), (float("inf"), ">=8s"))
+"""Window-length buckets for the short-utterance study (windows.py)."""
+
+
+def bucket_of(win_len: float | None) -> str:
+    if win_len is None:
+        return "none"
+    return next(label for bound, label in BUCKETS if win_len < bound)
+
+
+def load_windows(segment_id: str) -> tuple[list[tuple[float, float]], list[float]] | None:
+    """The windowed backend's decode spans and its word midpoints, if recorded."""
+    path = OUT_DIR / WINDOWED / f"{segment_id}.json"
+    if not path.exists():
+        return None
+    record = json.loads(path.read_text())
+    if "windows" not in record:
+        return None
+    spans = [(w["start"], w["end"]) for w in record["windows"]]
+    mids = [
+        (w["start"] + w["end"]) / 2 for seg in record["segments"] for w in seg["words"]
+    ]
+    return spans, mids
+
 
 @dataclass
 class PivotWord:
@@ -93,7 +118,11 @@ def hyp_span(
     return words
 
 
-def build_sites(segment_id: str, backends: list[str]) -> list[dict]:
+def build_sites(
+    segment_id: str,
+    backends: list[str],
+    windows: list[tuple[float, float]] | None = None,
+) -> list[dict]:
     pivot_words = load_pivot_words(segment_id)
     pivot_norms = [w.norm for w in pivot_words]
 
@@ -137,6 +166,22 @@ def build_sites(segment_id: str, backends: list[str]) -> list[dict]:
         ctx_lo, ctx_hi = max(0, s - CONTEXT_WORDS), min(len(pivot_words), e + CONTEXT_WORDS)
         t0 = pivot_words[ctx_lo].start if ctx_lo < len(pivot_words) else 0.0
         t1 = pivot_words[min(ctx_hi, len(pivot_words) - 1)].end
+        # Window provenance: which decode window (windows.py) covered this spot,
+        # how long it was, and how far into it the disagreement sits. "none"
+        # (win_len null) = the pivot heard words where the windowed pass decoded
+        # no window at all — VAD-dropped speech, or a pivot hallucination.
+        site_start = pivot_words[s].start if s < len(pivot_words) else pivot_words[-1].end
+        site_end = pivot_words[e - 1].end if e > s else site_start
+        win_len = win_off = None
+        if windows is not None:
+            best = max(
+                windows,
+                key=lambda w: min(w[1], site_end) - max(w[0], site_start),
+                default=None,
+            )
+            if best is not None and min(best[1], site_end) - max(best[0], site_start) >= 0:
+                win_len = round(best[1] - best[0], 2)
+                win_off = round(max(0.0, site_start - best[0]), 2)
         out.append(
             {
                 "segment": segment_id,
@@ -144,6 +189,8 @@ def build_sites(segment_id: str, backends: list[str]) -> list[dict]:
                 "after": " ".join(w.display for w in pivot_words[e:ctx_hi]),
                 "t0": max(0.0, t0 - SNIPPET_PAD_S),
                 "t1": t1 + SNIPPET_PAD_S,
+                "win_len": win_len,
+                "win_off": win_off,
                 "variants": list(unique.values()),
             }
         )
@@ -215,6 +262,8 @@ document.addEventListener('keydown', e => {
 function download() {
   const results = SITES.map((s, i) => ({
     segment: s.segment,
+    win_len: s.win_len ?? null,
+    win_off: s.win_off ?? null,
     variants: s.variants.map(v => ({ models: v.models })),
     picked: picks[i] ?? null,
   }));
@@ -227,15 +276,91 @@ show(0);
 </script></body></html>"""
 
 
-def generate(max_sites: int | None, seed: int) -> int:
+def stratified_sample(sites: list[dict], max_sites: int, rng: random.Random) -> list[dict]:
+    """Cap a segment's sites, drawing evenly across window buckets.
+
+    A plain random sample would be dominated by the long-window bulk of the
+    meeting; the short-utterance study needs its rare short-window sites kept."""
+    groups: dict[str, list[dict]] = {}
+    for site in sites:
+        groups.setdefault(bucket_of(site["win_len"]), []).append(site)
+    for group in groups.values():
+        rng.shuffle(group)
+    picked: list[dict] = []
+    while len(picked) < max_sites and any(groups.values()):
+        for label in sorted(groups):
+            if groups[label] and len(picked) < max_sites:
+                picked.append(groups[label].pop())
+    return sorted(picked, key=lambda s: s["t0"])
+
+
+def window_report(
+    per_segment: list[tuple[str, list[dict], list[tuple[float, float]] | None, list[float]]],
+) -> str:
+    """Disagreement density by window-length bucket, over ALL sites (pre-cap).
+
+    Denominator: the windowed backend's own word count per bucket, so the rate
+    is 'contested sites per 100 decoded words'. The 'none' row has no
+    denominator — it counts pivot words with no decode window at all."""
+    sites_by = {label: 0 for _, label in BUCKETS} | {"none": 0}
+    words_by = {label: 0 for _, label in BUCKETS}
+    windows_by = {label: 0 for _, label in BUCKETS}
+    onset, later = 0, 0
+    for _, sites, spans, word_mids in per_segment:
+        for site in sites:
+            sites_by[bucket_of(site["win_len"])] += 1
+            if site["win_off"] is not None:
+                if site["win_off"] <= 0.5:
+                    onset += 1
+                else:
+                    later += 1
+        for start, end in spans or []:
+            label = bucket_of(end - start)
+            windows_by[label] += 1
+            words_by[label] += sum(1 for m in word_mids if start <= m <= end)
+    lines = [
+        "# Window-length disagreement report",
+        "",
+        "Sites where the windowed decode and the pivot disagree, per window bucket",
+        "(all sites, before sampling; denominators from the windowed decode itself):",
+        "",
+        "| Window bucket | windows | decoded words | sites | sites / 100 words |",
+        "|---|---|---|---|---|",
+    ]
+    for _, label in BUCKETS:
+        rate = 100 * sites_by[label] / words_by[label] if words_by[label] else 0.0
+        lines.append(
+            f"| {label} | {windows_by[label]} | {words_by[label]} "
+            f"| {sites_by[label]} | {rate:.1f} |"
+        )
+    lines += [
+        f"| none (no window) | — | — | {sites_by['none']} | — |",
+        "",
+        f"Sites within 0.5 s of their window's start: {onset} "
+        f"(vs {later} later in the window).",
+        "",
+        "'none' = the pivot heard words where the windowed pass decoded no window:",
+        "VAD-dropped speech or pivot hallucination — the judged page decides which.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def generate(max_sites: int | None, seed: int, only_backends: list[str] | None) -> int:
     backends = sorted(
         d.name for d in OUT_DIR.iterdir() if d.is_dir() and any(d.glob("*.json"))
     )
+    if only_backends:
+        unknown = set(only_backends) - set(backends)
+        if unknown:
+            print(f"no hypotheses for backends: {sorted(unknown)}", file=sys.stderr)
+            return 1
+        backends = sorted(only_backends)
     if PIVOT not in backends:
         print(f"pivot backend '{PIVOT}' has no hypotheses", file=sys.stderr)
         return 1
     rng = random.Random(seed)
     all_sites = []
+    per_segment = []  # (id, all sites, window spans, word midpoints) for the report
     for segment in load_manifest():
         if not segment.wav_path.exists():
             continue
@@ -243,15 +368,24 @@ def generate(max_sites: int | None, seed: int) -> int:
         if missing:
             print(f"[skip] {segment.id}: missing hypotheses for {missing}", file=sys.stderr)
             continue
-        sites = build_sites(segment.id, backends)
+        windowed = load_windows(segment.id) if WINDOWED in backends else None
+        spans, word_mids = windowed if windowed else (None, [])
+        sites = build_sites(segment.id, backends, spans)
+        per_segment.append((segment.id, sites, spans, word_mids))
         total = len(sites)
         if max_sites and len(sites) > max_sites:
-            sites = sorted(rng.sample(sites, max_sites), key=lambda s: s["t0"])
+            sites = stratified_sample(sites, max_sites, rng)
         for site in sites:
             site["audio"] = snippet_b64(segment.wav_path, site["t0"], site["t1"])
             rng.shuffle(site["variants"])
         all_sites.extend(sites)
         print(f"{segment.id}: {total} disagreement sites, {len(sites)} included")
+
+    if any(spans is not None for _, _, spans, _ in per_segment):
+        report = window_report(per_segment)
+        report_path = OUT_DIR / "window-report.md"
+        report_path.write_text(report)
+        print(f"\n{report}\nwrote {report_path}")
 
     for site in all_sites:  # strip build-only fields
         for key in ("t0", "t1"):
@@ -292,6 +426,32 @@ def score(results_path: Path) -> int:
             f"| {model} | {wins.get(model, 0)}/{judged} ({wins.get(model, 0) / judged:.0%}) "
             f"| {by_lang.get('de', 0)} | {by_lang.get('en', 0)} |"
         )
+
+    # Window-bucket breakdown (sites tagged by windows.py provenance): does the
+    # windowed backend lose more of its contested sites in short windows?
+    tagged = [s for s in results if "win_len" in s]
+    if tagged and any(m == WINDOWED for m in models):
+        print(f"\n| Window bucket | judged | {WINDOWED} correct | onset (≤0.5s) correct |")
+        print("|---|---|---|---|")
+        rows = [label for _, label in BUCKETS] + ["none"]
+        for label in rows:
+            sites = [
+                s
+                for s in tagged
+                if bucket_of(s["win_len"]) == label
+                and s["picked"] is not None
+                and s["picked"] >= 0
+            ]
+            if not sites:
+                continue
+            won = [s for s in sites if WINDOWED in s["variants"][s["picked"]]["models"]]
+            onset = [s for s in sites if s["win_off"] is not None and s["win_off"] <= 0.5]
+            onset_won = [s for s in onset if WINDOWED in s["variants"][s["picked"]]["models"]]
+            onset_cell = f"{len(onset_won)}/{len(onset)}" if onset else "—"
+            print(
+                f"| {label} | {len(sites)} "
+                f"| {len(won)}/{len(sites)} ({len(won) / len(sites):.0%}) | {onset_cell} |"
+            )
     return 0
 
 
@@ -300,10 +460,16 @@ def main() -> int:
     parser.add_argument("--score", type=Path, help="score a downloaded results JSON")
     parser.add_argument("--max-sites", type=int, default=50, help="sites per segment (0 = all)")
     parser.add_argument("--seed", type=int, default=20260706)
+    parser.add_argument(
+        "--backends",
+        help="comma-separated backends to compare (default: every out/ dir with "
+        "hypotheses; segments missing any listed backend are skipped)",
+    )
     args = parser.parse_args()
     if args.score:
         return score(args.score)
-    return generate(args.max_sites or None, args.seed)
+    only = args.backends.split(",") if args.backends else None
+    return generate(args.max_sites or None, args.seed, only)
 
 
 if __name__ == "__main__":

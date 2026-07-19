@@ -33,16 +33,20 @@ MANIFEST = EVAL_DIR / "manifest.json"
 class EvalSegment:
     id: str
     source: str
-    """Filename inside examples/."""
+    """Filename inside examples/, or an absolute/~ path (a --record-audio WAV)."""
     start: float
     end: float
     language: str | None
     """"de" / "en"; None until determined (LID scan or listening)."""
     notes: str = ""
+    channel: int | None = None
+    """Channel to extract from a multichannel source (0 = left/mic,
+    1 = right/system in a stenograf recording); None downmixes."""
 
     @property
     def source_path(self) -> Path:
-        return EXAMPLES_DIR / self.source
+        source = Path(self.source).expanduser()
+        return source if source.is_absolute() else EXAMPLES_DIR / self.source
 
     @property
     def wav_path(self) -> Path:
@@ -72,12 +76,15 @@ def to_wav16k(
     start: float | None = None,
     end: float | None = None,
     duration: float | None = None,
+    channel: int | None = None,
 ) -> None:
     """ffmpeg any input → mono 16 kHz s16 WAV, optionally cutting a window.
 
     The one encoding every eval artifact uses — the same wire format the
     package captures. ``start``/``end`` bound the cut; ``duration`` is the
-    ``-t`` alternative to ``end`` for fixed-length probes."""
+    ``-t`` alternative to ``end`` for fixed-length probes. ``channel``
+    extracts one channel of a multichannel source (the per-channel decode
+    path a meeting runs) instead of downmixing."""
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
     if start is not None:
         cmd += ["-ss", str(start)]
@@ -85,7 +92,12 @@ def to_wav16k(
         cmd += ["-to", str(end)]
     if duration is not None:
         cmd += ["-t", str(duration)]
-    cmd += ["-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dst)]
+    cmd += ["-i", str(src), "-vn"]
+    if channel is not None:
+        cmd += ["-af", f"pan=mono|c0=c{channel}"]
+    else:
+        cmd += ["-ac", "1"]
+    cmd += ["-ar", "16000", "-c:a", "pcm_s16le", str(dst)]
     subprocess.run(cmd, check=True)
 
 

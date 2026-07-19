@@ -14,5 +14,14 @@
     "end": 420,
     "language": "en",
     "notes": "in-room far-field recording — hardest acoustic case"
+  },
+  {
+    "id": "de-meeting-mic",
+    "source": "~/Documents/Meetings/meeting-YYYYMMDD-HHMMSS/audio.wav",
+    "start": 0,
+    "end": 3600,
+    "language": "de",
+    "notes": "full recorded meeting, one channel (0 = mic/left, 1 = system/right)",
+    "channel": 0
   }
 ]
