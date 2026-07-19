@@ -19,6 +19,17 @@ Parakeet, so style-anchor bias mostly cancels and the referee only breaks the
 tie. Long windows (≥8 s) are sampled as the control arm — context should
 change little there.
 
+Experiment 3 — tail-jitter probe (added with cut-overlap decoding). The
+greedy TDT decode is knife-edge unstable at the slice tail: the same span
+decodes completely or drops ~10 trailing words on a millisecond-level bound
+shift. For every *cut-ended* window (``cut_end`` in the windows.py record)
+the probe decodes the slice three times with the end bound shifted ±50 ms
+and counts the kept words, in two arms: "bare" = the pre-fix slice (ends at
+the window end, no right clip) and "overhang" = the shipped cut-overlap
+slice (ends OVERHANG_S past the cut, words beyond the cut dropped). The
+kept-word-count range across the three decodes is the instability measure —
+expect ≈0 for the overhang arm, >0 for the bare arm.
+
 Experiment 2 — VAD-drop check. Disagreement sites covered by NO decode window
 ("none" in window-report.md) are spans where the pivot heard words but the
 pipeline decoded nothing. Decoding each span (±0.5 s pad) with Parakeet
@@ -38,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from pathlib import Path
@@ -52,7 +64,8 @@ from score import normalize  # noqa: E402
 from windows import read_mono16k  # noqa: E402
 
 from stenograf.asr import create_backend  # noqa: E402
-from stenograf.audio import sample_index  # noqa: E402
+from stenograf.audio import SAMPLE_RATE, sample_index  # noqa: E402
+from stenograf.vad import Window, decode_slice  # noqa: E402
 
 CTX_RAW_S = 15.0
 CTX_PREV_S = 10.0
@@ -60,6 +73,7 @@ SHORT_S = 8.0  # A/B every window below this; sample above as control
 CONTROL_PER_SEGMENT = 8
 PAD_NONE_S = 0.5
 MATCH_WER = 0.6  # exp 2: hyp-vs-pivot WER at or below this = "same speech"
+JITTER_S = 0.05  # exp 3: slice-end bound shift (±)
 SEED = 20260719
 
 
@@ -168,6 +182,54 @@ def run_context_ab(asr, segments, rng) -> tuple[list[str], list[dict]]:
     return lines, examples
 
 
+def run_jitter(asr, segments) -> list[str]:
+    header = ["## Experiment 3 — tail-jitter probe on cut-ended windows", ""]
+    tallies: dict[str, list[int]] = {"bare": [], "overhang": []}
+    probed = 0
+    for _segment, samples, record, _ in segments:
+        wins = record["windows"]
+        if wins and "cut_end" not in wins[0]:
+            return header + [
+                "windows.py records predate cut classification — re-run windows.py --force."
+            ]
+        duration = len(samples) / SAMPLE_RATE
+        for wrec in wins:
+            if wrec["cut_end"] is None:
+                continue
+            win = Window(wrec["start"], wrec["end"], wrec["cut_start"], wrec["cut_end"])
+            ctx, hi, keep_lo, keep_hi = decode_slice(win)
+            probed += 1
+            for arm, base_end, hi_bound in (
+                ("bare", win.end, math.inf),  # pre-fix slice: ends at the window, keeps all
+                ("overhang", hi, keep_hi),  # shipped slice: overhang read, cut clipped
+            ):
+                counts = []
+                for shift in (-JITTER_S, 0.0, JITTER_S):
+                    end_t = min(duration, base_end + shift)
+                    clip = samples[sample_index(ctx) : sample_index(end_t)]
+                    words = transcribe_words(asr, clip, None, ctx)
+                    counts.append(
+                        sum(1 for w in words if keep_lo <= (w["start"] + w["end"]) / 2 < hi_bound)
+                    )
+                tallies[arm].append(max(counts) - min(counts))
+    lines = header + [
+        "Every cut-ended window decoded 3× with the slice-end bound shifted ±50 ms;",
+        "the kept-word-count range across the three decodes measures tail",
+        "instability (0 = the bound shift changes nothing).",
+        "",
+        "| arm | windows | unstable (range>0) | Σ range | max range |",
+        "|---|---|---|---|---|",
+    ]
+    for arm, ranges in tallies.items():
+        unstable = sum(1 for r in ranges if r > 0)
+        worst = max(ranges, default=0)
+        lines.append(f"| {arm} | {len(ranges)} | {unstable} | {sum(ranges)} | {worst} |")
+    if probed == 0:
+        lines.append("")
+        lines.append("No cut-ended windows in any segment — nothing to probe.")
+    return lines
+
+
 def run_vad_drop(asr, segments) -> list[str]:
     counts = {"dropped-speech": 0, "hallucination": 0, "disputed": 0}
     tiny = 0  # confirmed drops short enough to blame min_speech
@@ -236,9 +298,7 @@ def main() -> int:
             continue
         record = json.loads((OUT_DIR / WINDOWED / f"{segment.id}.json").read_text())
         whisper_words = [
-            w
-            for seg in json.loads(whisper_path.read_text())["segments"]
-            for w in seg["words"]
+            w for seg in json.loads(whisper_path.read_text())["segments"] for w in seg["words"]
         ]
         loaded.append((segment, read_mono16k(segment.wav_path), record, whisper_words))
     if not loaded:
@@ -250,6 +310,7 @@ def main() -> int:
     rng = random.Random(SEED)
 
     exp1, examples = run_context_ab(asr, loaded, rng)
+    exp3 = run_jitter(asr, loaded)
     exp2 = run_vad_drop(asr, loaded)
 
     lines = ["# Context A/B + VAD-drop report", ""] + exp1 + [""]
@@ -263,7 +324,7 @@ def main() -> int:
                 f"  - ref: “{ex['ref']}”",
             ]
         lines += [""]
-    lines += exp2
+    lines += exp3 + [""] + exp2
     report = "\n".join(lines) + "\n"
     out = OUT_DIR / "context-ab.md"
     out.write_text(report)
