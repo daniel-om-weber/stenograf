@@ -50,12 +50,14 @@ from stenograf.config import Language
 from stenograf.vad import (
     DECODE_CONTEXT_S,
     OVERHANG_S,
+    SPEECH_HOLE_S,
     SileroVAD,
     SpeechSegment,
     Window,
+    bare_slice,
     cut_boundary,
     decode_slice,
-    tail_hole,
+    speech_hole,
 )
 
 _WORD_KEY = re.compile(r"\W+", re.UNICODE)
@@ -659,10 +661,12 @@ class WindowedLiveDecoder:
         flag pack_windows derives from the adjacent windows afterwards — the
         gap and the two floats are the same — which the flag-parity test pins.
         """
-        start, end = self._pending[0].start, self._pending[-1].end
+        runs = tuple(self._pending)
         self._pending = []
-        cut = cut_boundary(end, next_start) if next_start is not None else None
-        self._deferred.append(Window(start, end, self._next_cut_start, cut))
+        cut = cut_boundary(runs[-1].end, next_start) if next_start is not None else None
+        self._deferred.append(
+            Window(runs[0].start, runs[-1].end, self._next_cut_start, cut, speech=runs)
+        )
         self._next_cut_start = cut
 
     def _drain(self, *, force: bool) -> list[Word]:
@@ -699,33 +703,38 @@ class WindowedLiveDecoder:
         # _decoded_to guards the next window's *span*; slices may re-read, so
         # the overhang past b must not push it forward.
         self._decoded_to = b
-        padded = Window(a, b, win.cut_start, win.cut_end)
+        padded = Window(a, b, win.cut_start, win.cut_end, speech=win.speech)
         ctx, hi, keep_lo, keep_hi = decode_slice(padded)
         ctx = max(buf_start, ctx)
         hi = min(self._window.end(), hi)
         self.decoded_windows.append(padded)
         origin = self._window.start_idx or 0
-        lo_idx = max(0, sample_index(ctx) - origin)
 
-        def run(hi_t: float) -> list[Word]:
+        def run(lo_t: float, hi_t: float) -> list[Word]:
             self.decodes += 1
+            lo_idx = max(0, sample_index(lo_t) - origin)
             return [
-                Word(w.text, w.start + ctx, w.end + ctx, w.confidence)
+                Word(w.text, w.start + lo_t, w.end + lo_t, w.confidence)
                 for seg in self._asr.transcribe(
                     self._window.samples[lo_idx : sample_index(hi_t) - origin], self._language
                 )
                 for w in seg.words
-                if keep_lo <= (w.start + w.end) / 2 + ctx < keep_hi
+                if keep_lo <= (w.start + w.end) / 2 + lo_t < keep_hi
             ]
 
-        words = run(hi)
-        # Tail-hole retry, in lockstep with pipeline._decode_one: a cut-ended
-        # decode whose kept words stop short of the cut skipped its tail —
-        # re-decode the bare span and keep the variant reaching closer.
-        if win.cut_end is not None and hi > b and tail_hole(_last_end(words), win.cut_end):
-            retry = run(b)
-            if _later_end(_last_end(retry), _last_end(words)):
-                words = retry
+        words = run(ctx, hi)
+        # Skip retry, in lockstep with pipeline._decode_one: a decode leaving
+        # a multi-second stretch of the window's own VAD speech uncovered
+        # skipped it — re-decode the pre-change slice, better coverage wins.
+        bare_ctx, bare_hi = bare_slice(padded)
+        bare_ctx = max(buf_start, bare_ctx)
+        bare_hi = min(self._window.end(), bare_hi)
+        if (bare_ctx, bare_hi) != (ctx, hi):
+            hole = speech_hole([(w.start, w.end) for w in words], win.speech)
+            if hole > SPEECH_HOLE_S:
+                retry = run(bare_ctx, bare_hi)
+                if speech_hole([(w.start, w.end) for w in retry], win.speech) < hole:
+                    words = retry
         return _extend_committed(self._committed, words)
 
     def _retain(self, open_seg: SpeechSegment | None) -> None:
@@ -751,14 +760,6 @@ class WindowedLiveDecoder:
         if self._window.start_idx is None:
             return
         self._window.trim_before(keep_from)
-
-
-def _last_end(words: list[Word]) -> float | None:
-    return words[-1].end if words else None
-
-
-def _later_end(a: float | None, b: float | None) -> bool:
-    return a is not None and (b is None or a > b)
 
 
 def _key(word: Word) -> str:

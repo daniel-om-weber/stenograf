@@ -81,9 +81,16 @@ def count_monotonicity_violations(committed: list[Word]) -> int:
     return violations
 
 
-def evaluate(source: Path, start: float, dur: float | None, feed_chunk: float,
-             asr: ParakeetMLXBackend, vad: SileroVAD,
-             decode_interval: float | None, mode: str) -> dict:
+def evaluate(
+    source: Path,
+    start: float,
+    dur: float | None,
+    feed_chunk: float,
+    asr: ParakeetMLXBackend,
+    vad: SileroVAD,
+    decode_interval: float | None,
+    mode: str,
+) -> dict:
     samples = load_audio(source)
     lo = int(start * SAMPLE_RATE)
     hi = len(samples) if dur is None else min(len(samples), lo + int(dur * SAMPLE_RATE))
@@ -114,38 +121,64 @@ def evaluate(source: Path, start: float, dur: float | None, feed_chunk: float,
     violations = count_monotonicity_violations(committed)
 
     print(f"  finalize: {len(reference.split()):>5} words   ({duration / finalize_s:.0f}x RT)")
-    print(f"  live:     {len(hypothesis.split()):>5} words committed "
-          f"({flushed} at flush)   ({duration / live_s:.0f}x RT, {decoder.decodes} decodes)")
+    print(
+        f"  live:     {len(hypothesis.split()):>5} words committed "
+        f"({flushed} at flush)   ({duration / live_s:.0f}x RT, {decoder.decodes} decodes)"
+    )
     print(f"  1. agreement WER vs finalize : {wer:.1%}")
     print(f"  2. commit monotonicity       : {violations} violation(s)")
-    print(f"  3. commit latency            : median {statistics.median(latencies):.2f}s  "
-          f"p90 {_pctl(latencies, 0.9):.2f}s  max {max(latencies, default=0.0):.2f}s")
-    return {"source": source.name, "wer": wer, "violations": violations,
-            "median_latency": statistics.median(latencies) if latencies else 0.0}
+    print(
+        f"  3. commit latency            : median {statistics.median(latencies):.2f}s  "
+        f"p90 {_pctl(latencies, 0.9):.2f}s  max {max(latencies, default=0.0):.2f}s"
+    )
+    return {
+        "source": source.name,
+        "wer": wer,
+        "violations": violations,
+        "median_latency": statistics.median(latencies) if latencies else 0.0,
+    }
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--source", action="append", type=Path,
-                    help="Audio/video clip (repeatable); default: de-1 + en-1 eval wavs.")
+    ap.add_argument(
+        "--source",
+        action="append",
+        type=Path,
+        help="Audio/video clip (repeatable); default: de-1 + en-1 eval wavs.",
+    )
     ap.add_argument("--start", type=float, default=0.0, help="Clip start (s).")
     ap.add_argument("--dur", type=float, default=None, help="Clip duration (s); default: all.")
-    ap.add_argument("--feed-chunk", type=float, default=1.0,
-                    help="Simulated arrival chunk (s) — sets the caption cadence.")
-    ap.add_argument("--decode-interval", default="none",
-                    help="LiveDecoder decode_interval: seconds, or 'none' for utterance "
-                         "mode (decode only at VAD endpoints).")
-    ap.add_argument("--mode", choices=["live", "window"], default="window",
-                    help="'window' = WindowedLiveDecoder (the product default: finalize-"
-                         "identical windows); 'live' = LiveDecoder at --decode-interval.")
+    ap.add_argument(
+        "--feed-chunk",
+        type=float,
+        default=1.0,
+        help="Simulated arrival chunk (s) — sets the caption cadence.",
+    )
+    ap.add_argument(
+        "--decode-interval",
+        default="none",
+        help="LiveDecoder decode_interval: seconds, or 'none' for utterance "
+        "mode (decode only at VAD endpoints).",
+    )
+    ap.add_argument(
+        "--mode",
+        choices=["live", "window"],
+        default="window",
+        help="'window' = WindowedLiveDecoder (the product default: finalize-"
+        "identical windows); 'live' = LiveDecoder at --decode-interval.",
+    )
     args = ap.parse_args()
     decode_interval = None if args.decode_interval == "none" else float(args.decode_interval)
 
     sources = args.source or DEFAULT_SOURCES
     missing = [s for s in sources if not s.exists()]
     if missing:
-        print(f"missing clip(s): {', '.join(str(m) for m in missing)}\n"
-              "extract eval audio first, or pass --source PATH", file=sys.stderr)
+        print(
+            f"missing clip(s): {', '.join(str(m) for m in missing)}\n"
+            "extract eval audio first, or pass --source PATH",
+            file=sys.stderr,
+        )
         return 1
 
     asr = ParakeetMLXBackend()
@@ -159,8 +192,10 @@ def main() -> int:
 
     print("\n=== summary ===")
     for row in summary:
-        print(f"  {row['source']:<16} WER {row['wer']:.1%}   "
-              f"violations {row['violations']}   median latency {row['median_latency']:.2f}s")
+        print(
+            f"  {row['source']:<16} WER {row['wer']:.1%}   "
+            f"violations {row['violations']}   median latency {row['median_latency']:.2f}s"
+        )
     return 0
 
 

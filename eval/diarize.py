@@ -71,8 +71,12 @@ def _words_json(entries) -> dict:
             ]
         else:  # a wordless backend — keep the entry as one coarse span
             words.append(
-                {"text": entry.text, "start": entry.start, "end": entry.end,
-                 "speaker": entry.speaker}
+                {
+                    "text": entry.text,
+                    "start": entry.start,
+                    "end": entry.end,
+                    "speaker": entry.speaker,
+                }
             )
     return {"words": words}
 
@@ -97,9 +101,7 @@ def main() -> int:
 
     wanted = set(args.segments.split(",")) if args.segments else None
     segments = [
-        s
-        for s in load_manifest()
-        if (wanted is None or s.id in wanted) and s.wav_path.exists()
+        s for s in load_manifest() if (wanted is None or s.id in wanted) and s.wav_path.exists()
     ]
     if not segments:
         print("no extracted segments — run eval/extract.py first", file=sys.stderr)
@@ -130,8 +132,12 @@ def main() -> int:
 
         write_rttm(out_dir / f"{segment.id}.rttm", rttm_turns, segment.id)
         entries = finalize_channel(
-            pcm, asr=asr, language=language, vad=vad,
-            diarizer=diarizer, num_speakers=args.num_speakers,
+            pcm,
+            asr=asr,
+            language=language,
+            vad=vad,
+            diarizer=diarizer,
+            num_speakers=args.num_speakers,
         )
         (out_dir / f"{segment.id}.words.json").write_text(
             json.dumps(_words_json(entries), ensure_ascii=False, indent=2)

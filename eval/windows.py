@@ -37,9 +37,9 @@ from common import OUT_DIR, load_manifest  # noqa: E402
 
 from stenograf import models  # noqa: E402
 from stenograf.asr import create_backend  # noqa: E402
-from stenograf.audio import SAMPLE_RATE, sample_index, to_float32  # noqa: E402
-from stenograf.pipeline import _clip_window, _shift  # noqa: E402
-from stenograf.vad import SileroVAD, decode_slice, pack_windows  # noqa: E402
+from stenograf.audio import SAMPLE_RATE, to_float32  # noqa: E402
+from stenograf.pipeline import _decode_one  # noqa: E402
+from stenograf.vad import SileroVAD, pack_windows  # noqa: E402
 
 BACKEND_DIR = "parakeet-win"
 
@@ -57,25 +57,18 @@ def read_mono16k(path: Path) -> np.ndarray:
 def decode_windowed(asr, vad: SileroVAD, samples: np.ndarray, language):
     """pipeline._decode, with the window spans kept.
 
-    The decode arithmetic — the slice bounds and keep interval
-    (``decode_slice``) and the word clipping (``_clip_window``/``_shift``) —
-    is imported from the package, never re-implemented here: this script's
-    whole point is to record what the *real* decode path produces, so any
-    local copy of that logic silently rots (it did once: the 2026-07-19
-    context-carry fix landed in the package while this loop still decoded
-    bare windows).
+    The whole per-window decode — slice bounds, keep clipping, skip retry —
+    is the package's own ``pipeline._decode_one``, never re-implemented here:
+    this script's whole point is to record what the *real* decode path
+    produces, so any local copy of that logic silently rots (it did once: the
+    2026-07-19 context-carry fix landed in the package while this loop still
+    decoded bare windows).
     """
     duration = len(samples) / SAMPLE_RATE
     windows = pack_windows(vad.speech_segments(samples), duration)
     segments = []
     for i, win in enumerate(windows):
-        start, end = win.start, win.end
-        ctx, hi, keep_lo, keep_hi = decode_slice(win)
-        window = samples[sample_index(ctx) : sample_index(min(hi, duration))]
-        for seg in asr.transcribe(window, language):
-            clipped = _clip_window(_shift(seg, ctx), keep_lo, keep_hi)
-            if clipped is None:
-                continue
+        for clipped in _decode_one(samples, win, asr=asr, language=language, duration=duration):
             segments.append(
                 {
                     "text": clipped.text,
@@ -86,10 +79,16 @@ def decode_windowed(asr, vad: SileroVAD, samples: np.ndarray, language):
                     ],
                 }
             )
-        print(f"    window {i + 1}/{len(windows)} [{start:7.1f}s–{end:7.1f}s]", end="\r")
+        print(f"    window {i + 1}/{len(windows)} [{win.start:7.1f}s–{win.end:7.1f}s]", end="\r")
     segments.sort(key=lambda s: s["start"])
     return segments, [
-        {"start": w.start, "end": w.end, "cut_start": w.cut_start, "cut_end": w.cut_end}
+        {
+            "start": w.start,
+            "end": w.end,
+            "cut_start": w.cut_start,
+            "cut_end": w.cut_end,
+            "speech": [{"start": s.start, "end": s.end} for s in w.speech],
+        }
         for w in windows
     ]
 

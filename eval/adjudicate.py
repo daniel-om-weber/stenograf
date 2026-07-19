@@ -56,9 +56,7 @@ def load_windows(segment_id: str) -> tuple[list[tuple[float, float]], list[float
     if "windows" not in record:
         return None
     spans = [(w["start"], w["end"]) for w in record["windows"]]
-    mids = [
-        (w["start"] + w["end"]) / 2 for seg in record["segments"] for w in seg["words"]
-    ]
+    mids = [(w["start"] + w["end"]) / 2 for seg in record["segments"] for w in seg["words"]]
     return spans, mids
 
 
@@ -136,10 +134,7 @@ def build_sites(
         for hyp in [load_hyp_words(backend, segment_id)]
     }
     spans = sorted(
-        (i1, i2)
-        for opcodes, _ in aligned.values()
-        for op, i1, i2, _, _ in opcodes
-        if op != "equal"
+        (i1, i2) for opcodes, _ in aligned.values() for op, i1, i2, _, _ in opcodes if op != "equal"
     )
 
     # merge overlapping/nearby contested spans into sites
@@ -203,9 +198,24 @@ def build_sites(
 def snippet_b64(wav: Path, t0: float, t1: float) -> str:
     with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
         subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-             "-ss", str(t0), "-to", str(t1), "-i", str(wav),
-             "-c:a", "libmp3lame", "-b:a", "48k", tmp.name],
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                str(t0),
+                "-to",
+                str(t1),
+                "-i",
+                str(wav),
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "48k",
+                tmp.name,
+            ],
             check=True,
         )
         return base64.b64encode(Path(tmp.name).read_bytes()).decode()
@@ -339,8 +349,7 @@ def window_report(
     lines += [
         f"| none (no window) | — | — | {sites_by['none']} | — |",
         "",
-        f"Sites within 0.5 s of their window's start: {onset} "
-        f"(vs {later} later in the window).",
+        f"Sites within 0.5 s of their window's start: {onset} (vs {later} later in the window).",
         "",
         "'none' = the pivot heard words where the windowed pass decoded no window:",
         "VAD-dropped speech or pivot hallucination — the judged page decides which.",
@@ -349,9 +358,7 @@ def window_report(
 
 
 def generate(max_sites: int | None, seed: int, only_backends: list[str] | None) -> int:
-    backends = sorted(
-        d.name for d in OUT_DIR.iterdir() if d.is_dir() and any(d.glob("*.json"))
-    )
+    backends = sorted(d.name for d in OUT_DIR.iterdir() if d.is_dir() and any(d.glob("*.json")))
     if only_backends:
         unknown = set(only_backends) - set(backends)
         if unknown:
@@ -441,9 +448,7 @@ def score(results_path: Path) -> int:
             sites = [
                 s
                 for s in tagged
-                if bucket_of(s["win_len"]) == label
-                and s["picked"] is not None
-                and s["picked"] >= 0
+                if bucket_of(s["win_len"]) == label and s["picked"] is not None and s["picked"] >= 0
             ]
             if not sites:
                 continue

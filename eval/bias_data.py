@@ -154,17 +154,13 @@ def build_lists(
     return refs
 
 
-def derive_german(
-    sizes: tuple[int, ...] = SIZES, *, seed: int = SEED, force: bool = False
-) -> None:
+def derive_german(sizes: tuple[int, ...] = SIZES, *, seed: int = SEED, force: bool = False) -> None:
     """Build the German benchmark from MLS's own transcripts. No audio downloaded."""
     from huggingface_hub import hf_hub_download
 
     print(f"MLS German → {DE_DIR}")
     print("  ↓ train transcripts (92 MB, no audio)", flush=True)
-    train_path = Path(
-        hf_hub_download(MLS_REPO, MLS_TRAIN_TRANSCRIPTS, repo_type="dataset")
-    )
+    train_path = Path(hf_hub_download(MLS_REPO, MLS_TRAIN_TRANSCRIPTS, repo_type="dataset"))
     test_path = Path(hf_hub_download(MLS_REPO, MLS_TEST_TRANSCRIPTS, repo_type="dataset"))
 
     counts: Counter[str] = Counter()

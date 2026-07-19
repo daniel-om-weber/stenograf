@@ -440,9 +440,9 @@ class TestWindowedDecoder:
         assert flushed.committed  # words from the second window
 
     def test_open_run_past_budget_closes_the_window_early(self):
-        # The scripted word ends at the window edge so the cut-ended decode
-        # sees no tail hole (retry would double the decode count).
-        asr = ScriptedASR([[w("a", 4.5, 5.4)]])
+        # The scripted word covers the window's speech run so the cut-ended
+        # decode sees no skip hole (a retry would double the decode count).
+        asr = ScriptedASR([[w("a", 0.1, 5.4)]])
         vad = PackingFakeVAD(
             [
                 ([SpeechSegment(0.0, 5.0)], None),
@@ -464,8 +464,8 @@ class TestWindowedDecoder:
         # last (short) piece staying open for later runs to join. The split is
         # a mid-speech cut, so the [0, 30] piece's decode reads OVERHANG_S past
         # its end and waits for that audio (32.65 s) before decoding. (The
-        # scripted word ends at the cut — no tail hole, no retry decode.)
-        asr = ScriptedASR([[w("a", 29.0, 29.9)]])
+        # scripted word covers the piece's run — no skip hole, no retry.)
+        asr = ScriptedASR([[w("a", 0.1, 29.9)]])
         vad = PackingFakeVAD(
             [
                 ([SpeechSegment(0.0, 31.0)], None),
@@ -488,8 +488,8 @@ class TestWindowedDecoder:
         # with only 0.5 s of silence at the boundary — a cut at the gap midpoint.
         # Its decode reads OVERHANG_S past the padded window end, so it must
         # wait until the buffer reaches 20.15 + 2.5 = 22.65 s. (The scripted
-        # word ends at the cut — no tail hole, no retry decode.)
-        asr = ScriptedASR([[w("a", 19.0, 20.0)]])
+        # word covers the window's run — no skip hole, no retry decode.)
+        asr = ScriptedASR([[w("a", 0.2, 19.9)]])
         vad = PackingFakeVAD(
             [
                 ([SpeechSegment(0.0, 20.0)], None),
@@ -509,15 +509,15 @@ class TestWindowedDecoder:
         assert dec.decoded_windows[1].cut_start == 20.25
         assert dec.decoded_windows[1].cut_end is None
 
-    def test_tail_hole_triggers_a_bare_retry_that_wins(self):
-        # The overhang decode skips the window's tail (greedy-TDT pathology:
-        # kept words stop 18 s before the cut). The decoder must detect the
-        # hole, re-decode the bare span, and keep the variant that reaches
-        # the cut — the mechanism that recovers the skipped sentence.
+    def test_speech_hole_triggers_a_pre_change_retry_that_wins(self):
+        # The overlap decode skips most of the window's own VAD speech
+        # (greedy-TDT pathology). The decoder must detect the hole against
+        # the run, re-decode the pre-change slice, and keep the variant that
+        # covers more speech — the mechanism that recovers skipped sentences.
         asr = ScriptedASR(
             [
-                [w("early", 1.0, 2.0)],  # overhang slice: tail skipped
-                [w("early", 1.0, 2.0), w("late", 19.5, 20.1)],  # bare slice: full tail
+                [w("early", 1.0, 2.0)],  # overlap slice: speech skipped
+                [w("early", 1.0, 2.0), w("late", 19.5, 20.1)],  # pre-change slice
             ]
         )
         vad = PackingFakeVAD(
@@ -533,8 +533,8 @@ class TestWindowedDecoder:
         assert dec.decodes == 2  # overhang decode + bare retry
         assert [x.text for x in update.committed] == ["early", "late"]
 
-    def test_tail_hole_retry_keeps_the_primary_when_no_better(self):
-        # Both decodes stop short of the cut (genuinely odd audio): the retry
+    def test_speech_hole_retry_keeps_the_primary_when_no_better(self):
+        # Both decodes leave the same hole (genuinely odd audio): the retry
         # must not make things worse — the primary's words stand.
         asr = ScriptedASR([[w("early", 1.0, 2.0)]])  # same answer for both decodes
         vad = PackingFakeVAD(
@@ -558,8 +558,14 @@ class TestWindowedDecoder:
         # in test_vad.py's complement test).
         asr = ScriptedASR(
             [
-                # window A [0, 20]: slice [0, 22.65), times relative to ctx=0
-                [w("tail", 19.5, 20.1), w("boundary", 20.3, 20.4), w("next", 21.0, 22.0)],
+                # window A [0, 20]: slice [0, 22.65), times relative to ctx=0.
+                # "all" covers the run so the skip detector stays quiet.
+                [
+                    w("all", 0.1, 19.4),
+                    w("tail", 19.5, 20.1),
+                    w("boundary", 20.3, 20.4),
+                    w("next", 21.0, 22.0),
+                ],
                 # window B: short span → slice starts at ctx=5.35; rel = abs − 5.35
                 [w("tail", 14.15, 14.75), w("boundary", 14.95, 15.05), w("next", 15.65, 16.65)],
             ]
@@ -574,9 +580,9 @@ class TestWindowedDecoder:
         dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
         dec.feed(pcm(21.0), 0.0)
         dec.feed(pcm(3.0), 21.0)  # 24 s ≥ 22.65 s → window A decodes with overhang
-        assert [x.text for x in dec.committed_words] == ["tail"]
+        assert [x.text for x in dec.committed_words] == ["all", "tail"]
         dec.flush()
-        assert [x.text for x in dec.committed_words] == ["tail", "boundary", "next"]
+        assert [x.text for x in dec.committed_words] == ["all", "tail", "boundary", "next"]
 
     def test_silence_costs_no_decodes_and_keeps_memory_bounded(self):
         asr = ScriptedASR([[w("x", 0.1, 0.4)]])

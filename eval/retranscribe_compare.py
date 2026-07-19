@@ -139,11 +139,19 @@ def main() -> int:
     global SCRATCH
     SCRATCH = args.new_dir
     grand = {
-        "old_words": 0, "new_words": 0,
-        "added": 0, "removed": 0, "changed": 0,
-        "added_words": 0, "removed_words": 0,
-        "interjections": 0, "echoish_removed": 0,
-        "new_better": 0, "old_better": 0, "tie": 0, "no_ref": 0,
+        "old_words": 0,
+        "new_words": 0,
+        "added": 0,
+        "removed": 0,
+        "changed": 0,
+        "added_words": 0,
+        "removed_words": 0,
+        "interjections": 0,
+        "echoish_removed": 0,
+        "new_better": 0,
+        "old_better": 0,
+        "tie": 0,
+        "no_ref": 0,
     }
     examples = {"recovered": [], "new_wins": [], "old_wins": [], "removed": []}
     rows = []
@@ -238,8 +246,10 @@ def main() -> int:
         f"new better {g['new_better']}, old better {g['old_better']}, tie {g['tie']} "
         f"({judged} judged, {g['no_ref']} no-ref)"
     )
-    print(f"Removed regions whose text appears on the other channel (echo-dedup?): "
-          f"{g['echoish_removed']} of {g['removed']}")
+    print(
+        f"Removed regions whose text appears on the other channel (echo-dedup?): "
+        f"{g['echoish_removed']} of {g['removed']}"
+    )
     for title, key in (
         ("Recovered speech (additions)", "recovered"),
         ("Refereed improvements", "new_wins"),

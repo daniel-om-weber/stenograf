@@ -84,9 +84,7 @@ def main() -> int:
             "text": result["text"],
             "segments": result["segments"],
         }
-        segment.hyp_path(backend.name).write_text(
-            json.dumps(record, ensure_ascii=False, indent=2)
-        )
+        segment.hyp_path(backend.name).write_text(json.dumps(record, ensure_ascii=False, indent=2))
         print(
             f"[{segment.id}] {audio_s:.0f}s audio in {wall_s:.1f}s "
             f"({record['speed_x_rt']}x RT, peak {record['peak_rss_mb']} MB)"

@@ -12,8 +12,10 @@ from stenograf.vad import (
     SileroVAD,
     SpeechSegment,
     Window,
+    bare_slice,
     decode_slice,
     pack_windows,
+    speech_hole,
 )
 
 _EVAL_WAV = Path(__file__).resolve().parent.parent / "eval" / "audio" / "de-1.wav"
@@ -53,7 +55,16 @@ def test_oversized_segment_is_hard_split():
 
 def test_padding_clamped_to_audio_bounds():
     windows = pack_windows([seg(0.0, 29.9)], total_duration=30.0)
-    assert windows == [Window(0.0, 30.0)]
+    assert windows == [Window(0.0, 30.0, speech=(seg(0.0, 29.9),))]
+
+
+def test_windows_carry_their_own_speech_runs():
+    # The decode's skip detector checks kept words against exactly the runs
+    # the packer merged; hard-split pieces carry their synthesized run.
+    windows = pack_windows([seg(1, 5), seg(6, 10), seg(40, 71)], total_duration=80.0)
+    assert windows[0].speech == (seg(1, 5), seg(6, 10))
+    assert windows[1].speech == (seg(40.0, 70.0),)
+    assert windows[2].speech == (seg(70.0, 71.0),)
 
 
 def test_long_silence_starts_a_new_window():
@@ -111,24 +122,65 @@ class TestDecodeSlice:
         assert hi == 30.0 + OVERHANG_S
         assert keep_hi == 30.2
 
-    def test_cut_started_long_window_reads_the_symmetric_overhang(self):
-        # Long cut-started windows get cut repair, not the short-window context
-        # (added context on >=8 s windows measured null; busy channels chain
-        # cuts window-to-window, so the reach is the decode-cost lever).
-        win = Window(30.0, 60.0, cut_start=29.9, cut_end=60.1)
+    def test_mid_speech_cut_start_reads_the_symmetric_overhang(self):
+        # A window starting truly mid-speech (hard split / max_speech
+        # continuation: no silence between the cut and its first run) reaches
+        # back OVERHANG_S so it does not start mid-word. Cut repair, not the
+        # short-window context (added context on >=8 s windows measured null).
+        win = Window(30.0, 60.0, cut_start=30.0, cut_end=60.1, speech=(seg(30.0, 60.0),))
         ctx, hi, keep_lo, keep_hi = decode_slice(win)
         assert ctx == 30.0 - OVERHANG_S
         assert hi - ctx <= 30.0 + 2 * OVERHANG_S  # slices never outgrow the budget much
-        assert (keep_lo, keep_hi) == (29.9, 60.1)
-        # A short cut-started window keeps the full measured context reach.
-        ctx, _, _, _ = decode_slice(Window(30.0, 35.0, cut_start=29.9))
+        assert (keep_lo, keep_hi) == (30.0, 60.1)
+        # A short mid-speech-started window keeps the full measured context reach.
+        ctx, _, _, _ = decode_slice(Window(30.0, 35.0, cut_start=30.0, speech=(seg(30.0, 35.0),)))
         assert ctx == 30.0 - DECODE_CONTEXT_S
+
+    def test_pause_cut_start_decodes_from_its_own_padded_start(self):
+        # A budget cut at a real VAD pause (>= min_silence of gap): the padded
+        # start is already a clean onset — no reach, and crucially no re-roll
+        # of the whole window's knife-edge decode vs the pre-change slice.
+        win = Window(30.0, 60.0, cut_start=29.9, cut_end=60.1, speech=(seg(30.15, 60.0),))
+        ctx, _, keep_lo, _ = decode_slice(win)
+        assert ctx == 30.0
+        assert keep_lo == 29.9  # the keep complement is untouched
+
+    def test_bare_slice_is_the_pre_change_decode(self):
+        # The retry fallback: context for short windows only, no overhang —
+        # byte-identical to what the pre-cut-overlap code decoded.
+        assert bare_slice(Window(30.0, 60.0, cut_start=30.0, cut_end=60.1)) == (30.0, 60.0)
+        assert bare_slice(Window(30.0, 35.0, cut_end=35.2)) == (30.0 - DECODE_CONTEXT_S, 35.0)
 
     def test_keep_intervals_are_exact_complements_at_a_cut(self):
         windows = pack_windows([seg(0, 20), seg(20.5, 31)], total_duration=60.0, max_window=30.0)
         _, _, _, hi_left = decode_slice(windows[0])
         _, _, lo_right, _ = decode_slice(windows[1])
         assert hi_left == lo_right  # keep is [lo, hi): no word duplicates or falls through
+
+
+class TestSpeechHole:
+    def test_full_coverage_has_no_hole(self):
+        assert speech_hole([(0.9, 10.2), (10.1, 20.0)], (seg(1, 20),)) == 0.0
+
+    def test_word_gaps_inside_a_run_are_not_holes(self):
+        assert speech_hole([(1.0, 9.0), (9.8, 20.0)], (seg(1, 20),)) == pytest.approx(0.8)
+
+    def test_tail_skip_is_the_hole(self):
+        assert speech_hole([(1.0, 12.0)], (seg(1, 20),)) == pytest.approx(8.0)
+
+    def test_mid_window_skip_is_found(self):
+        # The failure mode a tail-anchored check misses: words reach the end
+        # but a chunk in the middle vanished.
+        assert speech_hole([(1.0, 5.0), (14.0, 20.0)], (seg(1, 20),)) == pytest.approx(9.0)
+
+    def test_silence_between_runs_never_counts(self):
+        assert speech_hole([(1.0, 5.0), (15.0, 20.0)], (seg(1, 5), seg(15, 20))) == 0.0
+
+    def test_no_words_means_the_longest_run_is_the_hole(self):
+        assert speech_hole([], (seg(1, 5), seg(8, 20))) == pytest.approx(12.0)
+
+    def test_no_speech_means_no_hole(self):
+        assert speech_hole([], ()) == 0.0
 
 
 @pytest.mark.skipif(

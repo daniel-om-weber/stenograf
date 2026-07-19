@@ -87,8 +87,10 @@ def aligned_deltas(mlx_words: list, onnx_words: list) -> list[float]:
             continue
         for i in range(chunk.ref_end_idx - chunk.ref_start_idx):
             deltas.append(
-                abs(mlx_sources[chunk.ref_start_idx + i].start
-                    - onnx_sources[chunk.hyp_start_idx + i].start)
+                abs(
+                    mlx_sources[chunk.ref_start_idx + i].start
+                    - onnx_sources[chunk.hyp_start_idx + i].start
+                )
             )
     return deltas
 
@@ -124,7 +126,7 @@ def main() -> int:
         all_ok &= ok
         print(
             f"{wav.name:<14} {wer:>6.1%} {med:>5.2f}s {p95:>5.2f}s "
-            f"{duration/mlx_dt:>6.1f}x {duration/onnx_dt:>6.1f}x  "
+            f"{duration / mlx_dt:>6.1f}x {duration / onnx_dt:>6.1f}x  "
             + ("PASS" if ok else "FAIL " + "; ".join(problems))
         )
 

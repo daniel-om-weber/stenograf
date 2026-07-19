@@ -27,10 +27,10 @@ the probe decodes the slice three times with the end bound shifted ±50 ms
 and counts the kept words, in two arms: "bare" = the pre-fix slice (ends at
 the window end, no right clip) and "shipped" = the product's cut-overlap
 decode (OVERHANG_S past the cut, words beyond the cut dropped, plus the
-tail-hole retry — an overhang-only arm measured WORSE than bare: the
-overhang re-rolls the knife-edge rather than removing it, and a skip can
-land inside the kept region). The kept-word-count range across the three
-decodes is the instability measure — expect ≈0 for the shipped arm.
+speech-coverage skip retry — an overhang-only arm measured WORSE than bare:
+the overhang re-rolls the knife-edge rather than removing it, and a skip
+can land inside the kept region). The kept-word-count range across the
+three decodes is the instability measure — expect ≈0 for the shipped arm.
 
 Experiment 2 — VAD-drop check. Disagreement sites covered by NO decode window
 ("none" in window-report.md) are spans where the pivot heard words but the
@@ -67,7 +67,14 @@ from windows import read_mono16k  # noqa: E402
 
 from stenograf.asr import create_backend  # noqa: E402
 from stenograf.audio import SAMPLE_RATE, sample_index  # noqa: E402
-from stenograf.vad import Window, decode_slice, tail_hole  # noqa: E402
+from stenograf.vad import (  # noqa: E402
+    SPEECH_HOLE_S,
+    SpeechSegment,
+    Window,
+    bare_slice,
+    decode_slice,
+    speech_hole,
+)
 
 CTX_RAW_S = 15.0
 CTX_PREV_S = 10.0
@@ -198,29 +205,40 @@ def run_jitter(asr, segments) -> list[str]:
         for wrec in wins:
             if wrec["cut_end"] is None:
                 continue
-            win = Window(wrec["start"], wrec["end"], wrec["cut_start"], wrec["cut_end"])
+            win = Window(
+                wrec["start"],
+                wrec["end"],
+                wrec["cut_start"],
+                wrec["cut_end"],
+                speech=tuple(SpeechSegment(s["start"], s["end"]) for s in wrec["speech"]),
+            )
             ctx, hi, keep_lo, keep_hi = decode_slice(win)
+            bare_ctx, bare_end = bare_slice(win)
 
-            def kept(base_end, hi_bound, *, _s=samples, _d=duration, _ctx=ctx, _lo=keep_lo):
-                clip = _s[sample_index(_ctx) : sample_index(min(_d, base_end))]
+            def kept(lo_t, base_end, hi_bound, *, _s=samples, _d=duration, _lo=keep_lo):
+                clip = _s[sample_index(lo_t) : sample_index(min(_d, base_end))]
                 return [
                     w
-                    for w in transcribe_words(asr, clip, None, _ctx)
+                    for w in transcribe_words(asr, clip, None, lo_t)
                     if _lo <= (w["start"] + w["end"]) / 2 < hi_bound
                 ]
 
+            def hole_of(words, _win=win):
+                return speech_hole([(w["start"], w["end"]) for w in words], _win.speech)
+
             bare_counts, shipped_counts = [], []
             for shift in (-JITTER_S, 0.0, JITTER_S):
-                bare_counts.append(len(kept(win.end + shift, math.inf)))
-                # The shipped path: overhang decode + tail-hole retry on the
-                # bare span, better tail wins (vad.tail_hole; pipeline._decode_one).
-                words = kept(hi + shift, keep_hi)
-                if tail_hole(words[-1]["end"] if words else None, win.cut_end):
+                bare_counts.append(len(kept(bare_ctx, bare_end + shift, math.inf)))
+                # The shipped path (pipeline._decode_one): overlap decode +
+                # skip retry on the pre-change slice, better coverage wins.
+                words = kept(ctx, hi + shift, keep_hi)
+                hole = hole_of(words)
+                if hole > SPEECH_HOLE_S:
                     retries += 1
-                    retry = kept(win.end + shift, keep_hi)
-                    if retry and (not words or retry[-1]["end"] > words[-1]["end"]):
+                    retry = kept(bare_ctx, bare_end + shift, keep_hi)
+                    if hole_of(retry) < hole:
                         words = retry
-                    if tail_hole(words[-1]["end"] if words else None, win.cut_end):
+                    if hole_of(words) > SPEECH_HOLE_S:
                         holes_left += 1
                 shipped_counts.append(len(words))
             tallies["bare"].append(max(bare_counts) - min(bare_counts))
@@ -229,7 +247,7 @@ def run_jitter(asr, segments) -> list[str]:
         "Every cut-ended window decoded 3× with the window-end bound shifted ±50 ms;",
         "the kept-word-count range across the three decodes measures tail",
         "instability (0 = the bound shift changes nothing). bare = the pre-fix",
-        "slice; shipped = overhang + tail-hole retry (the product decode).",
+        "slice; shipped = overlap + speech-coverage skip retry (the product decode).",
         "",
         "| arm | windows | unstable (range>0) | Σ range | max range |",
         "|---|---|---|---|---|",

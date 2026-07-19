@@ -26,9 +26,19 @@ AUDIO_SUFFIXES = {".mov", ".m4a", ".mp3", ".mp4", ".wav"}
 
 def probe_duration(path: Path) -> float:
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-        check=True, capture_output=True, text=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return float(out.stdout.strip())
 
