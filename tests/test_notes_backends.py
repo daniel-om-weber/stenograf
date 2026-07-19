@@ -214,9 +214,7 @@ class FakeMlxLm:
         return ("fake-model", self.tokenizer)
 
     def generate(self, model, tokenizer, prompt, max_tokens, sampler=None):
-        self.generate_calls.append(
-            {"prompt": prompt, "max_tokens": max_tokens, "sampler": sampler}
-        )
+        self.generate_calls.append({"prompt": prompt, "max_tokens": max_tokens, "sampler": sampler})
         return self.response
 
 

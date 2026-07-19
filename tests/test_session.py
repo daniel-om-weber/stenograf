@@ -694,9 +694,7 @@ class TestMeetingRecorder:
         )
 
         def one_run():
-            provider = ListProvider(
-                [frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))]
-            )
+            provider = ListProvider([frame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))])
             return recorder.run(provider)
 
         first, second = one_run(), one_run()

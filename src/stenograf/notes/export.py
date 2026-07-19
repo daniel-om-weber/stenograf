@@ -109,4 +109,3 @@ def _slug(title: str) -> str:
     slug = _REPLACE.sub(" ", slug)
     slug = " ".join(slug.split())
     return slug[:_SLUG_MAX_CHARS].rstrip() or "Meeting"
-

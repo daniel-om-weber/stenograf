@@ -311,6 +311,30 @@ overhang moves the unstable tail past the cut, into audio whose words are
 dropped again (their midpoint lies beyond ``cut_end``), so the kept text no
 longer sits in the danger zone. Same move, mirrored, for a cut *start*."""
 
+TAIL_HOLE_S = 1.5
+"""A cut-ended window whose kept words stop more than this before the cut has
+*skipped* its tail. At a cut, VAD-detected speech provably runs to the window
+end (that is what made the edge a cut), so the kept stream must reach ≈ the
+cut; in normal decodes the last word ends within ~0.8 s of it. The greedy TDT
+occasionally skips the last few seconds of a long slice entirely (the same
+knife-edge the overhang exists for — the overhang re-rolls it rather than
+removing it, measured: overhang-only re-transcription lost 225 words net vs
+the pre-change batch). A detected hole triggers one bare re-decode of the
+window (:func:`tail_hole`; the slice ending mid-speech at the cut forces the
+decoder to transcribe to the edge) and the variant whose kept words reach
+closer to the cut wins — deterministic, and paid only on detected skips."""
+
+
+def tail_hole(last_end: float | None, cut: float) -> bool:
+    """Did a cut-ended window's decode skip its tail? (See :data:`TAIL_HOLE_S`.)
+
+    ``last_end`` is the end of the last *kept* word (``None`` with no kept
+    words). Both decode paths must call this same predicate, or the batch and
+    live passes would retry different windows and their decodes would diverge.
+    """
+    return last_end is None or cut - last_end > TAIL_HOLE_S
+
+
 def context_start(start: float, end: float, *, cut: bool = False) -> float:
     """Where the decode slice for the packed window ``[start, end)`` begins.
 

@@ -55,6 +55,7 @@ NOTES_SCHEMA: dict = {
     "required": ["title", "summary", "decisions", "action_items", "open_questions"],
 }
 
+
 def schema_instruction(schema: dict) -> str:
     """The instruction a backend *without* decode-time grammar appends.
 
@@ -194,4 +195,3 @@ def _render_entries(entries: list[TranscriptEntry]) -> str:
 
 def _render_entry(entry: TranscriptEntry) -> str:
     return f"{entry.speaker} [{format_timestamp(entry.start)}]: {entry.text}"
-

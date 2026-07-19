@@ -22,7 +22,7 @@ from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
 from stenograf.transcript import Transcript, TranscriptEntry
-from stenograf.vad import SileroVAD, Window, decode_slice, pack_windows
+from stenograf.vad import SileroVAD, Window, decode_slice, pack_windows, tail_hole
 
 MAX_ENTRY_GAP = 1.5
 """Silence (s) between words of one speaker that still reads as one entry."""
@@ -121,19 +121,55 @@ def _decode(
     for i, win in enumerate(windows):
         if on_progress is not None:
             on_progress(STAGE_ASR, i, len(windows))
-        # The decode slice may read more than the window span — left context
-        # for short/cut-started windows, right overhang past a cut end — and
-        # the words outside the keep interval are dropped again. One shared
-        # rule (vad.decode_slice), mirrored operation for operation by
-        # WindowedLiveDecoder._decode_window (reuse guarantee).
-        ctx, hi, keep_lo, keep_hi = decode_slice(win)
-        window = samples[sample_index(ctx) : sample_index(min(hi, duration))]
-        for seg in asr.transcribe(window, language):
-            clipped = _clip_window(_shift(seg, ctx), keep_lo, keep_hi)
-            if clipped is not None:
-                segments.append(clipped)
+        segments.extend(_decode_one(samples, win, asr=asr, language=language, duration=duration))
     segments.sort(key=lambda seg: seg.start)
     return segments
+
+
+def _decode_one(
+    samples, win: Window, *, asr: ASRBackend, language, duration: float
+) -> list[Segment]:
+    """Decode one packed window into its kept segments.
+
+    The decode slice may read more than the window span — left context for
+    short/cut-started windows, right overhang past a cut end — and the words
+    outside the keep interval are dropped again. One shared rule
+    (``vad.decode_slice``), mirrored operation for operation by
+    ``WindowedLiveDecoder._decode_window`` (reuse guarantee) — including the
+    tail-hole retry: a cut-ended decode whose kept words stop short of the cut
+    skipped its tail (``vad.tail_hole``) and re-decodes the bare span, keeping
+    whichever variant's words reach closer to the cut.
+    """
+    ctx, hi, keep_lo, keep_hi = decode_slice(win)
+
+    def run(hi_t: float) -> list[Segment]:
+        out = []
+        for seg in asr.transcribe(samples[sample_index(ctx) : sample_index(hi_t)], language):
+            clipped = _clip_window(_shift(seg, ctx), keep_lo, keep_hi)
+            if clipped is not None:
+                out.append(clipped)
+        return out
+
+    over_end, bare_end = min(hi, duration), min(win.end, duration)
+    segments = run(over_end)
+    if (
+        win.cut_end is not None
+        and over_end > bare_end
+        and tail_hole(_tail_reach(segments), win.cut_end)
+    ):
+        retry = run(bare_end)
+        if _later(_tail_reach(retry), _tail_reach(segments)):
+            return retry
+    return segments
+
+
+def _tail_reach(segments: list[Segment]) -> float | None:
+    """End time of the last kept word of one window's decode (None if empty)."""
+    return segments[-1].words[-1].end if segments and segments[-1].words else None
+
+
+def _later(a: float | None, b: float | None) -> bool:
+    return a is not None and (b is None or a > b)
 
 
 def _clip_window(seg: Segment, keep_lo: float, keep_hi: float) -> Segment | None:

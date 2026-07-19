@@ -37,6 +37,7 @@ def frame_samples(frame_ms: int) -> int:
     """Samples per delivered frame — the one frame-size computation."""
     return max(1, SAMPLE_RATE * frame_ms // 1000)
 
+
 ORDER_TOLERANCE_SAMPLES = SAMPLE_RATE // 100  # 10 ms
 """Backward timestamp jitter tolerated before a frame is treated as a
 stream-ordering error. Providers deliver frames monotonically per channel; a

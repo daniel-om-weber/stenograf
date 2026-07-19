@@ -55,6 +55,7 @@ from stenograf.vad import (
     Window,
     cut_boundary,
     decode_slice,
+    tail_hole,
 )
 
 _WORD_KEY = re.compile(r"\W+", re.UNICODE)
@@ -702,17 +703,29 @@ class WindowedLiveDecoder:
         ctx, hi, keep_lo, keep_hi = decode_slice(padded)
         ctx = max(buf_start, ctx)
         hi = min(self._window.end(), hi)
-        self.decodes += 1
         self.decoded_windows.append(padded)
         origin = self._window.start_idx or 0
         lo_idx = max(0, sample_index(ctx) - origin)
-        hi_idx = sample_index(hi) - origin
-        words = [
-            Word(w.text, w.start + ctx, w.end + ctx, w.confidence)
-            for seg in self._asr.transcribe(self._window.samples[lo_idx:hi_idx], self._language)
-            for w in seg.words
-            if keep_lo <= (w.start + w.end) / 2 + ctx < keep_hi
-        ]
+
+        def run(hi_t: float) -> list[Word]:
+            self.decodes += 1
+            return [
+                Word(w.text, w.start + ctx, w.end + ctx, w.confidence)
+                for seg in self._asr.transcribe(
+                    self._window.samples[lo_idx : sample_index(hi_t) - origin], self._language
+                )
+                for w in seg.words
+                if keep_lo <= (w.start + w.end) / 2 + ctx < keep_hi
+            ]
+
+        words = run(hi)
+        # Tail-hole retry, in lockstep with pipeline._decode_one: a cut-ended
+        # decode whose kept words stop short of the cut skipped its tail —
+        # re-decode the bare span and keep the variant reaching closer.
+        if win.cut_end is not None and hi > b and tail_hole(_last_end(words), win.cut_end):
+            retry = run(b)
+            if _later_end(_last_end(retry), _last_end(words)):
+                words = retry
         return _extend_committed(self._committed, words)
 
     def _retain(self, open_seg: SpeechSegment | None) -> None:
@@ -738,6 +751,14 @@ class WindowedLiveDecoder:
         if self._window.start_idx is None:
             return
         self._window.trim_before(keep_from)
+
+
+def _last_end(words: list[Word]) -> float | None:
+    return words[-1].end if words else None
+
+
+def _later_end(a: float | None, b: float | None) -> bool:
+    return a is not None and (b is None or a > b)
 
 
 def _key(word: Word) -> str:
