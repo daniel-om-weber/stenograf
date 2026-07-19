@@ -659,6 +659,68 @@ stable-distro; nothing in the design touches ALSA directly, so these suffice.
 
 ---
 
+### Cut-overlap decoding — NEXT SESSION (planned 2026-07-19)
+
+The follow-up the window-length study earned (§2 "Short-utterance accuracy",
+eval/README.md). Two verified facts drive it: **(a)** the greedy TDT decode
+is knife-edge unstable at the tail of a full ~30 s window — the same span
+decodes completely or drops ~10 trailing words on a millisecond-level bound
+shift — so words are lost wherever a window boundary is a *forced mid-speech
+cut* (budget close, oversized hard split, sherpa's `max_speech` bound);
+**(b)** both attempts to tune this away by moving window bounds (threshold
+0.4, pad 0.3) lost whole Whisper-confirmed sentences and were reverted.
+Conclusion: fix the decode slice, never the bounds — the same move
+context-carry already made for short-window starts.
+
+**Design.** Extend `stenograf.vad` with cut classification + overhang, one
+shared rule like `context_start`:
+
+1. `pack_windows` additionally reports, per window, whether each edge is a
+   **cut** (speech continues within ~1 s beyond the edge, or the window came
+   from the oversized hard split) or a natural silence close. API: return a
+   small per-window record (or parallel flags) — touches `pipeline._decode`,
+   the online packer in `WindowedLiveDecoder` (it knows *why* it closed a
+   window, so it can derive the identical flag online), `eval/windows.py`,
+   and the byte-identity test. Flag parity live↔batch needs its own unit
+   test.
+2. **Cut-ended window** → decode slice extends `OVERHANG_S` (start ~2–3 s)
+   past the window end; keep words with midpoint ≤ cut. **Cut-started
+   window** → left context regardless of window length (today only <8 s
+   windows get it); keep midpoint > cut. The two keep-rules must be exact
+   complements (one tie-break, shared constant) so no word duplicates or
+   falls through at a cut.
+3. **Live specifics:** the right overhang needs future audio — when the
+   online packer closes a window at a cut, defer that window's decode until
+   the buffer reaches `end + OVERHANG_S` (bounded extra caption latency, cut
+   windows only). `_retain` must keep the overhang span; the span-vs-slice
+   distinction (`_decoded_to` guards spans, slices may re-read) already
+   exists from context-carry.
+
+**Verification battery (all exist, run in this order):**
+byte-identity test + new flag-parity tests → `eval/live.py --mode window`
+(must stay 0.0 % WER) → `eval/windows.py --force` + `eval/context_ab.py`
+(raw arm must stay ~0-changed on short buckets) → a **jitter probe** worth
+adding to context_ab: decode every cut-ended window with ±50 ms bound shifts
+and count word-count variance — the direct instrument for tail instability;
+expect variance ≈ 0 with overhang → finally
+`eval/retranscribe_compare.py --new-dir …` against the six stored meetings
+with a pre-change-batch control worktree (the harness that caught both
+reverts). Acceptance: the known lost sentences at cut boundaries in
+en-0713-sys (e.g. ~2935 s "and then I will maybe update you in two weeks",
+~4032 s, ~5165 s in the pre-fix batch) survive bound jitter; no net word
+loss vs the pre-change batch beyond filler churn; extra decode cost ≤ ~5 %
+of audio.
+
+**Unlocked afterwards, as separate gated steps:** re-attempt VAD threshold
+0.4 for the quiet-interjection drops (56 likely-real lost spans over 5.2 h,
+mostly Daniel's own mic-channel "ja/okay/gut" turns) — safe once mid-speech
+cuts stop losing words; and optionally a small always-on left slice overhang
+(~0.5 s) as the bound-safe replacement for the rejected pad widening (onset
+clipping is real, it was the *bound move* that lost). Each re-runs the same
+battery.
+
+---
+
 ### Phase 4 build plan — product layer + macOS distribution (Linux → Phase 5)
 
 Planned July 2026 by a five-subagent design pass (web UI · persistence/archive ·
