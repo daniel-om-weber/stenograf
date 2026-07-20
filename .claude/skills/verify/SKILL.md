@@ -88,3 +88,8 @@ remote-only scenario. TTS reads continuously — good stand-in for a monologue.
   audio time to wall time.
 - A user's real `steno start` (installed via uv tool) may be running — check
   `pgrep -fl steno` before killing anything.
+- Backgrounded runs cannot be stopped with `kill -INT`: POSIX non-interactive
+  shells start `&` children with SIGINT *ignored*, and Python inherits that
+  disposition — the signal is a silent no-op and the meeting runs forever
+  (SIGTERM kills without finalizing). Use `--max-seconds N` to end a scripted
+  run; it stops capture by itself and runs the full finalize.
