@@ -53,6 +53,17 @@ class CaptureUnavailableError(RuntimeError):
     doctor) can catch it without knowing which provider raised it."""
 
 
+class CaptureHelperError(RuntimeError):
+    """The capture transport died abnormally at runtime (crashed or wedged).
+
+    Raised from a provider's ``frames()`` instead of a clean end-of-stream, so
+    a helper that dies at startup — e.g. coreaudiod wedged by a concurrent
+    capture app (OBS) — fails the meeting loudly rather than finalizing an
+    empty transcript that looks like success (the 2026-07-20 silent-failure
+    bug). Platform-neutral so the CLI can catch it without importing a
+    platform provider module."""
+
+
 class Channel(StrEnum):
     MIC = "mic"  # local speaker(s)
     SYSTEM = "system"  # remote speakers (meeting-app output)

@@ -242,6 +242,15 @@ func startSystemTap(emitter: Emitter) -> TapSession {
 
     var tapID = AudioObjectID(kAudioObjectUnknown)
     die(AudioHardwareCreateProcessTap(desc, &tapID), "AudioHardwareCreateProcessTap")
+    if tapID == AudioObjectID(kAudioObjectUnknown) {
+        // Core Audio reports noErr but hands back no object when the tap can't
+        // be created — audio-capture permission missing, or coreaudiod wedged
+        // by a concurrent capture app (measured 2026-07-20: racing another
+        // mic+tap capture makes this or the format read below fail).
+        log("FATAL: system tap unavailable — audio-capture permission missing, "
+            + "or another app is capturing (OBS, a second stenograf?)")
+        exit(1)
+    }
 
     var asbd = AudioStreamBasicDescription()
     var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
@@ -415,7 +424,8 @@ func startMic(emitter: Emitter) -> AVAudioEngine {
     do {
         try engine.start()
     } catch {
-        log("FATAL: mic engine start: \(error.localizedDescription)")
+        log("FATAL: mic engine start: \(error.localizedDescription) "
+            + "— is another app capturing? (OBS, a second stenograf)")
         exit(1)
     }
     log("mic capture started")
@@ -438,9 +448,23 @@ var tapSession: TapSession?
 var micEngine: AVAudioEngine?
 
 if wantMic { requestMicrophoneAccess() }
+// Startup watchdog, armed only after the (legitimately open-ended) permission
+// prompt: device setup normally takes well under a second, but a concurrent
+// capture app can wedge coreaudiod so `engine.start()` never returns (measured
+// 2026-07-20 racing two mic+tap captures). Turn the hang into a loud exit the
+// consumer can detect and retry instead of a meeting that records nothing.
+let startupWatchdog = DispatchSource.makeTimerSource(queue: .global())
+startupWatchdog.schedule(deadline: .now() + 15)
+startupWatchdog.setEventHandler {
+    log("FATAL: capture did not start within 15 s "
+        + "— is another app capturing? (OBS, a second stenograf)")
+    exit(1)
+}
+startupWatchdog.resume()
 _ = Clock.epoch  // fix the shared origin before either channel can stamp a frame
 if wantSystem { tapSession = startSystemTap(emitter: emitter) }
 if wantMic { micEngine = startMic(emitter: emitter) }
+startupWatchdog.cancel()
 
 func shutdown() -> Never {
     micEngine?.stop()

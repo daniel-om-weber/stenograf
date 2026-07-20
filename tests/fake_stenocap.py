@@ -9,8 +9,15 @@ stream desync reaches the consumer); otherwise it emits a few frames and exits
 (to test natural end-of-stream). With --chatter it also logs status lines to
 stderr the way the real helper does (format info at start, a WARNING, and
 "stopped" at exit), to test the stderr routing.
+
+Crash modes (the real helper dies like this when coreaudiod is wedged by a
+concurrent capture app): --die-at-start logs a FATAL line and exits 1 before
+any frame; --die-once MARKER does that only when MARKER doesn't exist yet
+(creating it), so a respawn succeeds — the provider's retry path; --die-after N
+emits N frames per channel, then crashes — a mid-meeting death.
 """
 
+import os
 import signal
 import struct
 import sys
@@ -51,6 +58,21 @@ def main() -> None:
     if "--frames" in sys.argv[1:]:
         total = int(sys.argv[sys.argv.index("--frames") + 1])
 
+    if "--die-at-start" in sys.argv[1:]:
+        log("FATAL: system tap unavailable — another app is capturing?")
+        sys.exit(1)
+
+    if "--die-once" in sys.argv[1:]:
+        marker = sys.argv[sys.argv.index("--die-once") + 1]
+        if not os.path.exists(marker):
+            open(marker, "w").close()
+            log("FATAL: flaky start (first attempt)")
+            sys.exit(1)
+
+    die_after = None
+    if "--die-after" in sys.argv[1:]:
+        die_after = int(sys.argv[sys.argv.index("--die-after") + 1])
+
     if "--malformed" in sys.argv[1:]:
         emit(channels[0] if channels else 0, 0)
         sys.stdout.buffer.write(HEADER.pack(7, 0.0, 0))  # 7 is no channel code
@@ -62,6 +84,9 @@ def main() -> None:
         for code in channels:
             emit(code, index)
         index += 1
+        if die_after is not None and index >= die_after:
+            log("FATAL: stream died mid-meeting")
+            sys.exit(1)
         if not forever and index >= total:
             if chatter:
                 log("stopped")

@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stenograf.capture.base import Channel
+from stenograf.capture.base import CaptureHelperError, Channel
 from stenograf.capture.macos import (
     HelperNotFoundError,
     MacOSCaptureProvider,
@@ -134,6 +134,62 @@ class TestMacOSCaptureProvider:
         frames = list(provider.frames())
         provider.stop()
         assert len(frames) == 3  # audio unaffected by the sink's failures
+
+    def test_startup_crash_retries_once_then_raises_the_fatal_detail(self):
+        # The helper dying before any frame (coreaudiod wedged by a concurrent
+        # capture app) used to look like a clean end-of-stream — the meeting
+        # finalized an empty transcript that read as success. It must retry
+        # once (the wedge is measurably transient), then raise with the
+        # helper's own FATAL line so the failure toast says why.
+        lines: list[str] = []
+        provider = MacOSCaptureProvider(command=[*FAKE, "--die-at-start"], on_log=lines.append)
+        provider.start({Channel.MIC})
+        with pytest.raises(CaptureHelperError, match="tap unavailable"):
+            list(provider.frames())
+        provider.stop()
+        assert any("retrying once" in ln for ln in lines)
+
+    def test_startup_crash_recovers_when_the_respawn_succeeds(self, tmp_path):
+        # First spawn crashes (marker absent), the respawn streams normally:
+        # the consumer sees the frames and no error — the transient-wedge case.
+        marker = tmp_path / "died-once"
+        lines: list[str] = []
+        provider = MacOSCaptureProvider(
+            command=[*FAKE, "--die-once", str(marker)], on_log=lines.append
+        )
+        provider.start({Channel.MIC})
+        frames = list(provider.frames())
+        provider.stop()
+        assert len(frames) == 3
+        assert any("retrying once" in ln for ln in lines)
+
+    def test_midstream_crash_raises_without_a_retry(self):
+        # After audio has flowed a respawn can't help (the fresh helper would
+        # restart the shared clock at t=0); the crash must surface so the
+        # session finalizes what it has and reports the error.
+        lines: list[str] = []
+        provider = MacOSCaptureProvider(command=[*FAKE, "--die-after", "2"], on_log=lines.append)
+        provider.start({Channel.MIC})
+        received = []
+        with pytest.raises(CaptureHelperError, match="died mid-meeting"):
+            for frame in provider.frames():
+                received.append(frame)
+        provider.stop()
+        assert len(received) == 2
+        assert not any("retrying" in ln for ln in lines)
+
+    def test_startup_crash_without_a_sink_still_raises(self, capfd):
+        # Plain-CLI mode (stderr inherited): no tail is collected, but the
+        # crash must still raise — with the exit status, and the FATAL line
+        # itself visible on the terminal's stderr as ever.
+        provider = MacOSCaptureProvider(command=[*FAKE, "--die-at-start"])
+        provider.start({Channel.MIC})
+        with pytest.raises(CaptureHelperError, match="exited with status 1"):
+            list(provider.frames())
+        provider.stop()
+        err = capfd.readouterr().err
+        assert "FATAL" in err  # the helper's own line, inherited
+        assert "retrying once" in err  # the provider's announcement
 
     def test_stop_does_not_close_the_pipe_under_a_paused_reader(self):
         # stop() may fire (max_seconds, TUI quit) while the consumer sits between

@@ -12,11 +12,18 @@ These exercise the threaded plumbing, not the LiveDecoder's caption quality
 import threading
 
 import numpy as np
+import pytest
 from conftest import CallbackView, FakeASR
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.capture.base import (
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureHelperError,
+    CaptureProvider,
+    Channel,
+)
 from stenograf.config import MeetingProfile
 from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.live import StreamingUpdate
@@ -295,6 +302,24 @@ class TestLiveWorker:
         assert worker.error is None  # flush_interval defaults to 0 → no flushing path
 
 
+class CrashingProvider(CaptureProvider):
+    """Yields its preset frames, then dies the way a crashed helper does."""
+
+    def __init__(self, frames: list[AudioFrame] | None = None):
+        self._frames = frames or []
+        self.stopped = False
+
+    def start(self, channels: set[Channel]) -> None:
+        pass
+
+    def frames(self):
+        yield from self._frames
+        raise CaptureHelperError("stenocap: FATAL: system tap unavailable")
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
 class TestMeetingRecorderLive:
     def _recorder(self) -> MeetingRecorder:
         return MeetingRecorder(MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR())
@@ -346,6 +371,29 @@ class TestMeetingRecorderLive:
         ).transcript
         assert [e.speaker for e in transcript.entries] == ["Local-1"]  # the good second survived
         assert provider.stopped
+        assert any("capture stopped early" in m for m in errors)
+
+    def test_capture_crash_with_no_audio_fails_the_meeting(self):
+        # The 2026-07-20 OBS-conflict bug: the helper died at startup, zero
+        # frames arrived, and the meeting finalized an empty transcript that
+        # looked like success. With nothing captured there is no transcript to
+        # protect — the run must fail with the capture error, in both modes.
+        for live in (True, False):
+            provider = CrashingProvider()
+            with pytest.raises(CaptureHelperError, match="tap unavailable"):
+                self._recorder().run(provider, live=live)
+            assert provider.stopped  # the device is still released
+
+    def test_capture_crash_after_audio_still_finalizes(self):
+        # Same crash mid-meeting: captured audio exists, so the resilience rule
+        # holds — finalize what arrived, surface the error, keep the transcript.
+        good = AudioFrame(Channel.MIC, 0.0, np.ones(SAMPLE_RATE, dtype=np.int16))
+        provider = CrashingProvider([good])
+        errors: list[str] = []
+        transcript = self._recorder().run(
+            provider, live=True, view=CallbackView(on_status=errors.append)
+        ).transcript
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]
         assert any("capture stopped early" in m for m in errors)
 
 

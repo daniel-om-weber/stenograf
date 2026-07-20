@@ -26,7 +26,10 @@ import queue
 import signal
 import struct
 import subprocess
+import sys
 import threading
+import time
+from collections import deque
 from collections.abc import Iterator
 from importlib import resources
 from pathlib import Path
@@ -34,7 +37,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
+from stenograf.capture.base import (
+    SAMPLE_RATE,
+    AudioFrame,
+    CaptureHelperError,
+    CaptureProvider,
+    Channel,
+)
 from stenograf.capture.streaming import read_exact, relay_lines
 
 if TYPE_CHECKING:
@@ -117,13 +126,32 @@ class MacOSCaptureProvider(CaptureProvider):
         self._queue: queue.SimpleQueue[AudioFrame | Exception | None] | None = None
         self._drainer: threading.Thread | None = None
         self._log_relay: threading.Thread | None = None
+        self._channels: set[Channel] = set()
+        # The last helper stderr lines (on_log mode only): a crash's FATAL line
+        # goes into the CaptureHelperError message so the failure toast says
+        # *why*, not just that the helper died.
+        self._stderr_tail: deque[str] = deque(maxlen=8)
+        self._stop_requested = False
+        self._respawned = False
         # stop() is called from several threads (the capture loop on max_seconds,
         # the meeting thread on close, and the TUI's quit binding), so serialize it.
         self._stop_lock = threading.Lock()
 
     def start(self, channels: set[Channel]) -> None:
+        self._channels = set(channels)
+        self._stop_requested = False
+        self._respawned = False
+        # The queue outlives a helper respawn (frames() re-reads the attribute
+        # per item, but one queue for both spawns is simpler and the first
+        # drainer's end-of-stream marker is consumed before the second starts).
+        self._queue = queue.SimpleQueue()
+        with self._stop_lock:
+            self._spawn()
+
+    def _spawn(self) -> None:
+        """Launch the helper and its drain/relay threads. Caller holds _stop_lock."""
         argv = list(self._prefix)
-        argv += [_CHANNEL_FLAG[ch] for ch in (Channel.MIC, Channel.SYSTEM) if ch in channels]
+        argv += [_CHANNEL_FLAG[ch] for ch in (Channel.MIC, Channel.SYSTEM) if ch in self._channels]
         # stdout is the binary frame stream. stderr (status/errors) is inherited
         # by default so capture errors land on the plain CLI's terminal — but
         # with an on_log sink it is piped and relayed line-by-line instead,
@@ -135,7 +163,7 @@ class MacOSCaptureProvider(CaptureProvider):
             assert self._proc.stderr is not None
             self._log_relay = threading.Thread(
                 target=relay_lines,
-                args=(self._proc.stderr, self._on_log),
+                args=(self._proc.stderr, self._tail_and_forward),
                 name="stenocap-log",
                 daemon=True,
             )
@@ -148,7 +176,6 @@ class MacOSCaptureProvider(CaptureProvider):
         # unbounded on purpose: the meeting already lives in RAM (SessionStore),
         # so buffering here (~64 KB/s) costs nothing new, while dropping frames
         # would lose meeting audio to a stall the consumer recovers from.
-        self._queue = queue.SimpleQueue()
         self._drainer = threading.Thread(
             target=_drain_pipe,
             args=(self._proc.stdout, self._queue),
@@ -157,16 +184,75 @@ class MacOSCaptureProvider(CaptureProvider):
         )
         self._drainer.start()
 
+    def _tail_and_forward(self, line: str) -> None:
+        # Tail first: relay_lines suppresses sink exceptions per line, and the
+        # crash diagnostics must survive even a broken on_log.
+        self._stderr_tail.append(line)
+        self._on_log(line)  # type: ignore[misc]  # only installed when on_log is set
+
     def frames(self) -> Iterator[AudioFrame]:
         if self._queue is None:
             raise RuntimeError("frames() called before start()")
+        delivered = False
         while True:
             item = self._queue.get()
             if item is None:
-                return  # helper closed its stdout (stopped or exited)
+                # Helper closed its stdout — a stop, a natural end, or a crash.
+                if not self._ended_cleanly(delivered):
+                    continue  # respawned after a startup crash — keep reading
+                return
             if isinstance(item, Exception):
                 raise item  # stream desync, noticed by the drain thread
+            delivered = True
             yield item
+
+    def _ended_cleanly(self, delivered: bool) -> bool:
+        """At end-of-stream: was this a clean stop (True) or a helper crash?
+
+        A crash before any frame is retried once — measured 2026-07-20, a
+        concurrent capture app (OBS, a second stenograf) makes coreaudiod
+        flakily fail or hang the helper's device setup, and an immediate
+        second attempt often succeeds. A second startup crash, or any crash
+        after audio flowed, raises :class:`CaptureHelperError`; returning a
+        clean end here is what used to finalize an empty transcript that
+        looked like a successful meeting.
+        """
+        proc = self._proc
+        if proc is None or self._stop_requested:
+            return True  # stop() claimed it — a requested stop
+        try:
+            code = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # stdout closed but process wedged
+            proc.kill()
+            code = proc.wait()
+        if code == 0:
+            return True  # helper's own clean exit (external SIGINT/SIGTERM)
+        # Join the stderr relay so the helper's last lines (the FATAL) are in
+        # the tail before we compose the error.
+        if self._log_relay is not None:
+            self._log_relay.join(timeout=2)
+        detail = next((ln for ln in reversed(self._stderr_tail) if "FATAL" in ln), None)
+        if detail is None:
+            detail = f"capture helper exited with status {code}"
+            if self._stderr_tail:
+                detail += f" (last: {self._stderr_tail[-1]})"
+        if not delivered and not self._respawned:
+            self._respawned = True
+            self._announce(f"capture failed at startup ({detail}); retrying once")
+            time.sleep(1.0)  # give coreaudiod a beat to settle
+            with self._stop_lock:
+                if self._stop_requested:
+                    return True
+                self._spawn()
+            return False
+        raise CaptureHelperError(detail)
+
+    def _announce(self, message: str) -> None:
+        line = f"capture: {message}"
+        if self._on_log is not None:
+            self._on_log(line)
+        else:  # plain CLI — stderr is where the helper's own chatter lands
+            print(line, file=sys.stderr)
 
     def stop(self) -> None:
         # Idempotent + thread-safe: claim the process under the lock and null it so
@@ -174,6 +260,7 @@ class MacOSCaptureProvider(CaptureProvider):
         # is a no-op and only one caller ever signals/reaps it. The blocking wait
         # runs outside the lock so a second caller returns immediately.
         with self._stop_lock:
+            self._stop_requested = True
             proc, self._proc = self._proc, None
         if proc is None:
             return

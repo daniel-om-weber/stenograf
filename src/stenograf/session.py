@@ -1060,7 +1060,16 @@ class MeetingRecorder:
         was captured rather than discarding the whole meeting's transcript.
         ``aux_error`` is the mode's secondary-thread failure (checkpointer /
         live worker), likewise surfaced without losing the transcript.
+
+        The one exception: capture failed AND nothing was ever captured. There
+        is no transcript to protect, and publishing would write an empty one
+        that looks like a successful meeting (the 2026-07-20 OBS-conflict
+        silent failure) — so the meeting fails with the capture error instead.
         """
+        if capture_error is not None and all(
+            store.duration(ch) == 0.0 for ch in store.channels()
+        ):
+            raise capture_error
         if capture_error is not None:
             view.error(f"capture stopped early: {capture_error}; finalizing captured audio")
         if aux_error is not None:

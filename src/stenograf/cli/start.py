@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from stenograf.session import MeetingResult
 
 from stenograf import loaders
+from stenograf.capture.base import CaptureHelperError
 from stenograf.cli.format import _MEETING_MAX_SPEAKERS, _report_speaker_counts
 from stenograf.cli.run import (
     _apply_no_diarization,
@@ -362,6 +363,11 @@ def start(
             persist=persist,
             capture_log=capture_log,
         )
+    except CaptureHelperError as exc:
+        # Capture died with nothing recorded (session.py refuses to publish an
+        # empty transcript): a real failure, not a traceback-worthy crash. The
+        # finally below still replays the helper's buffered FATAL lines.
+        raise click.ClickException(str(exc)) from exc
     finally:
         if tee is not None:
             tee.close()
