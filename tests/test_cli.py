@@ -826,6 +826,47 @@ def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
     assert "You:" in plain_run.output
 
 
+def test_start_tui_generates_notes_while_the_screen_is_still_up(tmp_path, monkeypatch):
+    # Launcher parity (ui/flow.py): the TUI shape runs notes on the meeting
+    # thread — while the "done" screen is up — not in the CLI tail after the
+    # user quits, where they used to wait on the quit keypress.
+    notes_calls: list = []
+    notes_done_when_serve_returned: list = []
+
+    class FakeTUI(LiveView):
+        def __init__(self, profile, *, language=None, stop=None, persist=None):
+            self.statuses: list[str] = []
+
+        def status(self, message: str) -> None:
+            self.statuses.append(message)
+
+        def serve(self, meeting):
+            transcript = meeting()  # the meeting thread's work, incl. the notes step
+            notes_done_when_serve_returned.append(len(notes_calls))
+            return transcript
+
+    def fake_generate(transcript, out_dir, basename, **kwargs):
+        notes_calls.append(basename)
+        return [], None
+
+    monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
+    monkeypatch.setattr(cli.start, "_stdout_is_tty", lambda: True)
+    monkeypatch.setattr("stenograf.ui.meeting.TextualLiveView", FakeTUI)
+    monkeypatch.setattr("stenograf.cli.notes._generate_and_write_notes", fake_generate)
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+
+    run = CliRunner().invoke(
+        cli.main,
+        ["start", "--notes", "--local", "1", "--remote", "0", "--replay", str(mic)],
+    )
+    assert run.exit_code == 0, run.output
+    assert notes_done_when_serve_returned == [1], (
+        "notes must be generated on the meeting thread, before serve() returns"
+    )
+    assert "notes: wrote" not in run.output, "_finish_run must not generate the notes again"
+
+
 def test_doctor_runs_and_prints_checks():
     result = CliRunner().invoke(cli.main, ["doctor"])
     # Exit code is environment-dependent (0 all-ok, 1 if e.g. models uncached);

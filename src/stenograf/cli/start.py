@@ -22,6 +22,7 @@ from stenograf.cli.run import (
     _echo_glossary,
     _finish_run,
     _load_reid,
+    _notes_enabled,
     _notes_options,
     _prepare_output,
     _reid_format_options,
@@ -301,37 +302,59 @@ def start(
     created_at = datetime.now()
     out_dir, basename, audio_default = _prepare_output(out, created_at, settings, force=force)
 
-    started = time.monotonic()
-    asr, vad, diarizer = loaders.load_backends(
-        need_diarizer=any(p.num_speakers != 1 for p in plans),
-        asr_backend=settings.asr.backend,
-        asr_provider=settings.asr.provider,
-        glossary=glossary_terms,
-        attendee_names=attendee_names,
-        boost=settings.asr.boost,
-    )
-    reid = _load_reid(diarizer, enabled=use_reid, threshold=reid_threshold, store=reid_store)
-    _echo_glossary(glossary_terms, attendee_names)
-    recorder = MeetingRecorder(
-        profile,
-        asr=asr,
-        vad=vad,
-        diarizer=diarizer,
-        reid=reid,
-        language=profile.language,
-        glossary_threshold=glossary_threshold,
-        dedup_echo=use_aec,
-    )
-    recorder.reuse_live_finalize = not full_finalize
+    channels = ", ".join(p.channel.value for p in plans)
+    if use_tui:  # the TUI header carries REC / elapsed once it is up
+        click.echo(f"recording: {channels} (captions open when the models finish loading)")
+    else:
+        stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
+        click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
+    if len(plans) > 1:
+        state = "on" if use_aec else "off"
+        click.echo(f"echo cancellation: {state} (mic cancelled against system audio)")
 
-    # A bare --record-audio wins; absent one, [output] record_audio makes the
-    # meeting folder's audio.wav the standing default (same loud banner in the
-    # tee). --no-record-audio is the per-run opt-out of that default (the two are
-    # rejected together up top).
-    if not no_record_audio and record_audio is None and settings.output.record_audio:
-        record_audio = _RECORD_DEFAULT
-    tee = _make_tee(record_audio, audio_default, plans)
-    flush_interval = _resolve_flush_interval(flush_interval, live=live)
+    # Capture starts NOW, before the models load: the provider's frame queue is
+    # unbounded, so the meeting's first seconds buffer through a slow (cold)
+    # model load and the live pass catches up — instead of recording beginning
+    # tens of seconds after the command. The run below consumes the buffer
+    # (``provider_started=True`` keeps it from starting capture a second time).
+    provider.start({p.channel for p in plans})
+    started = time.monotonic()
+    try:
+        asr, vad, diarizer = loaders.load_backends(
+            need_diarizer=any(p.num_speakers != 1 for p in plans),
+            asr_backend=settings.asr.backend,
+            asr_provider=settings.asr.provider,
+            glossary=glossary_terms,
+            attendee_names=attendee_names,
+            boost=settings.asr.boost,
+        )
+        reid = _load_reid(diarizer, enabled=use_reid, threshold=reid_threshold, store=reid_store)
+        _echo_glossary(glossary_terms, attendee_names)
+        recorder = MeetingRecorder(
+            profile,
+            asr=asr,
+            vad=vad,
+            diarizer=diarizer,
+            reid=reid,
+            language=profile.language,
+            glossary_threshold=glossary_threshold,
+            dedup_echo=use_aec,
+        )
+        recorder.reuse_live_finalize = not full_finalize
+
+        # A bare --record-audio wins; absent one, [output] record_audio makes the
+        # meeting folder's audio.wav the standing default (same loud banner in the
+        # tee). --no-record-audio is the per-run opt-out of that default (the two are
+        # rejected together up top).
+        if not no_record_audio and record_audio is None and settings.output.record_audio:
+            record_audio = _RECORD_DEFAULT
+        tee = _make_tee(record_audio, audio_default, plans)
+        flush_interval = _resolve_flush_interval(flush_interval, live=live)
+    except BaseException:
+        # Capture is already live but nothing will ever consume it (a missing
+        # backend, Ctrl-C during the load, …) — release the devices on the way out.
+        provider.stop()
+        raise
 
     def _persist_files(transcript: Transcript) -> list[Path]:
         """Write the transcript files and drop the ``.partial`` checkpoint."""
@@ -341,13 +364,28 @@ def start(
 
     persist = _PersistOnce(_persist_files)
 
-    channels = ", ".join(p.channel.value for p in plans)
-    if not use_tui:  # the TUI header shows REC / elapsed instead of this hint
-        stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
-        click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
-    if len(plans) > 1:
-        state = "on" if use_aec else "off"
-        click.echo(f"echo cancellation: {state} (mic cancelled against system audio)")
+    # The TUI shape generates notes on the meeting thread, while the "done"
+    # screen is still up (launcher parity — ui/flow.py) — not after the user
+    # quits it. ``notes_in_tui`` is that step, or None when notes are off or
+    # the run has no TUI; ``_finish_run`` stays the notes path for the
+    # plain/batch shapes (and never re-runs them after the TUI already did).
+    run_notes = _notes_enabled(notes_flag, settings)
+    notes_in_tui = None
+    if use_tui and run_notes:
+        from stenograf.cli.notes import _generate_notes
+
+        def _notes_step(view, transcript: Transcript) -> bool:
+            return _generate_notes(
+                view,
+                transcript,
+                out_dir,
+                basename,
+                created_at=created_at,
+                notes_settings=settings.notes,
+            )
+
+        notes_in_tui = _notes_step
+
     try:
         result = _run_meeting(
             recorder,
@@ -362,6 +400,7 @@ def start(
             max_seconds=max_seconds,
             persist=persist,
             capture_log=capture_log,
+            notes=notes_in_tui,
         )
     except CaptureHelperError as exc:
         # Capture died with nothing recorded (session.py refuses to publish an
@@ -422,7 +461,10 @@ def start(
         basename,
         created_at=created_at,
         settings=settings,
-        notes_flag=notes_flag,
+        # The TUI shape already ran notes on the meeting thread (a failure
+        # there was warned in the header and stays a `steno notes` rerun, per
+        # the non-fatal contract) — don't generate them a second time here.
+        notes_flag=False if notes_in_tui is not None else notes_flag,
         print_markdown=print_markdown,
     )
 
@@ -441,8 +483,13 @@ def _run_meeting(
     max_seconds: float | None,
     persist: Callable[[Transcript], object] | None = None,
     capture_log=None,
+    notes: Callable[..., bool] | None = None,
 ) -> MeetingResult | None:
     """Run the capture session through the right live view and return its result.
+
+    The caller has already started the provider (capture begins before the
+    models load and frames buffer meanwhile), so every shape runs with
+    ``provider_started=True``.
 
     Three shapes behind one call:
 
@@ -453,6 +500,9 @@ def _run_meeting(
       event, so the transcript reaches disk while the app still shows the "done"
       screen — only the TUI has a gap between finalize and return worth closing;
       the other two shapes return immediately and the caller persists then.
+      ``notes`` (the in-TUI notes step) runs on the meeting thread right after,
+      with the "done" screen still up — launcher parity, instead of making the
+      notes wait for the quit keypress.
     - **Plain live** (live, no TTY or ``--plain``): the meeting runs on this thread
       and streams committed captions to stdout; checkpoints written silently.
     - **Batch** (``--no-live``): no live pass; status and checkpoint notices echo
@@ -483,8 +533,19 @@ def _run_meeting(
                 on_frame=on_frame,
                 checkpoint=checkpoint,
                 max_seconds=max_seconds,
+                provider_started=True,
             )
             results.append(result)
+            # The transcript is persisted (the ``finalized`` event fired inside
+            # run); a force-quit from here on cannot lose it, and serve() joins
+            # this thread, so an early quit does not cancel the notes either —
+            # they finish on the freed terminal.
+            if (
+                notes is not None
+                and result.transcript is not None
+                and notes(view, result.transcript)
+            ):
+                view.status("notes saved · q to exit")
             return result.transcript
 
         view.serve(meeting)
@@ -500,6 +561,7 @@ def _run_meeting(
                 on_frame=on_frame,
                 checkpoint=checkpoint,
                 max_seconds=max_seconds,
+                provider_started=True,
             )
 
     from stenograf.view import LiveView
@@ -525,6 +587,7 @@ def _run_meeting(
             flush_interval,
         ),
         max_seconds=max_seconds,
+        provider_started=True,
     )
 
 

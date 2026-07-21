@@ -44,6 +44,7 @@ import stenograf.ui._fps  # noqa: F401  — must precede the textual imports (fr
 # isort: split
 
 import contextlib
+import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -462,6 +463,18 @@ class TextualLiveView(LiveView):
 
     # -- lifecycle ---------------------------------------------------------
 
+    @property
+    def meeting_running(self) -> bool:
+        """Whether the armed meeting thread is still doing work (capture,
+        finalize, or the notes tail)."""
+        thread = self._meeting_thread
+        return thread is not None and thread.is_alive()
+
+    def join_meeting(self) -> None:
+        """Block until the armed meeting thread (if any) has finished."""
+        if self._meeting_thread is not None:
+            self._meeting_thread.join()
+
     def serve(self, meeting: Callable[[], Transcript]) -> Transcript:
         """Run the TUI (this thread) while ``meeting`` runs on a background thread.
 
@@ -474,11 +487,18 @@ class TextualLiveView(LiveView):
         self._app.run()
 
         # The UI has exited, but the meeting thread may still be running the on-stop
-        # finalize (e.g. the user force-quit the TUI while it was finalizing). Join it
-        # so the authoritative transcript is always collected — the finalize, once
-        # started, is never dropped just because the UI closed early.
-        if self._meeting_thread is not None:
-            self._meeting_thread.join()
+        # finalize (the user quit the TUI while it was finalizing) or the notes tail
+        # (quit on the "done" screen before the notes finished). Join it so neither
+        # is ever dropped just because the UI closed early — but say so first: the
+        # terminal is freed and an unexplained pause reads as a hang.
+        if self.meeting_running:
+            print(
+                "still finishing in the background (finalize/notes) — waiting; "
+                "Ctrl-C abandons it (a finalized transcript is already on disk, "
+                "and `steno notes --last` regenerates missing notes)",
+                file=sys.stderr,
+            )
+        self.join_meeting()
 
         if "error" in result:
             raise result["error"]  # type: ignore[misc]

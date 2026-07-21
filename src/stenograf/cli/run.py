@@ -88,6 +88,14 @@ def _resolve_run_config(
     )
 
 
+def _notes_enabled(notes_flag: bool | None, settings) -> bool:
+    """Whether this run generates notes: ``--notes`` asked for them, or — with
+    no flag either way — ``[notes] auto`` is on; ``--no-notes`` skips them even
+    then. One seam, so ``start``'s in-TUI notes and :func:`_finish_run` can
+    never disagree."""
+    return notes_flag if notes_flag is not None else settings.notes.auto is True
+
+
 def _finish_run(
     transcript: Transcript,
     out_dir: Path,
@@ -100,11 +108,10 @@ def _finish_run(
 ) -> None:
     """The tail both commands share: optional notes, optional stdout print.
 
-    Notes run when ``--notes`` asked for them, or — with no flag either way —
-    when ``[notes] auto`` is on; ``--no-notes`` skips them even then."""
+    Notes run per :func:`_notes_enabled`."""
     from stenograf.cli.notes import _notes_after_run
 
-    if notes_flag if notes_flag is not None else settings.notes.auto is True:
+    if _notes_enabled(notes_flag, settings):
         _notes_after_run(
             transcript,
             out_dir,

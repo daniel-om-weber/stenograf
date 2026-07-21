@@ -813,6 +813,7 @@ class MeetingRecorder:
         checkpoint: CheckpointConfig | None = None,
         max_seconds: float | None = None,
         live: bool = False,
+        provider_started: bool = False,
     ) -> MeetingResult:
         """Capture until the provider stops (or Ctrl-C), then finalize.
 
@@ -820,6 +821,10 @@ class MeetingRecorder:
         ``KeyboardInterrupt`` ends capture gracefully rather than aborting, so
         an interrupted meeting still yields a transcript of what was captured.
         ``max_seconds`` stops capture automatically after that much audio.
+        ``provider_started`` means the caller already called ``provider.start``
+        (so recording could begin before its own slow setup — model loading —
+        with the provider buffering frames meanwhile); the run then only
+        consumes and stops the provider, never starting it a second time.
 
         With ``live=True`` the meeting runs the streaming pass: capture on its own
         thread feeding a single :class:`LiveWorker` that drives a
@@ -855,6 +860,7 @@ class MeetingRecorder:
             view=sink,
             checkpoint=checkpoint,
             max_seconds=max_seconds,
+            provider_started=provider_started,
         )
 
     def _run_batch(
@@ -867,6 +873,7 @@ class MeetingRecorder:
         view: LiveView,
         checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
+        provider_started: bool = False,
     ) -> MeetingResult:
         """Consume-thread capture + a tail-only checkpoint thread (no live view).
 
@@ -883,7 +890,8 @@ class MeetingRecorder:
         # The provider starts before the checkpointer thread: a start failure
         # propagates (as it must) and would skip the finally below, so the
         # checkpointer must not yet exist or it would block on bus.wait forever.
-        provider.start(set(channels))
+        if not provider_started:
+            provider.start(set(channels))
         if bus is not None and checkpoint is not None:
             checkpointer = _TailCheckpointer(
                 store,
@@ -931,6 +939,7 @@ class MeetingRecorder:
         view: LiveView,
         checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
+        provider_started: bool = False,
     ) -> MeetingResult:
         """Live pass: threaded capture + one inference worker, then finalize.
 
@@ -995,7 +1004,8 @@ class MeetingRecorder:
             provider, store, bus, channels=channels, on_frame=on_frame, max_seconds=max_seconds
         )
 
-        provider.start(set(channels))
+        if not provider_started:
+            provider.start(set(channels))
         worker.start()
         capture.start()
         try:
@@ -1066,9 +1076,7 @@ class MeetingRecorder:
         that looks like a successful meeting (the 2026-07-20 OBS-conflict
         silent failure) — so the meeting fails with the capture error instead.
         """
-        if capture_error is not None and all(
-            store.duration(ch) == 0.0 for ch in store.channels()
-        ):
+        if capture_error is not None and all(store.duration(ch) == 0.0 for ch in store.channels()):
             raise capture_error
         if capture_error is not None:
             view.error(f"capture stopped early: {capture_error}; finalizing captured audio")

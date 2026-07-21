@@ -48,6 +48,16 @@ class StenografApp(App[None]):
     def __init__(self, initial: Screen | None = None) -> None:
         super().__init__()
         self._initial = initial
+        self.meetings: list = []
+        """Meeting views (``TextualLiveView``) started from this app.
+
+        Their meeting threads are daemons; :func:`~stenograf.ui.run_launcher`
+        joins any still alive after the app exits, so quitting the launcher
+        never kills a finalize or notes step mid-flight (the meeting screen's
+        own quit already survives — it only dismisses back to Home)."""
+
+    def track_meeting(self, view) -> None:
+        self.meetings.append(view)
 
     def get_default_screen(self) -> Screen:
         return self._initial if self._initial is not None else HomeScreen()

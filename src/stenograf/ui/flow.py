@@ -13,9 +13,11 @@ CLI's bare ``--record-audio``, always the meeting folder's ``audio.wav``.
 Ordering matters twice here:
 
 - the *slow* assembly (model loading) runs on the meeting thread after the
-  screen is up — the user watches "loading models…" in the header instead of
-  a frozen launcher; the capture provider is created first so the Stop
-  binding is wired almost immediately (``view.set_stop``);
+  screen is up — the user watches the loading status in the header instead of
+  a frozen launcher; the capture provider is created *and started* first, so
+  the Stop binding is wired almost immediately (``view.set_stop``) and the
+  meeting's first seconds buffer in the provider's queue through a slow
+  (cold) model load instead of being lost;
 - the transcript is persisted at the ``finalized`` event (the same
   ``_PersistOnce`` contract as the CLI TUI path), so a force-quit on the
   "done" screen — or even mid-finalize — never loses the meeting.
@@ -33,10 +35,8 @@ from stenograf.ui.meeting import TextualLiveView
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from stenograf.settings import Settings
     from stenograf.ui.app import StenografApp
     from stenograf.ui.setup import MeetingRequest
-    from stenograf.view import LiveView
 
 
 def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView:
@@ -93,37 +93,51 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
             on_log=loaders.CaptureLog(view=view),
         )
         view.set_stop(provider.stop)  # Stop/Ctrl-C crosses to capture from here on
+        # Capture starts NOW, before the models load: the provider's frame
+        # queue is unbounded, so the meeting's first seconds buffer through a
+        # slow (cold) model load instead of being lost. The run below consumes
+        # the buffer (``provider_started=True``).
+        provider.start({p.channel for p in plans})
         tee = None
-        if request.record_audio:
-            from stenograf.recording import WavTee
+        try:
+            if request.record_audio:
+                from stenograf.recording import WavTee
 
-            out_dir.mkdir(parents=True, exist_ok=True)  # the tee is this run's first write
-            tee = WavTee(out_dir / AUDIO_NAME, {p.channel for p in plans})
-        view.status("loading models…")
-        asr, vad, diarizer = loaders.load_backends(
-            need_diarizer=any(p.num_speakers != 1 for p in plans),
-            asr_backend=settings.asr.backend,
-            asr_provider=settings.asr.provider,
-            announce=view.status,
-        )
-        reid = None
-        if diarizer is not None:
-            reid = loaders.load_reid(
-                enabled=True,
-                threshold=settings.speakers.reid_threshold,
-                store_path=settings.speakers.profile_store,
+                out_dir.mkdir(parents=True, exist_ok=True)  # the tee is this run's first write
+                tee = WavTee(out_dir / AUDIO_NAME, {p.channel for p in plans})
+            view.status("recording · loading models…")
+            asr, vad, diarizer = loaders.load_backends(
+                need_diarizer=any(p.num_speakers != 1 for p in plans),
+                asr_backend=settings.asr.backend,
+                asr_provider=settings.asr.provider,
+                announce=view.status,
             )
-        recorder = MeetingRecorder(
-            profile,
-            asr=asr,
-            vad=vad,
-            diarizer=diarizer,
-            reid=reid,
-            language=profile.language,
-            glossary_threshold=settings.vocab.glossary_threshold,
-            dedup_echo=True,
-        )
-        # Loading is done; clear the status or "loading models…" would sit in
+            reid = None
+            if diarizer is not None:
+                reid = loaders.load_reid(
+                    enabled=True,
+                    threshold=settings.speakers.reid_threshold,
+                    store_path=settings.speakers.profile_store,
+                )
+            recorder = MeetingRecorder(
+                profile,
+                asr=asr,
+                vad=vad,
+                diarizer=diarizer,
+                reid=reid,
+                language=profile.language,
+                glossary_threshold=settings.vocab.glossary_threshold,
+                dedup_echo=True,
+            )
+        except BaseException:
+            # Capture is already live but the run will never start (a load
+            # failure) — release the devices on the way out; the error itself
+            # still reaches the dismiss toast via arm_meeting's result dict.
+            provider.stop()
+            if tee is not None:
+                tee.close()
+            raise
+        # Loading is done; clear the status or the loading line would sit in
         # the header for the whole meeting (the recorder emits no status event
         # between capture start and finalize). REC/elapsed carry it from here.
         view.status("")
@@ -136,6 +150,7 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
                 checkpoint=CheckpointConfig(
                     checkpoint_writer(out_dir, basename), _LIVE_FLUSH_INTERVAL_S
                 ),
+                provider_started=True,
             )
         finally:
             if tee is not None:
@@ -146,9 +161,20 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
             # No folder name here: the header is one line and even the date-named
             # folder pushes the quit hint off an 80-column screen; the dismiss
             # toast on Home carries the full path.
+            notes_ok = True
             if request.notes:
-                _generate_notes(view, transcript, out_dir, basename, created_at, settings)
-            view.status("saved · q to close")
+                from stenograf.cli.notes import _generate_notes
+
+                notes_ok = _generate_notes(
+                    view,
+                    transcript,
+                    out_dir,
+                    basename,
+                    created_at=created_at,
+                    notes_settings=settings.notes,
+                )
+            if notes_ok:  # a notes failure keeps its header message visible
+                view.status("saved · q to close")
         return transcript
 
     result: dict[str, object] = {}
@@ -174,36 +200,6 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
                 timeout=10,
             )
 
+    app.track_meeting(view)  # quitting the whole app must not kill this thread
     app.push_screen(view.screen, finished)
     return view
-
-
-def _generate_notes(
-    view: LiveView,
-    transcript: Transcript,
-    out_dir: Path,
-    basename: str,
-    created_at: datetime,
-    settings: Settings,
-) -> None:
-    """The ``--notes`` tail, launcher-shaped: non-fatal, progress via the header.
-
-    Same contract as the CLI's ``_notes_after_run`` (PLAN.md §5 D6): the
-    transcript is already on disk, so a notes failure warns and returns —
-    rerun later with ``steno notes``. Generation goes through the shared notes
-    entry point, which owns the MLX thread-affinity guard.
-    """
-    from stenograf.cli.notes import _generate_and_write_notes
-
-    view.status("generating notes…")
-    try:
-        _generate_and_write_notes(
-            transcript,
-            out_dir,
-            basename,
-            created_at=created_at,
-            notes_settings=settings.notes,
-            on_progress=lambda message: view.status(f"notes: {message}"),
-        )
-    except Exception as exc:  # noqa: BLE001 — non-fatal by contract
-        view.error(f"notes failed: {exc} — the transcript is safe; retry with `steno notes`")

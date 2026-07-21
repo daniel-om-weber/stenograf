@@ -337,6 +337,34 @@ class TestMeetingRecorder:
         # System channel was diarized with the known remote count; mic was not.
         assert diarizer.seen_num_speakers == 2
 
+    def test_provider_started_is_not_started_a_second_time(self):
+        # start.py/flow.py begin capture before the models load (frames buffer
+        # in the provider's queue); the run must then only consume and stop the
+        # provider, never call start() again — a restart would re-spawn the
+        # capture transport mid-buffer.
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+
+        class CountingProvider(ListProvider):
+            def __init__(self, frames):
+                super().__init__(frames)
+                self.start_calls = 0
+
+            def start(self, channels: set[Channel]) -> None:
+                self.start_calls += 1
+                super().start(channels)
+
+        for live in (False, True):
+            provider = CountingProvider([frame(Channel.MIC, 0.0, pcm)])
+            provider.start({Channel.MIC})  # the caller's early start
+            recorder = MeetingRecorder(
+                MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
+            )
+            result = recorder.run(provider, live=live, provider_started=True)
+
+            assert provider.start_calls == 1, f"live={live}: run() restarted the provider"
+            assert provider.stopped
+            assert result.transcript is not None
+
     def test_reid_names_matched_cluster_and_survives_relabel(self):
         # A cluster matching a stored profile is named by re-ID and must NOT be
         # renumbered into the channel template (Remote-1) by finalize's relabel;

@@ -15,7 +15,26 @@ from __future__ import annotations
 
 
 def run_launcher() -> None:
-    """Run the launcher app until the user quits it (blocking)."""
+    """Run the launcher app until the user quits it (blocking).
+
+    Meeting threads are daemons; if the user quits the whole launcher while
+    one is still finalizing or writing notes, exiting now would kill that work
+    mid-flight. Join the stragglers — visibly, on the freed terminal — so a
+    quit never costs a transcript or the meeting's notes.
+    """
+    import sys
+
     from stenograf.ui.app import StenografApp
 
-    StenografApp().run()
+    app = StenografApp()
+    app.run()
+    pending = [view for view in app.meetings if view.meeting_running]
+    if pending:
+        print(
+            "still finishing in the background (finalize/notes) — waiting; "
+            "Ctrl-C abandons it (a finalized transcript is already on disk, "
+            "and `steno notes --last` regenerates missing notes)",
+            file=sys.stderr,
+        )
+        for view in pending:
+            view.join_meeting()

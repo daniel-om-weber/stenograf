@@ -6,11 +6,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from stenograf.output import atomic_write_text
 from stenograf.transcript import Transcript
+
+if TYPE_CHECKING:
+    from stenograf.view import LiveView
 
 
 @click.command("notes")
@@ -228,3 +232,38 @@ def _notes_after_run(
         click.secho(f"  the transcript is safe — retry with `steno notes {out_dir}`", fg="yellow")
         return
     click.echo(f"notes: wrote {', '.join(str(p) for p in written)}")
+
+
+def _generate_notes(
+    view: LiveView,
+    transcript: Transcript,
+    out_dir: Path,
+    basename: str,
+    *,
+    created_at: datetime,
+    notes_settings,
+) -> bool:
+    """The ``--notes`` tail for a run behind a live TUI: non-fatal, progress via
+    the view.
+
+    Same contract as :func:`_notes_after_run` (PLAN.md §5 D6) — the transcript
+    is already on disk, so a notes failure warns and returns ``False``; rerun
+    later with ``steno notes``. Shared by the launcher's meeting flow and the
+    ``steno start`` TUI shape, so both generate notes *while the meeting screen
+    is still up* instead of after the user quits it. Generation goes through
+    the shared entry point, which owns the MLX thread-affinity guard.
+    """
+    view.status("generating notes…")
+    try:
+        _generate_and_write_notes(
+            transcript,
+            out_dir,
+            basename,
+            created_at=created_at,
+            notes_settings=notes_settings,
+            on_progress=lambda message: view.status(f"notes: {message}"),
+        )
+    except Exception as exc:  # noqa: BLE001 — non-fatal by contract
+        view.error(f"notes failed: {exc} — the transcript is safe; retry with `steno notes`")
+        return False
+    return True
