@@ -172,11 +172,11 @@ which would silently blind the canceller.
    with (3)**: no decodeable residual to suppress. LocalVQE/DTLN-aec remain in
    §5 as the escalation path if a future device class measures differently.
 
-## 5. Open items — both RESOLVED 2026-07-12 (the echo path is fully settled)
+## 5. Open items — all RESOLVED (items 1–2 on 2026-07-12, item 3 on 2026-07-24)
 
 Both tasks 3 and 4 closed on the same finding: **a canceller with a live reference
 does not leak.** Every measured leak came from *losing* the reference. That made
-tap robustness — not suppression — the remaining work; both defects below are now
+tap robustness — not suppression — the remaining work; the defects below are now
 fixed and regression-tested.
 
 1. **The tap dies on any Python-side stall >~1 s, permanently, with no recovery.**
@@ -202,6 +202,34 @@ fixed and regression-tested.
    existing backstop and CLI warning fire. Any far-end energy (comfort noise, a
    notification sound) resets the run; an all-zero mic tick neither extends nor
    resets it.
+
+3. **A tap whose sample-counted timeline lags wall clock starves the canceller
+   permanently.** `stenocap` stamps each channel as anchor + samples emitted; a
+   device that under-delivers (drops buffers, or a Bluetooth output whose real
+   clock runs behind its nominal rate) walks that timeline behind wall clock
+   without bound. Once the lag crosses the canceller's 0.5 s reference hold
+   (`_MAX_HOLD_S`), every mic tick times out waiting for a reference that is
+   forever >0.5 s behind, and cancellation is dead for the rest of the meeting.
+   Observed 2026-07-24 in a headphone session: the once-only drift warning
+   fired at 380 ms and `reference_gap_s` covered 6108 s of a 6109 s capture —
+   while remote transcription was perfectly healthy (the frames all arrive;
+   only the mic↔reference *pairing* breaks). Headphones made it harmless (no
+   acoustic echo path), but the same failure with speakers silently disables
+   echo protection. **FIXED:** the emitter tracks (wall clock − stamped
+   timeline) per channel and, when even the *minimum* drift over a 2 s window
+   exceeds 0.25 s, shifts the channel's anchor forward by that minimum and
+   logs `re-anchored +N ms` (routine chatter, not a WARNING). The jump lands
+   downstream as a silence-padded gap, exactly like a device-rebuild
+   re-anchor, so lag stays bounded ≈0.3 s — under the hold — and pairing
+   survives indefinitely. Correcting by the windowed minimum keeps transient
+   spikes (a buffer stamped with arrival time when the device supplies no
+   host time) from ever pushing the timeline ahead, which matters because the
+   monotonic-timestamp contract forbids shifting it back. A device running
+   *fast* (persistently negative drift) would need that backward shift, so it
+   keeps the once-only WARNING. Verified against the extracted emitter with
+   synthetic hostTimes: a 5 %-slow device stays bounded at ~0.3 s with
+   forward-only steps; ±400 ms spikes every 3 s cause zero re-anchors; a fast
+   device warns once and never moves.
 
 ## 6. Sources
 

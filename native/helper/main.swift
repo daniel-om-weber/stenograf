@@ -90,11 +90,30 @@ enum Clock {
 /// Serializes frame writes from the mic and tap callbacks onto stdout, and
 /// stamps each channel against the shared clock.
 final class Emitter: @unchecked Sendable {
+    /// Persistent drift past this is corrected (or, when the correction would
+    /// need a backward jump, warned about once). Kept under the echo
+    /// canceller's 0.5 s reference hold so pairing survives between checks.
+    private static let driftLimit = 0.25
+    /// How long drift must hold past the limit before the anchor moves. A
+    /// single reading can spike — a buffer without a valid host time is
+    /// stamped with its arrival time — and a spike must never move the
+    /// timeline, because it can never be moved back.
+    private static let driftWindowSeconds = 2.0
+
+    /// The extremes of (wall clock − stamped timeline) one channel showed
+    /// since its current observation window opened.
+    private struct DriftWindow {
+        var openedAt: Double
+        var minDrift: Double
+        var maxDrift: Double
+    }
+
     private let lock = NSLock()
     private let out = FileHandle.standardOutput
     private var emitted: [UInt8: Int] = [:]
     private var anchor: [UInt8: Double] = [:]
     private var floor: [UInt8: Double] = [:]
+    private var driftWindows: [UInt8: DriftWindow] = [:]
     private var driftWarned: Set<UInt8> = []
 
     /// Forget a channel's anchor so its next buffer re-anchors on the shared
@@ -112,13 +131,16 @@ final class Emitter: @unchecked Sendable {
         }
         anchor.removeValue(forKey: code)
         emitted[code] = 0
+        driftWindows.removeValue(forKey: code)
         driftWarned.remove(code)
     }
 
     /// Append one frame of mono 16 kHz int16 samples for `channel`. `hostTime`
     /// is when the *input* buffer behind these samples was captured; it anchors
     /// the channel on first use, after which sample counting carries the
-    /// timeline (monotonic, and sample-accurate within the channel).
+    /// timeline (monotonic, and sample-accurate within the channel) — with the
+    /// anchor nudged forward when the device's delivery falls behind wall
+    /// clock (`correctDrift`).
     func emit(_ channel: ChannelCode, _ samples: UnsafeBufferPointer<Int16>, hostTime: UInt64) {
         lock.lock()
         defer { lock.unlock() }
@@ -131,18 +153,11 @@ final class Emitter: @unchecked Sendable {
             base = max(Clock.seconds(since: hostTime), floor[code, default: 0])
             anchor[code] = base
         }
-        let timestamp = base + Double(priorSamples) / SAMPLE_RATE
+        var timestamp = base + Double(priorSamples) / SAMPLE_RATE
         emitted[code] = priorSamples + samples.count
 
-        // A device that drops or repeats buffers walks its sample count away
-        // from wall clock, which silently misaligns the echo canceller. Say so
-        // once rather than emitting a plausible-looking lie forever.
-        if priorSamples > 0, !driftWarned.contains(code) {
-            let drift = Clock.seconds(since: hostTime) - timestamp
-            if abs(drift) > 0.25 {
-                driftWarned.insert(code)
-                log("WARNING channel \(code) drifted \(Int(drift * 1000)) ms from wall clock")
-            }
+        if priorSamples > 0 {
+            timestamp += correctDrift(code, base: base, timestamp: timestamp, hostTime: hostTime)
         }
 
         var header = Data(capacity: 13)
@@ -156,6 +171,59 @@ final class Emitter: @unchecked Sendable {
         }
         out.write(header)
         out.write(payload)
+    }
+
+    /// Keep a channel's sample-counted timeline from walking away from wall
+    /// clock. Returns the seconds to add to the current frame's timestamp
+    /// (0 when nothing needs correcting); the anchor is moved by the same
+    /// amount so subsequent frames stay on the corrected timeline.
+    ///
+    /// A device that drops buffers, or runs slower than its nominal rate
+    /// (Bluetooth outputs do both), delivers fewer samples than wall time
+    /// elapses, so the stamped timeline falls further and further behind.
+    /// Left alone, the lag crosses the echo canceller's 0.5 s reference hold
+    /// and the canceller pairs nothing for the rest of the meeting — observed
+    /// 2026-07-24: a headphone session drifted 380 ms and ran its entire
+    /// 102 min without a usable reference while remote transcription was fine.
+    /// The fix is a forward anchor shift; the jump lands downstream as a
+    /// silence-padded gap, exactly like a device-rebuild re-anchor.
+    ///
+    /// Correct by the observation window's *minimum* drift: only lag that
+    /// persisted through every reading in the window is real under-delivery,
+    /// and over-shifting can never be undone (the consumer rejects backward
+    /// timestamps). A device running *fast* — persistently negative drift —
+    /// would need that forbidden backward shift, so it stays a once-only
+    /// warning as before.
+    private func correctDrift(
+        _ code: UInt8, base: Double, timestamp: Double, hostTime: UInt64
+    ) -> Double {  // holding lock
+        let wall = Clock.seconds(since: hostTime)
+        let drift = wall - timestamp
+        guard var window = driftWindows[code] else {
+            driftWindows[code] = DriftWindow(openedAt: wall, minDrift: drift, maxDrift: drift)
+            return 0
+        }
+        window.minDrift = min(window.minDrift, drift)
+        window.maxDrift = max(window.maxDrift, drift)
+        if wall - window.openedAt < Self.driftWindowSeconds {
+            driftWindows[code] = window
+            return 0
+        }
+        let shift = window.minDrift > Self.driftLimit ? window.minDrift : 0
+        driftWindows[code] = DriftWindow(
+            openedAt: wall, minDrift: drift - shift, maxDrift: drift - shift)
+        if shift > 0 {
+            anchor[code] = base + shift
+            log("channel \(code) re-anchored +\(Int(shift * 1000)) ms "
+                + "— device delivered fewer samples than wall clock; gap padded")
+            return shift
+        }
+        if window.maxDrift < -Self.driftLimit, !driftWarned.contains(code) {
+            driftWarned.insert(code)
+            log("WARNING channel \(code) drifted \(Int(window.maxDrift * 1000)) ms "
+                + "ahead of wall clock (device delivering too many samples)")
+        }
+        return 0
     }
 }
 
@@ -358,8 +426,9 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter) -> 
     // sample-counted timestamps off the shared clock (measured: ERLE collapses
     // to ~1 dB and the canceller starves). Trust the device doing the delivering.
     // Read once per aggregate build; the pinned device *vanishing* rebuilds
-    // this whole session (TapSupervisor), and a rate change on a still-present
-    // pinned device — rare — still surfaces through the drift warning.
+    // this whole session (TapSupervisor), and a rate mismatch on a
+    // still-present pinned device — a Bluetooth device's real clock straying
+    // from its nominal rate — is absorbed by the emitter's drift correction.
     var sampleRate = asbd.mSampleRate
     var aggRate = 0.0
     var rateSize = UInt32(MemoryLayout<Double>.size)
