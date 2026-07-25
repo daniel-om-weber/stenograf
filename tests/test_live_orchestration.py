@@ -483,7 +483,7 @@ class _SpyView(LiveView):
 
 
 class TestLivePassCpuProxy:
-    """PLAN.md Task 7: the CPU-proxy regression — a decode counter and monotonicity,
+    """The CPU-proxy regression — a decode counter and monotonicity,
     asserted through the wired ``MeetingRecorder.run(live=True)`` path (not just the
     decoder in isolation), so a future orchestration change can't quietly re-decode
     in silence or rewrite committed captions."""
@@ -495,7 +495,7 @@ class TestLivePassCpuProxy:
 
     def test_zero_window_decodes_during_silence(self):
         # The VAD reports no speech, so the whole live pass must run no ASR — the
-        # ~0% accelerator-in-silence budget (PLAN.md §5). We snapshot the decode
+        # ~0% accelerator-in-silence budget. We snapshot the decode
         # count at the finalize hand-off, before the on-stop finalize decodes.
         asr = CountingASR()
         spy = _SpyView(asr)
@@ -520,7 +520,7 @@ class TestLivePassCpuProxy:
 
 
 class TestFinalizeReuse:
-    """The on-stop finalize reuses the window pass's decodes (PLAN: halve total ASR)."""
+    """The on-stop finalize reuses the window pass's decodes (halving total ASR)."""
 
     def _recorder(self, asr) -> MeetingRecorder:
         return MeetingRecorder(

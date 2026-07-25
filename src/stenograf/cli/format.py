@@ -24,8 +24,7 @@ def _report_speaker_counts(counts) -> None:
 
     Explicit counts are echoed as given; an auto-detected count shows what the
     finalize found and the exact flag to lock or correct it by re-running over
-    the retained/recorded audio (PLAN.md §5 Stage 3a — a wrong estimate is never
-    fatal, just re-run finalize)."""
+    the retained/recorded audio (just re-run finalize)."""
     if not counts:
         click.echo("speakers: none found")
         return
@@ -57,7 +56,7 @@ def _lock_hint(detected: int, max_settable: int) -> tuple[int, bool] | None:
     range (an over-cluster artifact of unconstrained clustering — the displayed
     count stays the raw estimate; only the suggested lock value is capped).
     ``None`` when no speaker was found (``detected < 1``), so a silent channel never
-    produces a nonsensical ``--local 0`` hint (PLAN.md §5 Phase 3→4 audit)."""
+    produces a nonsensical ``--local 0`` hint."""
     if detected < 1:
         return None
     if detected > max_settable:

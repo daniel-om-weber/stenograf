@@ -1,6 +1,6 @@
 """Check setup — ``steno doctor``'s report in a scrollable screen.
 
-Phase 7, Task 5 (PLAN.md §5). The checks run in a ``@work(thread=True)``
+The checks run in a ``@work(thread=True)``
 worker (they probe helpers, model caches, and — on some platforms — spawn
 subprocesses; maintainability rule 1), then the full report renders at once:
 ``run_checks`` returns a finished list, so there is nothing to stream. The

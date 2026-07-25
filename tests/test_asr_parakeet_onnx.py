@@ -3,7 +3,7 @@
 The real model is a ~2.4 GB download, so ``transcribe`` is exercised against
 a fake onnx-asr adapter returning the token/timestamp lists the real one
 produces; MLX↔ONNX agreement on real audio is the eval harness's job
-(eval/parity.py, PLAN.md Phase 5 verification).
+(eval/parity.py).
 """
 
 from __future__ import annotations

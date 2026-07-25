@@ -1,6 +1,6 @@
 """Diarization Error Rate + word-attribution scoring for stenograf's diarizer.
 
-Phase 3, Task 0d (PLAN.md §5): the gating measurement. Nothing speaker-centric —
+The gating measurement. Nothing speaker-centric —
 re-ID threshold tuning, diarization upgrades — is measurable without a
 speaker-labeled reference and a scorer, so this is the long pole.
 

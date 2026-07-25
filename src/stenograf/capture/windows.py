@@ -7,7 +7,7 @@ capture streams for both channels —
 - mic    → the default input device
 - system → loopback capture on the default output device
 
-**Decision D (PLAN.md §5 Phase 6) resolved to ``soundcard``** over
+**Decision D resolved to ``soundcard``** over
 ``pyaudiowpatch``, spiked on real hardware (Windows 11 notebook, 2026-07-11):
 one API covers mic and loopback, and it initializes WASAPI with
 ``AUTOCONVERTPCM | SRC_DEFAULT_QUALITY``, so Windows resamples server-side to

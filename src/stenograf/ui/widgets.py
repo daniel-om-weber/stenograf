@@ -1,8 +1,7 @@
 """Shared launcher widgets: the keyboard-navigation subclasses.
 
 Textual's defaults leave arrow keys dead or surprising in exactly the places
-a form user reaches for them (PLAN.md §5 Phase 7 — the launcher is for people
-who don't live in a terminal):
+a form user reaches for them:
 
 - a scroll container binds the arrows to *scrolling*, and those bindings sit
   between the focused field and the screen, so arrows in a form scroll the

@@ -2,7 +2,7 @@
 
 The finalize pass never feeds raw sliding windows to the ASR model: Silero
 VAD finds speech, and ``pack_windows`` merges adjacent speech runs into
-windows of at most ~30 s that always cut in silence (PLAN.md §2).
+windows of at most ~30 s that always cut in silence.
 """
 
 from __future__ import annotations

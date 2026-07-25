@@ -1,6 +1,6 @@
 """Fully local, in-process notes backend: mlx-lm on Apple Silicon.
 
-The zero-install default on macOS (PLAN.md §5 Stage D): mlx-lm ships with
+The zero-install default on macOS: mlx-lm ships with
 stenograf under the same platform marker as the parakeet ASR backend, and the
 model downloads into the Hugging Face cache on first use — no server, no
 daemon, no ``ollama pull``.

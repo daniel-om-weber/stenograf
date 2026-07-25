@@ -1,7 +1,7 @@
 """The live-caption meeting screen — the second :class:`~stenograf.view.LiveView`.
 
 Built as a standalone Textual app in Phase 2, Task 6; converted to a
-:class:`~textual.screen.Screen` in Phase 7, Task 2 (PLAN.md §5) so one
+:class:`~textual.screen.Screen` in Phase 7, Task 2 so one
 codepath serves two entries:
 
 - **``steno start``** runs :class:`~stenograf.ui.app.StenografApp` with this

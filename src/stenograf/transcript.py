@@ -70,7 +70,7 @@ class Transcript:
     parameters: ResolvedParameters | None = None
     """How each meeting parameter was resolved (explicit/detected/default),
     written back so the persisted transcript records provenance, not just the
-    collapsed value (PLAN.md §5 Task 3b). ``None`` on crash checkpoints, which
+    collapsed value. ``None`` on crash checkpoints, which
     predate the authoritative finalize that resolves the parameters."""
 
     def to_json(self) -> str:
@@ -97,7 +97,7 @@ class Transcript:
         compat: a missing ``version`` is treated as legacy v1; unknown keys are
         ignored so a v1 reader tolerates additive fields; a ``version`` newer than
         this build raises :class:`UnsupportedTranscriptVersion`. Underpins
-        ``steno notes`` reading a written transcript back (PLAN.md §5 Stage A1)."""
+        ``steno notes`` reading a written transcript back."""
         obj = json.loads(data)
         version = obj.get("version", 1)
         if version > SCHEMA_VERSION:

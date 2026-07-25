@@ -6,7 +6,7 @@ into a live meeting. It:
 1. consumes ``AudioFrame`` objects from any :class:`CaptureProvider`,
 2. accumulates each channel's PCM in a bounded in-RAM store (never disk),
 3. on stop, runs the finalize pass **per channel** with that channel's known
-   speaker count — the biggest diarization accuracy lever (PLAN.md §2) — then
+   speaker count — the biggest diarization accuracy lever — then
 4. interleaves the two channels' entries into one timeline, labelling the mic
    channel ``Local-N`` and the system channel ``Remote-N``.
 
@@ -18,7 +18,7 @@ whole orchestrator is exercisable without native capture.
 Speaker bleed (remote audio leaving the speakers and re-entering the mic) is an
 echo-cancellation problem, handled upstream of this store against the system
 channel as the far-end reference. AEC never removes all of it, so cross-channel
-text dedup at merge time is the backstop (PLAN.md §2 "Hybrid-mode caveats").
+text dedup at merge time is the backstop.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ _CHANNEL_LABEL = {Channel.MIC: "Local-{n}", Channel.SYSTEM: "Remote-{n}"}
 # Channel-coarse labels for the crash checkpoints (live committed text or the
 # batch tail finalize): the checkpoint is not diarized, so it can only say which
 # channel spoke, not which speaker. The on-stop finalize replaces these with the
-# diarized ``Local-N``/``Remote-M`` labels (PLAN.md §3 Option B).
+# diarized ``Local-N``/``Remote-M`` labels.
 _CHANNEL_COARSE = {Channel.MIC: "Local", Channel.SYSTEM: "Remote"}
 
 
@@ -180,7 +180,7 @@ class SpeakerCount:
     ``requested`` is the plan's ``num_speakers`` (``None`` = estimated),
     ``detected`` the number of distinct speakers in the finalized transcript.
     Surfaced so the user can see an auto-detected count and, if it is wrong,
-    re-run finalize with an explicit count (PLAN.md §5 Stage 3a)."""
+    re-run finalize with an explicit count."""
 
     channel: Channel
     requested: int | None
@@ -220,7 +220,7 @@ def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
     recorded unless there is explicitly no local speaker (``local_speakers == 0``,
     a listen-only session); the system tap unless the meeting is in-room
     (``remote_speakers == 0``). Both channels estimate an unknown count: local
-    estimation is far-field and weaker than remote (PLAN.md §2), so the finalize
+    estimation is far-field and weaker than remote, so the finalize
     surfaces the detected count as editable. ``MeetingProfile`` forbids both
     counts being 0, so at least one channel is always planned.
     """
@@ -246,9 +246,9 @@ def resolve_parameters(
     given, else the LID result, else ``None``); ``speaker_counts`` are the
     per-channel requested-vs-detected counts. Explicit profile values are tagged
     ``explicit``, otherwise a detected value is ``detected``, otherwise the
-    parameter is left at a ``default`` — see :func:`~stenograf.config.resolve_value`
-    (PLAN.md §5 Task 3b). Both channels are always recorded so an explicit ``0``
-    ("this channel is off") is captured too.
+    parameter is left at a ``default`` — see
+    :func:`~stenograf.config.resolve_value`. Both channels are always recorded
+    so an explicit ``0`` ("this channel is off") is captured too.
     """
     detected = {c.channel: c.detected for c in speaker_counts}
     return ResolvedParameters(
@@ -385,7 +385,7 @@ straight to the worker."""
 
 @dataclass(frozen=True)
 class CheckpointConfig:
-    """Crash-checkpoint wiring (PLAN.md §3 Option B).
+    """Crash-checkpoint wiring.
 
     ``write`` receives each coalesced checkpoint transcript (the CLI wires the
     ``.partial`` writer here); ``interval`` is the seconds of captured audio
@@ -528,7 +528,7 @@ class LiveWorker(threading.Thread):
     window and :meth:`~stenograf.live.LiveDecoder.flush`\\ es each decoder to
     force-commit the tail.
 
-    Option B checkpointing (PLAN.md §3): every ``flush_interval`` seconds of
+    Option B checkpointing: every ``flush_interval`` seconds of
     processed audio the worker calls ``on_flush`` — a zero-inference hook that
     snapshots the decoders' already-committed text to ``.partial``. Doing it here,
     on the same thread that owns the decoders, needs no lock and never runs the
@@ -610,7 +610,7 @@ class LiveWorker(threading.Thread):
         decoder's window and restart at the recent edge, feeding only the last
         ``window_cap`` seconds: the skipped span becomes a caption *gap* (the
         finalize pass fills it on stop), not an ever-growing decode. Returns the
-        (possibly advanced) start second to feed from (PLAN.md §5, Task 0f)."""
+        (possibly advanced) start second to feed from (Task 0f)."""
         cap = self._decoders[channel].window_cap
         if mark - start <= cap:
             return start
@@ -652,7 +652,7 @@ class _TailCheckpointer(threading.Thread):
     :meth:`MeetingRecorder.finalize` diarizes the whole buffer and supersedes
     it. On close the worker exits without finalizing the final sub-interval
     tail — a clean stop supersedes the checkpoint anyway, and a crash is
-    defined to lose at most one interval of finalized text (PLAN.md §3).
+    defined to lose at most one interval of finalized text.
 
     Depends on the recorder only through the two bound callables, so it can be
     driven (and tested) without one.
@@ -793,7 +793,7 @@ class MeetingRecorder:
         the mic exactly as captured, and no transcript lines should vanish. Even
         when True the backstop only *arms* if the canceller reported losing its
         reference (finalize's ``reference_gap_s``): a healthy canceller leaks
-        nothing the ASR can decode (measured across the PLAN-AEC.md scenario
+        nothing the ASR can decode (measured across the AEC scenario
         matrix), so in the healthy case the backstop's one false-positive class —
         the local speaker verbatim-repeating the remote — can never fire."""
         self.language = language or profile.language
@@ -838,7 +838,7 @@ class MeetingRecorder:
         — ``status`` / ``language`` / ``finalizing`` / ``finalized`` /
         ``error`` — around the capture and finalize passes.
 
-        Both modes checkpoint for crash recovery (PLAN.md §3 Option B), if a
+        Both modes checkpoint for crash recovery, if a
         :class:`CheckpointConfig` is given, coalesced to its ``interval`` seconds
         of capture — but never any inference the mode does not already do. Live:
         the already-committed live text is flushed as-is (zero inference). Batch:
@@ -881,7 +881,7 @@ class MeetingRecorder:
         ends the meeting cleanly), but the crash checkpoint is a separate
         :class:`_TailCheckpointer` fed via an :class:`AudioBus`: it finalizes only
         the newest tail each interval, off this thread, so it neither stalls
-        capture nor re-finalizes the whole buffer (PLAN.md §3 Option B).
+        capture nor re-finalizes the whole buffer.
         """
         channels = [p.channel for p in plans]
         checkpointing = checkpoint is not None and checkpoint.enabled
@@ -947,9 +947,9 @@ class MeetingRecorder:
         :class:`LiveWorker` drives a :class:`~stenograf.live.LiveDecoder` per
         channel and streams updates to the view. On stop the worker is joined
         and the full finalize pass runs — it replaces the whole live transcript,
-        so live compromises never reach the final output (PLAN.md §2).
+        so live compromises never reach the final output.
 
-        Option B checkpointing (PLAN.md §3): the worker flushes the decoders'
+        Option B checkpointing: the worker flushes the decoders'
         already-committed text to ``checkpoint.write`` every ``checkpoint.interval``
         seconds — pure file I/O, no extra inference, since the live pass already
         produced that text. Empty flushes (nothing committed yet) are skipped so a
@@ -1196,7 +1196,7 @@ class MeetingRecorder:
         entries = [entry for plan in plans for entry in by_channel.get(plan.channel, [])]
         interleaved = interleave(entries)
         # Snap domain vocabulary / attendee names to canonical spelling on the
-        # authoritative transcript only (checkpoints stay raw — PLAN.md §5 Task 2b).
+        # authoritative transcript only (checkpoints stay raw).
         interleaved = apply_glossary(
             interleaved,
             glossary=self.profile.glossary,
@@ -1324,7 +1324,7 @@ class MeetingRecorder:
         view: LiveView,
     ) -> Language | None:
         """Resolve the meeting language: an explicit user setting always wins,
-        else LID over the finalized text (PLAN.md §2 "auto-detect once"). The
+        else LID over the finalized text. The
         result rides on the returned transcript, never on the recorder."""
         if self.language is not None:
             return self.language

@@ -1,4 +1,4 @@
-"""Repeatable echo-path runs on real hardware (PLAN-AEC.md §3, layer 1).
+"""Repeatable echo-path runs on real hardware (layer 1).
 
 Drives the *real* pipeline — native capture helper, speakers, mic, AEC — through
 one scenario and scores both layers:

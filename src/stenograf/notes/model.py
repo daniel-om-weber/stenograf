@@ -2,7 +2,7 @@
 
 Kept apart from :class:`~stenograf.transcript.Transcript` on purpose: notes are
 derivative, regenerable output, written as sibling ``.notes.md``/``.notes.json``
-files so the transcript schema stays pure (PLAN.md §5 Stage D).
+files so the transcript schema stays pure.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class NotesProvenance:
 class MeetingNotes:
     title: str
     """LLM-derived when the meeting had none — flows into the combined-note
-    export filename (PLAN.md §5 Stage D6)."""
+    export filename."""
     summary: str
     decisions: tuple[str, ...] = ()
     action_items: tuple[ActionItem, ...] = ()

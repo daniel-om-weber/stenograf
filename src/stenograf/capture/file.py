@@ -7,8 +7,8 @@ order, matching what a real provider delivers.
 
 By default it emits as fast as the consumer reads (batch finalize dev/test).
 With ``paced=True`` it releases each frame at its wall-clock timestamp, so
-``--replay`` exercises the live pass at genuine meeting cadence (PLAN.md §5
-Task 3) — the property that stresses the LiveWorker's real-time behaviour.
+``--replay`` exercises the live pass at genuine meeting cadence — the property
+that stresses the LiveWorker's real-time behaviour.
 """
 
 from __future__ import annotations

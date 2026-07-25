@@ -2,7 +2,7 @@
 
 A speaker *profile* is a named mean voice embedding saved across meetings, so a
 cluster the diarizer finds in this meeting can be matched to "Daniel" enrolled
-from an earlier one (PLAN.md §2 "Cross-meeting speaker re-ID"). The diarizer only
+from an earlier one. The diarizer only
 labels voices *within* one run (``S0``/``S1``…); the profile store is what carries
 identity *between* runs.
 
@@ -11,14 +11,14 @@ Two facts shape the design:
 - **Embeddings are model-bound.** A vector only means anything relative to the
   model that produced it, so every profile records its embedding-model id and a
   match is only ever attempted between vectors from the *same* model. Swapping the
-  embedding model (PLAN.md's ResNet293-LM upgrade path) simply starts a fresh,
+  embedding model simply starts a fresh,
   disjoint set of profiles rather than silently mis-matching.
 - **Profiles are precious user data, not a re-downloadable cache.** The store
   lives in the platform *data* dir (separate from ``models.cache_dir``) and writes
   atomically, so a crash mid-save never corrupts the library.
 
 The store and the cosine match live here, in the core — deliberately *not* in the
-diarizer (PLAN.md §2, [[phase3-verified-library-constraints]]): sherpa's
+diarizer ([[phase3-verified-library-constraints]]): sherpa's
 ``OfflineSpeakerDiarization`` exposes no embeddings, so the diarizer's job ends at
 ``diarize_with_embeddings`` handing back a per-cluster mean vector; turning those
 into names is this module's job.
@@ -40,7 +40,7 @@ from stenograf.output import atomic_write_text
 
 DEFAULT_THRESHOLD = 0.5
 """Cosine similarity at or above which a cluster is deemed the same speaker as a
-stored profile. ~0.5 is PLAN.md's starting point for the shipped eres2net
+stored profile. ~0.5 is the starting point for the shipped eres2net
 embedding. It stays at this default rather than being empirically tuned: tuning
 needs the hand-labelled 0d reference data, which is not being produced. Override
 per run with ``--reid-threshold`` (``steno start``/``transcribe``)."""
@@ -53,7 +53,7 @@ _STORE_VERSION = 1
 # array is ambiguous" and ``hash`` raises "unhashable type: ndarray". Identity
 # semantics are what the store actually uses (``remove``/``_replace`` match by
 # ``is``, names are unique per model), and they keep a profile safe to put in a set
-# or dict key — which a Phase-4 web UI will do (PLAN.md §5 Phase 3→4 audit).
+# or dict key — which a Phase-4 web UI will do.
 @dataclass(frozen=True, eq=False)
 class SpeakerProfile:
     """A named voice, identified by a unit-norm mean embedding under one model.

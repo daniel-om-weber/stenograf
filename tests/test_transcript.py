@@ -221,7 +221,7 @@ def test_timestamp_formats_hours():
     assert "01:01:01.500 --> 01:01:01.900" in transcript.to_vtt()
 
 
-# --- Transcript.from_json round-trip (PLAN.md §5 Stage A1) ---------------------
+# --- Transcript.from_json round-trip ---------------------
 
 _ROUNDTRIP_CASES = {
     "words_present_and_provisional": make_transcript,

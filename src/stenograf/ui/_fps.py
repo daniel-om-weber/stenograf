@@ -1,6 +1,6 @@
 """Pin Textual's frame cap low — import this before anything else textual.
 
-The minimal-redraw budget (PLAN.md §5, Phase 2 Task 6) caps Textual at 15 fps.
+The minimal-redraw budget (Phase 2 Task 6) caps Textual at 15 fps.
 The cap is import-order-sensitive: textual reads ``TEXTUAL_FPS`` once, at
 import, into ``constants.MAX_FPS`` and ``Screen.UPDATE_PERIOD`` — so the env
 var must be set before textual is imported. Both textual entry points

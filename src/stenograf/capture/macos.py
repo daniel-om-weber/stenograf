@@ -4,7 +4,7 @@ The helper (``stenocap``) captures system audio via a Core Audio process tap
 and the mic via AVAudioEngine, resamples both to mono 16 kHz int16, and streams
 them as framed PCM over its stdout. This provider spawns it, parses the frames
 into :class:`AudioFrame` objects, and terminates it on stop. No Python package
-exposes the process-tap API, which is why the native helper exists (PLAN.md §2).
+exposes the process-tap API, which is why the native helper exists.
 
 Wire protocol (helper → us), little-endian, stdout carries frames only
 (status/errors go to the helper's stderr):

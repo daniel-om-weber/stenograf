@@ -4,7 +4,7 @@ A package of one module per command (plus ``run`` for the flag+settings
 resolution the commands share and ``format`` for the human-facing rendering
 helpers); this ``__init__`` only assembles the click group. Domain logic
 lives in the library — each command body resolves its inputs and makes
-library calls (PLAN-CLEANUP.md C7).
+library calls.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def main(ctx: click.Context) -> None:
         if sys.platform == "win32" and hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
 
-    # Bare `steno` in a terminal opens the launcher (PLAN.md §5, Phase 7); in a
+    # Bare `steno` in a terminal opens the launcher (Phase 7); in a
     # pipe or script it prints help instead — Textual needs a real TTY, and a
     # script author hitting this by accident wants the usage text, not an app.
     if ctx.invoked_subcommand is None:

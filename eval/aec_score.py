@@ -1,4 +1,4 @@
-"""Score an ``--aec-dump`` triple: how much echo went, at what cost (PLAN-AEC.md §3).
+"""Score an ``--aec-dump`` triple: how much echo went, at what cost.
 
 Takes the mic/lpb/enh directory a ``steno start --aec-dump DIR`` run wrote and
 reports the layer-0 signal metrics:

@@ -1,6 +1,6 @@
 """Meeting notes: LLM-generated summaries over finalized transcripts.
 
-Stage D of the Phase 4 product layer (PLAN.md §5). The LLM is a *backend
+Stage D of the Phase 4 product layer. The LLM is a *backend
 choice*, not a dependency: prompt building, chunking, the output schema, and
 parsing all live here and are shared by every backend, so a provider is one
 line of configuration — the in-process ``mlx`` backend (ships with stenograf

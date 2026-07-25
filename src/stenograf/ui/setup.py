@@ -1,6 +1,6 @@
 """Meeting setup — the few choices that matter before capture starts.
 
-Phase 7, Task 3 (PLAN.md §5). The launcher's pre-meeting form, one concept per
+The launcher's pre-meeting form, one concept per
 control: which sources to capture (two switches), whether to tell speakers
 apart (the diarization switch — the per-channel counts only appear while it is
 on), language, an optional title, the audio-recording opt-in, and the notes

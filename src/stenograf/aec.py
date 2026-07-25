@@ -26,7 +26,7 @@ Two properties of AEC3 shape the design:
   hint. Feeding a deliberately wrong 500 ms hint measured the same 26 dB ERLE as
   the correct 25 ms, so the constant below is a nicety, not a load-bearing value.
 
-Measured across the PLAN-AEC.md scenario matrix (quiet/loud, batch/live,
+Measured across the AEC scenario matrix (quiet/loud, batch/live,
 built-in/Bluetooth, double-talk), a canceller with a live reference leaks
 nothing the ASR decodes. What residual echo survives comes from *losing* the
 reference — a stalled or mis-clocked tap. Loss arrives in two shapes, and
@@ -76,7 +76,7 @@ _DEAD_TAP_S = 30.0
 dead tap, not a quiet meeting: a live tap carries the meeting app's dither and
 comfort noise, and the mic always carries its own noise floor. Zeros are what
 the known long-session tap failure delivers — frames keep arriving, so absent-
-frame counting alone never notices (PLAN-AEC.md §5)."""
+frame counting alone never notices."""
 
 
 class _Track(GapPaddedBuffer):
@@ -259,7 +259,7 @@ class EchoCanceller:
         long-session failure keeps delivering frames of bit-exact-zero PCM, so
         without this check the counter stays 0, the text backstop never arms,
         and AEC3 adapts against silence while echo passes straight through to
-        the ASR (PLAN-AEC.md §5). A zero reference tick extends the run only
+        the ASR. A zero reference tick extends the run only
         while the mic tick is non-zero (an all-zero mic is no evidence either
         way — it neither extends nor resets); any far-end energy resets it.
         A run that reaches ``_DEAD_TAP_S`` lands in ``far_end_missing_ticks``

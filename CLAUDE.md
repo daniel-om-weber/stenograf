@@ -1,11 +1,16 @@
 # stenograf — instructions for Claude Code
 
 Meeting transcription pipeline: capture → live captions (TUI) → finalize
-(diarized transcript) → notes. Shipped on PyPI as `stenograf` 0.1.0. Full
-history, current state, and the active plan live in `PLAN.md` (§5 = phase
-plan); echo-cancellation deep-dive in `PLAN-AEC.md`; code-cleanup backlog
-(behavior-preserving refactors, worked pass by pass) in `PLAN-CLEANUP.md`. Use the `verify` skill
-to run/observe the tool without live capture hardware.
+(diarized transcript) → notes. Shipped on PyPI as `stenograf`.
+
+`PLAN.md` holds **only unbuilt work** — the active plan is Phase 8 (a native
+Qt Quick GUI), plus the open platform items and the declined list. Everything
+shipped, including the architecture and model-choice research, the AEC design
+and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
+history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
+`PLAN-CLEANUP.md`). Measured evidence for the shipped defaults is in
+`eval/README.md`; design rationale lives in the code's own docstrings. Use the
+`verify` skill to run/observe the tool without live capture hardware.
 
 ## Product philosophy (LOCKED — don't re-litigate)
 
@@ -31,12 +36,11 @@ the index.
 
 ## Current focus: Phase 5 — Linux (ACTIVE since 2026-07-10)
 
-Two machines, sequenced (details in PLAN.md §5 "Development-environment
-plan"): ONNX ASR backend on the Mac first (only place the MLX↔ONNX parity
+Two machines, sequenced: ONNX ASR backend on the Mac first (only place the MLX↔ONNX parity
 harness runs), then capture work moves to the CachyOS notebook (x86_64,
 real PipeWire); GitHub Actions Ubuntu is the stable-distro CI reference.
 
-## Platform decisions not recorded in PLAN.md
+## Platform decisions
 
 - **Notes backends per platform** (researched 2026-07-10): macOS = mlx-lm,
   pinned to the 0.29 line (0.30+ requires transformers>=5 which is
@@ -49,7 +53,7 @@ real PipeWire); GitHub Actions Ubuntu is the stable-distro CI reference.
   wheel friction as Linux.** onnxruntime-genai-directml was rejected
   (DX12-GPU-only on the EOL DirectML EP; coexistence with our
   onnxruntime-directml would actually have been fine — it depends on the
-  same flavor). Details: PLAN.md §5 Phase 6 Track D.
+  same flavor).
 - **MLX on background threads**: materialize weights on the load thread or
   inference dies with "no Stream(gpu, 0)"; verify MLX-threading changes
   against the real backend, not mocks.

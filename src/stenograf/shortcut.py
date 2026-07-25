@@ -1,4 +1,4 @@
-"""Double-clickable desktop launcher (PLAN.md §5, Phase 7 Task 6).
+"""Double-clickable desktop launcher (Phase 7 Task 6).
 
 ``steno setup`` drops a shortcut that opens the bare-``steno`` launcher TUI in
 the platform's terminal, so after the one-time setup nobody has to type a

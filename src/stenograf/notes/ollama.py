@@ -2,7 +2,7 @@
 
 No ``ollama`` pip dependency — the three endpoints we need (`/api/version`,
 `/api/tags`, `/api/chat`) are a handful of ``urllib`` calls, and staying
-stdlib keeps the reserved ``stenograf[ollama]`` extra empty (PLAN.md §5 D2).
+stdlib keeps the reserved ``stenograf[ollama]`` extra empty.
 """
 
 from __future__ import annotations

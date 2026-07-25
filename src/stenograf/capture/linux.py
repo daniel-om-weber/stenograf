@@ -9,7 +9,7 @@ format (mono 16 kHz s16le). One subprocess per channel:
 - mic    → ``--device=@DEFAULT_SOURCE@``  (the default input device)
 - system → ``--device=@DEFAULT_MONITOR@`` (the default output's monitor)
 
-Decision B (PLAN.md §5 Phase 5 sub-plan) was settled on the CachyOS notebook
+Decision B was settled on the CachyOS notebook
 (PipeWire 1.6.7) against the SoundCard ``include_loopback`` candidate: parec
 adds no Python dependency, mirrors the macOS helper's subprocess-streaming
 architecture, and measured a clean ~86 ms delivery cadence where SoundCard

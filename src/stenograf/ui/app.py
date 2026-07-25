@@ -1,6 +1,6 @@
 """The launcher application shell.
 
-Phase 7, Task 1 (PLAN.md §5). One long-lived :class:`StenografApp`; each
+One long-lived :class:`StenografApp`; each
 workflow is a :class:`~textual.screen.Screen` pushed onto its stack (Home is
 the default). The app owns the minimal-redraw budget for every screen: the
 frame cap is pinned by the :mod:`stenograf.ui._fps` import below (which must
@@ -37,7 +37,7 @@ else:
 class StenografApp(App[None]):
     """Screen-stack shell: mounts Home, or a caller-supplied root screen.
 
-    ``initial`` is the second entry mode (PLAN.md §5, Phase 7): ``steno start``
+    ``initial`` is the second entry mode (Phase 7): ``steno start``
     runs this same app with the meeting screen as its root, so the CLI and the
     launcher share one codepath. A root screen sits at the bottom of the stack
     and cannot be popped — dismissing it exits the app (``MeetingScreen._leave``).

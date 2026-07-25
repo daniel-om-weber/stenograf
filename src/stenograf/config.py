@@ -24,7 +24,7 @@ class Provenance(StrEnum):
     safe default): once a parameter is filled, its value alone no longer says
     whether the user set it, the finalize pass detected it, or it fell to a
     default. Recording the provenance next to the value keeps that distinction
-    on the persisted transcript (PLAN.md §5 Task 3b)."""
+    on the persisted transcript."""
 
     EXPLICIT = "explicit"  # the user set it
     DETECTED = "detected"  # the finalize pass auto-detected/estimated it
@@ -64,7 +64,7 @@ class ResolvedParameters:
     "Detected: German, 2 remote speakers" editability made durable. ``speakers`` is
     keyed by channel (``mic``/``system`` for a meeting, ``audio`` for a file
     transcribe); meeting-mode provenance is deferred with mode auto-detection
-    (PLAN.md §5 Task 3b)."""
+."""
 
     language: ResolvedValue
     speakers: dict[str, ResolvedValue] = field(default_factory=dict)
@@ -93,7 +93,7 @@ class MeetingProfile:
     """Override for the cross-meeting re-ID profile store; ``None`` = default store."""
     title: str | None = None
     """Human-readable meeting title. Fed to the notes prompt and the combined-note
-    export filename (PLAN.md §5 Stage A2); ``None`` = untitled."""
+    export filename; ``None`` = untitled."""
 
     def __post_init__(self) -> None:
         for name in ("local_speakers", "remote_speakers"):

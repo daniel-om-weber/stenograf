@@ -167,7 +167,7 @@ class TestPlanChannels:
 
     def test_unknown_local_estimates(self):
         # Unspecified --local now estimates on the mic (symmetric with --remote),
-        # not "assume one local user" — PLAN.md §5 Stage 3a. The far-field estimate
+        # not "assume one local user". The far-field estimate
         # is weaker, so the finalize surfaces the detected count as editable.
         plans = plan_channels(MeetingProfile(remote_speakers=2))
         assert plans[0] == ChannelPlan(Channel.MIC, None, "Local-{n}")
@@ -466,7 +466,7 @@ class TestMeetingRecorder:
         # Local unspecified (estimate), remote given as 2. The diarizer finds two
         # clusters on each channel; speaker_counts must carry requested=None for the
         # estimated mic (with the detected count) and requested=2 for the given
-        # system channel (PLAN.md §5 Stage 3a surfacing).
+        # system channel.
         pcm = np.ones(2 * SAMPLE_RATE, dtype=np.int16)
         provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
         diarizer = FakeDiarizer([SpeakerTurn("S0", 0.0, 1.0), SpeakerTurn("S1", 1.0, 2.0)])
@@ -483,7 +483,7 @@ class TestMeetingRecorder:
 
     def test_finalize_writes_parameter_provenance_onto_the_transcript(self):
         # The resolved parameters ride on the returned transcript so the persisted
-        # artifact records provenance, not just the collapsed value (PLAN.md §5 3b):
+        # artifact records provenance, not just the collapsed value:
         # explicit language, estimated local count, given remote count.
         pcm = np.ones(2 * SAMPLE_RATE, dtype=np.int16)
         provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])

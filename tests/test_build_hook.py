@@ -1,4 +1,4 @@
-"""Unit tests for the wheel build hook (hatch_build.py, PLAN.md Stage E1).
+"""Unit tests for the wheel build hook (hatch_build.py).
 
 The hook lives at the repo root (it is the hatchling entry point, not package
 code), so it is loaded by path rather than imported.

@@ -1,6 +1,6 @@
 """Live-caption views: the event interface + a plain-stdout implementation.
 
-Phase 2, Task 5 (PLAN.md §5). The live pass (``LiveWorker`` → ``LiveDecoder``)
+The live pass (``LiveWorker`` → ``LiveDecoder``)
 emits a stream of events — committed words, a provisional grey tail, and the
 out-of-band notices (status, language lock, the finalize hand-off). A
 :class:`LiveView` is the sink for those events; a concrete view renders them
@@ -12,7 +12,7 @@ Textual TUI (Task 6) is a second :class:`LiveView` behind the same interface.
 Live captions are **channel-coarse**: the live pass does not diarize, so it can
 only say which channel spoke (``You`` = mic/local, ``Remote`` = system audio).
 The on-stop finalize replaces the whole live transcript with diarized
-``Local-N``/``Remote-M`` speakers (PLAN.md §2), surfaced via :meth:`finalized`.
+``Local-N``/``Remote-M`` speakers, surfaced via :meth:`finalized`.
 In a non-TTY stream the captions already printed cannot be rewritten, so the
 plain view drops the interim tail (there is no cursor to erase it) and prints
 only committed text; the live grey tail is the Textual view's concern.
@@ -32,7 +32,7 @@ from stenograf.live import StreamingUpdate
 from stenograf.transcript import Transcript
 
 _LIVE_LABEL = {Channel.MIC: "You", Channel.SYSTEM: "Remote"}
-"""Channel-coarse caption labels for the live pass (PLAN.md Task 6). Distinct
+"""Channel-coarse caption labels for the live pass. Distinct
 from the checkpoint's ``Local``/``Remote`` (session ``_CHANNEL_COARSE``): the
 live *display* addresses the user as ``You``. The finalize swap replaces both
 with diarized ``Local-N``/``Remote-M`` labels."""
@@ -105,7 +105,7 @@ class LiveView:
 class PlainLiveView(LiveView):
     """Streams committed captions to a (typically non-TTY) stream via ``click.echo``.
 
-    The first shippable live view (PLAN.md §5): no Textual dependency, works over
+    The first shippable live view: no Textual dependency, works over
     a pipe or into a file. Committed words stream onto a per-channel line — the
     line continues while one channel keeps talking and breaks when the channel
     changes or a pause opens, so the log reads as utterance-sized paragraphs. The

@@ -1,6 +1,6 @@
 """Eval-only ASR backend wrappers.
 
-Deliberately minimal: each wraps one model+runtime candidate from PLAN.md §1 and
+Deliberately minimal: each wraps one model+runtime candidate and
 returns plain dicts. The shipped package gets proper ``stenograf.asr`` backends
 later, informed by what wins here.
 

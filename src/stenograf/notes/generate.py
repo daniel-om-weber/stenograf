@@ -2,7 +2,7 @@
 
 Single-shot for a normal meeting; whole-turn map-reduce for one too long for a
 single completion window. Nothing is ever written on failure — a typed error
-propagates and the transcript stands untouched (PLAN.md §5 D4).
+propagates and the transcript stands untouched.
 """
 
 from __future__ import annotations

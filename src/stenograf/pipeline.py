@@ -1,6 +1,6 @@
 """The finalize pass: VAD windows → batch ASR → diarization → merged entries.
 
-This is the accuracy core (PLAN.md §2). It operates on one channel of mono
+This is the accuracy core. It operates on one channel of mono
 16 kHz PCM; the meeting orchestrator runs it per channel (mic / system) and
 interleaves the results. ``steno transcribe`` runs it on a file.
 """
@@ -68,7 +68,7 @@ def finalize_channel(
     With ``reid`` given (and diarization running), the diarizer additionally emits
     a per-cluster voice embedding and ``reid`` maps matched clusters to persistent
     speaker-profile names; those entries carry the profile name instead of ``S<n>``
-    (cross-meeting re-ID, PLAN.md §2). Unmatched clusters keep their ``S<n>`` label
+    (cross-meeting re-ID). Unmatched clusters keep their ``S<n>`` label
     for the caller to template.
 
     ``precomputed_words`` skips the VAD+ASR stage entirely: the words (absolute
@@ -215,7 +215,7 @@ def finalize_file(
     so a file transcribe and a live meeting produce the same artifact shape.
     One un-split stream has no local/remote model, so speakers get the neutral
     ``Speaker <n>`` template and provenance is recorded under a single
-    ``"audio"`` channel (PLAN.md §5 3b). ``profile.language`` is the *given*
+    ``"audio"`` channel. ``profile.language`` is the *given*
     language (``None`` = detect); the returned transcript carries the resolved
     one."""
     entries = relabel_speakers(
@@ -278,7 +278,7 @@ def group_words(
 ) -> list[TranscriptEntry]:
     """Group one un-diarized speaker's words into entries, split on gaps > max_gap.
 
-    The live checkpoint (Option B, PLAN.md §3) turns a channel's committed live
+    The live checkpoint (Option B) turns a channel's committed live
     words into readable entries the same way :func:`merge_words_turns` groups a
     diarization turn — one entry per continuous run of speech — but with no
     speaker assignment: every word is attributed to ``speaker`` (a channel-coarse

@@ -1,9 +1,9 @@
 """Live pass: a re-decode window with LocalAgreement-2 commits.
 
-This is Phase 2, Task 1 (PLAN.md §5). It turns the batch ``ASRBackend`` into a
+It turns the batch ``ASRBackend`` into a
 streaming captioner **without any new dependency and without parakeet-mlx's
 incremental ``transcribe_stream`` API** — the Phase 2 spike measured that API as
-garbage at small right-context and fragile otherwise (PLAN.md §2 "Live ASR").
+garbage at small right-context and fragile otherwise.
 
 Instead the decoder re-decodes a short trailing window over the model's full
 ``generate()`` path — at most once per ``decode_interval`` of audio, since a
@@ -15,7 +15,7 @@ every decode uses the same full-attention path as the finalize pass, live
 captions land at finalize-grade accuracy (~10% WER, spike-measured), and the
 finalize pass still replaces the whole live transcript on stop.
 
-Window management (PLAN.md §2):
+Window management:
 
 - The window is ``left_context`` seconds of already-committed audio (context for
   the model) plus the uncommitted tail, capped at ``window_cap`` seconds. As
@@ -216,7 +216,7 @@ def _extend_committed(committed: list[Word], words: list[Word]) -> list[Word]:
     place a boundary word a hair before the last committed word's start. Such
     a regressor is a re-emitted duplicate, never genuinely new text — dropping
     it keeps the committed stream strictly append-only (the monotonicity
-    invariant; PLAN.md §5) with no visible loss. Returns the words kept.
+    invariant) with no visible loss. Returns the words kept.
     """
     kept: list[Word] = []
     last = committed[-1].start if committed else float("-inf")
@@ -356,7 +356,7 @@ class LiveDecoder:
         history is left intact and still monotonic; the abandoned audio becomes a
         caption gap the finalize pass fills on stop. The worker calls this when
         inference has fallen so far behind that feeding the whole backlog would
-        spiral (PLAN.md §5, Task 0f)."""
+        spiral (Task 0f)."""
         self._window.drop()
         self._buffer = []
 
@@ -434,8 +434,7 @@ class LiveDecoder:
         cutoff = self._committed[-1].end - self.match_tolerance
         new = [w for w in words if w.start > cutoff]
         # Timestamps drift between decodes, so also drop a leading run of words
-        # that just repeats the committed tail by text (whisper_streaming's
-        # n-gram cleanup — PLAN.md §1 SimulStreaming reference).
+        # that just repeats the committed tail by text (whisper_streaming's # n-gram cleanup).
         max_n = min(len(self._committed), len(new), 5)
         for n in range(max_n, 0, -1):
             if [_key(w) for w in self._committed[-n:]] == [_key(w) for w in new[:n]]:

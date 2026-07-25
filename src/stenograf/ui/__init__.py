@@ -1,6 +1,6 @@
 """The ``steno`` launcher — a mouse-driven Textual home for the pipeline.
 
-Phase 7 (PLAN.md §5): bare ``steno`` opens a button-based app so people who
+Bare ``steno`` opens a button-based app so people who
 don't live in a terminal can start a meeting, transcribe a recording, and
 generate notes without remembering subcommands. One module per screen,
 mirroring ``cli/``'s one-module-per-command layout; every screen is a thin

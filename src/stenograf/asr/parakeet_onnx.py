@@ -2,7 +2,7 @@
 (Phase 5). The *same* model the MLX backend runs, fp32 ONNX export, so
 transcripts stay comparable across platforms.
 
-Decision A (PLAN.md Phase 5) resolved to onnx-asr on *accuracy*, not
+Decision A resolved to onnx-asr on *accuracy*, not
 timestamps: the pinned sherpa-onnx<1.13 does decode Parakeet-v3 with real
 per-token timestamps, but its only published v3 export is int8, and int8
 costs real accuracy — measured 2026-07-11 on the eval WAVs, cross-WER

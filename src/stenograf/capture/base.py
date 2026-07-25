@@ -30,7 +30,7 @@ SAMPLE_RATE = 16_000
 """All frames carry mono int16 PCM at this rate; providers resample."""
 
 DEFAULT_FRAME_MS = 200
-"""Frame size providers deliver to the core (~200 ms; PLAN.md §2)."""
+"""Frame size providers deliver to the core (~200 ms)."""
 
 
 def frame_samples(frame_ms: int) -> int:

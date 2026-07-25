@@ -4,7 +4,7 @@ Written for an Obsidian vault but deliberately Obsidian-free: a vault is a
 folder, a note is markdown, and the ``> [!quote]-`` collapsible-transcript
 callout degrades to an ordinary blockquote elsewhere. Point ``[notes.export]
 dir`` at any directory and every summarized meeting lands there as
-``YYYY-MM-DD – Title.md`` (PLAN.md §5 D7).
+``YYYY-MM-DD – Title.md``.
 """
 
 from __future__ import annotations

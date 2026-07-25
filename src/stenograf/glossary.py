@@ -1,4 +1,4 @@
-"""Deterministic glossary + attendee-name post-correction (PLAN.md §5 Task 2b).
+"""Deterministic glossary + attendee-name post-correction.
 
 The *second* of stenograf's two glossary layers, and the one that answers to no
 acoustics. ``stenograf.asr.biasing`` steers the decoder toward the same terms while

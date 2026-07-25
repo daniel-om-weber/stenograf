@@ -1,6 +1,6 @@
 """Settings — a read-only rendering of ``steno settings show``.
 
-Phase 7, Task 5 (PLAN.md §5). The screen shows the effective configuration —
+The screen shows the effective configuration —
 every key with its value and where it came from (env override, settings.toml,
 built-in default) — through the same ``_settings_rows`` helper the CLI
 renders from, so the two can never disagree. Editing happens in $EDITOR via

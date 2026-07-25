@@ -1,6 +1,6 @@
 """Notes backend that drives any external CLI over stdin/stdout.
 
-The provider-agnostic escape hatch (PLAN.md §5 D3): configure an argv in
+The provider-agnostic escape hatch: configure an argv in
 ``settings.toml`` — ``["claude", "-p", …]``, ``["llm", "-m", "gpt-…"]``, a
 shell wrapper — and stenograf feeds it the rendered prompt (plus an explicit
 schema instruction) on stdin and expects one JSON object on stdout. Hosted

@@ -354,7 +354,7 @@ def _prepare_output(
     a fresh date-named folder under the visible output home (``[output] dir``
     in settings.toml, else ``~/Documents/Meetings``); ``--out`` uses that path
     itself as the meeting's folder. Either way the files inside are plainly
-    named — ``transcript.{fmt}``, ``audio.wav`` (PLAN.md §5 Stage C1).
+    named — ``transcript.{fmt}``, ``audio.wav``.
 
     File names inside a meeting folder are fixed, so pointing ``--out`` at a
     folder that already holds a transcript would silently replace that meeting;

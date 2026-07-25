@@ -4,7 +4,7 @@ The anti-hallucination rules live here, once: notes must cite what was said
 (speaker + timestamp), never invent attendees, decisions, or due dates. A
 user's own style guide (``[notes] instructions`` in settings.toml) is
 *appended* to — never replaces — the built-in system prompt, so those rules
-survive customization (PLAN.md §5 D4).
+survive customization.
 """
 
 from __future__ import annotations

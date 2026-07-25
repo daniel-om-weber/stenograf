@@ -1,8 +1,8 @@
-"""Label-free evaluation of the live pass (PLAN.md §5 Phase 2, Task 1 acceptance).
+"""Label-free evaluation of the live pass (Task 1 acceptance).
 
 The live pass is provisional text that the finalize pass replaces on stop, so its
 reference is finalize's own full-attention ``generate()`` output on the same
-audio — *not* a human transcript (PLAN.md §5 "Live-pass evaluation"). This drives
+audio — *not* a human transcript. This drives
 ``stenograf.live.LiveDecoder`` over a raw clip in simulated real time and reports
 the three label-free metrics:
 

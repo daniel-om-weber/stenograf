@@ -1,7 +1,7 @@
 """Where finished meetings land: a visible folder of self-describing dirs.
 
 stenograf's responsibility ends at producing text — the transcript and the
-notes. There is no index and no managed library (PLAN.md §5 Stage C): each run
+notes. There is no index and no managed library: each run
 writes one date-named folder (``meeting-YYYYMMDD-HHMMSS/``) into a user-visible
 output home — ``~/Documents/Meetings`` by default, ``[output] dir`` in
 settings.toml or ``--out`` to override — holding plainly named files::
@@ -51,8 +51,8 @@ def atomic_write_text(path: Path, text: str) -> None:
     corrupt file — and for the ``.partial`` crash-recovery checkpoint that also
     destroys the previous good copy, defeating the artifact meant to survive the
     crash. Writing a sibling temp then atomically renaming means a reader only
-    ever sees the whole old file or the whole new one (PLAN.md §5 Phase 3→4
-    audit). Creates the parent directory on demand — a meeting dir exists from
+    ever sees the whole old file or the whole new one. Creates the parent
+    directory on demand — a meeting dir exists from
     its first write, never earlier (see :func:`allocate_meeting_dir`)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -64,7 +64,7 @@ def default_output_home() -> Path:
     """The standing folder new meeting dirs are created in: ``~/Documents/Meetings``.
 
     Deliberately a *visible* location — transcripts and notes are user documents,
-    not app state (PLAN.md §5 Stage C1). ``[output] dir`` in settings.toml
+    not app state. ``[output] dir`` in settings.toml
     replaces it; ``--out`` bypasses it for one run."""
     return Path.home() / "Documents" / "Meetings"
 

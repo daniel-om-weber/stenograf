@@ -1,6 +1,5 @@
 """Parakeet-TDT-0.6B-v3 via parakeet-mlx — the committed default backend
-(PLAN.md Phase 0 verdict: tied Whisper large-v3 on real meetings at ~10×
-the speed; native word timestamps; no hallucination on silence).
+(native word timestamps; no hallucination on silence).
 
 Audio is passed as in-memory arrays (never temp files): parakeet-mlx's own
 ``transcribe(path)`` is just load → logmel → generate, so we call the last

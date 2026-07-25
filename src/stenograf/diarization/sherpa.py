@@ -1,7 +1,7 @@
 """Speaker diarization via sherpa-onnx (pyannote segmentation-3.0 + CAM++
 embeddings, ONNX/CPU).
 
-This is the cross-platform baseline diarizer. PLAN.md's accuracy target is
+This is the cross-platform baseline diarizer. The accuracy target is
 the pyannote community-1 pipeline; the macOS-native port of that (speakrs /
 FluidAudio — both libraries, so a thin wrapper binary is needed) replaces
 this on Mac in a later step, behind the same ``Diarizer`` interface.

@@ -1,6 +1,6 @@
 """Launcher meeting flow: assemble the pipeline and run it behind a pushed screen.
 
-Phase 7, Task 3 (PLAN.md §5). The launcher-side equivalent of ``steno start``'s
+The launcher-side equivalent of ``steno start``'s
 command body, built from the same library seams (``loaders``,
 ``MeetingRecorder``, the output writers) with settings.toml supplying
 everything the setup form doesn't ask about. Differences from the CLI are
@@ -64,7 +64,7 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
     created_at = datetime.now()
     # A fresh date-named folder under the visible output home — the launcher
     # has no --out equivalent, so allocation can never collide with an
-    # existing meeting (PLAN.md §5 Stage C).
+    # existing meeting.
     out_dir = allocate_meeting_dir(settings.output.dir or default_output_home(), created_at)
     basename = TRANSCRIPT_STEM
     write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)

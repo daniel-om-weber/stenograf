@@ -221,7 +221,7 @@ def _notes_after_run(
 ) -> None:
     """The opt-in ``--notes`` step after a transcript is safely written.
 
-    Non-fatal by contract (PLAN.md §5 D6): the transcript already stands, so
+    Non-fatal by contract: the transcript already stands, so
     any notes failure warns and returns — rerun later with ``steno notes``."""
     try:
         written, _notes = _generate_and_write_notes(
@@ -246,7 +246,7 @@ def _generate_notes(
     """The ``--notes`` tail for a run behind a live TUI: non-fatal, progress via
     the view.
 
-    Same contract as :func:`_notes_after_run` (PLAN.md §5 D6) — the transcript
+    Same contract as :func:`_notes_after_run` — the transcript
     is already on disk, so a notes failure warns and returns ``False``; rerun
     later with ``steno notes``. Shared by the launcher's meeting flow and the
     ``steno start`` TUI shape, so both generate notes *while the meeting screen

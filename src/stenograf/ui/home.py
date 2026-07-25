@@ -1,6 +1,6 @@
 """The launcher's home screen: one large labeled button per workflow.
 
-Phase 7, Task 1 (PLAN.md §5). The menu is deliberately small and descriptive —
+The menu is deliberately small and descriptive —
 the audience is people who don't know the subcommands, so every button carries
 a one-line description of what it does. Buttons are mouse-first (click to
 activate) but fully keyboard-reachable (tab/arrows + enter).

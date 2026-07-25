@@ -62,7 +62,7 @@ jobs:
       - run: cargo check --locked
       - run: cargo check --locked --features ${{ matrix.features }}
 
-  # Functional live capture on the stable-distro reference (PLAN.md §5
+  # Functional live capture on the stable-distro reference (Phase 5
   # dev-environment plan): a real PulseAudio server, a null sink as the
   # default output, TTS speech played into it, `steno start` capturing the
   # monitor through LinuxCaptureProvider, and the transcript asserted on

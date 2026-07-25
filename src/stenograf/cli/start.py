@@ -298,7 +298,7 @@ def start(
 
     # Every meeting gets its own date-named folder in the visible output home
     # (or --out as the folder), holding transcript.{md,json,…} + optional
-    # audio.wav — self-describing files, no index (PLAN.md §5 Stage C).
+    # audio.wav — self-describing files, no index.
     created_at = datetime.now()
     out_dir, basename, audio_default = _prepare_output(out, created_at, settings, force=force)
 

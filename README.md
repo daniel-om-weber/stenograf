@@ -11,7 +11,7 @@ in from the start.
 > **Status: early release.** On macOS and Linux the pipeline is complete end
 > to end: live system-audio + microphone capture, live captions, and the
 > high-accuracy speaker-labelled finalize pass, plus meeting notes. Windows
-> support is in progress. See [PLAN.md](PLAN.md).
+> support is in progress.
 
 ## Why another transcription tool?
 
@@ -346,8 +346,7 @@ uv run steno doctor
 The test suite is label-free and runs without a meeting: model-gated and
 real-audio tests self-skip when their assets are absent.
 
-See [PLAN.md](PLAN.md) for the full architecture, model choices, and roadmap;
-[PLAN-AEC.md](PLAN-AEC.md) for the echo-cancellation design and its measurements;
+See [PLAN.md](PLAN.md) for the remaining roadmap;
 `native/README.md` for the capture helper and its wire protocol; `eval/README.md`
 for the model-evaluation and AEC-scoring harnesses.
 

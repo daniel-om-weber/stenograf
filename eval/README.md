@@ -2,7 +2,7 @@
 
 **Result (2026-07-06): Parakeet-TDT-0.6B-v3 is the default for finalize + live.**
 Blind adjudication of 161 disagreement sites: Parakeet tied Whisper 42:42,
-Voxtral lost to both, Canary lost every pairing ~1:2. Details in PLAN.md §2;
+Voxtral lost to both, Canary lost every pairing ~1:2.
 raw judgments in out/adjudication-results-2026-07-06.json (gitignored).
 
 Goal: decide the default finalize-pass ASR model on *real* meeting audio, not
@@ -59,7 +59,7 @@ uv run --group eval eval/score.py     # → eval/out/report.md
 ```
 
 Target coverage: ~10 min hand-corrected reference per language (German +
-English), including one in-room far-field sample, per PLAN.md Phase 0.
+English), including one in-room far-field sample.
 
 ## Short-utterance / window-length study (2026-07-19)
 
@@ -153,7 +153,7 @@ bounds. The tail instability predates this study and explains occasional
 hard-split boundary losses in every earlier transcript.
 
 **Cut-overlap decoding: shipped and REVERTED 2026-07-19** (design record +
-revert rationale in PLAN.md §5 "Cut-overlap decoding"). The decode-side
+revert rationale in git history). The decode-side
 cut repair (edge classification, 2.5 s overhang, midpoint keep-rules,
 speech-coverage retry) measured slightly positive in aggregate (+24
 non-filler words / 61 k arm-to-arm, net −235 vs −272) but per-site ear
@@ -197,7 +197,7 @@ uv run eval/der.py                                 # → eval/out/diar-report.md
 real stenograf backends. Everything under `eval/refs/` and `eval/out/` stays
 gitignored (private content).
 
-## Echo cancellation (PLAN-AEC.md)
+## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
 writes the clock-aligned `mic.wav`/`lpb.wav`/`enh.wav` triple (near end as

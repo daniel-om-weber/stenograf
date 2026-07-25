@@ -1,6 +1,6 @@
 """Generate notes — the launcher's ``steno notes`` workflow.
 
-Phase 7, Task 5 (PLAN.md §5). Two ways to name a meeting, both dumb:
+Two ways to name a meeting, both dumb:
 the *last meeting* default (the ``notes --last`` semantics — the newest
 finished ``meeting-*`` folder in the output home, pre-selected at mount) and
 a plain :class:`~textual.widgets.DirectoryTree` picker for anything else.

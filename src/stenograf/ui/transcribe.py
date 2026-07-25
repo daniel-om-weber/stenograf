@@ -1,6 +1,6 @@
 """Transcribe a recording — the launcher's batch-finalize workflow.
 
-Phase 7, Task 4 (PLAN.md §5). A :class:`~textual.widgets.DirectoryTree` file
+A :class:`~textual.widgets.DirectoryTree` file
 picker, the transcription pipeline in a ``@work(thread=True)`` worker, and a
 :class:`~textual.widgets.ProgressBar` driven by the existing ``transcribe``
 progress callback (``finalize_file``'s ``on_progress``). The worker body is
