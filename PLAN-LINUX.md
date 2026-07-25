@@ -5,9 +5,12 @@ run for the first time on a real Linux session, end to end including a live
 meeting, and the six problems that found were fixed the same day (single
 instance, the localised documents dir, the desktop entry, the doubled window
 title, the X11 `WM_CLASS`, the window-size clamp — `git log` has them). Later
-the same day rung 0 of the ladder below was climbed, which took the tray-less
-degrade path, the X11 taskbar question and a light desktop off the unmeasured
-list without another machine. **No work item is open here.** What is left is
+the same day rung 0 of the ladder below was climbed and the two gestures only a
+hand can make were made, which took the tray-less degrade path, the X11 taskbar
+question, a light desktop, the rendered menu and the launcher gestures off the
+unmeasured list without another machine — and found one more bug on the way
+(*Open Stenograf*, greyed for a window that was merely buried). **No work item
+is open here.** What is left is
 this file's real job: the evidence, so
 no future session re-measures it; the decisions, so none re-litigates them; the
 desktops that have never run it and how to reach them without buying a machine;
@@ -56,11 +59,35 @@ Every item here was observed on that session, not reasoned about:
   the dark panel, and **re-inks red while recording**.
 - **The menu, over DBusMenu.** The `aboutToShow` relabelling design — the one
   thing headless tests could not reach — works: before `AboutToShow` the status
-  entry is empty; after it reads `No meeting running`, with *Open Stenograf*
-  and *Stop* correctly disabled. Qt exports `Stop && finalize` as
-  `Stop _& finalize`, which is the DBusMenu mnemonic convention (`_` marks the
-  accelerator), so Plasma should render `Stop & finalize` — *the rendered menu
-  was never looked at, only the exported strings*; see below.
+  entry is empty; after it reads `No meeting running`, and while a meeting runs
+  `Recording · 0:45`, with *Start meeting…* disabled and *Stop* enabled.
+- **The menu as Plasma draws it** (opened by hand, caught by a screenshot
+  recorder rather than a keypress that would dismiss it). `Stop _& finalize` —
+  Qt's DBusMenu mnemonic encoding of `Stop && finalize` — arrives on screen as
+  **`Stop & finalize`**, so the convention holds end to end and nothing needs
+  escaping differently. Labels, both separators and the greying all render as
+  the exported properties say.
+- **What the rendered menu found, and it was a real one.** *Open Stenograf* came
+  out greyed while the window was merely **buried** behind another window:
+  `isVisible()` means *mapped*, not looked at, and an occluded window is the
+  shape the whole menu-bar mode is designed around (`app.py`'s redraw budget
+  leans on exactly that). The same predicate suppressed the "Meeting finished"
+  notification in the same common case. Both were fixed the same day — the entry
+  is never disabled now, and the notification keys off `isActive()` — and both
+  re-measured here afterwards: the exported menu reports *Open Stenograf*
+  enabled with the window in front, and stopping a meeting from the menu bar
+  with the window buried rendered **Meeting finished** with the folder as its
+  body. `steno start`'s Stop and Quit were driven the same way, over
+  `com.canonical.dbusmenu`'s `Event`, and both did the whole job (finalize,
+  transcript on disk, clean exit).
+- **The launcher gestures** (a hand on the trackpad, the one thing no harness
+  reaches). Launching the K-menu entry shows a busy cursor before the window
+  appears — `StartupNotify=true` doing its job. Clicking the same entry a second
+  time while the app is running starts **no** second instance and brings the
+  existing window forward; a left-click on the tray icon does the same. Which of
+  the two mechanisms refuses the second launch — KDE's `SingleMainWindow=true`
+  or our own `QLocalServer` claim — is not observable from outside, and both are
+  in force.
 - **Tray → window on Wayland.** `Activate` on the SNI both shows **and focuses**
   the window; KWin's focus-stealing prevention does not eat
   `requestActivate()`. (`set_dock_icon` is a no-op here, as intended.)
@@ -136,7 +163,13 @@ legacy branch by design — so it is a `mv` whenever anyone cares.
   and setup is what installs one.
 - **The app stays dark on a light desktop.** Same as macOS: the palette is the
   product's, not the system's. The only system-themed surface is the file
-  dialog, which will follow a light desktop — acceptable.
+  dialog, which follows a light desktop and stays readable there — seen, not
+  assumed (above).
+- **"Is the user looking at it?" is `isActive()`, never `isVisible()`.** The
+  distinction cost a real bug (above) and it will cost another one: on both
+  Wayland and X11 a window is *visible* the whole time it sits behind the video
+  call, which is where this app expects to spend a meeting. Qt exposes no
+  occlusion query on any platform, so focus is the only proxy there is.
 - **Fixed `pixelSize`s stay.** Qt reports the desktop font as `Sans Serif 9`
   (no KDE platform-theme plugin in the wheel), and the app sets explicit sizes
   anyway. Scaling is honoured; a user's *font size* preference is not — the
@@ -153,9 +186,9 @@ legacy branch by design — so it is a `mv` whenever anyone cares.
 
 ## Still unmeasured
 
-Nothing below is worth coding against blind. Rung 0 shortened this list the
-same day; the section after it says how to reach what is left without buying a
-machine:
+Nothing below is worth coding against blind. Rung 0 and two minutes of
+trackpad time shortened this list to one line the same day; the section after
+it says how to reach what is left without buying a machine:
 
 - **Stock GNOME (Wayland) without the AppIndicator extension** — *narrowed*.
   The degrade-to-window path itself is now measured with a window on screen
@@ -166,15 +199,8 @@ machine:
   (above), so what is left is a panel that matches on `WM_CLASS` alone — XFCE —
   and a launcher pinned to a taskbar rather than a window merely appearing in
   one.
-- **The launcher gesture itself.** The single-instance path was driven with two
-  `python -m stenograf --gui` launches, not with two clicks on the K-menu entry,
-  so `StartupNotify=true` and `SingleMainWindow=true` are validated as keys but
-  not observed doing anything.
-- **The rendered tray menu** — only the DBus-exported labels were read. There is
-  no way to open the systray applet's menu over DBus (`ContextMenu` asks the
-  *app* to draw one, which Qt leaves to the host) and no pointer-injection tool
-  on this machine, so this needs a human hand on the trackpad.
-- **Any other desktop** (XFCE, Cinnamon).
+- **Any other desktop** (XFCE, Cinnamon) — which is rung 1 below, and all that
+  is left.
 
 ---
 
@@ -232,9 +258,9 @@ GNOME stand-in.
 `distrobox`, an Ubuntu LTS box, `Xephyr` and an XFCE session inside it. One
 environment collects **a `WM_CLASS`-only taskbar** (the one X11 matcher rung 0's
 XWayland grab does not stand in for, since Plasma and GNOME both read the
-desktop-file properties Qt sets), **the rendered SNI menu** on a panel that is
-not Plasma's — including whether `Stop _& finalize` really arrives as
-`Stop & finalize` — and **another desktop entirely**. It is also the only rung
+desktop-file properties Qt sets), **the SNI menu drawn by a panel that is not
+Plasma's** (Plasma's own rendering is measured, mnemonic and all), and **another
+desktop entirely**. It is also the only rung
 that exercises *userland*: a stable-distro glibc against the PySide6 and onnxruntime
 wheels, `parec` out of `pulseaudio-utils` rather than `pipewire-pulse`, and
 `desktop-file-validate` plus the icon cache as a distro actually ships them.

@@ -343,9 +343,16 @@ wrote the transcript; **X11 launcher identity** turned out to be more than
 `WM_CLASS` (Qt exports `_KDE_NET_WM_DESKTOP_FILE` and `_GTK_APPLICATION_ID` too,
 so Plasma and GNOME group the window with its launcher without it); and a
 **light system theme** leaves the app's own palette alone and the file dialog
-readable. What is left needs one Ubuntu/XFCE container (a `WM_CLASS`-only
-taskbar, the rendered SNI menu, another desktop), a hand on the trackpad (the
-launcher gesture), and a VM for nothing.
+readable. The two gestures no harness can make were then made by hand: the
+K-menu entry shows a busy cursor and a second click starts no second app, and
+Plasma renders `Stop _& finalize` as `Stop & finalize` — which is also where the
+seventh Linux bug turned up. *Open Stenograf* was greyed whenever the window was
+merely **buried** behind the video call, because `isVisible()` means mapped, not
+looked at; the same predicate had been suppressing the "Meeting finished"
+notification in exactly that, the normal, case. Both now key off focus instead,
+and both were re-measured on the desktop. What is left needs one Ubuntu/XFCE
+container (a `WM_CLASS`-only taskbar, a non-Plasma panel drawing the SNI menu,
+another desktop) and a VM for nothing.
 
 **The desktop app on Windows — never run on a real desktop.** The code is
 portable and the launcher follows the `gui` extra (`shortcut.py`: a

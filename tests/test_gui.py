@@ -588,6 +588,43 @@ class TestTray:
         assert not tray.stop.isEnabled()
         assert tray.start.isEnabled()
 
+    def test_the_window_can_always_be_opened_from_the_menu(self, tray, gui):
+        # This entry used to grey itself out while the window was visible. Qt's
+        # isVisible() means *mapped*, not looked at, so Plasma rendered it greyed
+        # for a window merely buried behind the video call (measured 2026-07-25)
+        # — the shape a meeting normally runs in, and exactly when the entry is
+        # wanted. show_window() raises and focuses either way.
+        shell, _engine = gui
+        tray.menu.aboutToShow.emit()
+        assert tray.open_window.isEnabled(), "hidden: the only way back"
+
+        shell.window.show()
+        tray.menu.aboutToShow.emit()
+        assert tray.open_window.isEnabled(), "visible: possibly behind the call"
+
+    def test_a_finished_meeting_is_announced_to_an_unfocused_window(self, tray, gui, monkeypatch):
+        # Same measurement, other consequence: keyed off isVisible() the "Meeting
+        # finished" notification would fire only in the rare case (no window at
+        # all) and stay silent in the common one (window open, buried).
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        messages = []
+        monkeypatch.setattr(QSystemTrayIcon, "supportsMessages", staticmethod(lambda: True))
+        monkeypatch.setattr(
+            QSystemTrayIcon, "showMessage", lambda self, *args: messages.append(args)
+        )
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.window.show()  # visible, but an offscreen window never has focus
+        meeting.set(folder="/meetings/meeting-1")
+
+        meeting.set(active=True, phase="rec")
+        tray._refresh()
+        meeting.set(active=False, phase="done")
+        tray._refresh()
+        assert [message[0] for message in messages] == ["Meeting finished"]
+        assert messages[0][1] == "/meetings/meeting-1", "the folder is the whole message"
+
     def test_stop_from_the_menu_bar_needs_no_window(self, tray, gui):
         shell, _engine = gui
         meeting = shell.screen("Meeting")

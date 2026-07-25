@@ -174,6 +174,12 @@ class Tray(QObject):
         self.status = self.menu.addAction("")
         self.status.setEnabled(False)
         self.menu.addSeparator()
+        # Never disabled. It was, while the window was on screen — until Plasma's
+        # own rendered menu showed it greyed out with the window merely *buried*
+        # behind the video call (measured 2026-07-25): `isVisible()` means mapped,
+        # not looked at, and the occluded window is the normal in-meeting shape
+        # this whole mode is designed around. `show_window` raises and focuses
+        # either way, so there is no state in which the entry has nothing to do.
         self.open_window = self._item("Open Stenograf", self._open)
         self.start = self._item("Start meeting…", self._start)
         self.stop = self._item("Stop && finalize", self._stop)  # && escapes the mnemonic
@@ -257,12 +263,18 @@ class Tray(QObject):
             self._announce()
 
     def _announce(self) -> None:
-        """Say a meeting is over when there is no window to say it on.
+        """Say a meeting is over unless the user is already watching it end.
 
-        The visible case needs nothing: the meeting screen is already showing the
-        finished transcript."""
+        "Already watching" is the *active* window, not a visible one. Qt's
+        `isVisible()` is true for a window buried behind the video call — which
+        is the shape the whole menu-bar mode assumes a meeting runs in — so
+        keying off it would have suppressed this notification in precisely the
+        common case and shown it only in the rare one. Measured through Plasma's
+        rendered menu, which greyed *Open Stenograf* for an occluded window
+        (2026-07-25). A focused window is already showing the finished
+        transcript, and there the notification would be pure duplication."""
         window = self.shell.window
-        if self.shell.quitting_now or (window is not None and window.isVisible()):
+        if self.shell.quitting_now or (window is not None and window.isActive()):
             return
         if not QSystemTrayIcon.supportsMessages():
             return
@@ -276,8 +288,6 @@ class Tray(QObject):
         self.status.setText(self.summary())
         self.start.setEnabled(not live and not self.shell.quitting_now)
         self.stop.setEnabled(self.state() == "rec")
-        window = self.shell.window
-        self.open_window.setEnabled(window is not None and not window.isVisible())
         self.quit.setText(
             "Quit now (abandons the finalize)" if self.shell.quitting_now else "Quit Stenograf"
         )
