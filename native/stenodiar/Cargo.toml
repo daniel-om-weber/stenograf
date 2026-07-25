@@ -16,6 +16,16 @@ cuda = ["speakrs/cuda"]
 [dependencies]
 speakrs = "0.5"
 
+# Never referenced from code: it is here so cargo's feature unification builds
+# the OpenSSL that speakrs' model download links (hf-hub → ureq → native-tls)
+# from source and statically. Otherwise the binary needs the *build* machine's
+# libssl.so.3 — the one thing that would stop a wheel-carried helper from
+# starting on another distro (and manylinux_2_28 only has OpenSSL 1.1, which no
+# current distro ships). native-tls uses Security.framework on macOS and
+# SChannel on Windows and never touches OpenSSL there, hence the target gate.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
 [profile.release]
 lto = true
 

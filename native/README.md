@@ -1,7 +1,9 @@
-# Native helpers (macOS)
+# Native helpers
 
-Two optional binaries live here, both speaking simple pipes to the Python core
-and both honoring the same rule: **meeting audio never touches disk** — plus
+Two optional binaries live here — stenocap is macOS-only, stenodiar is built
+for every platform stenograf ships a wheel for — both speaking simple pipes to
+the Python core and both honoring the same rule: **meeting audio never touches
+disk** — plus
 `appbundle/`, which is not a helper at all but the sources for the macOS
 desktop launcher `Stenograf.app`. It breaks this directory's convention on
 purpose: its product is *committed* (`src/stenograf/assets/Stenograf.app`)
@@ -23,6 +25,33 @@ TCC-guarded resource. The first run per
 machine downloads models and compiles them for CoreML (minutes; `--warmup`
 does it eagerly). Without the binary, stenograf silently falls back to
 sherpa-only diarization.
+
+Unlike stenocap it is not macOS-only, and users never build it: all three
+platform wheels carry it (macOS arm64 with CoreML, manylinux_2_39 x86_64 and
+win_amd64 with ORT CPU), because at ~15 MB compressed the bytes are cheaper
+than a documented download nobody performs — the alternative that was
+considered and dropped. Platforms without one of those wheels (musl, Linux
+arm64, **anything older than glibc 2.39**) install the pure `py3-none-any`
+wheel and keep the sherpa-only fallback.
+
+The Linux binary is the delicate one: it must start on distros it was not
+built on. Two things fix its floor, and only one of them is our choice.
+
+- **glibc 2.39, not ours.** The onnxruntime static library `ort-sys`
+  downloads references `__isoc23_strtol` and `__libc_single_threaded` — glibc
+  2.38 symbols — so an older image cannot link stenodiar at all
+  (manylinux_2_28 was tried, and fails at the link step, not at runtime).
+  `release.yml` therefore pins `ubuntu-24.04` (glibc 2.39) and tags the wheel
+  to match; measured, the binary itself needs only 2.38 and GLIBCXX_3.4.30.
+- **OpenSSL, ours.** `stenodiar/Cargo.toml` vendors it statically so the
+  helper never depends on the user's OpenSSL version. Note the flag reaches
+  only the *runtime* graph: `ort-sys`'s build script pulls its own
+  `openssl-sys` through a build-dependency, which cargo resolves with a
+  separate feature set, so the build machine still needs `libssl-dev` (and a
+  full `perl`, which is what compiles the vendored copy).
+
+`release.yml` asserts all of it on the built wheel — highest glibc symbol,
+libstdc++ against the runner's own, and no `libssl` in `ldd`.
 
 `helper/` holds **stenocap**, the ad-hoc-signed Swift binary that feeds live
 audio to the Python core. It captures

@@ -365,13 +365,30 @@ Windows is covered in code — as a *named pipe* rather than a socket, which is 
 one half of it no Linux or macOS run exercises. Nothing else here is worth
 coding against blind.
 
-**stenodiar distribution off macOS.** Throughput is measured and passes (8.6× RT
-on Windows, 8.2× on Linux), `find_stenodiar` handles the `.exe` suffix and a
-`target/release` dev fallback, and `build.ps1`/`build.sh` exist — but the
-shipping decision (GitHub Releases attachment + a documented drop location,
-deliberately not wheel-bundled: 40 MB for an optional sherpa-fallback feature
-does not belong in every platform wheel) has no implementation. Today a
-Windows/Linux user has to build it with cargo.
+**stenodiar off macOS — in the wheels, proven in a local sandbox, never yet run
+by CI.** The release-attachment plan was dropped for platform wheels (15 MB
+compressed, measured, not the 40 MB the old note assumed — and it deletes the
+drop location, the downloader and the docs telling users to curl a binary):
+`hatch_build.py` bundles the helper into a manylinux_2_39_x86_64 and a
+win_amd64 wheel when `STENOGRAF_BUNDLE_STENODIAR=1`. The Linux job was
+developed against a **bwrap sandbox over the real image rootfs** — no container
+runtime on the notebook and none needed: `unshare -r` to extract the layers,
+bwrap to build in them — which is what caught the four failures review did not.
+The image's perl lacks FindBin/IPC::Cmd/Time::Piece (vendored OpenSSL will not
+configure); `ort-sys`'s *build script* pulls its own `openssl-sys` through a
+build-dependency, which cargo resolves with a separate feature set, so the
+vendored flag never reaches it and the machine still needs `libssl-dev`; and
+above all **manylinux_2_28 cannot link stenodiar at all** — the prebuilt
+onnxruntime references `__isoc23_strtol` and `__libc_single_threaded`, glibc
+2.38 symbols. That is where ubuntu-24.04 and the 2.39 tag come from: the floor
+is upstream's, not ours. In the sandbox the binary builds, needs glibc 2.38 and
+GLIBCXX_3.4.30, carries no `libssl`, and `--warmup` fetches its models over TLS.
+
+Unrun: the workflow itself — the Windows wheel job, the three smoke legs, and
+whether the GitHub runner image differs from the base image the sandbox used
+(the `perl`/`libssl-dev` step is written to not care). Trigger `release.yml`
+via `workflow_dispatch`, which does everything except publish, before the next
+tag rather than discovering it during one.
 
 ---
 

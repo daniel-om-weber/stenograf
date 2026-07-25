@@ -270,6 +270,21 @@ GNOME has neither: between them they span both sides of every conditional in
 is observable there, but `SingleMainWindow` is a KDE key, so watching it do
 something is a hand on *this* trackpad, not another desktop.
 
+*Rung 1 needs no runtime installed.* Proven 2026-07-26 while building the
+stenodiar release job against the real ubuntu-24.04 and manylinux images:
+`bwrap` and user namespaces are already here, and a registry image is just
+tarballs — anonymous token, `GET /v2/<repo>/manifests/<tag>`, extract each
+layer. It ran a distro's own toolchain end to end (apt, rustup, a full cargo
+build) and caught four failures no review would have. Three gotchas, each
+costing a wasted build: extract **inside `unshare -r`** or root-owned files
+silently vanish and rpm/dpkg then "reinstall" them into thin air; `chmod -R
+u+w` the tree afterwards, because bwrap drops `CAP_DAC_OVERRIDE` and the
+image's read-only dirs then really are read-only; and apt needs
+`-o APT::Sandbox::User=root`, since dropping to `_apt` is impossible when only
+one uid is mapped. Sessions are the one thing this cannot bring — no systemd,
+no session bus of its own — so it stands in for *userland*, which is most of
+what rung 1 was for.
+
 **Rung 2 — nested GNOME, once, as a check on rung 0.**
 `gnome-shell --wayland --nested` in a Fedora box, to confirm the real shell
 behaves the way an empty bus predicts. Finickier than XFCE; worth one sitting,

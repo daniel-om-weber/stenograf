@@ -41,8 +41,10 @@ jobs:
           name: dist-macos
           path: dist/
 
-  build-linux:
-    # pure py3-none-any wheel + the sdist
+  build-pure:
+    # pure py3-none-any wheel + the sdist — what every platform without a
+    # specific wheel below installs (musl, Linux arm64, …): no helpers, and
+    # estimated speaker counts fall back to sherpa there.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -50,6 +52,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
       - run: uv build
       - name: Verify the pure wheel carries no helpers
+        # No STENOGRAF_BUNDLE_STENODIAR here, so the hook must stay a no-op.
         run: |
           ls dist/*py3-none-any.whl dist/*.tar.gz
           if unzip -l dist/*.whl | grep -qE 'stenocap|stenodiar'; then
@@ -58,7 +61,97 @@ jobs:
           fi
       - uses: actions/upload-artifact@v7
         with:
-          name: dist-linux
+          name: dist-pure
+          path: dist/
+
+  build-linux-x86_64:
+    # manylinux wheel bundling stenodiar, pinned to the oldest runner whose
+    # glibc the build can actually use. That floor is not ours to choose: the
+    # onnxruntime static library ort-sys downloads references __isoc23_strtol
+    # and friends, glibc 2.38 symbols, so the link fails outright in an older
+    # image (manylinux_2_28 was tried and cannot build this at all). Ubuntu
+    # 24.04 is glibc 2.39, hence the tag; anything older installs the pure
+    # wheel and keeps sherpa-only diarization. Pin the version rather than
+    # ubuntu-latest — when that label moves, the floor must move deliberately,
+    # with the tag in hatch_build.py, not silently under users.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      STENOGRAF_BUNDLE_STENODIAR: "1"
+    steps:
+      - uses: actions/checkout@v7
+      # Both named rather than assumed from the runner image, because both
+      # failure modes are silent until the link step.
+      # libssl-dev is for the *build scripts*, not for us: ort-sys downloads
+      # onnxruntime over TLS at build time, and cargo resolves build-deps with
+      # their own feature set, so stenodiar's vendored-OpenSSL flag never
+      # reaches that copy of openssl-sys. The system OpenSSL links into a
+      # throwaway build script; the shipped helper carries the vendored one, as
+      # the ldd check asserts. perl (not perl-base) is what *builds* that
+      # vendored OpenSSL — its Configure wants FindBin, IPC::Cmd and Time::Piece.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev perl
+      # The runner image ships Rust; fail early and loudly if that ever
+      # changes rather than inside the build hook.
+      - run: cargo --version
+      - uses: astral-sh/setup-uv@v8.3.2
+      - run: uv build --wheel
+      - name: Verify the wheel bundles a portable stenodiar
+        run: |
+          ls dist/*manylinux_2_39_x86_64.whl
+          unzip -o dist/*.whl 'stenograf/bin/stenodiar' -d /tmp/whl
+          test -x /tmp/whl/stenograf/bin/stenodiar
+          ldd /tmp/whl/stenograf/bin/stenodiar
+          # Three ways a helper built here dies on a user's machine.
+          # 1. A glibc symbol newer than the tag promises.
+          max=$(objdump -T /tmp/whl/stenograf/bin/stenodiar |
+                grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "highest glibc symbol: $max"
+          test "$(printf '%s\n%s\n' "$max" GLIBC_2.39 | sort -V | tail -1)" = GLIBC_2.39
+          # 2. A libstdc++ newer than this runner's — measured rather than
+          #    hardcoded, so the claim is "runs anywhere with a libstdc++ at
+          #    least as new as the one we built against".
+          needed=$(objdump -T /tmp/whl/stenograf/bin/stenodiar |
+                   grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1)
+          have=$(objdump -T /usr/lib/x86_64-linux-gnu/libstdc++.so.6 |
+                 grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1)
+          echo "libstdc++: needs $needed, runner provides $have"
+          test "$(printf '%s\n%s\n' "$needed" "$have" | sort -V | tail -1)" = "$have"
+          # 3. The build machine's OpenSSL — stenodiar vendors it statically
+          #    precisely so a user's OpenSSL version is never in the picture.
+          if ldd /tmp/whl/stenograf/bin/stenodiar | grep -qE 'libssl|libcrypto'; then
+            echo "stenodiar must not depend on the build machine's OpenSSL" >&2
+            exit 1
+          fi
+          /tmp/whl/stenograf/bin/stenodiar --help
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-linux-x86_64
+          path: dist/
+
+  build-windows:
+    # win_amd64 wheel bundling stenodiar (build.ps1: ORT CPU, MSVC).
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      STENOGRAF_BUNDLE_STENODIAR: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+      # The runner image ships Rust; fail early and loudly if that ever
+      # changes rather than inside the build hook.
+      - run: cargo --version
+      - run: uv build --wheel
+      - name: Verify the wheel bundles the stenodiar diarization helper
+        shell: bash
+        run: |
+          ls dist/*win_amd64.whl
+          unzip -o dist/*.whl 'stenograf/bin/stenodiar.exe' -d /tmp/whl
+          /tmp/whl/stenograf/bin/stenodiar.exe --help
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-windows
           path: dist/
 
   smoke-macos:
@@ -94,31 +187,45 @@ jobs:
           test -f smoke-out/transcript.json
 
   smoke-linux:
-    needs: build-linux
+    # Installs the *manylinux* wheel on a distro that is not the build image —
+    # which is the point: a helper built against glibc 2.28 has to run on the
+    # runner's much newer one, and its statically vendored OpenSSL has to find
+    # this machine's CA bundle before the model download can work at all.
+    needs: build-linux-x86_64
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: astral-sh/setup-uv@v8.3.2
       - uses: actions/download-artifact@v8
         with:
-          name: dist-linux
+          name: dist-linux-x86_64
           path: dist
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: uv tool install -p 3.13 ./dist/stenograf-*py3-none-any.whl
+      - run: uv tool install -p 3.13 ./dist/stenograf-*manylinux_2_39_x86_64.whl
       - run: steno --version
-      # Linux capture/ASR land in Phase 5; today the smoke is: the pure wheel
+      # Linux capture/ASR land in Phase 5; today the smoke is: the wheel
       # installs, the CLI runs, and the headless model download works.
       - run: steno setup --models-only
+      - name: The installed helper is found and its TLS stack reaches HuggingFace
+        # --warmup downloads the diarization models and nothing else, so it is
+        # the cheapest end-to-end proof that the vendored OpenSSL build talks
+        # to the network on a foreign distro. doctor exits 1 on a runner (no
+        # audio endpoint); what is asserted here is the helper line.
+        run: |
+          steno doctor > doctor.txt 2>&1 || true
+          cat doctor.txt
+          grep -q "stenograf/bin/stenodiar" doctor.txt
+          unzip -o dist/*.whl 'stenograf/bin/stenodiar' -d /tmp/whl
+          /tmp/whl/stenograf/bin/stenodiar --warmup
 
   smoke-windows:
-    # Windows ships the same pure wheel Linux does (no native helpers), so there
-    # is nothing extra to *build* — but nothing verified a clean Windows install
-    # before publish either, which is how 0.2.1 shipped a launcher that died on
-    # every meeting start. The launcher/TUI itself is covered by the headless
-    # real-stack smoke in ci.yml's windows unit job; this leg is the *installed
-    # artifact* check: the wheel installs, the CLI renders through a redirected
-    # stdout, and the pipeline runs end to end from a file.
-    needs: build-linux
+    # Nothing verified a clean Windows install before publish until 0.2.1
+    # shipped a launcher that died on every meeting start. The launcher/TUI
+    # itself is covered by the headless real-stack smoke in ci.yml's windows
+    # unit job; this leg is the *installed artifact* check: the wheel installs,
+    # carries its helper, renders through a redirected stdout, and runs the
+    # pipeline end to end from a file.
+    needs: build-windows
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -128,11 +235,11 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
       - uses: actions/download-artifact@v8
         with:
-          name: dist-linux
+          name: dist-windows
           path: dist
       # uv installs tool executables to ~/.local/bin on Windows too.
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: uv tool install -p 3.13 ./dist/stenograf-*py3-none-any.whl
+      - run: uv tool install -p 3.13 ./dist/stenograf-*win_amd64.whl
       - run: steno --version
       # ffmpeg is the bundled imageio-ffmpeg binary here — nothing to install.
       - run: steno setup --models-only
@@ -147,6 +254,8 @@ jobs:
           cat doctor.txt
           grep -q "ASR backend" doctor.txt
           grep -q "ffmpeg" doctor.txt
+          # The installed wheel's own helper, not a stray build in the checkout.
+          grep -qi "stenodiar.exe" doctor.txt
       - name: Pipeline smoke on a synthetic WAV
         # Live WASAPI capture needs hardware no runner has; --replay drives the
         # same pipeline from a file.
@@ -163,7 +272,10 @@ jobs:
           test -f smoke-out/transcript.json
 
   publish:
-    needs: [smoke-macos, smoke-linux, smoke-windows]
+    # build-pure is listed explicitly: no smoke leg installs the pure wheel any
+    # more (each platform now smokes its own), but PyPI still needs it and the
+    # sdist, and download-artifact below collects whatever has finished.
+    needs: [build-pure, smoke-macos, smoke-linux, smoke-windows]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15

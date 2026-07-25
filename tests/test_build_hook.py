@@ -7,6 +7,7 @@ code), so it is loaded by path rather than imported.
 import importlib.util
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,8 +31,17 @@ def build_data() -> dict:
     return {"force_include": {}, "pure_python": True}
 
 
-def test_noop_off_macos_arm64(hook_module, tmp_path, monkeypatch):
+def _stenodiar(root: Path) -> Path:
+    """Where the hook expects cargo's output — `.exe` when the suite runs on Windows."""
+    name = "stenodiar.exe" if sys.platform == "win32" else "stenodiar"
+    return root / "native" / "stenodiar" / name
+
+
+def test_noop_off_macos_without_the_release_flag(hook_module, tmp_path, monkeypatch):
+    # The common case: `pip install` from the sdist on Linux/Windows. Nothing
+    # is built, nothing is bundled, and no cargo is required.
     monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
+    monkeypatch.delenv(hook_module.BUNDLE_ENV, raising=False)
     data = build_data()
     make_hook(hook_module, tmp_path).initialize("standard", data)
     assert data == build_data()  # untouched → pure py3-none-any wheel
@@ -45,14 +55,43 @@ def test_noop_for_editable_and_sdist(hook_module, tmp_path, monkeypatch, version
     assert data == build_data()
 
 
+@pytest.mark.parametrize(
+    "platform_name,machine,tag_attr",
+    [
+        ("linux", "x86_64", "LINUX_TAG"),
+        ("win32", "AMD64", "WINDOWS_TAG"),
+    ],
+)
+def test_release_flag_selects_the_platform_tag(
+    hook_module, monkeypatch, platform_name, machine, tag_attr
+):
+    monkeypatch.setenv(hook_module.BUNDLE_ENV, "1")
+    monkeypatch.setattr(hook_module.sys, "platform", platform_name)
+    monkeypatch.setattr(hook_module.platform, "machine", lambda: machine)
+    assert hook_module._stenodiar_wheel_tag() == getattr(hook_module, tag_attr)
+
+
+def test_release_flag_on_an_unsupported_platform_raises(hook_module, monkeypatch):
+    # Better a failed build than a wheel tagged manylinux_2_28_x86_64 with an
+    # aarch64 binary in it — or with nothing in it at all.
+    monkeypatch.setenv(hook_module.BUNDLE_ENV, "1")
+    monkeypatch.setattr(hook_module.sys, "platform", "linux")
+    monkeypatch.setattr(hook_module.platform, "machine", lambda: "aarch64")
+    with pytest.raises(RuntimeError, match="no stenodiar wheel target"):
+        hook_module._stenodiar_wheel_tag()
+
+
 def _fake_build(tmp_path):
-    """A subprocess.run stand-in that 'builds' whichever helper's build.sh ran."""
+    """A subprocess.run stand-in that 'builds' whichever helper's script ran."""
 
     def fake(cmd, check):
         assert check
         script = Path(cmd[-1])
-        assert script.name == "build.sh"
-        binary = script.parent / ("stenocap" if script.parent.name == "helper" else "stenodiar")
+        assert script.stem == "build"  # build.sh, or build.ps1 on Windows
+        name = "stenocap" if script.parent.name == "helper" else "stenodiar"
+        if name == "stenodiar" and sys.platform == "win32":
+            name += ".exe"  # cargo's suffix, mirroring _stenodiar_path
+        binary = script.parent / name
         binary.parent.mkdir(parents=True, exist_ok=True)
         binary.write_bytes(b"\x00")
         binary.chmod(0o644)  # compilers emit 0o755; prove the hook re-asserts it
@@ -69,14 +108,45 @@ def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch)
     make_hook(hook_module, tmp_path).initialize("standard", data)
 
     assert data["pure_python"] is False
-    assert data["tag"] == hook_module.WHEEL_TAG
+    assert data["tag"] == hook_module.MACOS_TAG
     helper = tmp_path / "native" / "helper" / "stenocap"
-    stenodiar = tmp_path / "native" / "stenodiar" / "stenodiar"
+    stenodiar = _stenodiar(tmp_path)
     assert data["force_include"][str(helper)] == "stenograf/bin/stenocap"
-    assert data["force_include"][str(stenodiar)] == "stenograf/bin/stenodiar"
+    assert data["force_include"][str(stenodiar)] == f"stenograf/bin/{stenodiar.name}"
     if os.name == "posix":  # exec bits don't exist on Windows
         for binary in (helper, stenodiar):
             assert binary.stat().st_mode & 0o111 == 0o111
+
+
+def test_bundles_only_stenodiar_off_macos(hook_module, tmp_path, monkeypatch):
+    # The release build on Linux/Windows: one helper, the platform tag, and no
+    # stenocap anywhere near it (it is macOS-only).
+    monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
+    monkeypatch.setattr(hook_module, "_stenodiar_wheel_tag", lambda: hook_module.LINUX_TAG)
+    monkeypatch.setattr(hook_module.subprocess, "run", _fake_build(tmp_path))
+    data = build_data()
+    make_hook(hook_module, tmp_path).initialize("standard", data)
+
+    assert data["pure_python"] is False
+    assert data["tag"] == hook_module.LINUX_TAG
+    stenodiar = _stenodiar(tmp_path)
+    assert data["force_include"] == {str(stenodiar): f"stenograf/bin/{stenodiar.name}"}
+
+
+def test_missing_toolchain_off_macos_fails_the_wheel(hook_module, tmp_path, monkeypatch):
+    # Off macOS the flag *is* the request for a bundling wheel, so a failing
+    # build must not degrade to a platform-tagged wheel with nothing in it —
+    # unlike macOS, where a missing cargo is the ordinary source-install case.
+    monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
+    monkeypatch.setattr(hook_module, "_stenodiar_wheel_tag", lambda: hook_module.LINUX_TAG)
+    monkeypatch.setattr(hook_module, "_cargo_available", lambda: False)
+
+    def fail(cmd, check):
+        raise subprocess.CalledProcessError(127, cmd)
+
+    monkeypatch.setattr(hook_module.subprocess, "run", fail)
+    with pytest.raises(RuntimeError, match="install a Rust toolchain"):
+        make_hook(hook_module, tmp_path).initialize("standard", build_data())
 
 
 def test_missing_cargo_skips_stenodiar_but_still_ships(hook_module, tmp_path, monkeypatch):
