@@ -1618,6 +1618,49 @@ def test_bare_invocation_on_a_tty_opens_the_launcher(monkeypatch):
     assert "Usage:" not in result.output
 
 
+def test_gui_flag_opens_the_desktop_app_without_needing_a_tty(monkeypatch):
+    # --gui is how a Dock/desktop shortcut starts the tool: a window needs no
+    # TTY, so the terminal check that gates the Textual launcher must not gate
+    # this. CliRunner streams are never TTYs, which is exactly the case tested.
+    import stenograf.gui
+    import stenograf.ui
+
+    calls = []
+    monkeypatch.setattr(stenograf.gui, "run_gui", lambda: calls.append(1))
+    monkeypatch.setattr(stenograf.ui, "run_launcher", lambda: (_ for _ in ()).throw(AssertionError))
+
+    result = CliRunner().invoke(cli.main, ["--gui"])
+
+    assert result.exit_code == 0
+    assert calls == [1]
+
+
+def test_gui_flag_with_a_subcommand_is_a_usage_error(monkeypatch):
+    import stenograf.gui
+
+    monkeypatch.setattr(stenograf.gui, "run_gui", lambda: (_ for _ in ()).throw(AssertionError))
+
+    result = CliRunner().invoke(cli.main, ["--gui", "profiles", "list"])
+
+    assert result.exit_code != 0
+    assert "no subcommand" in result.output
+
+
+def test_the_desktop_app_says_how_to_install_qt_when_it_is_missing(monkeypatch):
+    # PySide6 is the optional [gui] extra; a missing one must be an instruction,
+    # not an ImportError traceback.
+    import importlib.util
+
+    import click
+
+    from stenograf.gui import run_gui
+
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    with pytest.raises(click.ClickException) as excinfo:
+        run_gui()
+    assert "stenograf[gui]" in excinfo.value.message
+
+
 def test_subcommands_never_open_the_launcher(monkeypatch):
     import stenograf.ui
 

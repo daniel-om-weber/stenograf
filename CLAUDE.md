@@ -3,8 +3,17 @@
 Meeting transcription pipeline: capture → live captions (TUI) → finalize
 (diarized transcript) → notes. Shipped on PyPI as `stenograf`.
 
-`PLAN.md` holds **only unbuilt work** — the active plan is Phase 8 (a native
-Qt Quick GUI), plus the open platform items and the declined list. Everything
+**Three front-ends, one library.** The CLI (`cli/`), the Textual launcher
+(`ui/`) and the Qt desktop app (`gui/`, `steno --gui`) are all thin: they gather
+inputs and call library entry points. The workflows they share live in
+`flow.py` (meeting request → run, transcribe, notes, settings report) and
+`captions.py` (live-caption line rules). Logic a screen needs that the library
+lacks goes into the library — never into one front-end, or the two UIs drift.
+
+`PLAN.md` holds **only unbuilt work** — the active plan is Phase 8's remainder
+(the app is built and opt-in; idle-power measurement, the TCC-survival test,
+`Stenograf.app` + icons, the tray mode and the default flip are open), plus the
+open platform items and the declined list. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /

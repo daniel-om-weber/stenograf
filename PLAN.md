@@ -14,13 +14,37 @@ the CLI or by the Textual launcher (`steno` with no arguments).
 
 ---
 
-## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25, not started.
+## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, steps 1–2 and 5–7 open.
 
 **Decision: the launcher becomes a real desktop application built on Qt Quick
 (PySide6), and `Stenograf.app` is generated locally by `steno setup`.** This
 absorbs the old Phase 7 Tier 2 (tray + packaged installers). The CLI
 subcommands and the whole library stay untouched; the Textual launcher stays
 the default until the Qt screens reach parity.
+
+**Built 2026-07-25 (steps 3 + 4): `stenograf/gui/` — all six screens, opt-in
+behind `steno --gui`,** with PySide6 as the optional `[gui]` extra. Getting
+there moved the shared work into the library, which is what keeps two
+front-ends from drifting: `stenograf/flow.py` (meeting-request resolution, the
+meeting run, transcribe, notes, the settings report) and
+`stenograf/captions.py` (the live-caption line rules). The Textual screens were
+rewritten onto both and are now as thin as the Qt ones. Tests are headless
+(`tests/test_gui.py`, `QT_QPA_PLATFORM=offscreen`): every page is instantiated
+with its real controller and the Qt message handler must stay silent — a QML
+binding error is a warning, not an exception, so an unwatched app "works" while
+rendering nothing.
+
+Landmines paid for while building it, beyond the spike's:
+
+- **A QML property may not be named `onSomething`** — `readonly property color
+  onAccent` is parsed as a signal handler and kills the whole singleton with
+  "Cannot assign a value to a signal".
+- **Screen objects must outlive the engine.** Parent them to the shell and the
+  shell to the `QGuiApplication`; the reverse teardown order re-evaluates every
+  binding against a null object and floods stderr with TypeErrors at exit.
+- **`ComboBox.textRole`/`valueRole` against a Python list of maps** is a
+  silent-`undefined` risk; `Combo.qml` reads the selected entry out of the model
+  by index instead.
 
 ### Why Qt, and why not the alternatives
 
@@ -134,20 +158,25 @@ regression tests possible in CI (`screencapture` from inside the app instead
 
 Each step ships working; none blocks the platform work below.
 
-1. Idle-power measurement of the Qt prototype under `powermetrics`, with and
-   without `pulseEnabled` — the number that must not regress the live
-   pipeline's power profile.
-2. The TCC-survival test: locally written `.app`, grant the mic,
-   `uv tool upgrade`, confirm no re-prompt. Everything below assumes it passes.
-3. `stenograf/gui/` + app shell + home screen; bare `steno` opens it behind an
-   opt-in flag while the Textual launcher stays default.
-4. Meeting screen (the risky one — live captions, worker threads), then
-   transcribe / notes / settings / doctor.
+1. **Open.** Idle-power measurement of the built app under `powermetrics` — the
+   number that must not regress the live pipeline's power profile. The app ships
+   the prototype's discipline (one 1 Hz timer, no page transitions, no idle
+   animation; only hover/toggle feedback animates, event-driven and ≤90 ms), but
+   the discipline is asserted by review, not measured.
+2. **Open.** The TCC-survival test: locally written `.app`, grant the mic,
+   `uv tool upgrade`, confirm no re-prompt. Steps 5–6 assume it passes.
+3. **Done** — `stenograf/gui/` + shell + home, opt-in behind `steno --gui`.
+4. **Done** — meeting screen (live captions on a worker thread), transcribe,
+   notes, settings, doctor. Native file dialogs replace the TUI's tree pickers;
+   the notes picker stays a folder picker, never a meeting list.
 5. `shortcut.py` writes `Stenograf.app` instead of `Stenograf.command`; icon
    assets (`.icns`/`.ico`/`.png`) land here — none exist yet.
 6. Menu-bar / taskbar mode via `QSystemTrayIcon`, degrading to the launcher
    where no tray host exists.
-7. Flip the default; retire the Textual launcher once parity is reached.
+7. Flip the default (`[gui]` moves into `dependencies`, bare `steno` opens the
+   window); retire the Textual launcher once parity is reached. Not before the
+   app has been *used* for real meetings — nothing in the automated tests can
+   tell whether the live screen reads well over half an hour.
 
 ---
 

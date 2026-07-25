@@ -98,6 +98,15 @@ dependencies = [
 # stdlib-only, so the extra stays empty — naming it now keeps
 # `stenograf[ollama]` a valid requirement before and after Stage D lands.
 ollama = []
+# The native desktop app (`steno --gui`, Phase 8). An extra rather than a base
+# dependency while the Textual launcher is still the default: ~110 MB of Qt is
+# not something a terminal user should download for a UI they never open. When
+# the GUI becomes the default (plan step 7) this moves into `dependencies`.
+# PySide6 is LGPL-3.0 and stays a normal pip dependency — that satisfies the
+# relinking obligation for this MIT project; a bundled build would not.
+# -Essentials (not the full PySide6) is the QtQuick/QtQml/QtQuickControls2 set
+# the app uses; Addons would add another ~100 MB of modules we never import.
+gui = ["PySide6-Essentials>=6.8"]
 
 [project.urls]
 Repository = "https://github.com/daniel-om-weber/stenograf"
@@ -119,6 +128,10 @@ dev = [
     # chain is macOS-arm64-only, so declare it here or `pytest` fails to collect the
     # DER scorer test on Linux/CI (Phase 3→4 readiness audit).
     "scipy>=1.11",
+    # tests/test_gui.py drives the Qt app's controllers and compiles every .qml
+    # (headless, QT_QPA_PLATFORM=offscreen). Same requirement as the [gui] extra,
+    # declared here too so CI actually runs those tests instead of skipping them.
+    "PySide6-Essentials>=6.8",
 ]
 # Phase 0 model-evaluation harness (eval/) — not shipped with the package.
 eval = [

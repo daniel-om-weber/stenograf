@@ -30,12 +30,18 @@ from stenograf.cli import (  # noqa: F401
 
 
 @click.group(invoke_without_command=True)
+@click.option(
+    "--gui",
+    is_flag=True,
+    help="Open the native desktop app instead of the terminal launcher (needs stenograf[gui]).",
+)
 @click.version_option(__version__, prog_name="stenograf")
 @click.pass_context
-def main(ctx: click.Context) -> None:
+def main(ctx: click.Context, gui: bool) -> None:
     """Accuracy-first local meeting transcription. Audio never touches disk.
 
-    Run without a subcommand in a terminal to open the interactive launcher.
+    Run without a subcommand in a terminal to open the interactive launcher,
+    or with --gui to open the desktop app.
     """
     # Windows pipes/redirects default to the legacy code page (cp1252), and a
     # single ✓/← in our output would then crash click.echo with a
@@ -46,16 +52,26 @@ def main(ctx: click.Context) -> None:
         if sys.platform == "win32" and hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
 
+    if ctx.invoked_subcommand is not None:
+        if gui:  # --gui is about the entry, not about any one command
+            raise click.UsageError("--gui opens the desktop app; it takes no subcommand")
+        return
+
     # Bare `steno` in a terminal opens the launcher (Phase 7); in a
     # pipe or script it prints help instead — Textual needs a real TTY, and a
     # script author hitting this by accident wants the usage text, not an app.
-    if ctx.invoked_subcommand is None:
-        if _interactive_terminal():
-            from stenograf.ui import run_launcher
+    # `steno --gui` opens the desktop app (Phase 8) and needs no TTY at all: it
+    # is a window, and it is how a Dock/desktop shortcut will start the tool.
+    if gui:
+        from stenograf.gui import run_gui
 
-            run_launcher()
-        else:
-            click.echo(ctx.get_help())
+        run_gui()
+    elif _interactive_terminal():
+        from stenograf.ui import run_launcher
+
+        run_launcher()
+    else:
+        click.echo(ctx.get_help())
 
 
 def _interactive_terminal() -> bool:

@@ -110,6 +110,20 @@ launcher opens:
 Everything the launcher does is also a plain CLI command — the rest of this
 document — so terminal users and scripts lose nothing.
 
+### The desktop app (preview)
+
+The same five workflows also exist as a real native window, built on Qt Quick.
+It is opt-in while it settles; the terminal launcher above stays the default.
+
+```sh
+uv tool install --force 'stenograf[gui]'   # adds Qt (~110 MB); one time
+steno --gui
+```
+
+It runs the same library the CLI does — same meeting folders, same
+settings.toml, same transcripts — so you can switch between the two freely, or
+never use it at all.
+
 ## Usage
 
 ```sh
@@ -344,7 +358,14 @@ uv run steno doctor
 ```
 
 The test suite is label-free and runs without a meeting: model-gated and
-real-audio tests self-skip when their assets are absent.
+real-audio tests self-skip when their assets are absent. The desktop app's
+tests run headless (`QT_QPA_PLATFORM=offscreen`, no window is ever shown) and
+skip entirely where PySide6 is not installed.
+
+Three front-ends share one library: the CLI (`stenograf/cli/`), the terminal
+launcher (`stenograf/ui/`) and the desktop app (`stenograf/gui/`). None of them
+holds pipeline logic — the workflows they drive live in `stenograf/flow.py`, so
+a behaviour change lands in all three at once.
 
 See [PLAN.md](PLAN.md) for the remaining roadmap;
 `native/README.md` for the capture helper and its wire protocol; `eval/README.md`

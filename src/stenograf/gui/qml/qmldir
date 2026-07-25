@@ -1,0 +1,3 @@
+# Makes Theme a singleton for the implicit import of this directory: every .qml
+# file next to it can write `Theme.accent` with no import line and no instance.
+singleton Theme 1.0 Theme.qml
