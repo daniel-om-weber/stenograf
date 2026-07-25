@@ -18,6 +18,11 @@ the index.
 
 - Commit straight to `main` for planned work; branch only for large
   unplanned multi-commit refactors.
+- Before committing, the CI triple must pass locally: `uv run ruff check .`,
+  `uv run --with pyright pyright` (macOS only — the mlx deps install there
+  only, so it is the only place types resolve as CI sees them), and
+  `uv run pytest -q`. `scripts/hooks/pre-commit` runs all three; enable it
+  per clone with `git config core.hooksPath scripts/hooks`.
 - Never mention Claude or AI assistance in commit messages or PR bodies —
   no `Co-Authored-By: Claude`, no "Generated with" trailers.
 - Delegate token-heavy research fan-outs to cheaper Opus subagents rather

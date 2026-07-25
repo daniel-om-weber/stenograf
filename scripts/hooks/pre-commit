@@ -1,0 +1,33 @@
+#!/bin/sh
+# Pre-commit gate: run the checks that CI's `test` job runs, before the commit
+# exists rather than after it is pushed. Enable once per clone with
+#
+#   git config core.hooksPath scripts/hooks
+#
+# Roughly 70 s (ruff ~1 s, pyright ~15 s, pytest ~55 s). Bypass deliberately
+# with `git commit --no-verify` for a WIP or docs-only commit.
+#
+# Two things this does NOT cover, both of which still only fail in CI: the
+# pytest run on Linux/Windows, and the `stenodiar` cargo checks. It also checks
+# the working tree, not the index — a partially staged commit can pass here and
+# still be broken on its own.
+set -eu
+
+echo "pre-commit: ruff ..."
+uv run ruff check .
+
+# pyright only on macOS, matching .github/workflows/ci.yml: the platform-marker
+# deps (mlx-lm, parakeet-mlx) install there only, and without them importable
+# pyright resolves half the codebase to Unknown and reports different errors
+# than CI does. On Linux/Windows the type check is CI's job.
+if [ "$(uname -s)" = "Darwin" ]; then
+    echo "pre-commit: pyright ..."
+    uv run --with pyright pyright
+else
+    echo "pre-commit: pyright skipped (macOS-only, as in CI)"
+fi
+
+echo "pre-commit: pytest ..."
+uv run pytest -q
+
+echo "pre-commit: ok"
