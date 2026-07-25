@@ -352,7 +352,8 @@ def _prepare_output(
 
     Returns ``(out_dir, basename, audio_default)``. By default the meeting gets
     a fresh date-named folder under the visible output home (``[output] dir``
-    in settings.toml, else ``~/Documents/Meetings``); ``--out`` uses that path
+    in settings.toml, else ``Meetings`` in the user's documents folder — see
+    :func:`~stenograf.output.default_output_home`); ``--out`` uses that path
     itself as the meeting's folder. Either way the files inside are plainly
     named — ``transcript.{fmt}``, ``audio.wav``.
 

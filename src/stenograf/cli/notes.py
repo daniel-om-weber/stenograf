@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     "last",
     is_flag=True,
     help="Use the newest meeting folder in the output home ([output] dir in "
-    "settings.toml, else ~/Documents/Meetings) instead of naming a PATH.",
+    "settings.toml, else Meetings/ in your documents folder) instead of naming "
+    "a PATH.",
 )
 @click.option(
     "--backend",

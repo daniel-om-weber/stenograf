@@ -16,7 +16,10 @@ optional; a missing file is simply all defaults. The full schema::
     [output]
     dir = "~/Documents/Meetings"        # the output home: every run writes its
                                         # own meeting-YYYYMMDD-HHMMSS/ folder
-                                        # here (--out bypasses it for one run)
+                                        # here (--out bypasses it for one run).
+                                        # Default: Meetings/ in the documents
+                                        # folder the desktop names — localised
+                                        # on Linux (~/Dokumente/Meetings)
     record_audio = false                # keep the raw captured audio as the
                                         # meeting folder's audio.wav, exactly as a
                                         # bare --record-audio would. Off by
@@ -128,7 +131,11 @@ SETTINGS_TEMPLATE = """\
 # reaches it: list "Prometheus-Alert", not "Alert" on its own.
 
 [output]
-# dir = "~/Documents/Meetings"             # where meeting folders are created
+# dir = "~/Documents/Meetings"             # where meeting folders are created;
+#                                          # the default is Meetings/ in your
+#                                          # documents folder, which is localised
+#                                          # on Linux (~/Dokumente/Meetings).
+#                                          # `steno settings show` prints it
 # record_audio = false                     # true = keep audio.wav (raw capture)
 #                                          # in every meeting folder, like a bare
 #                                          # --record-audio
@@ -186,7 +193,8 @@ class VocabSettings:
 class OutputSettings:
     dir: Path | None = None
     """The output home meeting folders are created in; ``None`` = the default
-    (``~/Documents/Meetings``, :func:`stenograf.output.default_output_home`).
+    (``Meetings`` in the user's documents folder, localised on Linux —
+    :func:`stenograf.output.default_output_home`).
     Not one meeting's dir — ``--out`` is that — but the folder of folders."""
     record_audio: bool | None = None
     """``True`` keeps the raw captured audio as each meeting folder's

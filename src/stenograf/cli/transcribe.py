@@ -95,8 +95,8 @@ if TYPE_CHECKING:
     default=None,
     help="Use this directory as the transcription's folder instead of creating "
     "a date-named one under the output home ([output] dir in settings.toml, "
-    "else ~/Documents/Meetings). Refuses a directory that already holds a "
-    "transcript unless --force.",
+    "else Meetings/ in your documents folder). Refuses a directory that already "
+    "holds a transcript unless --force.",
 )
 @click.option(
     "--force",
@@ -146,8 +146,8 @@ def transcribe(
 
     Runs the same finalize pipeline a live meeting runs on stop, and writes
     the transcript into its own date-named folder under the output home
-    ([output] dir in settings.toml, else ~/Documents/Meetings). Use --out to
-    name the folder yourself; --format also emits srt/vtt subtitles.
+    ([output] dir in settings.toml, else Meetings/ in your documents folder).
+    Use --out to name the folder yourself; --format also emits srt/vtt subtitles.
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
 

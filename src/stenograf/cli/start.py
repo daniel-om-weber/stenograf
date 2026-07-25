@@ -102,8 +102,8 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     default=None,
     help="Use this directory as the meeting's folder instead of creating a "
     "date-named one under the output home ([output] dir in settings.toml, "
-    "else ~/Documents/Meetings). Refuses a directory that already holds a "
-    "transcript unless --force.",
+    "else Meetings/ in your documents folder). Refuses a directory that already "
+    "holds a transcript unless --force.",
 )
 @click.option(
     "--force",

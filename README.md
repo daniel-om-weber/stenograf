@@ -199,7 +199,9 @@ downmixes to mono. Force either way with `--channels split|mix`.
 
 ## Where your files land
 
-Every run writes its own date-named folder into `~/Documents/Meetings`:
+Every run writes its own date-named folder into `Meetings` inside your
+documents folder — `~/Documents/Meetings`, or your desktop's localised name for
+it on Linux (`~/Dokumente/Meetings` on a German one):
 
 ```
 ~/Documents/Meetings/meeting-20260710-091500/
@@ -210,7 +212,8 @@ Every run writes its own date-named folder into `~/Documents/Meetings`:
 
 That's it — there is no separate library or index to manage. Browse with
 Finder or `ls`, read with anything that opens markdown, delete with `rm`.
-Change the standing location with `[output] dir` in settings.toml, or give one
+`steno settings show` prints the folder it resolved. Change the standing
+location with `[output] dir` in settings.toml, or give one
 run its own folder with `--out DIR` (files land directly in it; if DIR already
 holds a transcript, stenograf refuses to replace it unless you add `--force`).
 Audio is stored only when you passed `--record-audio`; without it a meeting
@@ -352,7 +355,8 @@ attendees = ["Anja Müller"]
 glossary_threshold = 0.95
 
 [output]
-dir = "~/Documents/Meetings"      # where meeting folders are created
+dir = "~/Documents/Meetings"      # where meeting folders are created (default:
+                                  # Meetings/ in your documents folder)
 
 [speakers]
 diarization = true                # separate speakers within a channel (off by

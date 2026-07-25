@@ -1,14 +1,72 @@
-"""The visible output home: folder allocation and the --last scan (Stage C)."""
+"""The visible output home: where it is, folder allocation, the --last scan."""
 
+import sys
 from datetime import datetime
 
 from stenograf.output import (
     allocate_meeting_dir,
     created_at_from_dir_name,
+    default_output_home,
+    documents_dir,
     latest_meeting_dir,
 )
 
 WHEN = datetime(2026, 7, 10, 9, 15, 0)
+
+
+def _linux_home(monkeypatch, tmp_path, user_dirs: str | None) -> None:
+    """A Linux session whose documents folder is whatever ``user_dirs`` says."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Path.home() on a Windows host
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
+    if user_dirs is not None:
+        (tmp_path / ".config").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".config" / "user-dirs.dirs").write_text(user_dirs, encoding="utf-8")
+
+
+def test_documents_is_the_folder_the_desktop_names(tmp_path, monkeypatch):
+    # The localised case: writing to ~/Documents here would create a second
+    # documents tree that the file manager's sidebar does not list.
+    _linux_home(
+        monkeypatch,
+        tmp_path,
+        '# written by xdg-user-dirs-update\n'
+        'XDG_DESKTOP_DIR="$HOME/Desktop"\n'
+        'XDG_DOCUMENTS_DIR="$HOME/Dokumente"\n'
+        'XDG_MUSIC_DIR="$HOME/Musik"\n',
+    )
+
+    assert documents_dir() == tmp_path / "Dokumente"
+    assert default_output_home() == tmp_path / "Dokumente" / "Meetings"
+
+
+def test_documents_falls_back_to_the_english_default(tmp_path, monkeypatch):
+    # No user-dirs.dirs at all (a minimal WM, a container): ~/Documents is both
+    # xdg-user-dirs' own default and what macOS and Windows use.
+    _linux_home(monkeypatch, tmp_path, None)
+
+    assert documents_dir() == tmp_path / "Documents"
+    assert default_output_home() == tmp_path / "Documents" / "Meetings"
+
+
+def test_an_absolute_or_disabled_entry_is_honoured(tmp_path, monkeypatch):
+    _linux_home(monkeypatch, tmp_path, f'XDG_DOCUMENTS_DIR="{tmp_path}/elsewhere/docs"\n')
+    assert documents_dir() == tmp_path / "elsewhere" / "docs"
+
+    # An entry pointing at $HOME means "disabled" in the XDG spec — the output
+    # home must not become the home directory itself.
+    _linux_home(monkeypatch, tmp_path, 'XDG_DOCUMENTS_DIR="$HOME/"\n')
+    assert documents_dir() == tmp_path / "Documents"
+
+
+def test_off_linux_the_file_is_not_consulted(tmp_path, monkeypatch):
+    # macOS localises the *display* name only: ~/Documents is the real path, and
+    # a stray user-dirs.dirs (from a dual-booted home dir) must not win there.
+    _linux_home(monkeypatch, tmp_path, 'XDG_DOCUMENTS_DIR="$HOME/Dokumente"\n')
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    assert documents_dir() == tmp_path / "Documents"
 
 
 def _finished(home, name):

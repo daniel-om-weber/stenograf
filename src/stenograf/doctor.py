@@ -66,17 +66,23 @@ def _settings_check() -> Check:
     """Whether settings.toml (if present) parses and validates whole.
 
     Not optional: every command now resolves its defaults from the file at
-    startup, so a broken file blocks ``steno start`` itself."""
+    startup, so a broken file blocks ``steno start`` itself.
+
+    It also names the output home, because that one is *resolved* rather than
+    fixed — the documents folder is localised on Linux, so a user whose meetings
+    are in ``~/Dokumente`` needs somewhere to read that off instead of guessing.
+    """
+    from stenograf.output import default_output_home
     from stenograf.settings import SettingsError, load_settings, settings_path
 
     path = settings_path()
     try:
-        load_settings()
+        settings = load_settings()
     except SettingsError as exc:
         return Check(name="Settings", ok=False, detail=str(exc))
-    if not path.exists():
-        return Check(name="Settings", ok=True, detail=f"{path} not present — all defaults")
-    return Check(name="Settings", ok=True, detail=f"{path} OK")
+    home = settings.output.dir or default_output_home()
+    state = "OK" if path.exists() else "not present — all defaults"
+    return Check(name="Settings", ok=True, detail=f"{path} {state}; meetings → {home}")
 
 
 def installed(module: str) -> bool:
