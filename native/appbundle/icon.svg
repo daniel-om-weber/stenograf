@@ -1,0 +1,37 @@
+<!--
+  Stenograf's app icon: a shorthand outline — one continuous stroke that starts
+  in the microphone's cyan (Theme.mic) and ends in the remote channel's pink
+  (Theme.remote). Two voices, written down as one line.
+
+  Deliberately not a waveform: bars-on-a-tile is what every recorder app on the
+  platform already looks like (TypeWhisper included), and this tool's output is
+  a transcript, not a recording.
+
+  Kept to SVG Tiny 1.2 features (no filters, no CSS): render_icon.py rasterizes
+  it with Qt's renderer, which supports nothing more. A single round-capped
+  stroke also survives being drawn 16 px wide, which five thin bars do not.
+
+  1024x1024 canvas with the 824x824 squircle macOS expects at its centre.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="backdrop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#252b36"/>
+      <stop offset="1" stop-color="#0f1116"/>
+    </linearGradient>
+    <!-- userSpaceOnUse: the hand-over has to happen along the stroke's travel
+         across the tile, not within each segment's own bounding box. -->
+    <linearGradient id="voices" gradientUnits="userSpaceOnUse" x1="200" y1="0" x2="824" y2="0">
+      <stop offset="0" stop-color="#4cc9f0"/>
+      <stop offset="1" stop-color="#f072c0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#backdrop)"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none"
+        stroke="#ffffff" stroke-opacity="0.09" stroke-width="4"/>
+
+  <path d="M 220 660 C 250 420, 380 280, 470 380 C 560 480, 470 720, 570 730 C 690 742, 700 470, 810 392"
+        fill="none" stroke="url(#voices)" stroke-width="88"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

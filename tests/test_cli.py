@@ -1207,8 +1207,11 @@ def _helper_wrapper(tmp_path, *forced_args):
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
 def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))  # the launcher lands in $HOME/Desktop
+    from stenograf import shortcut
+
+    monkeypatch.setenv("HOME", str(tmp_path))  # the launcher lands in $HOME/Applications
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
+    monkeypatch.setattr(shortcut, "_qt_installed", lambda: True)
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
@@ -1216,8 +1219,25 @@ def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
     assert "granted" in result.output
     assert fetched  # downloads run after the permission step
     assert "launcher installed" in result.output
-    assert (tmp_path / "Desktop" / "Stenograf.command").exists()
+    assert (tmp_path / "Applications" / "Stenograf.app").is_dir()
+    # The grant just taken belongs to this terminal; the app is its own TCC
+    # client and asks once more. Saying so is the whole point of the line.
+    assert "asks for microphone access once" in result.output
     assert "setup complete" in result.output
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
+def test_setup_without_the_gui_extra_falls_back_to_the_command_file(tmp_path, monkeypatch):
+    from stenograf import shortcut
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
+    monkeypatch.setattr(shortcut, "_qt_installed", lambda: False)
+    monkeypatch.setattr(loaders, "prefetch_models", lambda: None)
+    result = CliRunner().invoke(cli.main, ["setup"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "Desktop" / "Stenograf.command").exists()
+    assert "stenograf[gui]" in result.output  # how to get the app instead
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")

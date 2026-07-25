@@ -58,12 +58,26 @@ def setup(models_only: bool) -> None:
     if not models_only:
         from stenograf.shortcut import install_shortcut
 
-        if (shortcut := install_shortcut()) is not None:
-            click.echo(click.style("✓", fg="green") + f" launcher installed: {shortcut}")
-            if sys.platform.startswith("linux"):  # menu entry; macOS/Windows land on the Desktop
+        if (launcher := install_shortcut()) is not None:
+            click.echo(click.style("✓", fg="green") + f" launcher installed: {launcher}")
+            if launcher.suffix == ".app":  # macOS with the gui extra: the real app
+                click.echo("  Open it from Spotlight or the Dock — no terminal needed.")
+                # The grant taken above belongs to this terminal. The app is its
+                # own TCC client (that is the point of the bundle), so it asks
+                # once more — and that grant then survives every upgrade.
+                click.echo(
+                    "  The app asks for microphone access once, the first time you start a "
+                    "meeting from it."
+                )
+            elif sys.platform.startswith("linux"):  # menu entry; the others land on the Desktop
                 click.echo('  Look for "Stenograf" in your application menu.')
             else:
                 click.echo("  Double-click it to start stenograf — no terminal needed.")
+                if sys.platform == "darwin":  # no gui extra, so no Stenograf.app
+                    click.echo(
+                        "  For the desktop app instead of a terminal window, install the extra "
+                        "— uv tool install --force 'stenograf[gui]' — and re-run `steno setup`."
+                    )
 
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.

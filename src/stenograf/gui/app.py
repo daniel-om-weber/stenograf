@@ -38,9 +38,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
+
+from stenograf import ASSETS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -262,6 +264,11 @@ def run() -> int:
     app.setApplicationName("Stenograf")
     app.setApplicationDisplayName("Stenograf")
     app.setOrganizationName("stenograf")
+    # Named here rather than left to the platform: launched from
+    # `Stenograf.app` the Dock already shows the bundle's icon, but started
+    # from a terminal — or on Linux and Windows — this is the only thing
+    # standing between the app and a generic Python tile.
+    app.setWindowIcon(QIcon(str(ASSETS / "icon.png")))
 
     engine, gui = build(app)
     # Shown from here, not by the QML: a headless test can build the whole tree

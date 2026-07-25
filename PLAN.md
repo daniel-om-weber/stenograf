@@ -14,16 +14,17 @@ the CLI or by the Textual launcher (`steno` with no arguments).
 
 ---
 
-## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, **step 5 is next**, 6–7 follow.
+## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built and installable, **step 6 is next**, then 7.
 
 **Decision: the launcher becomes a real desktop application built on Qt Quick
-(PySide6), and `Stenograf.app` is generated locally by `steno setup`.** This
+(PySide6), and `Stenograf.app` is installed locally by `steno setup`.** This
 absorbs the old Phase 7 Tier 2 (tray + packaged installers). The CLI
 subcommands and the whole library stay untouched; the Textual launcher stays
 the default until the Qt screens reach parity.
 
 **Built 2026-07-25 (steps 3 + 4): `stenograf/gui/` — all six screens, opt-in
-behind `steno --gui`,** with PySide6 as the optional `[gui]` extra. Getting
+behind `steno --gui`,** with PySide6 as the optional `[gui]` extra; step 5 put
+them behind a double-clickable `~/Applications/Stenograf.app`. Getting
 there moved the shared work into the library, which is what keeps two
 front-ends from drifting: `stenograf/flow.py` (meeting-request resolution, the
 meeting run, transcribe, notes, the settings report) and
@@ -84,16 +85,17 @@ a future PyInstaller-bundled build would not, and needs real attention.
 ### Distribution: no Developer ID required
 
 macOS quarantine is applied by the *downloading* program, so a file written
-locally is never assessed by Gatekeeper. `steno setup` already exploits this
-for `Stenograf.command`; the same trick carries a full `.app` bundle — custom
-icon, Dock presence, `LSUIElement` for menu-bar mode — with no Developer ID,
-no notarization, not even a real signature (ad-hoc suffices). **The $99/yr
-gates only a *downloadable* artifact.**
+locally is never assessed by Gatekeeper. `steno setup` exploited this first for
+`Stenograf.command` and now (step 5) for the full `.app` bundle — custom icon,
+Dock presence, menu-bar mode — with no Developer ID, no notarization, not even
+a real signature (ad-hoc suffices). **The $99/yr gates only a *downloadable*
+artifact.**
 
 Consequence, **measured** in step 2 below: TCC grants move off Terminal.app onto
 our bundle. That is better hygiene ("Stenograf would like to access the
-microphone") but reworks the `setup`/`doctor` permission flow, and an ad-hoc
-bundle's TCC identity is weak in one specific, load-bearing way — TCC stores
+microphone"); `setup` now says so in as many words, because the grant it takes
+for the terminal is not the app's. An ad-hoc bundle's TCC identity is weak in
+one specific, load-bearing way — TCC stores
 **`cdhash` and nothing else** as the requirement, no identifier and no anchor.
 So the bundle must be a thin wrapper that is **byte-identical forever**, and it
 must **spawn** the installed `steno` as a child; a wrapper that `exec`s it loses
@@ -165,10 +167,10 @@ regression tests possible in CI (`screencapture` from inside the app instead
 
 ### Sequencing
 
-Each step ships working; none blocks the platform work below. Steps 2–4 are
+Each step ships working; none blocks the platform work below. Steps 2–5 are
 done and step 1's remainder is deferred, so **the next thing to build is step
-5** — and because of what step 2 measured it should be built together with the
-Info.plist shape step 6 needs (see step 6).
+6** — which step 5 unblocked rather than constrained: the Info.plist coupling
+the plan expected turned out not to exist (see step 6).
 
 1. **Half done 2026-07-25; the watt half deliberately deferred.** The
    per-process half is measured and the app is clean: on the idle home screen
@@ -224,36 +226,54 @@ Info.plist shape step 6 needs (see step 6).
 4. **Done** — meeting screen (live captions on a worker thread), transcribe,
    notes, settings, doctor. Native file dialogs replace the TUI's tree pickers;
    the notes picker stays a folder picker, never a meeting list.
-5. `shortcut.py` writes `Stenograf.app` instead of `Stenograf.command`, shaped
-   by what step 2 measured:
+5. **Done 2026-07-25.** `steno setup` installs `~/Applications/Stenograf.app`
+   (with the `gui` extra; without it the Desktop `.command` stays, since an
+   `.app` cannot host a TUI). Sources in `native/appbundle/`, the built and
+   signed bundle committed at `src/stenograf/assets/Stenograf.app` and shipped
+   in the wheel — `shortcut.py` only ever copies it, and
+   `tests/test_shortcut.py` pins a sha256 over the tree so a casual rebuild
+   fails CI. Built as step 2 demanded: a universal Mach-O stub that
+   `posix_spawn`s `steno --gui` and waits on it, an icon (`icon.svg` →
+   `.icns` + the `icon.png` Qt now uses for its window/Dock/taskbar tile), and
+   the launch target outside the bundle at `~/Library/Application
+   Support/stenograf/launch-target` — one argv element per line, falling back
+   to `~/.local/bin/steno --gui`, which is why the CLI must keep accepting
+   `--gui` forever. That path is `data_dir()`'s macOS default rather than the
+   `~/.config` this plan first named, but with `$STENOGRAF_DATA` deliberately
+   *not* honoured: launchd gives the stub no environment, so both ends have to
+   agree on one fixed path.
 
-   - `Contents/MacOS/Stenograf` is a **prebuilt, committed** Mach-O that spawns
-     the installed `steno` and waits on it — not a script, not an `exec`, and
-     not compiled at install time, since a per-machine or per-release rebuild
-     moves the cdhash and re-prompts every user. Changing it at all is a
-     re-prompt for everyone, so treat it as frozen.
-   - The bundle carries **no configuration**: the launch target lives outside it
-     (a `~/.config/stenograf/launch-target` file, falling back to
-     `~/.local/bin/steno`, which survives `uv tool upgrade`). Baking
-     `sys.executable` into the wrapper — what `shortcut.py` does today for
-     `Stenograf.command`, deliberately, to self-heal after a reinstall — would
-     move the cdhash on every `steno setup`. `setup` must therefore never
-     rewrite the bundle non-identically.
-   - Icon assets (`.icns`/`.ico`/`.png`) land here; **none exist yet**. Adding
-     the icon changes the cdhash, so the layout must be frozen *including the
-     icon* before any user grants — otherwise the icon release re-prompts
-     everyone who already did.
+   Everything the stub does beyond spawning exists because a Dock launch has
+   nowhere to complain to: the child's output is teed to
+   `~/Library/Logs/Stenograf.log`, a missing target or a non-zero exit raises a
+   `CFUserNotification` alert, signals are forwarded so logout doesn't orphan
+   the window, and `PATH` is widened past launchd's bare four entries. The
+   signal handler restores the default disposition once the child is gone —
+   without that the stub survives SIGTERM while an alert is up, which cost a
+   rebuild to find. Verified end to end on this machine: the wheel round-trips
+   the bundle byte-identically with its signature intact, the copy in
+   `~/Applications` still satisfies `codesign --verify --strict`, and capture
+   started from the app wrote the grant this whole design is for —
+   `kTCCServiceMicrophone` and `kTCCServiceAudioCapture` against
+   `dev.stenograf.app`, `client_type=0`, requirement `cdhash H"1651c78f…" or
+   cdhash H"b0516786…"`, i.e. **both slices of the universal binary**, so the
+   grant even survives an Intel↔Apple-Silicon migration. No `python3.13` row
+   appeared. The step-2 test bundle's grant was replaced rather than migrated,
+   which is the freeze rule demonstrated from the other side.
 6. Menu-bar / taskbar mode via `QSystemTrayIcon`, degrading to the launcher
    where no tray host exists. Rule 4 gives this a power argument the toolkit
    comparison did not: a tray-only app has no visible window, so it idles at ~1
    wakeup/s instead of the display-refresh floor.
 
-   **It is no longer independently shippable after step 5.** Menu-bar mode wants
-   `LSUIElement` in `Info.plist`, and by step 2's measurement any Info.plist
-   change moves the bundle's cdhash and silently re-prompts everyone who has
-   already granted — exactly like adding the icon. So the tray mode's plist keys
-   have to be decided *with* step 5 and shipped in the same frozen layout, even
-   if the tray code itself lands dark and later.
+   **Still independently shippable — the feared plist coupling does not exist**
+   (measured 2026-07-25, `native/appbundle/README.md`). LaunchServices moves the
+   bundle's registration onto the spawned Qt child when it checks in (one Dock
+   tile, our icon, `originalPid` still the stub), and the child owns its own
+   activation policy at runtime: `setActivationPolicy(accessory)` flips the
+   record from `Foreground` to `UIElement` live. So menu-bar mode is a call in
+   the child, not an `LSUIElement` key in the frozen Info.plist — which was
+   tried and rejected anyway, because a UIElement app cannot be activated by
+   `open` and the window then opens *behind* the frontmost one.
 7. Flip the default (`[gui]` moves into `dependencies`, bare `steno` opens the
    window); retire the Textual launcher once parity is reached. Not before the
    app has been *used* for real meetings — nothing in the automated tests can

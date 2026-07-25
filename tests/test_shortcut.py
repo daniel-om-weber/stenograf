@@ -1,12 +1,17 @@
-"""The desktop launcher ``steno setup`` drops, and the entries it relies on.
+"""The desktop launchers ``steno setup`` drops, and the entries they rely on.
 
-Phase 7 Task 6: the launcher embeds the absolute interpreter and runs
-``-m stenograf`` — a double-clicked shortcut gets a login-shell PATH that may
-lack uv's shim directory, so ``steno`` by name is never good enough.
+Two rules are worth the tests. The terminal launchers embed the absolute
+interpreter and run ``-m stenograf`` (Phase 7 Task 6) — a double-clicked
+shortcut gets a login-shell PATH that may lack uv's shim directory, so ``steno``
+by name is never good enough. And ``Stenograf.app`` (Phase 8 step 5) is copied
+byte for byte and never generated, because macOS pins the app's microphone
+grant to the bundle's exact contents.
 """
 
 from __future__ import annotations
 
+import hashlib
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +22,19 @@ from stenograf import shortcut
 
 REPO_ROOT = Path(__file__).parent.parent
 WINDOWS = sys.platform == "win32"  # the real host, before any monkeypatching
+MACOS = sys.platform == "darwin"
+
+BUNDLE_FINGERPRINT = "870170af7d55022a683a6d15ef8d2c921e2e32b7f0b2f13117e3223b30d4deeb"
+"""sha256 over every file in the committed bundle, path and bytes.
+
+The one constant in this file that is a *decision*, not an observation. TCC
+stores the app's microphone and system-audio grants against the cdhash of
+``Contents/MacOS/Stenograf`` — no identifier, no anchor (PLAN.md Phase 8 step 2)
+— and the Info.plist and the icon are sealed into that hash. So changing
+anything in the bundle, including rebuilding the same source, makes every
+machine that already granted access prompt again, with no way to migrate the
+old grant. Matching cdhashes as built: arm64 ``1651c78f…``, x86_64 ``b0516786…``.
+"""
 
 
 def _home(monkeypatch, path: Path) -> None:
@@ -25,18 +43,152 @@ def _home(monkeypatch, path: Path) -> None:
     monkeypatch.setenv("USERPROFILE", str(path))
 
 
-def test_macos_shortcut_is_an_executable_command_file(tmp_path, monkeypatch):
+def _macos(monkeypatch, tmp_path: Path, *, qt: bool) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(shortcut, "_qt_installed", lambda: qt)
     _home(monkeypatch, tmp_path)
+
+
+def _fingerprint(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+# -- the macOS app bundle ----------------------------------------------------
+
+
+def test_the_committed_bundle_is_frozen():
+    # Read BUNDLE_FINGERPRINT's docstring before touching this.
+    assert _fingerprint(shortcut.BUNDLE_TEMPLATE) == BUNDLE_FINGERPRINT
+
+
+def test_the_bundle_has_the_shape_macos_requires():
+    contents = shortcut.BUNDLE_TEMPLATE / "Contents"
+    info = plistlib.loads((contents / "Info.plist").read_bytes())
+    assert info["CFBundleIdentifier"] == "dev.stenograf.app"  # the TCC client name
+    assert info["CFBundleExecutable"] == "Stenograf"
+    # Both usage strings: the capture helper's prompt is attributed to this app.
+    assert "microphone" in info["NSMicrophoneUsageDescription"]
+    assert info["NSAudioCaptureUsageDescription"]
+    # Menu-bar mode (step 6) is a runtime activation-policy call in the spawned
+    # child, measured 2026-07-25 — an LSUIElement here would only stop `open`
+    # from bringing the window forward, and could never be added later anyway.
+    assert "LSUIElement" not in info
+
+    executable = contents / "MacOS" / "Stenograf"
+    # A Mach-O, never a script: an interpreted main executable makes the
+    # interpreter — which lives outside the bundle — the process TCC sees.
+    assert executable.read_bytes()[:4] == b"\xca\xfe\xba\xbe"  # universal binary
+    assert (contents / "Resources" / "Stenograf.icns").is_file()
+    assert (contents / "_CodeSignature" / "CodeResources").is_file()
+
+
+def test_macos_installs_the_app_bundle(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path, qt=True)
+
+    target = shortcut.install_shortcut()
+
+    assert target == tmp_path / "Applications" / "Stenograf.app"
+    # Byte for byte, including the signature: the copy is the same app to TCC.
+    assert _fingerprint(target) == BUNDLE_FINGERPRINT
+    if not WINDOWS:  # Windows stat reports no exec bits
+        assert (target / "Contents" / "MacOS" / "Stenograf").stat().st_mode & 0o111
+
+
+def test_the_app_is_pointed_at_this_installation_from_outside_the_bundle(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path, qt=True)
+
+    target = shortcut.install_shortcut()
+
+    lines = shortcut.launch_target_path().read_text(encoding="utf-8").splitlines()
+    command = [line for line in lines if line and not line.startswith("#")]
+    assert command[0].endswith(("steno", "python", "python3", "python.exe", "python3.exe"))
+    assert command[-1] == "--gui"  # the app has no terminal to host the TUI in
+    # Nothing machine-specific may be written *into* the bundle: that is what
+    # would move the cdhash on every setup.
+    assert str(tmp_path) not in (target / "Contents" / "Info.plist").read_text(encoding="utf-8")
+
+
+def test_reinstall_refreshes_the_target_but_never_the_bundle(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path, qt=True)
+    target = shortcut.install_shortcut()
+    executable = target / "Contents" / "MacOS" / "Stenograf"
+    before = executable.stat().st_ino
+    shortcut.launch_target_path().write_text("/stale/steno\n", encoding="utf-8")
+
+    again = shortcut.install_shortcut()
+
+    assert again == target
+    assert executable.stat().st_ino == before  # an up-to-date bundle is left alone
+    assert "/stale/steno" not in shortcut.launch_target_path().read_text(encoding="utf-8")
+
+
+def test_a_damaged_bundle_is_replaced(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path, qt=True)
+    target = shortcut.install_shortcut()
+    executable = target / "Contents" / "MacOS" / "Stenograf"
+    executable.write_bytes(b"truncated")
+
+    shortcut.install_shortcut()
+
+    assert _fingerprint(target) == BUNDLE_FINGERPRINT
+
+
+def test_the_app_retires_the_desktop_command_file(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path, qt=False)
+    legacy = shortcut.install_shortcut()  # the pre-app launcher
+    assert legacy is not None and legacy.exists()
+    monkeypatch.setattr(shortcut, "_qt_installed", lambda: True)
+
+    shortcut.install_shortcut()
+
+    # Two launchers with different behaviour is the confusing outcome.
+    assert not legacy.exists()
+
+
+def test_a_foreign_command_file_is_left_alone(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path, qt=True)
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    (desktop / "Stenograf.command").write_text("#!/bin/sh\n# mine, not yours\n", encoding="utf-8")
+
+    shortcut.install_shortcut()
+
+    assert (desktop / "Stenograf.command").exists()  # it is the user's Desktop
+
+
+@pytest.mark.skipif(not MACOS, reason="codesign only exists on macOS")
+def test_the_installed_copy_still_satisfies_its_signature(tmp_path, monkeypatch):
+    # The whole distribution model: the seal travels with the files, so a bundle
+    # written by shutil is the same code object as the one that was signed here.
+    _macos(monkeypatch, tmp_path, qt=True)
+
+    target = shortcut.install_shortcut()
+
+    subprocess.run(["codesign", "--verify", "--strict", str(target)], check=True, timeout=60)
+
+
+# -- the terminal launchers --------------------------------------------------
+
+
+def test_macos_without_qt_still_gets_the_command_file(tmp_path, monkeypatch):
+    # An .app cannot host a TUI, so without the gui extra the Terminal.app
+    # shortcut stays the honest answer.
+    _macos(monkeypatch, tmp_path, qt=False)
 
     target = shortcut.install_shortcut()
 
     assert target == tmp_path / "Desktop" / "Stenograf.command"
-    if not WINDOWS:  # Windows stat reports no exec bits
+    if not WINDOWS:
         assert target.stat().st_mode & 0o111  # double-click needs the exec bit
     content = target.read_text()
     assert content.startswith("#!/bin/sh")
     assert f'exec "{sys.executable}" -m stenograf' in content
+    assert not (tmp_path / "Applications").exists()
 
 
 def test_linux_shortcut_is_a_terminal_desktop_entry(tmp_path, monkeypatch):
@@ -49,6 +201,7 @@ def test_linux_shortcut_is_a_terminal_desktop_entry(tmp_path, monkeypatch):
     content = target.read_text()
     assert "Terminal=true" in content  # the TUI needs a real terminal
     assert f'Exec="{sys.executable}" -m stenograf' in content
+    assert f"Icon={shortcut.ICON}" in content and shortcut.ICON.is_file()
 
 
 def test_linux_shortcut_defaults_to_local_share(tmp_path, monkeypatch):
@@ -62,10 +215,10 @@ def test_linux_shortcut_defaults_to_local_share(tmp_path, monkeypatch):
 
 
 def test_reinstall_overwrites_and_self_heals(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "darwin")
-    _home(monkeypatch, tmp_path)
+    _macos(monkeypatch, tmp_path, qt=False)
 
     first = shortcut.install_shortcut()
+    assert first is not None
     first.write_text("#!/bin/sh\nexec /stale/interpreter -m stenograf\n")
     second = shortcut.install_shortcut()
 

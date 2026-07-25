@@ -117,8 +117,14 @@ It is opt-in while it settles; the terminal launcher above stays the default.
 
 ```sh
 uv tool install --force 'stenograf[gui]'   # adds Qt (~110 MB); one time
-steno --gui
+steno setup                                # installs ~/Applications/Stenograf.app
+steno --gui                                # …or just open the app
 ```
+
+On macOS, setup then replaces the Desktop shortcut with a real **Stenograf.app**
+— its own icon, Dock tile and Spotlight entry. It asks for microphone access
+once, under its own name rather than your terminal's, and keeps that permission
+across every later upgrade.
 
 It runs the same library the CLI does — same meeting folders, same
 settings.toml, same transcripts — so you can switch between the two freely, or

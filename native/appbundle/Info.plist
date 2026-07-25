@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>dev.stenograf.app</string>
+	<key>CFBundleName</key>
+	<string>Stenograf</string>
+	<key>CFBundleDisplayName</key>
+	<string>Stenograf</string>
+	<key>CFBundleExecutable</key>
+	<string>Stenograf</string>
+	<key>CFBundleIconFile</key>
+	<string>Stenograf</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<!-- The launcher stub's version, not stenograf's, and it never moves: this
+	     dictionary is hashed into the executable's cdhash, which is the whole of
+	     the TCC grant (PLAN.md Phase 8 step 2). The app's real version comes from
+	     the `steno` it launches. -->
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<!-- No LSUIElement, deliberately, and this is the key that step 6 was
+	     expected to need (PLAN.md said the tray mode would want it, and that
+	     changing the plist later re-prompts everyone). Measured 2026-07-25:
+	     LaunchServices moves this bundle's registration onto the spawned child
+	     when Qt checks in — one Dock tile, our icon, our name, `originalPid`
+	     still pointing at the stub — and the child then owns its own activation
+	     policy at runtime: `setActivationPolicy(accessory)` flips the record
+	     from Foreground to UIElement live. So menu-bar mode is a call in the
+	     child, not a key here. With LSUIElement set the app also opened *behind*
+	     the frontmost window, because `open` cannot activate a UIElement. -->
+	<!-- The capture helper is a grandchild of this bundle and TCC attributes its
+	     prompt here, so the sentences the user is asked to agree to are these. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>stenograf transcribes your meetings locally; the microphone captures your own voice and is never written to disk.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>stenograf transcribes your meetings locally; system audio is the remote participants' voices and is never written to disk.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

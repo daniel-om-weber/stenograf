@@ -117,6 +117,18 @@ class TestQmlTree:
                 assert item is not None, f"{page}.qml did not instantiate"
             assert log.seen == []
 
+    def test_the_app_has_an_icon_to_show(self, qt_app):
+        # Ships in the wheel next to the .app bundle it was cut from. Without
+        # it the Dock and the taskbar fall back to a generic Python tile —
+        # which is also what a wheel that dropped the assets/ directory looks
+        # like, so this doubles as a packaging check.
+        from PySide6.QtGui import QIcon
+
+        from stenograf import ASSETS
+
+        icon = QIcon(str(ASSETS / "icon.png"))
+        assert not icon.isNull(), f"{ASSETS / 'icon.png'} is missing or unreadable"
+
     def test_every_menu_entry_opens_a_real_page(self, gui):
         shell, _engine = gui
         for page, _label, _description in MENU:

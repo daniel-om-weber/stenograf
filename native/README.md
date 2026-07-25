@@ -1,7 +1,13 @@
 # Native helpers (macOS)
 
 Two optional binaries live here, both speaking simple pipes to the Python core
-and both honoring the same rule: **meeting audio never touches disk**.
+and both honoring the same rule: **meeting audio never touches disk** — plus
+`appbundle/`, which is not a helper at all but the sources for the macOS
+desktop launcher `Stenograf.app`. It breaks this directory's convention on
+purpose: its product is *committed* (`src/stenograf/assets/Stenograf.app`)
+rather than built at install time, because macOS pins the app's microphone
+grant to the bundle's exact bytes. Read `appbundle/README.md` before touching
+anything in it.
 
 `stenodiar/` holds the **diarization helper**, a Rust CLI around
 [speakrs](https://github.com/avencera/speakrs) (the pyannote community-1

@@ -1,0 +1,5 @@
+# The app bundle's bytes ARE the microphone grant (PLAN.md Phase 8 step 5): TCC
+# pins the app to the cdhash of these exact files, so any end-of-line or
+# encoding conversion on a checkout would silently revoke it for that user.
+src/stenograf/assets/Stenograf.app/** binary
+src/stenograf/assets/icon.png binary
