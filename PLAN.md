@@ -14,7 +14,7 @@ the CLI or by the Textual launcher (`steno` with no arguments).
 
 ---
 
-## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, steps 1 and 5–7 open.
+## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, **step 5 is next**, 6–7 follow.
 
 **Decision: the launcher becomes a real desktop application built on Qt Quick
 (PySide6), and `Stenograf.app` is generated locally by `steno setup`.** This
@@ -145,25 +145,55 @@ regression tests possible in CI (`screencapture` from inside the app instead
 3. Notes generation still goes through the existing entry point on the thread
    that imported `mlx_lm`. A Qt worker thread naively re-importing it dies
    with "no Stream(gpu, 0)".
-4. **The redraw budget carries over verbatim.** The TUI's `TEXTUAL_FPS` pin and
-   `animation_level = "none"` become "bind the view to model updates, no idle
-   animations": a QML `Timer { running: true }`, a spinner, or an easing
-   transition on every caption holds the compositor awake for the whole
-   meeting, against a live pipeline tuned to ~0.6 W. The prototype keeps
-   exactly one 1 Hz timer and ships `pulseEnabled: false` to make the cost of
-   a pulsing REC dot visible.
+4. **The redraw budget carries over, but it cannot reach Qt's floor.** The TUI's
+   `TEXTUAL_FPS` pin and `animation_level = "none"` become "bind the view to
+   model updates, no idle animations": a QML `Timer { running: true }`, a
+   spinner, or an easing transition on every caption holds the compositor awake
+   for the whole meeting, against a live pipeline tuned to ~0.6 W. The app keeps
+   exactly one 1 Hz timer (`gui/meeting.py`, the meeting clock).
+
+   That discipline is necessary but **not sufficient, and step 1 measured why**:
+   a *visible, unoccluded* Qt Quick window with scene-graph content is woken at
+   the display's refresh rate — ~120/s on the Liquid Retina XDR panel — whatever
+   the QML does. The lever that actually works is **occlusion**, and it is ~100×
+   rather than ~2×: covered by another window the same app drops to ~1 wakeup/s.
+   So the realistic in-meeting cost is the occluded case (the window normally
+   sits behind the video-call window), and a tray-only mode idles at the floor
+   permanently — a power argument for step 6 in its own right.
 5. The notes screen stays a dumb file picker, never a meeting list with
    metadata — that would be the meeting browser the product philosophy forbids.
 
 ### Sequencing
 
-Each step ships working; none blocks the platform work below.
+Each step ships working; none blocks the platform work below. Steps 2–4 are
+done and step 1's remainder is deferred, so **the next thing to build is step
+5** — and because of what step 2 measured it should be built together with the
+Info.plist shape step 6 needs (see step 6).
 
-1. **Open.** Idle-power measurement of the built app under `powermetrics` — the
-   number that must not regress the live pipeline's power profile. The app ships
-   the prototype's discipline (one 1 Hz timer, no page transitions, no idle
-   animation; only hover/toggle feedback animates, event-driven and ≤90 ms), but
-   the discipline is asserted by review, not measured.
+1. **Half done 2026-07-25; the watt half deliberately deferred.** The
+   per-process half is measured and the app is clean: on the idle home screen
+   `steno --gui` is indistinguishable from a 40-line standalone replica of
+   `Home.qml`'s structure with no Python object behind it — both ~120 wakeups/s,
+   ~2.0 CPU ms/s, **GPU 0.00 ms/s**, Energy Impact ~0.16. The wakeups are
+   therefore not our timers, not the `Behavior`/`ColorAnimation` pairs and not
+   the `app` bridge; they are the display-refresh floor described in rule 4
+   above, and `QSG_RENDER_LOOP=basic` does not remove them.
+
+   Two measurement traps, both paid for: an **empty `ApplicationWindow` is not a
+   valid control** — with no scene graph it never exercises the render loop, so
+   comparing against it makes Qt's floor look like our own bug; and `sample`
+   showing all six threads parked does **not** mean nothing wakes the process,
+   because each wake is ~17 µs and invisible at 1 ms sampling. Use
+   `powermetrics --samplers tasks` (per-process wakeups survive a busy machine;
+   absolute watts do not).
+
+   **Deferred:** the absolute watt delta against the pipeline's ~0.6 W. It needs
+   a quiet machine — Spotlight/SeaDrive indexing had the noise floor at
+   446–795 mW, 350 mW peak-to-peak, which is the order of the quantity being
+   measured — and the wakeups' true cost is masked meanwhile, since "Pkg idle"
+   wakeups read ~0 while `mds_stores` keeps the package out of idle anyway. Not
+   a blocker for anything below; pick it up on an idle machine, on battery,
+   several minutes per arm, app-open vs app-closed interleaved.
 2. **Done 2026-07-25 — passed.** A locally written, ad-hoc-signed
    `Stenograf.app` was granted mic + system audio, then
    `uv tool install --reinstall stenograf` replaced the venv, the python symlink
@@ -214,7 +244,16 @@ Each step ships working; none blocks the platform work below.
      icon* before any user grants — otherwise the icon release re-prompts
      everyone who already did.
 6. Menu-bar / taskbar mode via `QSystemTrayIcon`, degrading to the launcher
-   where no tray host exists.
+   where no tray host exists. Rule 4 gives this a power argument the toolkit
+   comparison did not: a tray-only app has no visible window, so it idles at ~1
+   wakeup/s instead of the display-refresh floor.
+
+   **It is no longer independently shippable after step 5.** Menu-bar mode wants
+   `LSUIElement` in `Info.plist`, and by step 2's measurement any Info.plist
+   change moves the bundle's cdhash and silently re-prompts everyone who has
+   already granted — exactly like adding the icon. So the tray mode's plist keys
+   have to be decided *with* step 5 and shipped in the same frozen layout, even
+   if the tray code itself lands dark and later.
 7. Flip the default (`[gui]` moves into `dependencies`, bare `steno` opens the
    window); retire the Textual launcher once parity is reached. Not before the
    app has been *used* for real meetings — nothing in the automated tests can
