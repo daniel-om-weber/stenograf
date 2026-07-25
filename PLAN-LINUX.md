@@ -7,7 +7,8 @@ instance, the localised documents dir, the desktop entry, the doubled window
 title, the X11 `WM_CLASS`, the window-size clamp — `git log` has them). **No
 work item is open here.** What is left is this file's real job: the evidence, so
 no future session re-measures it; the decisions, so none re-litigates them; the
-desktops that have never run it; and the recipe for observing a running GUI.
+desktops that have never run it and how to reach them without buying a machine;
+and the recipe for observing a running GUI.
 
 **The machine every number below comes from:** CachyOS on the GPD notebook
 (`cachyos-gpdmini`, x86_64, kernel 7.1.4-1-cachyos-deckify), **KDE Plasma
@@ -119,13 +120,16 @@ legacy branch by design — so it is a `mv` whenever anyone cares.
 
 ---
 
-## Still unmeasured — needs a different desktop
+## Still unmeasured
 
-Nothing below is worth coding against blind:
+Nothing below is worth coding against blind. The section after it says how to
+reach each one without buying a machine:
 
 - **Stock GNOME (Wayland) without the AppIndicator extension** — the
   degrade-to-window path (`install()` returns `None`, closing the window quits).
-  This is the branch the whole tray design leans on and it has never run.
+  This is the branch the whole tray design leans on and it has never run *on a
+  real desktop*; `tests/test_gui.py` takes the branch offscreen, and rung 0
+  below takes it with a window on screen, without GNOME.
 - **A real X11 session** — whether the taskbar groups the window with its
   launcher now that `StartupWMClass` names the class Qt actually sets.
 - **The launcher gesture itself.** The single-instance path was driven with two
@@ -137,6 +141,87 @@ Nothing below is worth coding against blind:
   *app* to draw one, which Qt leaves to the host) and no pointer-injection tool
   on this machine, so this needs a human hand on the trackpad.
 - **Any other desktop** (XFCE, Cinnamon) and a **light** system theme.
+
+---
+
+## Reaching those desktops — containers, not virtual machines
+
+The list above reads like it needs more machines. It does not. Every item on it
+is a fact about a **session** — which shell owns the panel, what is registered
+on the session bus, which display protocol the window speaks, which distro
+packaged the userland around it — and not one is a fact about a kernel.
+Containers share the host kernel and bring their own userland and their own
+session, which is precisely the axis these items vary along; a VM adds a
+kernel, a display manager and ten gigabytes, and buys nothing the list asks
+for. Nothing needed here is installed on this machine — `podman`, `distrobox`,
+`xorg-server-xephyr` and `weston` are all in `extra`, all absent (checked
+2026-07-25).
+
+Climb in order and stop when it stops paying; the curve flattens hard after
+rung 1.
+
+**Rung 0 — an isolated session bus. Nothing to install, and it lands today.**
+`QSystemTrayIcon.isSystemTrayAvailable()` keys off `org.kde.StatusNotifierWatcher`
+on the **session bus**, not off the compositor, so a fresh bus *is* a desktop
+with no tray host. Measured here 2026-07-25:
+
+```
+$ uv run --extra gui python probe.py                    # the real Plasma session
+platform: wayland | bus: /run/user/1000/bus   | trayAvailable: True
+$ dbus-run-session -- uv run --extra gui python probe.py
+platform: wayland | bus: /tmp/dbus-VvATr5yLPn | trayAvailable: False
+```
+
+The window still goes to the real compositor, so this drives the GNOME-shaped
+branch — `install()` returns `None`, `setQuitOnLastWindowClosed` is left true,
+`--tray` prints its warning and opens a window anyway — **with a window
+actually on screen**, which is the half `test_no_tray_host_means_no_status_item`
+cannot reach: offscreen proves the branch is taken, not that closing the window
+then really quits the app and leaves no meeting orphaned. Run the observation
+harness below under `dbus-run-session`, close the window, assert the process
+exits. **What it is not:** GNOME's own rendering, nor the nastier case where a
+watcher is registered but nothing draws the item. It also strips the
+notification daemon and the portal out of that session, so it is a probe for
+this one branch and not a general GNOME stand-in.
+
+**Rung 1 — one container, and most of the remaining value.** `podman` +
+`distrobox`, an Ubuntu LTS box, `Xephyr` and an XFCE session inside it. One
+environment collects **a real X11 session** (does the taskbar group the window
+with its launcher now that `StartupWMClass` names the class Qt actually sets),
+**the rendered SNI menu** on a panel that is not Plasma's — including whether
+`Stop _& finalize` really arrives as `Stop & finalize` — **a light system
+theme**, and **another desktop entirely**. It is also the only rung that
+exercises *userland*: a stable-distro glibc against the PySide6 and onnxruntime
+wheels, `parec` out of `pulseaudio-utils` rather than `pipewire-pulse`, and
+`desktop-file-validate` plus the icon cache as a distro actually ships them.
+XFCE is the right second desktop precisely because it has SNI **and** X11 where
+GNOME has neither: between them they span both sides of every conditional in
+`tray.py`. The launcher-gesture item splits across this line — `StartupNotify`
+is observable there, but `SingleMainWindow` is a KDE key, so watching it do
+something is a hand on *this* trackpad, not another desktop.
+
+**Rung 2 — nested GNOME, once, as a check on rung 0.**
+`gnome-shell --wayland --nested` in a Fedora box, to confirm the real shell
+behaves the way an empty bus predicts. Finickier than XFCE; worth one sitting,
+not a standing environment.
+
+**Rung 3 — a virtual machine.** Only if something session-*level* — display
+manager, autostart, portal handoff — misbehaves in a way a nested session
+cannot show. Expect never to climb here. Windows is not an argument for one
+either: its three open items are hardware items, and the notebook exists.
+
+**What no amount of this reaches:** AEC over real speakers, GPU vendor tiers,
+real PipeWire devices, HiDPI panels, and the deferred watt number. A VM's audio
+device and GPU are fictions. Those stay on real machines, which is where they
+already are.
+
+**The by-product worth having.** The recipe below is KWin scripting, i.e.
+Plasma-only. A container has no KWin and forces protocol-generic probes instead
+— `xprop` and `wmctrl` for X11, `busctl`/`gdbus` for SNI and DBusMenu — which
+then work on Plasma too, and are the form these checks have to be in before any
+of them can live in CI. `capture-linux` in `.github/workflows/ci.yml` already
+proves that pattern end to end: stand a session up inside the job, drive it,
+assert on what comes out.
 
 ---
 

@@ -336,7 +336,11 @@ an existing `~/Documents/Meetings` is left where it is and `steno doctor` names
 whichever one is in force), four fixes to the desktop entry, the doubled window
 title, the X11 `WM_CLASS`, and the window default. What is still unmeasured is
 all elsewhere: stock GNOME without the AppIndicator extension (the
-degrade-to-window path), a real X11 session, and the rendered tray menu.
+degrade-to-window path), a real X11 session, and the rendered tray menu. None of
+that needs another machine — those are session facts, not kernel facts, so
+`PLAN-LINUX.md` now carries the ladder for reaching them: an isolated session
+bus (`dbus-run-session`, measured to report no tray host) for the GNOME branch,
+one Ubuntu/XFCE container for X11 and the rendered menu, and a VM for nothing.
 
 **The desktop app on Windows — never run on a real desktop.** The code is
 portable and the launcher follows the `gui` extra (`shortcut.py`: a

@@ -25,8 +25,9 @@ history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
 `PLAN-CLEANUP.md`). **`PLAN-LINUX.md` is the one live side-plan**: the desktop
 app measured on a real KDE/Wayland session on 2026-07-25, and the six problems
 that found fixed the same day — it now holds no open work, only what was
-measured (do not re-verify it), the decisions, the desktops it has never run on,
-and the recipe for observing a running GUI on that machine. Measured evidence for the shipped defaults is in
+measured (do not re-verify it), the decisions, the desktops it has never run on
+plus the container ladder for reaching them (never a VM), and the recipe for
+observing a running GUI on that machine. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
 
