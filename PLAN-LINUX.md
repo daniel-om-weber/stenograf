@@ -4,8 +4,11 @@ Phase 8's app was designed, built and tuned on macOS; on **2026-07-25** it was
 run for the first time on a real Linux session, end to end including a live
 meeting, and the six problems that found were fixed the same day (single
 instance, the localised documents dir, the desktop entry, the doubled window
-title, the X11 `WM_CLASS`, the window-size clamp — `git log` has them). **No
-work item is open here.** What is left is this file's real job: the evidence, so
+title, the X11 `WM_CLASS`, the window-size clamp — `git log` has them). Later
+the same day rung 0 of the ladder below was climbed, which took the tray-less
+degrade path, the X11 taskbar question and a light desktop off the unmeasured
+list without another machine. **No work item is open here.** What is left is
+this file's real job: the evidence, so
 no future session re-measures it; the decisions, so none re-litigates them; the
 desktops that have never run it and how to reach them without buying a machine;
 and the recipe for observing a running GUI.
@@ -75,6 +78,34 @@ Every item here was observed on that session, not reasoned about:
 - **Startup**: 0.61 s from exec to first frame, warm (0.23 s imports, 0.29 s
   building the QML tree); the single-instance claim added `PySide6.QtNetwork`,
   which is 9 ms on top of QtCore. No launch-feedback problem worth solving.
+- **The no-tray-host branch, with a window actually on screen** — rung 0 of the
+  ladder below, climbed the same day. Under `dbus-run-session` the app reports
+  `isSystemTrayAvailable()` false, `install()` returns `None`, and
+  `setQuitOnLastWindowClosed` is left **true**: the stock-GNOME shape, driven
+  against the real compositor rather than offscreen. `--tray` prints its warning
+  and opens a window anyway, and closing that window exits 0.
+- **Closing that window during a live meeting** — the case that decides whether
+  the degrade path is *safe*, since there the close is the app's only exit. A
+  meeting was started from the GUI's own setup form (a real recording replayed
+  through the capture provider) and KWin's `closeWindow()` — the titlebar X —
+  was pressed while it was recording. The app printed the stderr explanation,
+  stopped capture, finalized, and wrote `transcript.{md,json,txt}` with the
+  checkpoints cleaned up; `run()` returned 0 about a second after the click.
+  No orphaned meeting, nothing for a user to rescue by hand.
+- **X11 launcher identity is not only `WM_CLASS`** (measured under XWayland).
+  Qt also exports `_KDE_NET_WM_DESKTOP_FILE=stenograf` **and**
+  `_GTK_APPLICATION_ID=stenograf`, KWin reports `desktopFileName=stenograf` for
+  the X11 window, and Plasma's task manager shows one entry carrying the app's
+  own icon. Every desktop-file matcher — Plasma, GNOME Shell — therefore groups
+  an X11 window with its launcher without consulting `StartupWMClass` at all;
+  the key is the fallback for panels that know only `WM_CLASS`.
+- **A light system theme**, without touching the session: Qt's built-in KDE
+  theme reads `kdeglobals` out of `$XDG_CONFIG_HOME`, so one process can be
+  handed Breeze Light while the desktop stays dark. The app's own screens render
+  in the product palette unchanged; the file dialog follows the light desktop
+  and is perfectly readable. The trade named in the decisions below, seen rather
+  than assumed. (The titlebar in that grab is still the real session's — a
+  client cannot fake the decoration.)
 - **The event loop stays live after the finalize** (120 s of 1 Hz heartbeat,
   `phase=done`, `running=False`) — an earlier apparent freeze was an artefact of
   the observing shell, not the app.
@@ -122,16 +153,19 @@ legacy branch by design — so it is a `mv` whenever anyone cares.
 
 ## Still unmeasured
 
-Nothing below is worth coding against blind. The section after it says how to
-reach each one without buying a machine:
+Nothing below is worth coding against blind. Rung 0 shortened this list the
+same day; the section after it says how to reach what is left without buying a
+machine:
 
-- **Stock GNOME (Wayland) without the AppIndicator extension** — the
-  degrade-to-window path (`install()` returns `None`, closing the window quits).
-  This is the branch the whole tray design leans on and it has never run *on a
-  real desktop*; `tests/test_gui.py` takes the branch offscreen, and rung 0
-  below takes it with a window on screen, without GNOME.
-- **A real X11 session** — whether the taskbar groups the window with its
-  launcher now that `StartupWMClass` names the class Qt actually sets.
+- **Stock GNOME (Wayland) without the AppIndicator extension** — *narrowed*.
+  The degrade-to-window path itself is now measured with a window on screen
+  (above), so what is left is GNOME's own rendering, and the nastier case rung 0
+  cannot stage: a watcher registered on the bus with nothing actually drawing
+  the item.
+- **A real X11 session** — *narrowed*. The matching mechanism is measured
+  (above), so what is left is a panel that matches on `WM_CLASS` alone — XFCE —
+  and a launcher pinned to a taskbar rather than a window merely appearing in
+  one.
 - **The launcher gesture itself.** The single-instance path was driven with two
   `python -m stenograf --gui` launches, not with two clicks on the K-menu entry,
   so `StartupNotify=true` and `SingleMainWindow=true` are validated as keys but
@@ -140,7 +174,7 @@ reach each one without buying a machine:
   no way to open the systray applet's menu over DBus (`ContextMenu` asks the
   *app* to draw one, which Qt leaves to the host) and no pointer-injection tool
   on this machine, so this needs a human hand on the trackpad.
-- **Any other desktop** (XFCE, Cinnamon) and a **light** system theme.
+- **Any other desktop** (XFCE, Cinnamon).
 
 ---
 
@@ -160,10 +194,10 @@ for. Nothing needed here is installed on this machine — `podman`, `distrobox`,
 Climb in order and stop when it stops paying; the curve flattens hard after
 rung 1.
 
-**Rung 0 — an isolated session bus. Nothing to install, and it lands today.**
-`QSystemTrayIcon.isSystemTrayAvailable()` keys off `org.kde.StatusNotifierWatcher`
-on the **session bus**, not off the compositor, so a fresh bus *is* a desktop
-with no tray host. Measured here 2026-07-25:
+**Rung 0 — an isolated session bus. CLIMBED 2026-07-25; its findings are in
+"What works" above.** `QSystemTrayIcon.isSystemTrayAvailable()` keys off
+`org.kde.StatusNotifierWatcher` on the **session bus**, not off the compositor,
+so a fresh bus *is* a desktop with no tray host:
 
 ```
 $ uv run --extra gui python probe.py                    # the real Plasma session
@@ -172,26 +206,36 @@ $ dbus-run-session -- uv run --extra gui python probe.py
 platform: wayland | bus: /tmp/dbus-VvATr5yLPn | trayAvailable: False
 ```
 
-The window still goes to the real compositor, so this drives the GNOME-shaped
-branch — `install()` returns `None`, `setQuitOnLastWindowClosed` is left true,
-`--tray` prints its warning and opens a window anyway — **with a window
-actually on screen**, which is the half `test_no_tray_host_means_no_status_item`
-cannot reach: offscreen proves the branch is taken, not that closing the window
-then really quits the app and leaves no meeting orphaned. Run the observation
-harness below under `dbus-run-session`, close the window, assert the process
-exits. **What it is not:** GNOME's own rendering, nor the nastier case where a
-watcher is registered but nothing draws the item. It also strips the
-notification daemon and the portal out of that session, so it is a probe for
-this one branch and not a general GNOME stand-in.
+The window still goes to the real compositor, which is the half
+`test_no_tray_host_means_no_status_item` cannot reach: offscreen proves the
+branch is taken, not that closing the window then really quits the app and
+leaves no meeting orphaned. Both were driven this way and both hold — see the
+two bullets above. Two things learned climbing it:
+
+- **A meeting has to be running for the interesting half.** An empty app exits
+  on the close trivially; the claim worth testing is that the *finalize* still
+  happens, and it does, off `run()`'s own `join_meetings` after the event loop
+  has already stopped. The transcript is written by the worker thread at the
+  `finalized` event, so the dead event loop costs nothing.
+- **A fresh bus activates its own `xdg-desktop-portal`**, and Qt's registration
+  against it fails differently there — `Could not register app ID: Connection
+  already associated with an application ID`, even with the desktop entry
+  installed. An artefact of the staged session, not a regression of the
+  pre-`steno setup` warning above it.
+
+**What it is not:** GNOME's own rendering, nor the nastier case where a watcher
+is registered but nothing draws the item. It also strips the notification daemon
+out of that session, so it is a probe for this one branch and not a general
+GNOME stand-in.
 
 **Rung 1 — one container, and most of the remaining value.** `podman` +
 `distrobox`, an Ubuntu LTS box, `Xephyr` and an XFCE session inside it. One
-environment collects **a real X11 session** (does the taskbar group the window
-with its launcher now that `StartupWMClass` names the class Qt actually sets),
-**the rendered SNI menu** on a panel that is not Plasma's — including whether
-`Stop _& finalize` really arrives as `Stop & finalize` — **a light system
-theme**, and **another desktop entirely**. It is also the only rung that
-exercises *userland*: a stable-distro glibc against the PySide6 and onnxruntime
+environment collects **a `WM_CLASS`-only taskbar** (the one X11 matcher rung 0's
+XWayland grab does not stand in for, since Plasma and GNOME both read the
+desktop-file properties Qt sets), **the rendered SNI menu** on a panel that is
+not Plasma's — including whether `Stop _& finalize` really arrives as
+`Stop & finalize` — and **another desktop entirely**. It is also the only rung
+that exercises *userland*: a stable-distro glibc against the PySide6 and onnxruntime
 wheels, `parec` out of `pulseaudio-utils` rather than `pipewire-pulse`, and
 `desktop-file-validate` plus the icon cache as a distro actually ships them.
 XFCE is the right second desktop precisely because it has SNI **and** X11 where
@@ -237,15 +281,40 @@ desktop. What worked here, and the traps paid for:
   `window.grabWindow()` per screen. `grabWindow` needs no compositor
   permission and captures at the real scale factor.
 - **Keep test meetings out of the documents folder**: `STENOGRAF_DATA=<scratch>`
-  with a `settings.toml` holding `[output] dir = <scratch>/meetings`.
+  with a `settings.toml` holding `[output] dir = <scratch>/meetings`. Safe for a
+  throwaway run — `data_dir()` holds settings and speaker profiles, *not* the
+  model cache (that is the HF cache, 2.6 GB here, and moving it would re-download
+  everything).
+- **Give the GUI a meeting without a microphone.** `flow.py` deliberately has no
+  replay (a developer flag), so patch the seam the run uses:
+  `loaders.make_provider` is called with `replay=None`, and a wrapper that
+  substitutes a wav path replays it paced to wall clock. That is the hardware
+  boundary the `verify` skill says to fake at. A previous meeting's `audio.wav`
+  is the best source — real speech, real ASR — repeated a few times with the
+  stdlib `wave` module when one is too short to leave room to act.
+- **Drive the whole of `run()`, not just `build()`, when identity matters.**
+  Construct the `QApplication` first (`run()` reuses `QApplication.instance()`),
+  arm a `QTimer` state machine, then call `run()`: the application name, the
+  desktop file name, the window icon and the single-instance claim are all set
+  *inside* it, so a harness that calls `build()` directly gets a nameless,
+  generic-icon app and will mislead anyone reading its screenshots.
+- **A light desktop for one process**: `XDG_CONFIG_HOME=<scratch>` with
+  `/usr/share/color-schemes/BreezeLight.colors` copied in as `kdeglobals`. Qt's
+  built-in KDE theme reads it; the real session is untouched. QML's `FileDialog`
+  can be opened from the harness — walk the root object's children for a
+  class name containing `FileDialog` and `QMetaObject.invokeMethod(dialog,
+  "open")` — since a dialog nobody clicks is the only system-themed surface
+  there is to look at.
 - **Window facts come from KWin scripting**, not from guesswork: write a `.js`
   that walks `workspace.windowList()` and `print()`s
   `resourceClass`/`resourceName`/`desktopFileName`/`caption`, load it with
   `gdbus … org.kde.kwin.Scripting.loadScript`, run
   `/Scripting/Script<N>.run`, read the output from `journalctl --user`. The
   same script can `workspace.activeWindow = w` to raise a window, and
-  `w.closeWindow()` to press the titlebar X. **A loaded script runs once** —
-  re-running needs a fresh `loadScript`.
+  `w.closeWindow()` to press the titlebar X — the honest way to test a close,
+  and it works on an app running against an isolated session bus, because KWin
+  is reached over the *real* bus while the window is reached over Wayland.
+  **A loaded script runs once** — re-running needs a fresh `loadScript`.
 - **Tray facts come from DBus**: the item's properties from
   `org.kde.StatusNotifierItem`, the menu from
   `busctl --user call <name> /MenuBar com.canonical.dbusmenu GetLayout iias 0 -- -1 …`,

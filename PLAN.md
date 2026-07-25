@@ -334,13 +334,18 @@ every platform), the output home ignored a localised documents dir (now resolved
 from `user-dirs.dirs`, so `~/Dokumente/Meetings` — with **no legacy branch**, so
 an existing `~/Documents/Meetings` is left where it is and `steno doctor` names
 whichever one is in force), four fixes to the desktop entry, the doubled window
-title, the X11 `WM_CLASS`, and the window default. What is still unmeasured is
-all elsewhere: stock GNOME without the AppIndicator extension (the
-degrade-to-window path), a real X11 session, and the rendered tray menu. None of
-that needs another machine — those are session facts, not kernel facts, so
-`PLAN-LINUX.md` now carries the ladder for reaching them: an isolated session
-bus (`dbus-run-session`, measured to report no tray host) for the GNOME branch,
-one Ubuntu/XFCE container for X11 and the rendered menu, and a VM for nothing.
+title, the X11 `WM_CLASS`, and the window default. Rung 0 of that file's ladder —
+an isolated session bus — was then climbed the same day and took three items off
+the unmeasured list with no second machine: the **degrade-to-window path** ran
+with a window on the real compositor and, the half that matters, a window closed
+**mid-meeting** with no tray to close into still stopped capture, finalized and
+wrote the transcript; **X11 launcher identity** turned out to be more than
+`WM_CLASS` (Qt exports `_KDE_NET_WM_DESKTOP_FILE` and `_GTK_APPLICATION_ID` too,
+so Plasma and GNOME group the window with its launcher without it); and a
+**light system theme** leaves the app's own palette alone and the file dialog
+readable. What is left needs one Ubuntu/XFCE container (a `WM_CLASS`-only
+taskbar, the rendered SNI menu, another desktop), a hand on the trackpad (the
+launcher gesture), and a VM for nothing.
 
 **The desktop app on Windows — never run on a real desktop.** The code is
 portable and the launcher follows the `gui` extra (`shortcut.py`: a
