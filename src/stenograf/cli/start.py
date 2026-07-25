@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
-    from stenograf.session import MeetingResult
+    from stenograf.session import MeetingRecorder, MeetingResult
 
 from stenograf import loaders
 from stenograf.capture.base import CaptureHelperError
@@ -470,7 +470,7 @@ def start(
 
 
 def _run_meeting(
-    recorder,
+    recorder: MeetingRecorder,
     provider,
     *,
     live: bool,
