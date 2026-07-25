@@ -56,32 +56,14 @@ from textual.screen import Screen
 from textual.widgets import Footer, RichLog, Static
 
 from stenograf.asr.base import Word
+from stenograf.captions import LIVE_LABEL, CaptionStream
 from stenograf.capture.base import Channel
 from stenograf.config import Language, MeetingProfile
 from stenograf.transcript import Transcript
 from stenograf.ui.app import StenografApp
-from stenograf.view import LiveView
+from stenograf.view import LiveView, clock, profile_label
 
-_LIVE_LABEL = {Channel.MIC: "You", Channel.SYSTEM: "Remote"}
 _LABEL_STYLE = {Channel.MIC: "bold cyan", Channel.SYSTEM: "bold magenta"}
-_LINE_GAP = 1.5  # committed run continues while the gap to the next words is under this
-
-_LINE_FLUSH_CHARS = 250
-"""Once the open committed line grows past this, it moves into the scrolling log
-immediately. The open-line merge exists for the speculative pass's few-word
-commits; the window pass commits a whole ~30 s window per batch, and during a
-long remote stretch budget-closed windows join with sub-second gaps, so without
-this bound the line grows for minutes inside the height-capped interim area —
-invisible below its fourth row (the "UI frozen while remote talks" bug)."""
-
-_IDLE_FLUSH_S = 5.0
-"""Wall-clock seconds without a new commit before the open line flushes to the
-log anyway. The last window of a stretch of speech otherwise sits in the interim
-area until some future commit displaces it — minutes, in a quiet meeting."""
-
-_INTERIM_TAIL_CHARS = 200
-"""At most this much of the open line (its tail) renders in the interim area.
-The area clips at the bottom, so only the freshest words may occupy it."""
 
 
 class Phase(Enum):
@@ -99,23 +81,6 @@ class Phase(Enum):
     def __init__(self, lead: str, color: str) -> None:
         self.lead = lead
         self.color = color
-
-
-def _clock(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
-
-
-def _profile_label(profile: MeetingProfile) -> str:
-    def part(count: int | None) -> str:
-        return "auto" if count is None else str(count)
-
-    if profile.local_speakers == 0:
-        return f"remote {part(profile.remote_speakers)}"
-    if profile.remote_speakers == 0:
-        return f"local {part(profile.local_speakers)}"
-    return f"local {part(profile.local_speakers)} · remote {part(profile.remote_speakers)}"
 
 
 class MeetingScreen(Screen[Transcript | None]):
@@ -157,17 +122,10 @@ class MeetingScreen(Screen[Transcript | None]):
         self._start = 0.0
         self._transcript: Transcript | None = None  # the screen result (finalize swap)
 
-        # One interleaved committed stream (the RichLog), tracked like the plain
-        # view: a run continues on the open line until the channel changes or a
-        # pause opens. The open line lives in the interim area (bright) and moves
-        # into the log on break — or once it outgrows _LINE_FLUSH_CHARS or sits
-        # idle past _IDLE_FLUSH_S, so continuous speech cannot hold text out of
-        # the log (and out of sight) indefinitely.
-        self._open_channel: Channel | None = None
-        self._open_words: list[str] = []
-        self._last_end = 0.0
-        self._last_commit_at = 0.0  # wall clock of the newest commit (idle flush)
-        self._interim: dict[Channel, str] = {}
+        # Words in, readable lines out: when a line breaks, how long it may grow
+        # and what the interim area shows are all the stream's rules (shared with
+        # the Qt meeting screen), so this screen only renders what it emits.
+        self._captions = CaptionStream(self._write_line)
 
         # Plain-text mirrors for tests / debugging.
         self.committed_lines: list[str] = []
@@ -197,75 +155,34 @@ class MeetingScreen(Screen[Transcript | None]):
 
     def _tick(self) -> None:
         self._render_header()
-        # Idle flush: commits stopped arriving (the stretch of speech ended), so
-        # the open line cannot continue soon — move it into the log rather than
-        # leaving it stranded in the interim area until a future commit displaces
-        # it. Costs at most one extra log line if speech resumes within the gap.
-        if self._open_words and time.monotonic() - self._last_commit_at > _IDLE_FLUSH_S:
-            self._flush_open_line()
+        if self._captions.flush_if_idle():  # a stretch of speech ended
             self._render_interim()
 
     # -- captions ----------------------------------------------------------
 
     def push_committed(self, channel: Channel, words: Sequence[Word]) -> None:
-        if not words:
-            return
-        text = [w.text for w in words]
-        continues = (
-            self._open_channel == channel
-            and self._open_words
-            and words[0].start - self._last_end <= _LINE_GAP
-        )
-        if continues:
-            self._open_words.extend(text)
-        else:
-            self._flush_open_line()
-            self._open_channel = channel
-            self._open_words = list(text)
-        self._last_end = words[-1].end
-        self._last_commit_at = time.monotonic()
-        # Size bound: past the cap the open line reads as a paragraph already, so
-        # move it into the log *now*. A window-mode batch (~30 s of speech) lands
-        # in the log the moment it commits instead of accumulating — clipped and
-        # invisible — in the height-capped interim area.
-        if len(" ".join(self._open_words)) >= _LINE_FLUSH_CHARS:
-            self._flush_open_line()
+        self._captions.commit(channel, words)
         self._render_interim()
 
     def push_interim(self, channel: Channel, text: str) -> None:
-        if text:
-            self._interim[channel] = text
-        else:
-            self._interim.pop(channel, None)
+        self._captions.interim(channel, text)
         self._render_interim()
 
-    def _flush_open_line(self) -> None:
-        """Move the growing committed line into the append-only log."""
-        if self._open_channel is None or not self._open_words:
-            return
-        label, style = _LIVE_LABEL[self._open_channel], _LABEL_STYLE[self._open_channel]
-        text = " ".join(self._open_words)
+    def _write_line(self, channel: Channel, text: str) -> None:
+        """A finished caption line, from the stream into the append-only log."""
+        label, style = LIVE_LABEL[channel], _LABEL_STYLE[channel]
         self.query_one("#captions", RichLog).write(f"[{style}]{label}[/]  {text}")
         self.committed_lines.append(f"{label}  {text}")
-        self._open_channel = None
-        self._open_words = []
 
     def _render_interim(self) -> None:
         """The dim per-channel tail: the open committed line (bright) + grey tail."""
         lines: list[str] = []
-        for channel in (Channel.MIC, Channel.SYSTEM):
-            parts: list[str] = []
-            if channel == self._open_channel and self._open_words:
-                open_text = " ".join(self._open_words)
-                if len(open_text) > _INTERIM_TAIL_CHARS:  # the area clips at the bottom
-                    open_text = "…" + open_text[-_INTERIM_TAIL_CHARS:]
-                parts.append(open_text)
-            tail = self._interim.get(channel, "")
+        for channel, open_text, tail in self._captions.tails():
+            parts = [open_text] if open_text else []
             if tail:
                 parts.append(f"[dim]{tail}[/]")
-            if parts:
-                style = _LABEL_STYLE[channel]
-                lines.append(f"[{style}]{_LIVE_LABEL[channel]}[/]  " + " ".join(parts))
+            style = _LABEL_STYLE[channel]
+            lines.append(f"[{style}]{LIVE_LABEL[channel]}[/]  " + " ".join(parts))
         self.query_one("#interim", Static).update("\n".join(lines))
 
     # -- out-of-band notices ----------------------------------------------
@@ -284,17 +201,14 @@ class MeetingScreen(Screen[Transcript | None]):
 
     def push_finalized(self, transcript: Transcript) -> None:
         """Swap the live captions for the authoritative, diarized transcript."""
-        self._flush_open_line()
-        self._interim.clear()
-        self._open_channel = None
-        self._open_words = []
+        self._captions.clear()
         self.query_one("#interim", Static).update("")
         log = self.query_one("#captions", RichLog)
         log.clear()
         self.committed_lines = []
         for entry in transcript.entries:
             marker = " [dim](overlap)[/]" if entry.provisional else ""
-            stamp = f"[dim]{_clock(entry.start)}[/]"
+            stamp = f"[dim]{clock(entry.start)}[/]"
             log.write(f"[bold]{entry.speaker}[/] {stamp}  {entry.text}{marker}")
             self.committed_lines.append(f"{entry.speaker}  {entry.text}")
         if transcript.language is not None:
@@ -312,9 +226,9 @@ class MeetingScreen(Screen[Transcript | None]):
     # -- header ------------------------------------------------------------
 
     def header_text(self) -> str:
-        elapsed = _clock(time.monotonic() - self._start) if self._start else "0:00"
+        elapsed = clock(time.monotonic() - self._start) if self._start else "0:00"
         lang = self._language.value if self._language else "—"
-        bits = [self._phase.lead, elapsed, lang, _profile_label(self._profile)]
+        bits = [self._phase.lead, elapsed, lang, profile_label(self._profile)]
         if self._status:
             bits.append(self._status)
         return "  ·  ".join(bits)

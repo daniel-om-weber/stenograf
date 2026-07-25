@@ -1,42 +1,29 @@
-"""Launcher meeting flow: assemble the pipeline and run it behind a pushed screen.
+"""Launcher meeting flow: run a :class:`~stenograf.flow.MeetingRun` behind a pushed screen.
 
-The launcher-side equivalent of ``steno start``'s
-command body, built from the same library seams (``loaders``,
-``MeetingRecorder``, the output writers) with settings.toml supplying
-everything the setup form doesn't ask about. Differences from the CLI are
-deliberate scope, not drift: no ``--out``/``--force`` (a fresh date-named
-folder can't collide), no replay/AEC-dump/full-finalize (developer flags),
-and progress reports through the meeting screen's header instead of
-``click.echo``. The audio tee is the form's "keep the audio" switch — the
-CLI's bare ``--record-audio``, always the meeting folder's ``audio.wav``.
+The screen-side half of a meeting. Everything that *is* the meeting — folder
+allocation, capture, the load order, persistence, the notes tail — lives in
+:mod:`stenograf.flow`, shared with the Qt app; what is left here is the Textual
+part: arm the run on a background thread, push the screen, and report the
+outcome on whatever screen the user lands back on.
 
-Ordering matters twice here:
-
-- the *slow* assembly (model loading) runs on the meeting thread after the
-  screen is up — the user watches the loading status in the header instead of
-  a frozen launcher; the capture provider is created *and started* first, so
-  the Stop binding is wired almost immediately (``view.set_stop``) and the
-  meeting's first seconds buffer in the provider's queue through a slow
-  (cold) model load instead of being lost;
-- the transcript is persisted at the ``finalized`` event (the same
-  ``_PersistOnce`` contract as the CLI TUI path), so a force-quit on the
-  "done" screen — or even mid-finalize — never loses the meeting.
+Ordering still matters: the run is armed *before* the push and starts once the
+screen mounts, so the user watches the loading status in the header instead of a
+frozen launcher, and the transcript is persisted at the ``finalized`` event
+(``MeetingRun.persist``, handed to the view here) — so a force-quit on the
+"done" screen, or even mid-finalize, never loses the meeting.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
-from stenograf import loaders
-from stenograf.transcript import DEFAULT_FORMATS, Transcript
+from stenograf.flow import MeetingRun
+from stenograf.transcript import Transcript
 from stenograf.ui.meeting import TextualLiveView
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
+    from stenograf.flow import MeetingRequest
     from stenograf.ui.app import StenografApp
-    from stenograf.ui.setup import MeetingRequest
 
 
 def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView:
@@ -47,141 +34,20 @@ def start_meeting(app: StenografApp, request: MeetingRequest) -> TextualLiveView
     on whatever screen the user lands back on. Returns the view (tests drive
     it; interactive callers ignore it).
     """
-    from stenograf.cli.start import _LIVE_FLUSH_INTERVAL_S, _PersistOnce
-    from stenograf.output import (
-        AUDIO_NAME,
-        TRANSCRIPT_STEM,
-        allocate_meeting_dir,
-        checkpoint_writer,
-        cleanup_checkpoints,
-        default_output_home,
-        write_transcript,
+    meeting = MeetingRun(request)
+    view = TextualLiveView(
+        request.profile,
+        language=request.profile.language,
+        persist=meeting.persist,
+        app=app,
     )
-    from stenograf.session import CheckpointConfig, MeetingRecorder, plan_channels
-
-    settings, profile = request.settings, request.profile
-    plans = plan_channels(profile)
-    created_at = datetime.now()
-    # A fresh date-named folder under the visible output home — the launcher
-    # has no --out equivalent, so allocation can never collide with an
-    # existing meeting.
-    out_dir = allocate_meeting_dir(settings.output.dir or default_output_home(), created_at)
-    basename = TRANSCRIPT_STEM
-    write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)
-
-    def _persist_files(transcript: Transcript) -> list[Path]:
-        paths = write_transcript(transcript, out_dir, basename, write_formats)
-        cleanup_checkpoints(out_dir, basename)
-        return paths
-
-    persist = _PersistOnce(_persist_files)
-    view = TextualLiveView(profile, language=profile.language, persist=persist, app=app)
-
-    def meeting() -> Transcript | None:
-        view.status("starting capture…")
-        # announce=view.status everywhere below: loader progress must go to
-        # the header, never through click — Textual owns stdio here, and on
-        # Windows click.echo dies probing its proxy (loaders module docstring).
-        # on_log likewise: the capture transports' stderr chatter must not be
-        # written over the running app; problems reach the header instead.
-        provider = loaders.make_provider(
-            None,
-            plans,
-            paced=True,
-            aec=True,
-            announce=view.status,
-            on_log=loaders.CaptureLog(view=view),
-        )
-        view.set_stop(provider.stop)  # Stop/Ctrl-C crosses to capture from here on
-        # Capture starts NOW, before the models load: the provider's frame
-        # queue is unbounded, so the meeting's first seconds buffer through a
-        # slow (cold) model load instead of being lost. The run below consumes
-        # the buffer (``provider_started=True``).
-        provider.start({p.channel for p in plans})
-        tee = None
-        try:
-            if request.record_audio:
-                from stenograf.recording import WavTee
-
-                out_dir.mkdir(parents=True, exist_ok=True)  # the tee is this run's first write
-                tee = WavTee(out_dir / AUDIO_NAME, {p.channel for p in plans})
-            view.status("recording · loading models…")
-            asr, vad, diarizer = loaders.load_backends(
-                need_diarizer=any(p.num_speakers != 1 for p in plans),
-                asr_backend=settings.asr.backend,
-                asr_provider=settings.asr.provider,
-                announce=view.status,
-            )
-            reid = None
-            if diarizer is not None:
-                reid = loaders.load_reid(
-                    enabled=True,
-                    threshold=settings.speakers.reid_threshold,
-                    store_path=settings.speakers.profile_store,
-                )
-            recorder = MeetingRecorder(
-                profile,
-                asr=asr,
-                vad=vad,
-                diarizer=diarizer,
-                reid=reid,
-                language=profile.language,
-                glossary_threshold=settings.vocab.glossary_threshold,
-                dedup_echo=True,
-            )
-        except BaseException:
-            # Capture is already live but the run will never start (a load
-            # failure) — release the devices on the way out; the error itself
-            # still reaches the dismiss toast via arm_meeting's result dict.
-            provider.stop()
-            if tee is not None:
-                tee.close()
-            raise
-        # Loading is done; clear the status or the loading line would sit in
-        # the header for the whole meeting (the recorder emits no status event
-        # between capture start and finalize). REC/elapsed carry it from here.
-        view.status("")
-        try:
-            result = recorder.run(
-                provider,
-                live=True,
-                view=view,
-                on_frame=tee.add if tee else None,
-                checkpoint=CheckpointConfig(
-                    checkpoint_writer(out_dir, basename), _LIVE_FLUSH_INTERVAL_S
-                ),
-                provider_started=True,
-            )
-        finally:
-            if tee is not None:
-                tee.close()  # flush + finalize the WAV header even on a dying run
-        transcript = result.transcript
-        if transcript is not None:
-            # Persisted already, at the finalized event — this is display only.
-            # No folder name here: the header is one line and even the date-named
-            # folder pushes the quit hint off an 80-column screen; the dismiss
-            # toast on Home carries the full path.
-            notes_ok = True
-            if request.notes:
-                from stenograf.cli.notes import _generate_notes
-
-                notes_ok = _generate_notes(
-                    view,
-                    transcript,
-                    out_dir,
-                    basename,
-                    created_at=created_at,
-                    notes_settings=settings.notes,
-                )
-            if notes_ok:  # a notes failure keeps its header message visible
-                view.status("saved · q to close")
-        return transcript
 
     result: dict[str, object] = {}
-    view.arm_meeting(meeting, result)
+    view.arm_meeting(lambda: meeting.run(view), result)
 
     def finished(transcript: Transcript | None) -> None:
         """Back on the previous screen: say how the meeting ended."""
+        out_dir = meeting.out_dir
         if isinstance(transcript, Transcript):
             app.notify(f"Files in {out_dir}", title="Meeting saved", timeout=10)
         elif "error" in result:

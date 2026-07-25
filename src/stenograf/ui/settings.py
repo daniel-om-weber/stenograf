@@ -64,25 +64,11 @@ class SettingsScreen(Screen[None]):
         """(Re)build the ``settings show`` text; a broken file renders its error.
 
         Returns whether the file loaded cleanly (drives the post-edit toast)."""
-        from stenograf.cli.settings_cmd import _settings_rows
-        from stenograf.settings import SettingsError, load_settings, settings_path
+        from stenograf.flow import settings_report
 
-        path = settings_path()
-        suffix = "" if path.exists() else " (not present — all defaults)"
-        self.lines = [f"settings: {path}{suffix}"]
-        try:
-            settings = load_settings()
-        except SettingsError as exc:
-            self.lines += ["", str(exc), "Press Edit to fix the file."]
-            ok = False
-        else:
-            for table, rows in _settings_rows(settings):
-                self.lines.append("")
-                self.lines.append(f"[{table}]")
-                width = max(len(key) for key, _, _ in rows)
-                for key, value, source in rows:
-                    self.lines.append(f"  {key:<{width}} = {value}  ({source})")
-            ok = True
+        self.lines, ok = settings_report()
+        if not ok:  # the shared report says what is wrong; this screen says what to do
+            self.lines.append("Press Edit to fix the file.")
         self.query_one("#body", Static).update("\n".join(self.lines))
         return ok
 

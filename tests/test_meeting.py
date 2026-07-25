@@ -109,7 +109,7 @@ class TestCaptions:
                 # instead of continuing a line that is already in the log.
                 screen.push_committed(Channel.SYSTEM, [_w("weiter", 18.2, 18.5)])
                 await pilot.pause()
-                assert screen._open_words == ["weiter"]
+                assert screen._captions.open_words == ["weiter"]
 
         _run(body)
 
@@ -143,7 +143,7 @@ class TestCaptions:
                 await pilot.pause()
                 screen._tick()  # commit is fresh → no flush yet
                 assert screen.committed_lines == []
-                screen._last_commit_at -= 6.0  # age the commit past the threshold
+                screen._captions._last_commit_at -= 6.0  # age it past the threshold
                 screen._tick()
                 await pilot.pause()
                 assert screen.committed_lines == ["Remote  hallo"]

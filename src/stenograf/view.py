@@ -27,7 +27,7 @@ import click
 
 from stenograf.asr.base import Word
 from stenograf.capture.base import Channel
-from stenograf.config import Language
+from stenograf.config import Language, MeetingProfile
 from stenograf.live import StreamingUpdate
 from stenograf.transcript import Transcript
 
@@ -63,6 +63,14 @@ class LiveView:
 
     def close(self) -> None:
         """Release any display resources (no-op for a plain stream)."""
+
+    def set_stop(self, stop: Callable[[], None]) -> None:
+        """Offer the view a callback that ends capture (a Stop button or key).
+
+        Called by the run as soon as there *is* something to stop — before the
+        models load, so the control is live during a slow cold start. A view
+        with no way to interrupt (the plain stream: Ctrl-C reaches the process
+        directly) ignores it."""
 
     # -- streamed captions -------------------------------------------------
 
@@ -138,7 +146,7 @@ class PlainLiveView(LiveView):
                 self._echo(f" {text}", nl=False)
             else:
                 self._break_line()
-                self._echo(f"[{_clock(words[0].start)}] {_LIVE_LABEL[channel]}: {text}", nl=False)
+                self._echo(f"[{clock(words[0].start)}] {_LIVE_LABEL[channel]}: {text}", nl=False)
                 self._open = True
                 self._line_channel = channel
             self._last_end = words[-1].end
@@ -179,7 +187,23 @@ class PlainLiveView(LiveView):
             self._line_channel = None
 
 
-def _clock(seconds: float) -> str:
+def clock(seconds: float) -> str:
+    """``m:ss`` (``h:mm:ss`` past an hour) — timestamps and elapsed time alike."""
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
+
+
+def profile_label(profile: MeetingProfile) -> str:
+    """What a meeting screen's header says about the sources being captured.
+
+    ``local 2 · remote auto``, or just the live half when one source is off."""
+
+    def part(count: int | None) -> str:
+        return "auto" if count is None else str(count)
+
+    if profile.local_speakers == 0:
+        return f"remote {part(profile.remote_speakers)}"
+    if profile.remote_speakers == 0:
+        return f"local {part(profile.local_speakers)}"
+    return f"local {part(profile.local_speakers)} · remote {part(profile.remote_speakers)}"

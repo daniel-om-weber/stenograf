@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterable
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -81,15 +80,10 @@ class NotesScreen(Screen[None]):
         self.status_text = ""  # plain-text mirror of the status line
 
     def compose(self) -> ComposeResult:
-        from stenograf.output import default_output_home, latest_meeting_dir
+        from stenograf.flow import notes_home
+        from stenograf.output import latest_meeting_dir
 
-        home = self._root
-        if home is None:
-            with contextlib.suppress(Exception):  # a broken settings.toml
-                from stenograf.settings import load_settings
-
-                home = load_settings().output.dir
-            home = home or default_output_home()
+        home = self._root if self._root is not None else notes_home()
         # The newest finished meeting is the default target — most notes runs
         # happen right after the meeting they summarize.
         self._target = latest_meeting_dir(home)
@@ -157,27 +151,11 @@ class NotesScreen(Screen[None]):
     @work(thread=True, exclusive=True)
     def _generate(self, target: Path) -> None:
         """Resolve the target and run the shared notes entry point (rule 2)."""
-        from stenograf.cli.notes import _generate_and_write_notes
-        from stenograf.output import TRANSCRIPT_STEM, created_at_from_dir_name
-        from stenograf.transcript import Transcript
+        from stenograf.flow import generate_notes_for
 
         try:
-            path = target / f"{TRANSCRIPT_STEM}.json" if target.is_dir() else target
-            if not path.is_file():
-                raise ValueError(f"{target} holds no {TRANSCRIPT_STEM}.json")
-            try:
-                transcript = Transcript.from_json(path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                raise ValueError(f"{path} is not a readable transcript JSON: {exc}") from exc
-            out_dir = path.parent
-            created_at = created_at_from_dir_name(out_dir.name) or datetime.fromtimestamp(
-                path.stat().st_mtime
-            )
-            written, _notes = _generate_and_write_notes(
-                transcript,
-                out_dir,
-                path.stem,
-                created_at=created_at,
+            written = generate_notes_for(
+                target,
                 on_progress=lambda message: self._post(self._set_status, f"notes: {message}"),
             )
         except Exception as exc:  # noqa: BLE001 — every failure lands on the status line
