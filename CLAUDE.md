@@ -11,8 +11,9 @@ inputs and call library entry points. The workflows they share live in
 lacks goes into the library — never into one front-end, or the two UIs drift.
 
 `PLAN.md` holds **only unbuilt work** — the active plan is Phase 8's remainder
-(the app is built and opt-in; idle-power measurement, the TCC-survival test,
-`Stenograf.app` + icons, the tray mode and the default flip are open), plus the
+(the app is built and opt-in; idle-power measurement, `Stenograf.app` + icons,
+the tray mode and the default flip are open — the TCC-survival test passed on
+2026-07-25 and its two constraints are written into step 5), plus the
 open platform items and the declined list. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git

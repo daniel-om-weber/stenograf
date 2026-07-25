@@ -14,7 +14,7 @@ the CLI or by the Textual launcher (`steno` with no arguments).
 
 ---
 
-## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, steps 1–2 and 5–7 open.
+## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, steps 1 and 5–7 open.
 
 **Decision: the launcher becomes a real desktop application built on Qt Quick
 (PySide6), and `Stenograf.app` is generated locally by `steno setup`.** This
@@ -90,14 +90,15 @@ icon, Dock presence, `LSUIElement` for menu-bar mode — with no Developer ID,
 no notarization, not even a real signature (ad-hoc suffices). **The $99/yr
 gates only a *downloadable* artifact.**
 
-Consequence to design for: TCC grants move off Terminal.app onto our bundle.
-That is better hygiene ("Stenograf would like to access the microphone") but
-reworks the `setup`/`doctor` permission flow, and an unsigned bundle's TCC
-identity is weak — so the bundle must stay a **thin wrapper that never
-changes** (it execs the installed `steno`), and the grant's survival across
-`uv tool upgrade` must be tested before anything is built on it. Windows and
-Linux need no equivalent trick: a locally written `.lnk` carries no
-Mark-of-the-Web, and Linux signs nothing.
+Consequence, **measured** in step 2 below: TCC grants move off Terminal.app onto
+our bundle. That is better hygiene ("Stenograf would like to access the
+microphone") but reworks the `setup`/`doctor` permission flow, and an ad-hoc
+bundle's TCC identity is weak in one specific, load-bearing way — TCC stores
+**`cdhash` and nothing else** as the requirement, no identifier and no anchor.
+So the bundle must be a thin wrapper that is **byte-identical forever**, and it
+must **spawn** the installed `steno` as a child; a wrapper that `exec`s it loses
+the bundle identity altogether. Windows and Linux need no equivalent trick: a
+locally written `.lnk` carries no Mark-of-the-Web, and Linux signs nothing.
 
 ### Prototype results (2026-07-25)
 
@@ -163,14 +164,55 @@ Each step ships working; none blocks the platform work below.
    the prototype's discipline (one 1 Hz timer, no page transitions, no idle
    animation; only hover/toggle feedback animates, event-driven and ≤90 ms), but
    the discipline is asserted by review, not measured.
-2. **Open.** The TCC-survival test: locally written `.app`, grant the mic,
-   `uv tool upgrade`, confirm no re-prompt. Steps 5–6 assume it passes.
+2. **Done 2026-07-25 — passed.** A locally written, ad-hoc-signed
+   `Stenograf.app` was granted mic + system audio, then
+   `uv tool install --reinstall stenograf` replaced the venv, the python symlink
+   and stenocap itself (helper cdhash `d431bc81…` → `f8246bfc…`, a harsher
+   change than a version upgrade makes); the app relaunched with a mic frame, no
+   prompt, no new TCC row and an untouched grant. Evidence read straight out of
+   `~/Library/Application Support/com.apple.TCC/TCC.db`. Two findings step 5
+   must honour, both learned the hard way:
+
+   - **The main executable may not be a script, and may not `exec`.** A
+     `#!/bin/sh` wrapper that execs python makes the process launchd started
+     *become* the interpreter — a Mach-O outside the bundle — so TCC drops the
+     bundle identity and path-keys the grant to the shared uv interpreter
+     (`client_type=1`, and the prompt is titled "python3.13"). That is worse
+     than the status quo: every uv-managed tool shares that interpreter, and a
+     `uv python` upgrade moves the path and re-prompts. A compiled wrapper that
+     **spawns** `steno` as a child and stays alive as its parent gets
+     `client=dev.stenograf.app, client_type=0` for both
+     `kTCCServiceMicrophone` and `kTCCServiceAudioCapture` — children inherit
+     the responsible process, so stenocap's request is attributed to the app.
+     stenocap's own signature is never a TCC client, which is why rebuilding it
+     has never re-prompted.
+   - **The stored requirement is `cdhash H"…"` alone** (decode with
+     `csreq -r <blob> -t`). The grant survives upgrades precisely because the
+     pinned identity lives entirely inside the bundle while the venv is outside
+     it — and by the same token *any* change to the bundle silently revokes it.
 3. **Done** — `stenograf/gui/` + shell + home, opt-in behind `steno --gui`.
 4. **Done** — meeting screen (live captions on a worker thread), transcribe,
    notes, settings, doctor. Native file dialogs replace the TUI's tree pickers;
    the notes picker stays a folder picker, never a meeting list.
-5. `shortcut.py` writes `Stenograf.app` instead of `Stenograf.command`; icon
-   assets (`.icns`/`.ico`/`.png`) land here — none exist yet.
+5. `shortcut.py` writes `Stenograf.app` instead of `Stenograf.command`, shaped
+   by what step 2 measured:
+
+   - `Contents/MacOS/Stenograf` is a **prebuilt, committed** Mach-O that spawns
+     the installed `steno` and waits on it — not a script, not an `exec`, and
+     not compiled at install time, since a per-machine or per-release rebuild
+     moves the cdhash and re-prompts every user. Changing it at all is a
+     re-prompt for everyone, so treat it as frozen.
+   - The bundle carries **no configuration**: the launch target lives outside it
+     (a `~/.config/stenograf/launch-target` file, falling back to
+     `~/.local/bin/steno`, which survives `uv tool upgrade`). Baking
+     `sys.executable` into the wrapper — what `shortcut.py` does today for
+     `Stenograf.command`, deliberately, to self-heal after a reinstall — would
+     move the cdhash on every `steno setup`. `setup` must therefore never
+     rewrite the bundle non-identically.
+   - Icon assets (`.icns`/`.ico`/`.png`) land here; **none exist yet**. Adding
+     the icon changes the cdhash, so the layout must be frozen *including the
+     icon* before any user grants — otherwise the icon release re-prompts
+     everyone who already did.
 6. Menu-bar / taskbar mode via `QSystemTrayIcon`, degrading to the launcher
    where no tray host exists.
 7. Flip the default (`[gui]` moves into `dependencies`, bare `steno` opens the
