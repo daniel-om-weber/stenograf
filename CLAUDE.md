@@ -22,7 +22,10 @@ quiet machine), plus the open platform items and the declined list. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
-`PLAN-CLEANUP.md`). Measured evidence for the shipped defaults is in
+`PLAN-CLEANUP.md`). **`PLAN-LINUX.md` is the one live side-plan**: the desktop
+app measured on a real KDE/Wayland session on 2026-07-25 — what already works
+(do not re-verify it), six open items, and the recipe for observing a running
+GUI on that machine. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
 
