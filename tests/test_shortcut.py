@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import plistlib
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -204,10 +205,58 @@ def test_linux_entry_opens_the_app_when_qt_is_installed(tmp_path, monkeypatch):
     content = target.read_text()
     assert f'Exec="{sys.executable}" -m stenograf --gui' in content
     assert "Terminal=false" in content  # a window must not get a terminal behind it
-    # The other half of the app_id handshake: `gui/app.py` hands Qt this same
-    # constant, so the running window is matched back to this entry instead of
-    # appearing beside it without its icon.
-    assert f"StartupWMClass={shortcut.DESKTOP_FILE_NAME}" in content
+    # The X11 half of the handshake, and the one that is easy to get wrong: Qt
+    # builds WM_CLASS from the *application name*, not from the app_id (measured
+    # under XWayland 2026-07-25: "steno", "Stenograf"), so the entry has to
+    # declare the capitalized class rather than lean on a shell lowercasing it.
+    assert f"StartupWMClass={shortcut.APPLICATION_NAME}" in content
+    assert "StartupWMClass=stenograf" not in content
+    # KDE's half of the single-instance rule (gui.app.claim_single_instance is
+    # the portable half); ignored elsewhere.
+    assert "SingleMainWindow=true" in content
+    assert "StartupNotify=true" in content
+
+
+def test_the_linux_entry_names_an_installed_icon(tmp_path, monkeypatch):
+    # An absolute Icon= into site-packages works until a reinstall moves the
+    # venv, and gives a notification daemon a file where a name would let it
+    # pick a size. hicolor is the theme every other theme falls back to.
+    _linux(monkeypatch, tmp_path, qt=True)
+
+    target = shortcut.install_shortcut()
+
+    icon = tmp_path / "xdg" / "icons" / "hicolor" / "512x512" / "apps" / "stenograf.png"
+    assert icon.read_bytes() == shortcut.ICON.read_bytes()
+    assert f"Icon={shortcut.DESKTOP_FILE_NAME}\n" in target.read_text()
+
+
+def test_the_linux_entry_lists_the_app_once(tmp_path, monkeypatch):
+    # Two main categories make the app appear twice in the menu, which is what
+    # the old AudioVideo;Audio;Utility; did.
+    _linux(monkeypatch, tmp_path, qt=True)
+
+    target = shortcut.install_shortcut()
+
+    assert "Categories=AudioVideo;Audio;Recorder;" in target.read_text()
+
+
+@pytest.mark.skipif(
+    shutil.which("desktop-file-validate") is None,
+    reason="desktop-file-utils is not installed here",
+)
+@pytest.mark.parametrize("qt", [True, False])
+def test_the_linux_entry_validates(tmp_path, monkeypatch, qt):
+    # The whole file against the spec's own validator — the only check that
+    # catches a key we invented or a category that does not exist.
+    _linux(monkeypatch, tmp_path, qt=qt)
+
+    target = shortcut.install_shortcut()
+    assert target is not None
+
+    result = subprocess.run(
+        ["desktop-file-validate", str(target)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0 and not result.stdout, result.stdout + result.stderr
 
 
 def test_installing_the_extra_converts_the_linux_entry_in_place(tmp_path, monkeypatch):
@@ -275,8 +324,11 @@ def test_linux_shortcut_is_a_terminal_desktop_entry(tmp_path, monkeypatch):
     content = target.read_text()
     assert "Terminal=true" in content  # the TUI needs a real terminal
     assert f'Exec="{sys.executable}" -m stenograf\n' in content  # …and no --gui
-    assert f"Icon={shortcut.ICON}" in content and shortcut.ICON.is_file()
+    assert f"Icon={shortcut.DESKTOP_FILE_NAME}\n" in content and shortcut.ICON.is_file()
     assert "StartupWMClass" not in content  # a TUI has no window to match
+    # Nor a startup notification to complete: that launch is the terminal
+    # emulator's, and claiming it leaves a busy cursor spinning until it times out.
+    assert "StartupNotify" not in content
 
 
 def test_linux_shortcut_defaults_to_local_share(tmp_path, monkeypatch):
