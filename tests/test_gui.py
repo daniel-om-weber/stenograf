@@ -100,10 +100,16 @@ class _Warnings:
     def __exit__(self, *exc):
         qInstallMessageHandler(None)
 
+    # Font complaints are about the machine, not about our QML: the offscreen
+    # platform has no "Sans Serif" and says so once, and on Windows PySide6
+    # ships no fonts directory at all ("QFontDatabase: Cannot find font
+    # directory …"). Neither can be fixed from a .qml file, and letting them
+    # through means this test only ever passes on the developer's own desktop.
+    _ENVIRONMENT_NOISE = ("font family", "font directory")
+
     def _handle(self, mode, context, message):
         loud = (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg)
-        # The offscreen platform has no "Sans Serif" and says so once.
-        if mode in loud and "font family" not in message:
+        if mode in loud and not any(noise in message for noise in self._ENVIRONMENT_NOISE):
             self.seen.append(message)
 
 
@@ -412,7 +418,7 @@ class TestTranscribeScreen:
 
         shell, _engine = gui
         screen = shell.screen("Transcribe")
-        screen.choose(f"file://{audio}")
+        screen.choose(audio.as_uri())
         assert screen.state["file"] == str(audio)
 
         screen.start()
@@ -425,7 +431,7 @@ class TestTranscribeScreen:
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         shell, _engine = gui
         screen = shell.screen("Transcribe")
-        screen.choose(f"file://{tmp_path / 'not-audio.wav'}")
+        screen.choose((tmp_path / "not-audio.wav").as_uri())
         screen.start()  # the file does not exist
         assert screen.state["busy"] is False  # never started
 

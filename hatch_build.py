@@ -114,7 +114,7 @@ class CustomBuildHook(BuildHookInterface):
                 stenodiar,
                 hint="fix the Rust toolchain (cargo build failed) or uninstall it to skip",
             )
-            build_data["force_include"][str(stenodiar)] = "stenograf/bin/stenodiar"
+            build_data["force_include"][str(stenodiar)] = f"stenograf/bin/{stenodiar.name}"
         else:
             print(
                 "hatch_build: no Rust toolchain — wheel will lack the stenodiar "

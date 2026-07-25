@@ -26,6 +26,12 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
+      # PySide6 links libEGL even under QT_QPA_PLATFORM=offscreen, and it is
+      # the one Qt runtime library the Linux runner image does not ship — so
+      # importing tests/test_gui.py fails at collection without it. Everything
+      # else Qt needs is already there; macOS and Windows need nothing.
+      - run: sudo apt-get install -y libegl1
+        if: runner.os == 'Linux'
       - run: uv sync
       - run: uv run ruff check .
       # macOS only: the platform-marker deps (mlx-lm, parakeet-mlx) are only

@@ -71,11 +71,15 @@ def _windows(monkeypatch, tmp_path: Path, *, qt: bool) -> None:
 
 
 def _fingerprint(root: Path) -> str:
+    # Sort the posix strings, never the Path objects: WindowsPath compares
+    # case-insensitively, which puts _CodeSignature first there and last
+    # everywhere else — the same bytes then hash differently per platform, and
+    # BUNDLE_FINGERPRINT is a constant about the bundle, not about the runner.
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            digest.update(path.relative_to(root).as_posix().encode())
-            digest.update(path.read_bytes())
+    files = {p.relative_to(root).as_posix(): p for p in root.rglob("*") if p.is_file()}
+    for relative in sorted(files):
+        digest.update(relative.encode())
+        digest.update(files[relative].read_bytes())
     return digest.hexdigest()
 
 
