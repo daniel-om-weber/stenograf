@@ -52,6 +52,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
 
 from stenograf import ASSETS
+from stenograf.shortcut import DESKTOP_FILE_NAME
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -376,6 +377,11 @@ def run(*, tray: bool = False) -> int:
     app.setApplicationName("Stenograf")
     app.setApplicationDisplayName("Stenograf")
     app.setOrganizationName("stenograf")
+    # The Linux half of the same identity: this is the app_id a Wayland window
+    # carries, and it has to name the desktop entry `steno setup` wrote or the
+    # window arrives iconless and separate from its own launcher. Ignored on
+    # macOS and Windows. The constant lives with the entry that must match it.
+    app.setDesktopFileName(DESKTOP_FILE_NAME)
     # Named here rather than left to the platform: launched from
     # `Stenograf.app` the Dock already shows the bundle's icon, but started
     # from a terminal — or on Linux and Windows — this is the only thing

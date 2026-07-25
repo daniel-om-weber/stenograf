@@ -1211,7 +1211,7 @@ def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
 
     monkeypatch.setenv("HOME", str(tmp_path))  # the launcher lands in $HOME/Applications
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
-    monkeypatch.setattr(shortcut, "_qt_installed", lambda: True)
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: True)
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
@@ -1232,7 +1232,7 @@ def test_setup_without_the_gui_extra_falls_back_to_the_command_file(tmp_path, mo
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
-    monkeypatch.setattr(shortcut, "_qt_installed", lambda: False)
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: False)
     monkeypatch.setattr(loaders, "prefetch_models", lambda: None)
     result = CliRunner().invoke(cli.main, ["setup"])
     assert result.exit_code == 0, result.output
@@ -1261,6 +1261,7 @@ def test_setup_windows_checks_the_privacy_toggle_then_prefetches(tmp_path, monke
 
     monkeypatch.setattr(capture_windows, "mic_access_blocked", lambda: None)
     monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: True)  # the extra is in the dev group
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
@@ -1269,6 +1270,7 @@ def test_setup_windows_checks_the_privacy_toggle_then_prefetches(tmp_path, monke
     assert "shows no permission prompt" in result.output  # no prompt is ever coming
     assert "launcher installed" in result.output
     assert (tmp_path / "Desktop" / "Stenograf.cmd").exists()
+    assert "stenograf[gui]" not in result.output  # already installed: nothing to offer
     assert fetched
 
 

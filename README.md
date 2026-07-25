@@ -117,14 +117,20 @@ It is opt-in while it settles; the terminal launcher above stays the default.
 
 ```sh
 uv tool install --force 'stenograf[gui]'   # adds Qt (~110 MB); one time
-steno setup                                # installs ~/Applications/Stenograf.app
+steno setup                                # points the desktop launcher at the app
 steno --gui                                # …or just open the app
 ```
 
-On macOS, setup then replaces the Desktop shortcut with a real **Stenograf.app**
-— its own icon, Dock tile and Spotlight entry. It asks for microphone access
-once, under its own name rather than your terminal's, and keeps that permission
-across every later upgrade.
+The launcher follows the extra on every platform: once Qt is installed,
+`steno setup` rewrites the shortcut it already made so that double-clicking it
+opens the app instead of a terminal window — on Linux the application-menu
+entry, on Windows the Desktop `Stenograf.cmd`. Uninstall the extra, re-run
+setup, and they turn back into the terminal launcher.
+
+On macOS it goes further and replaces the Desktop shortcut with a real
+**Stenograf.app** — its own icon, Dock tile and Spotlight entry. It asks for
+microphone access once, under its own name rather than your terminal's, and
+keeps that permission across every later upgrade.
 
 The app also lives in the **menu bar** (system tray on Windows and Linux),
 which is where it belongs for most of a meeting: the icon turns red while

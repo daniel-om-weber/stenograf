@@ -43,8 +43,9 @@ def setup(models_only: bool) -> None:
     launched from, so re-run this from each terminal app (or IDE) you will
     run meetings from. Windows: no prompt exists, so the microphone privacy
     toggle is checked and named instead. Then installs a double-clickable
-    launcher and downloads every model the first meeting would otherwise
-    stop to fetch; the models are cached machine-wide.
+    launcher — the desktop app where the `gui` extra is installed, the
+    terminal launcher otherwise — and downloads every model the first meeting
+    would otherwise stop to fetch; the models are cached machine-wide.
     """
     if not models_only:
         if sys.platform == "darwin":
@@ -56,7 +57,7 @@ def setup(models_only: bool) -> None:
     # models fetch on first use anyway), the shortcut shouldn't be lost to that.
     # --models-only skips it — headless machines and CI have no desktop.
     if not models_only:
-        from stenograf.shortcut import install_shortcut
+        from stenograf.shortcut import gui_installed, install_shortcut
 
         if (launcher := install_shortcut()) is not None:
             click.echo(click.style("✓", fg="green") + f" launcher installed: {launcher}")
@@ -73,11 +74,13 @@ def setup(models_only: bool) -> None:
                 click.echo('  Look for "Stenograf" in your application menu.')
             else:
                 click.echo("  Double-click it to start stenograf — no terminal needed.")
-                if sys.platform == "darwin":  # no gui extra, so no Stenograf.app
-                    click.echo(
-                        "  For the desktop app instead of a terminal window, install the extra "
-                        "— uv tool install --force 'stenograf[gui]' — and re-run `steno setup`."
-                    )
+            # Every platform's launcher follows the extra, so the offer to
+            # upgrade a terminal launcher into the app is not macOS-specific.
+            if not gui_installed():
+                click.echo(
+                    "  For the desktop app instead of a terminal window, install the extra "
+                    "— uv tool install --force 'stenograf[gui]' — and re-run `steno setup`."
+                )
 
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.

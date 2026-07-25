@@ -1,11 +1,13 @@
 """The desktop launchers ``steno setup`` drops, and the entries they rely on.
 
-Two rules are worth the tests. The terminal launchers embed the absolute
+Three rules are worth the tests. The terminal launchers embed the absolute
 interpreter and run ``-m stenograf`` (Phase 7 Task 6) — a double-clicked
 shortcut gets a login-shell PATH that may lack uv's shim directory, so ``steno``
-by name is never good enough. And ``Stenograf.app`` (Phase 8 step 5) is copied
+by name is never good enough. ``Stenograf.app`` (Phase 8 step 5) is copied
 byte for byte and never generated, because macOS pins the app's microphone
-grant to the bundle's exact contents.
+grant to the bundle's exact contents. And on every platform the launcher
+follows the ``gui`` extra, converting the existing shortcut in place rather
+than leaving two entries named Stenograf that behave differently.
 """
 
 from __future__ import annotations
@@ -49,8 +51,22 @@ def _home(monkeypatch, path: Path) -> None:
 
 def _macos(monkeypatch, tmp_path: Path, *, qt: bool) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(shortcut, "_qt_installed", lambda: qt)
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: qt)
     _home(monkeypatch, tmp_path)
+
+
+def _linux(monkeypatch, tmp_path: Path, *, qt: bool) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: qt)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+
+
+def _windows(monkeypatch, tmp_path: Path, *, qt: bool) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: qt)
+    # Bypass the registry lookup: on POSIX hosts winreg doesn't exist, and on
+    # a real Windows host it would point at the user's actual Desktop.
+    monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
 
 
 def _fingerprint(root: Path) -> str:
@@ -146,7 +162,7 @@ def test_the_app_retires_the_desktop_command_file(tmp_path, monkeypatch):
     _macos(monkeypatch, tmp_path, qt=False)
     legacy = shortcut.install_shortcut()  # the pre-app launcher
     assert legacy is not None and legacy.exists()
-    monkeypatch.setattr(shortcut, "_qt_installed", lambda: True)
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: True)
 
     shortcut.install_shortcut()
 
@@ -176,6 +192,61 @@ def test_the_installed_copy_still_satisfies_its_signature(tmp_path, monkeypatch)
     subprocess.run(["codesign", "--verify", "--strict", str(target)], check=True, timeout=60)
 
 
+# -- the app launchers off macOS ---------------------------------------------
+
+
+def test_linux_entry_opens_the_app_when_qt_is_installed(tmp_path, monkeypatch):
+    _linux(monkeypatch, tmp_path, qt=True)
+
+    target = shortcut.install_shortcut()
+
+    assert target == tmp_path / "xdg" / "applications" / f"{shortcut.DESKTOP_FILE_NAME}.desktop"
+    content = target.read_text()
+    assert f'Exec="{sys.executable}" -m stenograf --gui' in content
+    assert "Terminal=false" in content  # a window must not get a terminal behind it
+    # The other half of the app_id handshake: `gui/app.py` hands Qt this same
+    # constant, so the running window is matched back to this entry instead of
+    # appearing beside it without its icon.
+    assert f"StartupWMClass={shortcut.DESKTOP_FILE_NAME}" in content
+
+
+def test_installing_the_extra_converts_the_linux_entry_in_place(tmp_path, monkeypatch):
+    _linux(monkeypatch, tmp_path, qt=False)
+    first = shortcut.install_shortcut()
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: True)
+
+    second = shortcut.install_shortcut()
+
+    assert second == first  # one menu entry named Stenograf, never two
+    assert "Terminal=false" in second.read_text()
+
+
+def test_windows_launcher_opens_the_app_when_qt_is_installed(tmp_path, monkeypatch):
+    _windows(monkeypatch, tmp_path, qt=True)
+    monkeypatch.setattr(shortcut, "_windowed_python", lambda: r"C:\venv\pythonw.exe")
+
+    target = shortcut.install_shortcut()
+
+    assert target == tmp_path / "Desktop" / "Stenograf.cmd"
+    content = target.read_text()
+    assert r'start "Stenograf" "C:\venv\pythonw.exe" -m stenograf --gui' in content
+    # The terminal wrapper's `pause` would strand the app behind a console
+    # waiting for a keypress nobody is there to give.
+    assert "pause" not in content
+
+
+def test_the_windows_app_launcher_prefers_the_console_less_interpreter(tmp_path, monkeypatch):
+    # A plain python.exe would put a console window behind the app for the
+    # whole meeting; pythonw.exe is the same interpreter without one.
+    (tmp_path / "python.exe").touch()
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
+    assert shortcut._windowed_python() == str(tmp_path / "python.exe")  # none beside it yet
+
+    (tmp_path / "pythonw.exe").touch()
+
+    assert shortcut._windowed_python() == str(tmp_path / "pythonw.exe")
+
+
 # -- the terminal launchers --------------------------------------------------
 
 
@@ -196,20 +267,21 @@ def test_macos_without_qt_still_gets_the_command_file(tmp_path, monkeypatch):
 
 
 def test_linux_shortcut_is_a_terminal_desktop_entry(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    _linux(monkeypatch, tmp_path, qt=False)
 
     target = shortcut.install_shortcut()
 
     assert target == tmp_path / "xdg" / "applications" / "stenograf.desktop"
     content = target.read_text()
     assert "Terminal=true" in content  # the TUI needs a real terminal
-    assert f'Exec="{sys.executable}" -m stenograf' in content
+    assert f'Exec="{sys.executable}" -m stenograf\n' in content  # …and no --gui
     assert f"Icon={shortcut.ICON}" in content and shortcut.ICON.is_file()
+    assert "StartupWMClass" not in content  # a TUI has no window to match
 
 
 def test_linux_shortcut_defaults_to_local_share(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: False)
     _home(monkeypatch, tmp_path)
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
 
@@ -231,10 +303,7 @@ def test_reinstall_overwrites_and_self_heals(tmp_path, monkeypatch):
 
 
 def test_windows_shortcut_is_a_cmd_wrapper(tmp_path, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "win32")
-    # Bypass the registry lookup: on POSIX hosts winreg doesn't exist, and on
-    # a real Windows host it would point at the user's actual Desktop.
-    monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
+    _windows(monkeypatch, tmp_path, qt=False)
 
     target = shortcut.install_shortcut()
 
