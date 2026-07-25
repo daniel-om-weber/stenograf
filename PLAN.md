@@ -365,30 +365,12 @@ Windows is covered in code — as a *named pipe* rather than a socket, which is 
 one half of it no Linux or macOS run exercises. Nothing else here is worth
 coding against blind.
 
-**stenodiar off macOS — in the wheels, proven in a local sandbox, never yet run
-by CI.** The release-attachment plan was dropped for platform wheels (15 MB
-compressed, measured, not the 40 MB the old note assumed — and it deletes the
-drop location, the downloader and the docs telling users to curl a binary):
-`hatch_build.py` bundles the helper into a manylinux_2_39_x86_64 and a
-win_amd64 wheel when `STENOGRAF_BUNDLE_STENODIAR=1`. The Linux job was
-developed against a **bwrap sandbox over the real image rootfs** — no container
-runtime on the notebook and none needed: `unshare -r` to extract the layers,
-bwrap to build in them — which is what caught the four failures review did not.
-The image's perl lacks FindBin/IPC::Cmd/Time::Piece (vendored OpenSSL will not
-configure); `ort-sys`'s *build script* pulls its own `openssl-sys` through a
-build-dependency, which cargo resolves with a separate feature set, so the
-vendored flag never reaches it and the machine still needs `libssl-dev`; and
-above all **manylinux_2_28 cannot link stenodiar at all** — the prebuilt
-onnxruntime references `__isoc23_strtol` and `__libc_single_threaded`, glibc
-2.38 symbols. That is where ubuntu-24.04 and the 2.39 tag come from: the floor
-is upstream's, not ours. In the sandbox the binary builds, needs glibc 2.38 and
-GLIBCXX_3.4.30, carries no `libssl`, and `--warmup` fetches its models over TLS.
-
-Unrun: the workflow itself — the Windows wheel job, the three smoke legs, and
-whether the GitHub runner image differs from the base image the sandbox used
-(the `perl`/`libssl-dev` step is written to not care). Trigger `release.yml`
-via `workflow_dispatch`, which does everything except publish, before the next
-tag rather than discovering it during one.
+**stenodiar off macOS — done 2026-07-26, nothing open.** The
+release-attachment plan was dropped for platform wheels; `release.yml` cut all
+four artifacts and passed every smoke leg on a `workflow_dispatch` dry run,
+which is everything a tag does except publish. Why the floor is
+manylinux_2_39 and not lower — it is upstream onnxruntime's, not ours — is in
+`native/README.md` with the rest of the design.
 
 ---
 

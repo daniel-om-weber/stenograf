@@ -187,10 +187,10 @@ jobs:
           test -f smoke-out/transcript.json
 
   smoke-linux:
-    # Installs the *manylinux* wheel on a distro that is not the build image —
-    # which is the point: a helper built against glibc 2.28 has to run on the
-    # runner's much newer one, and its statically vendored OpenSSL has to find
-    # this machine's CA bundle before the model download can work at all.
+    # Installs the manylinux wheel the way a user does — `uv tool install`,
+    # not a checkout — and makes the helper reach the network: the statically
+    # vendored OpenSSL has to find this machine's CA bundle before the model
+    # download can work at all, and nothing earlier in the pipeline proves it.
     needs: build-linux-x86_64
     runs-on: ubuntu-latest
     timeout-minutes: 30

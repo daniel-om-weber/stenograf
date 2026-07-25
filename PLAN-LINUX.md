@@ -283,7 +283,9 @@ image's read-only dirs then really are read-only; and apt needs
 `-o APT::Sandbox::User=root`, since dropping to `_apt` is impossible when only
 one uid is mapped. Sessions are the one thing this cannot bring — no systemd,
 no session bus of its own — so it stands in for *userland*, which is most of
-what rung 1 was for.
+what rung 1 was for. It is also **exact**: the release runner later reported
+the same two numbers the sandbox had (`GLIBC_2.38`, `GLIBCXX_3.4.30`), so what
+it measures can be trusted rather than merely believed.
 
 **Rung 2 — nested GNOME, once, as a check on rung 0.**
 `gnome-shell --wayland --nested` in a Fedora box, to confirm the real shell
