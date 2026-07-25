@@ -32,6 +32,12 @@ Three consequences, all load-bearing:
   frozen complete — icon included, and with the Info.plist keys the menu-bar
   mode needs (see below) — before any user was asked for permission.
 
+The bundle has been rebuilt exactly once since, on 2026-07-25, to replace the
+icon. That was legitimate only because `git tag --contains` showed the bundle's
+commit in no release: the re-prompt reached this machine and nobody else. Check
+the same thing before you ever consider it again, and expect the answer to be
+no.
+
 ## Why it spawns instead of exec'ing
 
 The main executable **may not be a script and may not `exec`**. A `#!/bin/sh`
@@ -72,7 +78,10 @@ once, and `TCC.db` then held
 
 with the requirement `cdhash H"1651c78f…" or cdhash H"b0516786…"` — **both
 slices of the universal binary**, so the same grant follows the app across an
-Intel/Apple-Silicon migration. No `python3.13` row appeared, which is the
+Intel/Apple-Silicon migration. Those two hashes are the *pre-icon-change*
+bundle, which is what makes them the cleanest demonstration of the rule: the
+bundle shipping today hashes to `ea4e7966…` / `1e0f106b…`, the row above does
+not match it, and the prompt therefore comes back once. No `python3.13` row appeared, which is the
 failure this design exists to avoid. The step-2 test bundle's older grant, still
 in the database and pinned to *its* cdhash, was simply replaced: proof of the
 freeze rule from the other direction, since nothing migrates an old grant.

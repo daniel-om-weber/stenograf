@@ -1,37 +1,116 @@
 <!--
-  Stenograf's app icon: a shorthand outline — one continuous stroke that starts
-  in the microphone's cyan (Theme.mic) and ends in the remote channel's pink
-  (Theme.remote). Two voices, written down as one line.
+  Stenograf's app icon: an opening double quotation mark, one comma per channel
+  — the microphone's cyan (Theme.mic) and the remote channel's indigo
+  (Theme.remote). A transcript is verbatim speech, and this is the glyph that
+  already means exactly that; the two colours make it two people's speech
+  without drawing either of them.
 
   Deliberately not a waveform: bars-on-a-tile is what every recorder app on the
   platform already looks like (TypeWhisper included), and this tool's output is
-  a transcript, not a recording.
+  a transcript, not a recording. Deliberately not warm, either — a round head
+  under a tapering tail reads as a flame the moment the second ink goes warm,
+  which killed the coral, vermilion and gold pairings. Cyan and indigo are
+  analogous, so the pair sits together and nothing in it burns.
+
+  The tile is a superellipse, |x/a|^5 + |y/a|^5 = 1, not an `rx` rounded
+  rectangle. macOS app icons have continuous curvature; an rx corner splices a
+  circular arc onto a straight edge and the break shows next to system icons.
+  SVG has no superellipse, so it is 48 points fitted with Catmull-Rom cubics —
+  max radial deviation 0.53 px at 1024, i.e. under 0.01 px at 16.
 
   Kept to SVG Tiny 1.2 features (no filters, no CSS): render_icon.py rasterizes
-  it with Qt's renderer, which supports nothing more. A single round-capped
-  stroke also survives being drawn 16 px wide, which five thin bars do not.
+  it with Qt's renderer, which supports nothing more. That rules out blur, drop
+  shadows and glows, so the depth here is four gradients and stacked shapes —
+  an ink pool behind each mark, a specular top edge, and ink that lightens
+  toward the tail. All of it survives being drawn 16 px wide, because none of
+  it is a thin feature. `<use>` is Tiny 1.2 and Qt honours it, including
+  inherited fill, so the tile outline is written once rather than four times.
 
-  1024x1024 canvas with the 824x824 squircle macOS expects at its centre.
+  1024x1024 canvas with the 824x824 tile macOS expects at its centre.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
+    <path id="tile" d="M 924.00 512.00 C 924.00 572.82, 923.53 654.47, 922.59 694.46 C 921.64 734.45, 920.23
+             735.59, 918.33 751.94 C 916.42 768.29, 914.05 780.51, 911.16 792.56 C 908.26 804.61,
+             904.90 814.70, 900.96 824.24 C 897.03 833.78, 892.61 842.07, 887.56 849.81 C 882.51
+             857.55, 876.96 864.37, 870.67 870.67 C 864.37 876.96, 857.55 882.51, 849.81 887.56 C
+             842.07 892.61, 833.78 897.03, 824.24 900.96 C 814.70 904.90, 804.61 908.26, 792.56
+             911.16 C 780.51 914.05, 768.29 916.42, 751.94 918.33 C 735.59 920.23, 734.45 921.64,
+             694.46 922.59 C 654.47 923.53, 572.82 924.00, 512.00 924.00 C 451.18 924.00, 369.53
+             923.53, 329.54 922.59 C 289.55 921.64, 288.41 920.23, 272.06 918.33 C 255.71 916.42,
+             243.49 914.05, 231.44 911.16 C 219.39 908.26, 209.30 904.90, 199.76 900.96 C 190.22
+             897.03, 181.93 892.61, 174.19 887.56 C 166.45 882.51, 159.63 876.96, 153.33 870.67 C
+             147.04 864.37, 141.49 857.55, 136.44 849.81 C 131.39 842.07, 126.97 833.78, 123.04
+             824.24 C 119.10 814.70, 115.74 804.61, 112.84 792.56 C 109.95 780.51, 107.58 768.29,
+             105.67 751.94 C 103.77 735.59, 102.36 734.45, 101.41 694.46 C 100.47 654.47, 100.00
+             572.82, 100.00 512.00 C 100.00 451.18, 100.47 369.53, 101.41 329.54 C 102.36 289.55,
+             103.77 288.41, 105.67 272.06 C 107.58 255.71, 109.95 243.49, 112.84 231.44 C 115.74
+             219.39, 119.10 209.30, 123.04 199.76 C 126.97 190.22, 131.39 181.93, 136.44 174.19 C
+             141.49 166.45, 147.04 159.63, 153.33 153.33 C 159.63 147.04, 166.45 141.49, 174.19
+             136.44 C 181.93 131.39, 190.22 126.97, 199.76 123.04 C 209.30 119.10, 219.39 115.74,
+             231.44 112.84 C 243.49 109.95, 255.71 107.58, 272.06 105.67 C 288.41 103.77, 289.55
+             102.36, 329.54 101.41 C 369.53 100.47, 451.18 100.00, 512.00 100.00 C 572.82 100.00,
+             654.47 100.47, 694.46 101.41 C 734.45 102.36, 735.59 103.77, 751.94 105.67 C 768.29
+             107.58, 780.51 109.95, 792.56 112.84 C 804.61 115.74, 814.70 119.10, 824.24 123.04 C
+             833.78 126.97, 842.07 131.39, 849.81 136.44 C 857.55 141.49, 864.37 147.04, 870.67
+             153.33 C 876.96 159.63, 882.51 166.45, 887.56 174.19 C 892.61 181.93, 897.03 190.22,
+             900.96 199.76 C 904.90 209.30, 908.26 219.39, 911.16 231.44 C 914.05 243.49, 916.42
+             255.71, 918.33 272.06 C 920.23 288.41, 921.64 289.55, 922.59 329.54 C 923.53 369.53,
+             924.00 451.18, 924.00 512.00 Z"/>
+
     <linearGradient id="backdrop" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#252b36"/>
       <stop offset="1" stop-color="#0f1116"/>
     </linearGradient>
-    <!-- userSpaceOnUse: the hand-over has to happen along the stroke's travel
-         across the tile, not within each segment's own bounding box. -->
-    <linearGradient id="voices" gradientUnits="userSpaceOnUse" x1="200" y1="0" x2="824" y2="0">
-      <stop offset="0" stop-color="#4cc9f0"/>
-      <stop offset="1" stop-color="#f072c0"/>
+
+    <!-- The ink pools. Drawn on the tile's own outline, which is the only
+         clipping SVG Tiny guarantees. -->
+    <radialGradient id="poolA" cx="0.36" cy="0.60" r="0.54">
+      <stop offset="0" stop-color="#4cc9f0" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#4cc9f0" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="poolB" cx="0.64" cy="0.60" r="0.54">
+      <stop offset="0" stop-color="#8b7bf0" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#8b7bf0" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Bright along the top edge, gone by the bottom: stop-opacity is the
+         only way to fade a stroke without a filter. -->
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.15"/>
+    </linearGradient>
+
+    <!-- userSpaceOnUse inside each comma's own space: the marks are turned
+         through 180 degrees, so local +y runs up the tile and the light lands
+         on the tail tip. -->
+    <linearGradient id="inkA" gradientUnits="userSpaceOnUse" x1="0" y1="333" x2="0" y2="-104">
+      <stop offset="0" stop-color="#82d9f4"/>
+      <stop offset="0.55" stop-color="#4cc9f0"/>
+      <stop offset="1" stop-color="#4cc9f0"/>
+    </linearGradient>
+    <linearGradient id="inkB" gradientUnits="userSpaceOnUse" x1="0" y1="333" x2="0" y2="-104">
+      <stop offset="0" stop-color="#aea3f4"/>
+      <stop offset="0.55" stop-color="#8b7bf0"/>
+      <stop offset="1" stop-color="#8b7bf0"/>
     </linearGradient>
   </defs>
 
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#backdrop)"/>
-  <rect x="102" y="102" width="820" height="820" rx="183" fill="none"
-        stroke="#ffffff" stroke-opacity="0.09" stroke-width="4"/>
+  <use href="#tile" fill="url(#backdrop)"/>
+  <use href="#tile" fill="url(#poolA)"/>
+  <use href="#tile" fill="url(#poolB)"/>
+  <use href="#tile" fill="none" stroke="url(#edge)" stroke-width="4"/>
 
-  <path d="M 220 660 C 250 420, 380 280, 470 380 C 560 480, 470 720, 570 730 C 690 742, 700 470, 810 392"
-        fill="none" stroke="url(#voices)" stroke-width="88"
-        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Head plus tail, twice. The heads sit 244 apart so the pair reads as one
+       glyph, and the whole mark is centred on its own bounding box, not on the
+       heads — hence 594 rather than 512. -->
+  <g transform="translate(390,594) rotate(180)" fill="url(#inkA)">
+    <circle cx="0" cy="0" r="104"/>
+    <path d="M 74.9 52.0 C 106.1 149.8, 81.1 235.0, -6.2 276.6 C 27.0 193.4, 31.2 120.6, -31.2 91.5 Z"/>
+  </g>
+  <g transform="translate(634,594) rotate(180)" fill="url(#inkB)">
+    <circle cx="0" cy="0" r="104"/>
+    <path d="M 74.9 52.0 C 106.1 149.8, 81.1 235.0, -6.2 276.6 C 27.0 193.4, 31.2 120.6, -31.2 91.5 Z"/>
+  </g>
 </svg>

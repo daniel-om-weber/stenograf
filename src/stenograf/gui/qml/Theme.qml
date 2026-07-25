@@ -16,9 +16,12 @@ QtObject {
     readonly property color accentText: "#0d1117"
 
     // Channel colours: the live captions are channel-coarse (You / Remote)
-    // until the finalize swap brings in real speaker labels.
+    // until the finalize swap brings in real speaker labels. These two are the
+    // app icon's two inks as well, so they move together — indigo replaced a
+    // pink here on 2026-07-25 because the icon's two marks read as flames with
+    // a warm second colour, and an analogous pair sits together besides.
     readonly property color mic: "#4cc9f0"
-    readonly property color remote: "#f072c0"
+    readonly property color remote: "#8b7bf0"
 
     // Phase colours, keyed by the meeting screen's phase ids.
     readonly property color rec: "#ff5f56"

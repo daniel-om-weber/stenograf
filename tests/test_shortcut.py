@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).parent.parent
 WINDOWS = sys.platform == "win32"  # the real host, before any monkeypatching
 MACOS = sys.platform == "darwin"
 
-BUNDLE_FINGERPRINT = "870170af7d55022a683a6d15ef8d2c921e2e32b7f0b2f13117e3223b30d4deeb"
+BUNDLE_FINGERPRINT = "69f0436e2e1b774402c95f2e8d808e60d8912b3442c1cb02b5eb9f78cfca8a42"
 """sha256 over every file in the committed bundle, path and bytes.
 
 The one constant in this file that is a *decision*, not an observation. TCC
@@ -33,7 +33,11 @@ stores the app's microphone and system-audio grants against the cdhash of
 — and the Info.plist and the icon are sealed into that hash. So changing
 anything in the bundle, including rebuilding the same source, makes every
 machine that already granted access prompt again, with no way to migrate the
-old grant. Matching cdhashes as built: arm64 ``1651c78f…``, x86_64 ``b0516786…``.
+old grant. Matching cdhashes as built: arm64 ``ea4e7966…``, x86_64 ``1e0f106b…``.
+
+Changed once, on 2026-07-25, to replace the icon before the bundle had ever
+shipped in a tagged release — so the re-prompt it cost reached nobody but this
+machine. That window is closed now.
 """
 
 
