@@ -18,6 +18,7 @@ window at all, and offscreen means nothing appears on a screen.
 """
 
 import os
+import sys
 import threading
 import time
 
@@ -643,6 +644,89 @@ class TestTray:
         assert not shell.window.isVisible()
         assert stopped == [], "closing to the tray must not end the meeting"
         assert meeting.state["phase"] == "rec"
+
+
+class TestSingleInstance:
+    """One app per user, however often the launcher is clicked.
+
+    macOS gets this from LaunchServices; Linux and Windows have nothing like it,
+    and closing the window now only hides it — so clicking the launcher again,
+    the natural way to ask for the window back, is exactly the gesture that
+    would otherwise start a second app: two tray icons, two microphone claims,
+    two meeting folders written side by side. ``QLocalServer`` needs no display,
+    so the whole path is testable right here."""
+
+    @pytest.fixture
+    def name(self, monkeypatch):
+        """A claim name of this test's own.
+
+        The real one is per *user*, which is the point of it — and would collide
+        with the app running on the developer's own desktop."""
+        from PySide6.QtNetwork import QLocalServer
+
+        from stenograf.gui import app as app_module
+
+        unique = f"stenograf-test-{os.getpid()}"
+        monkeypatch.setattr(app_module, "_instance_name", lambda: unique)
+        yield unique
+        QLocalServer.removeServer(unique)
+
+    def test_the_second_launch_hands_over_its_click_and_leaves(self, qt_app, name):
+        from stenograf.gui.app import claim_single_instance
+
+        first = claim_single_instance()
+        assert first is not None and first.isListening()
+        try:
+            assert claim_single_instance() is None, "the second launch must not build an app"
+            # It said nothing beyond "a launch happened here" — the connection
+            # *is* the message, and it has to reach the running app.
+            pump(first.hasPendingConnections)
+        finally:
+            first.close()
+
+    def test_the_running_app_answers_by_showing_its_window(self, qt_app, gui, name):
+        from stenograf.gui.app import _relaunched, claim_single_instance
+
+        shell, _engine = gui
+        server = claim_single_instance()
+        assert server is not None and shell.window is not None
+        try:
+            shell.hide_window()  # where closing the window leaves it, with a tray up
+            assert claim_single_instance() is None
+            pump(server.hasPendingConnections)
+
+            _relaunched(server, shell)
+
+            assert shell.window.isVisible()
+            # Drained, not merely ignored: unaccepted connections count against
+            # maxPendingConnections, and a server that stops accepting refuses
+            # the *next* launch — which then starts the second app.
+            assert not server.hasPendingConnections()
+        finally:
+            shell.hide_window()
+            server.close()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="a named pipe leaves no file behind")
+    def test_a_crashed_instance_does_not_lock_the_next_one_out(self, qt_app, name):
+        from pathlib import Path
+
+        from PySide6.QtNetwork import QLocalServer
+
+        from stenograf.gui.app import claim_single_instance
+
+        scout = QLocalServer()  # only to learn where Qt puts the socket
+        assert scout.listen(name)
+        socket_path = Path(scout.fullServerName())
+        scout.close()
+        socket_path.write_bytes(b"")  # what a killed instance leaves behind
+
+        server = claim_single_instance()
+
+        try:
+            assert server is not None and server.isListening(), server and server.errorString()
+        finally:
+            if server is not None:
+                server.close()
 
 
 class TestQuitting:

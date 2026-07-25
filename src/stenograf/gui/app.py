@@ -40,6 +40,7 @@ aborts the process on ``qFatal``.
 
 from __future__ import annotations
 
+import getpass
 import sys
 import threading
 from pathlib import Path
@@ -47,12 +48,13 @@ from typing import TYPE_CHECKING, TypeVar
 
 from PySide6.QtCore import Property, QCoreApplication, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QIcon
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
 
 from stenograf import ASSETS
-from stenograf.shortcut import DESKTOP_FILE_NAME
+from stenograf.shortcut import APPLICATION_NAME, DESKTOP_FILE_NAME
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -63,6 +65,13 @@ if TYPE_CHECKING:
 
 QML_DIR = Path(__file__).parent / "qml"
 """Where the ``.qml`` files live; they ship inside the wheel next to this module."""
+
+_INSTANCE_REPLY_MS = 500
+"""How long to wait for a running instance to answer (:func:`claim_single_instance`).
+
+Generous for what it covers: the connection is accepted by the kernel from the
+listening socket's backlog, so an instance whose GUI thread is busy still answers
+instantly. A name with nothing behind it is refused immediately and never waits."""
 
 MENU: tuple[tuple[str, str, str], ...] = (
     ("Setup", "Start meeting", "Capture this meeting with live captions."),
@@ -363,6 +372,75 @@ def build(app: QGuiApplication) -> tuple[QQmlApplicationEngine, StenografGui]:
     return engine, gui
 
 
+def claim_single_instance(parent: QObject | None = None) -> QLocalServer | None:
+    """Claim this user's "Stenograf is running here" name, once per machine.
+
+    Returns the listening server if this process is the only Stenograf, and
+    ``None`` if another one answered — that one has been asked to show its
+    window, and this process must exit 0 without printing anything.
+
+    Closing the window only *hides* it (:mod:`stenograf.gui.tray`), which makes
+    clicking the launcher again the natural way to ask for the window back — and
+    with nothing claimed, that gesture starts a second app instead: two tray
+    icons, two microphone claims, two meeting folders written in parallel. macOS
+    is covered by LaunchServices, which keeps tracking the bundle and delivers a
+    re-open as an activation; Linux and Windows have no equivalent. The claim is
+    made unconditionally anyway, since a terminal ``steno --gui`` can start a
+    second copy beside the bundle on macOS too.
+
+    **The connection is the whole message.** There is nothing to say beyond "a
+    launch happened over here", so no protocol is invented for it — and a
+    connection the running app never reads still wakes its event loop.
+    """
+    name = _instance_name()
+    probe = QLocalSocket()
+    probe.connectToServer(name)
+    if probe.waitForConnected(_INSTANCE_REPLY_MS):
+        probe.disconnectFromServer()
+        return None
+    server = QLocalServer(parent)
+    # Nothing answered a moment ago, so a socket still sitting there was left by
+    # an instance that crashed — and Qt refuses to listen on a name that exists.
+    QLocalServer.removeServer(name)
+    if not server.listen(name):
+        # Never fatal: an app that will not open is worse than one that can be
+        # opened twice. Say so on stderr and carry on.
+        print(
+            f"could not claim {server.fullServerName() or name} "
+            f"({server.errorString()}) — a second launch will start a second copy",
+            file=sys.stderr,
+        )
+    return server
+
+
+def _instance_name() -> str:
+    """The single-instance name: one per user, since the namespace is not.
+
+    Qt turns a bare name into a socket in the temp directory — ``/tmp``, shared
+    by every account on Linux — or, on Windows, into a named pipe in the
+    machine-global pipe namespace. Both need the user in the name so two people
+    logged into one machine do not lock each other out. ``$XDG_RUNTIME_DIR``
+    would be the tidier home on Linux, but handing Qt an absolute path only
+    works on Unix, and one name that works on all three platforms is worth more
+    than the directory.
+    """
+    return f"stenograf-{getpass.getuser()}"
+
+
+def _relaunched(server: QLocalServer, gui: StenografGui) -> None:
+    """Answer a second launch: drain its connection and put the window up.
+
+    Draining is not politeness — unaccepted connections count against
+    ``maxPendingConnections``, and a server that has stopped accepting refuses
+    the *next* launch, which then starts the second instance this whole path
+    exists to prevent.
+    """
+    while (connection := server.nextPendingConnection()) is not None:
+        connection.close()
+        connection.deleteLater()
+    gui.show_window()
+
+
 def run(*, tray: bool = False) -> int:
     """Open the app and run it until it quits; returns the exit code.
 
@@ -374,8 +452,11 @@ def run(*, tray: bool = False) -> int:
 
     app = QApplication.instance() or QApplication(sys.argv)
     assert isinstance(app, QApplication)
-    app.setApplicationName("Stenograf")
-    app.setApplicationDisplayName("Stenograf")
+    # Not setApplicationDisplayName: Qt appends it to every window title, and
+    # the KDE titlebar then reads "stenograf — Stenograf" (measured 2026-07-25).
+    # The name is what the tray, the SNI title and the notification app name all
+    # come from, so it is the display name that is redundant, not this.
+    app.setApplicationName(APPLICATION_NAME)
     app.setOrganizationName("stenograf")
     # The Linux half of the same identity: this is the app_id a Wayland window
     # carries, and it has to name the desktop entry `steno setup` wrote or the
@@ -388,7 +469,14 @@ def run(*, tray: bool = False) -> int:
     # standing between the app and a generic Python tile.
     app.setWindowIcon(QIcon(str(ASSETS / "icon.png")))
 
+    # Before anything is built: the cheapest thing a second launch can do is
+    # hand its click over and leave.
+    instance = claim_single_instance(app)
+    if instance is None:
+        return 0
+
     _engine, gui = build(app)
+    instance.newConnection.connect(lambda: _relaunched(instance, gui))
     status_item = install(gui)
     if status_item is not None:
         # The window is now closeable without ending the app, so Qt's own rule
@@ -408,9 +496,22 @@ def run(*, tray: bool = False) -> int:
         gui.hide_window()
     else:
         gui.show_window()
+    if instance.hasPendingConnections():
+        # A launch that raced the QML load: `newConnection` fired before the slot
+        # above existed, and Qt does not re-emit it. Answered here rather than
+        # earlier so the --tray hide cannot undo it.
+        _relaunched(instance, gui)
     code = app.exec()
     gui.join_meetings()
     return code
 
 
-__all__ = ["MENU", "QML_DIR", "Screen", "StenografGui", "build", "run"]
+__all__ = [
+    "MENU",
+    "QML_DIR",
+    "Screen",
+    "StenografGui",
+    "build",
+    "claim_single_instance",
+    "run",
+]

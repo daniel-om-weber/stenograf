@@ -16,10 +16,21 @@ ApplicationWindow {
     // NOT: it resolves late, and each Component's first pass reads null).
     property var app
 
-    width: 1000
-    height: 680
+    // Clamped, not fixed: 1000x680 is the intended size, but a 1280x720 logical
+    // desktop (a 1080p panel at 150 % scale) is barely larger, and a smaller one
+    // would have the window opening past the screen edge. A guard for those, not
+    // a fix for this machine — measured on KDE 6.7.3 2026-07-25: Wayland reports
+    // the *whole* panel as available (a client cannot learn panel geometry there,
+    // so 720 clamps nothing), X11 reports the work area (690), and either way
+    // these are content sizes while the compositor fits the decorated frame. Its
+    // own shrink to 1000x690 is what actually keeps the window on screen, and
+    // the layout holds at that size.
+    width: Math.min(1000, Screen.desktopAvailableWidth)
+    height: Math.min(680, Screen.desktopAvailableHeight)
     minimumWidth: 720
     minimumHeight: 520
+    // No applicationDisplayName is set (gui/app.py says why), so this is the
+    // whole window title rather than the first half of "stenograf — Stenograf".
     title: "stenograf"
     color: Theme.bg
 
