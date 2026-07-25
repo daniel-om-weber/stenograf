@@ -1,10 +1,13 @@
-# stenograf on Linux — the desktop app, measured and still to fix
+# stenograf on Linux — what the desktop app was measured to do
 
-Phase 8's app was designed, built and tuned on macOS; `PLAN.md` recorded it as
-*never run on a real desktop* off that platform. On **2026-07-25** it was run
-for the first time on a real Linux session, end to end including a live
-meeting. This file holds what that found: the parts that already work (so no
-future session re-measures them), and the work that is left, worst first.
+Phase 8's app was designed, built and tuned on macOS; on **2026-07-25** it was
+run for the first time on a real Linux session, end to end including a live
+meeting, and the six problems that found were fixed the same day (single
+instance, the localised documents dir, the desktop entry, the doubled window
+title, the X11 `WM_CLASS`, the window-size clamp — `git log` has them). **No
+work item is open here.** What is left is this file's real job: the evidence, so
+no future session re-measures it; the decisions, so none re-litigates them; the
+desktops that have never run it; and the recipe for observing a running GUI.
 
 **The machine every number below comes from:** CachyOS on the GPD notebook
 (`cachyos-gpdmini`, x86_64, kernel 7.1.4-1-cachyos-deckify), **KDE Plasma
@@ -15,18 +18,34 @@ somewhere else (XWayland, DBus introspection) it says so.
 
 ---
 
-## What already works — do not re-verify
+## What works — do not re-verify
 
 Every item here was observed on that session, not reasoned about:
 
 - **The window.** Renders correctly and crisply at 150 % fractional scaling
   (the grab comes back at 1.5×, so Qt gets the fractional scale rather than
   rounding to 2). KDE draws a server-side titlebar carrying our icon; the task
-  manager shows **one** entry with the app tile.
+  manager shows **one** entry with the app tile. The caption reads `stenograf`,
+  once — `applicationDisplayName` is deliberately unset, or Qt appends it.
 - **Launcher identity on Wayland.** KWin reports the window as
   `resourceClass=stenograf`, `desktopFileName=stenograf` — `setDesktopFileName`
-  does exactly what `shortcut.py`'s `DESKTOP_FILE_NAME` comment claims. The X11
-  half is *not* fine; see item 5.
+  does exactly what `shortcut.py`'s `DESKTOP_FILE_NAME` comment claims.
+- **The desktop entry.** Both variants (app and TUI) pass
+  `desktop-file-validate` with no output, and `Icon=stenograf` resolves out of
+  the user's own hicolor theme (`QIcon.fromTheme` finds it at 512×512 on the
+  live session; under `QT_QPA_PLATFORM=offscreen` it does not, because that
+  platform has no icon theme at all — not a lookup failure).
+- **X11 `WM_CLASS`** (measured under XWayland, `QT_QPA_PLATFORM=xcb`): the class
+  is `applicationName`, the instance is `argv[0]`'s basename — `"steno",
+  "Stenograf"` from the console script, `"__main__.py", "Stenograf"` from the
+  entry's `python -m stenograf`. Only the class is stable, and it is what
+  `StartupWMClass=Stenograf` now declares; KWin agrees
+  (`resourceClass=Stenograf` for the X11 window).
+- **One app per user.** `gui.app.claim_single_instance` claims
+  `/tmp/stenograf-$USER`; a second launch exits 0, prints nothing, and the first
+  app's **hidden** window comes back on screen. One SNI item stays registered
+  with the watcher, not two. A `SIGTERM`-killed instance leaves its socket
+  behind and the next launch still starts (`removeServer` clears it).
 - **The tray.** `isSystemTrayAvailable()` and `supportsMessages()` are both
   true; the status item registers as an SNI (`Id`/`Title` = `Stenograf`,
   `Category` = `ApplicationStatus`), shows the two commas in the brand inks on
@@ -37,7 +56,7 @@ Every item here was observed on that session, not reasoned about:
   and *Stop* correctly disabled. Qt exports `Stop && finalize` as
   `Stop _& finalize`, which is the DBusMenu mnemonic convention (`_` marks the
   accelerator), so Plasma should render `Stop & finalize` — *the rendered menu
-  was never looked at, only the exported strings.* Worth one eyeball.
+  was never looked at, only the exported strings*; see below.
 - **Tray → window on Wayland.** `Activate` on the SNI both shows **and focuses**
   the window; KWin's focus-stealing prevention does not eat
   `requestActivate()`. (`set_dock_icon` is a no-op here, as intended.)
@@ -50,138 +69,19 @@ Every item here was observed on that session, not reasoned about:
   `parec`/PipeWire → live pass → Stop → finalize → `transcript.{md,json,txt}`
   (+ `audio.wav` when asked) → the DONE screen with diarized entries. Three
   runs, one with real speech in the room. `steno doctor` is green apart from
-  optional Ollama.
+  optional Ollama, and now names the output home it resolved
+  (`/home/deck/Dokumente/Meetings` here, read out of `user-dirs.dirs`).
 - **Startup**: 0.61 s from exec to first frame, warm (0.23 s imports, 0.29 s
-  building the QML tree). No launch-feedback problem worth solving.
+  building the QML tree); the single-instance claim added `PySide6.QtNetwork`,
+  which is 9 ms on top of QtCore. No launch-feedback problem worth solving.
 - **The event loop stays live after the finalize** (120 s of 1 Hz heartbeat,
   `phase=done`, `running=False`) — an earlier apparent freeze was an artefact of
   the observing shell, not the app.
 
----
-
-## Work items
-
-### 1. Nothing stops a second instance — the one real bug
-
-**Symptom.** Launching the desktop entry twice starts two independent apps
-(measured: PIDs 13701 and 13827, **two** SNI items registered with the
-watcher). Both have a tray icon, both can start a meeting, both would open the
-microphone and write their own meeting folder.
-
-**Why it is now load-bearing.** Step 6 made closing the window *hide* it, so
-the natural gesture for "bring stenograf back" — click the launcher again — is
-exactly the gesture that produces the second copy. macOS is covered by
-LaunchServices (measured in `PLAN.md` step 6: a second `open` starts no second
-instance, and the app answers the reopen as `ApplicationActivate`); Linux and
-Windows have no equivalent. `grep` confirms there is no lock, `QLocalServer` or
-`QSharedMemory` anywhere in the tree.
-
-**Fix.** In `gui/app.py: run()`, before building anything: claim a per-user
-name (`stenograf-$UID`, `$XDG_RUNTIME_DIR` is the natural home) with
-`QLocalServer`. If the connect succeeds, the app is already running — send it
-`show`, print nothing, exit 0. If it fails, `removeServer()` (a crashed
-instance leaves a stale socket) and listen; incoming connections call
-`gui.show_window()`, which is the Linux/Windows counterpart of `Tray._reopened`.
-Do it unconditionally rather than Linux-only: a terminal `steno --gui` can
-start a second copy on macOS too, beside the bundle.
-
-**Test.** Factor the claim into its own function so a headless test can call it
-twice in one process and assert the second call reports "already running";
-`QLocalServer` needs no display.
-
-**Then** add `SingleMainWindow=true` to the desktop entry (item 3) — KDE honours
-it, everything else ignores it.
-
-### 2. `~/Documents/Meetings` is the wrong folder on a localised desktop
-
-**Symptom.** `output.default_output_home()` hardcodes `Path.home() /
-"Documents" / "Meetings"`. On this machine `xdg-user-dir DOCUMENTS` is
-`/home/deck/Dokumente`, so the tool silently creates a *second* documents tree
-that the file manager's sidebar does not list.
-
-**Why it outranks every GUI detail.** The product lock is "the filesystem is
-the index" — the folder has to be the one the user's file manager shows.
-macOS is unaffected (`~/Documents` is the real path with a localised display
-name); Windows has the same class of problem through OneDrive redirection,
-which `shortcut.py` already handles for the Desktop but `output.py` does not
-for Documents.
-
-**Fix.** Resolve the documents directory in one place: on Linux read
-`XDG_DOCUMENTS_DIR` out of `$XDG_CONFIG_HOME/user-dirs.dirs` (expanding
-`$HOME`), everywhere else keep `~/Documents`. Read the file rather than
-shelling out to `xdg-user-dir`, which is not installed everywhere.
-
-**Decision to take first:** what happens to an existing `~/Documents/Meetings`
-on a machine that also has a localised documents dir. Recommendation: prefer
-the XDG dir, and have `doctor` name the output home it resolved (it already
-prints a settings line) so a moved folder is discoverable rather than
-mysterious. A permanent "use the legacy path if it exists" branch is the thing
-to avoid — one always-used resolver, and a release note.
-
-**Also update the places that name the default in prose:** `output.py` (module
-docstring + `default_output_home`), `settings.py` (three), `cli/notes.py`,
-`cli/transcribe.py` (two), `README.md` (four).
-
-**Test.** Monkeypatch `HOME`/`XDG_CONFIG_HOME` with and without a
-`user-dirs.dirs`, assert both resolutions.
-
-### 3. The desktop entry needs four small fixes
-
-All in `shortcut.py` (`_LINUX_DESKTOP`, `_install_desktop_entry`), all cheap:
-
-- **`Categories=AudioVideo;Audio;Utility;` names two main categories**, and
-  `desktop-file-validate` warns the app may appear **twice** in the menu.
-  `AudioVideo;Audio;Recorder;` is the idiomatic set (`Recorder` is an
-  additional category that requires `AudioVideo`).
-- **`Icon=` is an absolute path into site-packages.** It works today, but it
-  points inside a venv that a reinstall can move, and it gives the notification
-  daemon a path instead of a themed name. Install
-  `assets/icon.png` (it is 512×512) to
-  `$XDG_DATA_HOME/icons/hicolor/512x512/apps/stenograf.png` and write
-  `Icon=stenograf`. A scalable SVG would be nicer still; the geometry exists in
-  `native/appbundle/icon.svg`, and a *new* sibling file under `assets/` is
-  allowed by the bundle freeze — but one PNG is the single path.
-- **No `StartupNotify=true`.** Startup is 0.6 s, so this is polish, not rescue.
-- **`SingleMainWindow=true`**, once item 1 lands.
-
-**Test.** `tests/test_shortcut.py` already has a `_linux` helper — extend it:
-the icon file is installed, `Icon=stenograf`, exactly one main category,
-`StartupNotify`.
-
-### 4. The title bar reads "stenograf — Stenograf"
-
-Qt appends `applicationDisplayName` to the window title, so the KDE titlebar
-and task manager show the name twice (measured: KWin caption
-`stenograf — Stenograf`; `Main.qml` sets `title: "stenograf"` and
-`gui/app.py` sets both `setApplicationName` and `setApplicationDisplayName`).
-Drop one — the display name is the one to lose, since the tray, the SNI title
-and the notification app name all come from `applicationName`. **Check the
-macOS window title after the change**, since it is the same code path there.
-
-### 5. On X11 the window class is not what the entry declares
-
-**Measured under XWayland** (`QT_QPA_PLATFORM=xcb`, `xprop`):
-`WM_CLASS = "steno", "Stenograf"` — the instance name is `argv[0]`'s basename,
-the class is `applicationName`. The entry says `StartupWMClass=stenograf`, so
-matching an X11 window back to its launcher relies on the shells'
-case-insensitive fallbacks (KWin lowercases `resourceClass`; GNOME retries a
-lowercased lookup) rather than on the declared string.
-
-**Fix.** Write `StartupWMClass=Stenograf` — the class Qt actually sets — and
-correct the `DESKTOP_FILE_NAME` docstring, which currently reasons the other
-way round. `StartupWMClass` is consulted only for X11 windows, so this cannot
-disturb the Wayland matching that already works.
-
-**Not fixed by this:** the claim is still unverified on a *real* X11 session
-(see below).
-
-### 6. Small screens: the default window is bigger than this desktop
-
-`Main.qml` opens 1000×680; the logical desktop here is 1280×720 minus a 46 px
-panel, so KWin shrank the frame to 1000×690 and the content to ~662. Nothing
-was cut off and the layout held, but clamping the initial size to
-`Screen.desktopAvailableWidth/Height` is a two-line change worth making with
-the other cosmetics.
+**One local leftover:** this machine's pre-fix meeting sits in
+`~/Documents/Meetings/meeting-20260725-215405`, off the resolved output home
+now that it is `~/Dokumente/Meetings`. Nothing moves it — the resolver has no
+legacy branch by design — so it is a `mv` whenever anyone cares.
 
 ---
 
@@ -209,6 +109,13 @@ the other cosmetics.
   (no KDE platform-theme plugin in the wheel), and the app sets explicit sizes
   anyway. Scaling is honoured; a user's *font size* preference is not — the
   same trade the macOS build makes.
+- **The window-size clamp is a guard, not a fit.** `Main.qml` clamps its initial
+  1000×680 to `Screen.desktopAvailable*`, which on **Wayland is the whole panel**
+  — a client cannot learn panel geometry there, so 720 clamps nothing — and on
+  X11 is the work area (690). Both are *content* sizes while the compositor fits
+  the decorated frame, so KWin's own shrink to 1000×690 is what keeps the window
+  on screen either way, and the layout holds at that size. Chasing the
+  decoration height from QML is not worth it.
 
 ---
 
@@ -220,9 +127,16 @@ Nothing below is worth coding against blind:
   degrade-to-window path (`install()` returns `None`, closing the window quits).
   This is the branch the whole tray design leans on and it has never run.
 - **A real X11 session** — whether the taskbar groups the window with its
-  launcher after item 5's change.
+  launcher now that `StartupWMClass` names the class Qt actually sets.
+- **The launcher gesture itself.** The single-instance path was driven with two
+  `python -m stenograf --gui` launches, not with two clicks on the K-menu entry,
+  so `StartupNotify=true` and `SingleMainWindow=true` are validated as keys but
+  not observed doing anything.
+- **The rendered tray menu** — only the DBus-exported labels were read. There is
+  no way to open the systray applet's menu over DBus (`ContextMenu` asks the
+  *app* to draw one, which Qt leaves to the host) and no pointer-injection tool
+  on this machine, so this needs a human hand on the trackpad.
 - **Any other desktop** (XFCE, Cinnamon) and a **light** system theme.
-- **The rendered tray menu** — only the DBus-exported labels were read.
 
 ---
 
@@ -237,8 +151,8 @@ desktop. What worked here, and the traps paid for:
   setup form with the same map QML sends (`setup.start({...})`), and save
   `window.grabWindow()` per screen. `grabWindow` needs no compositor
   permission and captures at the real scale factor.
-- **Keep test meetings out of `~/Documents`**: `STENOGRAF_DATA=<scratch>` with a
-  `settings.toml` holding `[output] dir = <scratch>/meetings`.
+- **Keep test meetings out of the documents folder**: `STENOGRAF_DATA=<scratch>`
+  with a `settings.toml` holding `[output] dir = <scratch>/meetings`.
 - **Window facts come from KWin scripting**, not from guesswork: write a `.js`
   that walks `workspace.windowList()` and `print()`s
   `resourceClass`/`resourceName`/`desktopFileName`/`caption`, load it with
@@ -251,11 +165,17 @@ desktop. What worked here, and the traps paid for:
   `org.kde.StatusNotifierItem`, the menu from
   `busctl --user call <name> /MenuBar com.canonical.dbusmenu GetLayout iias 0 -- -1 …`,
   and `AboutToShow` can be called directly to prove the relabelling path.
-  `Activate ii x y` simulates the left click.
+  `Activate ii x y` simulates the left click. `RegisteredStatusNotifierItems` on
+  `org.kde.StatusNotifierWatcher` lists the items; map a bus name to a process
+  with `org.freedesktop.DBus.GetConnectionUnixProcessID` — and read that reply
+  with care, since `tr -dc '0-9'` glues the `uint32` in the D-Bus signature onto
+  the front of the pid.
 - **Screenshots**: `spectacle -b -n -f -o out.png` for the whole screen (`-a`
   grabs the *active* window, which is usually not ours), then `magick … -crop`
   to inspect the panel and the tray at 8×.
+- **What is not installed here**: `xwininfo` (use `xprop -name <title>` and KWin
+  scripting instead), `bc`, `/usr/bin/time`.
 - **Two traps**: `pkill -f "…stenograf…"` matches the agent's own shell command
-  and kills the session — resolve PIDs with `pgrep` and kill by number; and a
-  backgrounded Python harness needs `python -u`, or its output dies with the
-  process and looks like a hang in the app.
+  and kills the session — resolve PIDs with `pgrep` and kill by number, one
+  number per `kill`; and a backgrounded Python harness needs `python -u`, or its
+  output dies with the process and looks like a hang in the app.

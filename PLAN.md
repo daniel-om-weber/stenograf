@@ -324,18 +324,19 @@ Terminal (captions, resize, clean Ctrl-C); and re-running the three automatable
 items on the notebook's GPU (different DML vendor tier). This gates the
 "supported" claim, and there is nothing to code until it finds something.
 
-**The desktop app on Linux — measured 2026-07-25, six items open: see
-`PLAN-LINUX.md`.** The app was run for the first time on a real Linux session
-(KDE Plasma 6.7.3, Wayland, 150 % scale) including a live meeting captured
-through PipeWire from the GUI. The window, the launcher identity on Wayland,
-the tray with its DBusMenu, notifications, closing the window mid-meeting and
-stopping from the menu bar all work; the open work is one real bug (nothing
-stops a second instance, and closing-to-tray makes clicking the launcher again
-the way you get one), the localised documents dir (`~/Dokumente`, not
-`~/Documents`), four fixes to the desktop entry, the doubled window title, the
-X11 `WM_CLASS`, and a window default larger than a 1280×720 logical desktop.
-Stock GNOME without the AppIndicator extension — the degrade-to-window path —
-and a real X11 session remain unmeasured.
+**The desktop app on Linux — measured and fixed 2026-07-25; nothing open. See
+`PLAN-LINUX.md`** for the evidence, the decisions and the desktops it has never
+run on. The app was run on a real Linux session (KDE Plasma 6.7.3, Wayland,
+150 % scale) including a live meeting captured through PipeWire from the GUI,
+and the six problems that found were fixed the same day: nothing stopped a
+second instance (now a `QLocalServer` claim in `gui/app.py`, unconditional on
+every platform), the output home ignored a localised documents dir (now resolved
+from `user-dirs.dirs`, so `~/Dokumente/Meetings` — with **no legacy branch**, so
+an existing `~/Documents/Meetings` is left where it is and `steno doctor` names
+whichever one is in force), four fixes to the desktop entry, the doubled window
+title, the X11 `WM_CLASS`, and the window default. What is still unmeasured is
+all elsewhere: stock GNOME without the AppIndicator extension (the
+degrade-to-window path), a real X11 session, and the rendered tray menu.
 
 **The desktop app on Windows — never run on a real desktop.** The code is
 portable and the launcher follows the `gui` extra (`shortcut.py`: a
@@ -343,8 +344,10 @@ portable and the launcher follows the `gui` extra (`shortcut.py`: a
 `QT_QPA_PLATFORM=offscreen` in CI. What needs a real session: does the tray
 icon appear, does the window match its launcher in the taskbar, fonts and
 HiDPI at 125/150/200 %, and closing the window during a live meeting. The
-second-instance bug above applies here too — Windows has no LaunchServices
-either. Nothing else here is worth coding against blind.
+single-instance claim the Linux work added is deliberately unconditional, so
+Windows is covered in code — as a *named pipe* rather than a socket, which is the
+one half of it no Linux or macOS run exercises. Nothing else here is worth
+coding against blind.
 
 **stenodiar distribution off macOS.** Throughput is measured and passes (8.6× RT
 on Windows, 8.2× on Linux), `find_stenodiar` handles the `.exe` suffix and a
