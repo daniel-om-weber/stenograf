@@ -533,7 +533,9 @@ CachyOS notebook — dev-environment plan in §5). Phase 6 (Windows) was scoped
 2026-07-11 on a Windows 11 notebook and its capture track shipped the same day
 — portability audit + build summary at the end of this section. Phase 7 (the
 `steno` launcher TUI — a mouse-driven Textual home screen for non-terminal
-users) was planned 2026-07-12; plan at the end of this section. The per-task build logs of the completed phases were removed from
+users) was planned 2026-07-12; plan at the end of this section. Phase 8 (a
+native **Qt Quick** GUI, absorbing Phase 7's deferred Tier 2) was decided
+2026-07-25 after a two-toolkit prototype; plan at the end of this section. The per-task build logs of the completed phases were removed from
 this file on 2026-07-10; they live in its git history (and in PLAN-AEC.md for
 echo cancellation).
 
@@ -1414,6 +1416,135 @@ under `--models-only` — headless/CI); `install.sh` + README one-liner do the
 rest. Two naming landmines for future screens: never define `_running` or
 `_render` on a Screen — both shadow Textual internals (`MessagePump._running`,
 `Widget._render`) and break the screen silently.
+
+### Phase 8 plan — native GUI (Qt Quick), decided 2026-07-25
+
+**Decision: the launcher becomes a real desktop application built on Qt Quick
+(PySide6), and `Stenograf.app` is generated locally by `steno setup`.** This
+supersedes Phase 7's Tier 2 (tray + packaged signed installers), which is
+folded in below. The CLI subcommands and the whole library stay untouched; the
+Textual TUI stays until the Qt screens replace it workflow by workflow.
+
+**What this is not.** Not a web UI. A `textual-serve` + `pywebview` route was
+costed first — it is by far the cheapest (every existing screen would work
+unchanged in a native window) — and rejected: it renders our TUI inside a
+browser engine, which is the wrong side of the philosophy lock, and on Linux
+its GTK backend needs PyGObject anyway. A second route, our own terminal
+renderer (custom Textual `Driver` → `pyte` → a canvas), was rejected for
+making us the owner of a terminal emulator's bug surface (unicode widths,
+IME, HiDPI, copy/paste) in exchange for zero new capability.
+
+**Toolkit evaluation (2026-07-25, all facts checked against PyPI).**
+
+| | install cost | rendering | licence | verdict |
+|---|---|---|---|---|
+| Qt Quick (PySide6) | ~110 MB (`PySide6-Essentials`) | GPU scene graph | LGPL-3.0 ✓ | **chosen** |
+| Tk 9 + sv-ttk | nominally 0 | CPU | MIT ✓ | runner-up, blocked (below) |
+| Dear PyGui | 3 MB | GPU (ImGui) | MIT ✓ | tooling aesthetic; immediate mode redraws continuously |
+| Slint | 16 MB | GPU | **GPLv3 or commercial** | disqualified — MIT project; also *no stable Python release* (latest `1.17.1b2`) |
+| Toga | small | native widgets | BSD ✓ | disqualified — `toga-gtk` needs `pygobject`+`pycairo` (sdist-only), `toga-winforms` needs pythonnet |
+
+Qt wins on more than looks. **`QSystemTrayIcon` speaks StatusNotifierItem on
+Linux natively**, which deletes the 300–500 lines of hand-rolled D-Bus
+(`StatusNotifierItem` + `com.canonical.dbusmenu` over `jeepney`) that a
+pystray-free tray backend would otherwise have cost — PyGObject is sdist-only,
+so pystray's Linux backends are not reachable from a pip-only install. The
+menu-bar/taskbar mode therefore stops being a separate project and becomes a
+mode of the same app. Coverage caveat unchanged: KDE/XFCE/Cinnamon/Ubuntu-GNOME
+have SNI; stock GNOME needs the AppIndicator extension, so the tray must stay
+an enhancement with the desktop launcher as the guaranteed entry point.
+
+**LGPL, deliberately:** PySide6 is LGPL-3.0 (PyQt6 is GPL and would relicense
+this MIT project). A normal pip dependency satisfies the relinking obligation;
+a future PyInstaller-bundled build would not, and needs real attention.
+
+**Distribution — the finding that unblocks Tier 2 without money.** macOS
+quarantine is applied by the *downloading* program, so a file written locally
+is never assessed by Gatekeeper. `steno setup` already exploits this for
+`Stenograf.command`; the same trick carries a full `.app` bundle — custom
+icon, Dock presence, `LSUIElement` for menu-bar mode — with no Developer ID and
+no notarization. **The $99/yr is required only for a *downloadable* artifact**
+(PLAN.md's earlier Tier-2 note read as if it gated the whole tier; it does
+not). Consequence: TCC grants move off Terminal.app onto our bundle, which is
+better hygiene ("Stenograf would like to access the microphone") but reworks
+the `setup`/`doctor` permission flow — and unsigned bundles get weak TCC
+identity, so the bundle must stay a **thin wrapper that never changes** (it
+execs the installed `steno`) and the grant's survival across `uv tool upgrade`
+must be tested before anything is built on it. Windows and Linux need no
+equivalent trick: a locally written `.lnk` carries no Mark-of-the-Web, and
+Linux signs nothing.
+
+**Prototype results (2026-07-25, `prototypes/gui/`, untracked).** Both
+toolkits were built against the real information architecture (home menu +
+live meeting screen with committed captions, dim interim tail, phase-coloured
+header) sharing one fake feed, ~860 lines total. Qt produced the intended
+design directly. Tk's *meeting* screen came out presentable — colour-tagged
+`Text`, tab-stop alignment, clean type — but its *home* screen renders flat,
+because `highlightthickness`/`highlightbackground` does not reliably draw a
+1 px card border on macOS and surface-on-background alone is too weak to read
+as a card; Qt got the same look from `radius` + `border.color`.
+
+**The blocker that settled it:** *uv-managed CPython cannot open a Tk window.*
+python-build-standalone ships Tcl/Tk but bakes in the build machine's prefix
+(`/tools/deps/lib/tcl9.0`), so `import tkinter` succeeds and `tkinter.Tk()`
+dies with "Cannot find a usable init.tcl". Homebrew's `python3` fails
+differently (no `_tkinter`; separate formula), as do the many distros that
+split out `python3-tk`. Since `uv tool install` *is* our distribution channel,
+Tk's whole advantage — free and already present — is false as stated. It is
+recoverable (set `TCL_LIBRARY`/`TK_LIBRARY` from `sys.base_prefix` before
+importing tkinter) but that is a startup hack shipped forever, with a
+different failure per platform and per Python source. Qt needed no equivalent.
+
+**Landmines paid for in the spike** (full list in `prototypes/gui/README.md`):
+`qmlRegisterSingletonInstance()` breaks the `ApplicationWindow` root outright —
+every QML-declared child is then rejected from `contentData` ("Cannot assign
+QQmlConnections_QML_6 … expected QObject"); `setContextProperty()` works but
+resolves late, so each `Component`'s first binding pass reads `null` and logs a
+TypeError. **Use `engine.setInitialProperties({...})`** — set before component
+completion, every binding correct on the first pass, zero warnings.
+`QQuickWindow.grabWindow()` screenshots the app with no Screen Recording
+permission, which makes UI regression tests possible in CI (`screencapture`
+from inside the app instead *blocks* on the TCC prompt).
+
+**Rules the port inherits.**
+
+1. The GUI stays a thin client of the library (the C7 rule the CLI and TUI
+   already follow): screens gather inputs and call library entry points.
+2. Slow work goes to a worker thread with signals — the Qt equivalent of
+   `@work(thread=True)`; blocking the GUI thread freezes rendering.
+3. Notes generation still goes through the existing entry point on the thread
+   that imported `mlx_lm` ([[mlx-weights-thread-local-streams]]). A Qt worker
+   thread naively re-importing it dies with "no Stream(gpu, 0)".
+4. **The redraw budget carries over verbatim.** The TUI's `TEXTUAL_FPS` pin and
+   `animation_level = "none"` become "bind the view to model updates, no idle
+   animations": a QML `Timer { running: true }`, a spinner or an easing
+   transition on every caption holds the compositor awake for the whole
+   meeting. The prototype keeps exactly one 1 Hz timer and ships
+   `pulseEnabled: false` to make the cost of a pulsing REC dot visible.
+5. `NotesScreen`'s guardrail survives the port: a dumb file picker, never a
+   meeting list with metadata — that would be the meeting browser the product
+   philosophy forbids.
+
+**Sequencing** (each step ships working; none blocks Phase 5/6):
+
+1. Idle-power measurement of the Qt prototype under `powermetrics`
+   ([[powermetrics-passwordless]]), with and without `pulseEnabled` — the
+   number that must not regress the 0.6 W live-pipeline profile.
+2. The TCC-survival test: locally written `.app`, grant the mic,
+   `uv tool upgrade`, confirm no re-prompt. Everything below assumes it passes.
+3. `stenograf/gui/` + app shell + home screen; bare `steno` opens it behind an
+   opt-in flag while the Textual launcher stays default.
+4. Meeting screen (the risky one — live captions, worker threads), then
+   transcribe / notes / settings / doctor.
+5. `shortcut.py` writes `Stenograf.app` instead of `Stenograf.command`; icon
+   assets (`.icns`/`.ico`/`.png`) land here — none exist yet.
+6. Menu-bar / taskbar mode via `QSystemTrayIcon`, degrading to the launcher
+   where no tray host exists.
+7. Flip the default; retire the Textual launcher once parity is reached.
+
+**Still deferred:** packaged signed installers and any downloadable artifact
+(needs the $99 Developer ID + notarization; revisit only if non-terminal users
+ask to double-click an installer).
 
 ### Contextual-biasing evaluation harness (built 2026-07-13)
 
