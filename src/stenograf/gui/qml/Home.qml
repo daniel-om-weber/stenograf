@@ -46,7 +46,9 @@ Item {
                 padding: 0
                 focus: card.index === 0
 
-                onClicked: card.modelData.page === "quit" ? Qt.quit() : page.app.open(card.modelData.page)
+                // quit_app(), not Qt.quit(): leaving with a meeting running has
+                // to stop capture and let the finalize land first.
+                onClicked: card.modelData.page === "quit" ? page.app.quit_app() : page.app.open(card.modelData.page)
 
                 background: Rectangle {
                     radius: 12

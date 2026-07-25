@@ -11,13 +11,14 @@ inputs and call library entry points. The workflows they share live in
 lacks goes into the library — never into one front-end, or the two UIs drift.
 
 `PLAN.md` holds **only unbuilt work** — the active plan is Phase 8's remainder
-(the app is built, opt-in, and installed as `~/Applications/Stenograf.app` by
-`steno setup`; **the tray mode — step 6 — is next**, then the default flip.
-Step 5's bundle is FROZEN: its bytes are every user's microphone grant, so read
+(the app is built, opt-in, installed as `~/Applications/Stenograf.app` by
+`steno setup`, and lives in the menu bar; **only step 7 — the default flip — is
+left, and it is gated on real use, not on code**. Step 5's bundle is FROZEN:
+its bytes are every user's microphone grant, so read
 `native/appbundle/README.md` before touching anything under it or under
-`src/stenograf/assets/`. Step 1's per-process profile is done and its watt half
-is deferred to a quiet machine), plus the
-open platform items and the declined list. Everything
+`src/stenograf/assets/` — new sibling files there are fine, the `.app` tree is
+not. Step 1's per-process profile is done and its watt half is deferred to a
+quiet machine), plus the open platform items and the declined list. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /

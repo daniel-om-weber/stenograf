@@ -14,7 +14,7 @@ the CLI or by the Textual launcher (`steno` with no arguments).
 
 ---
 
-## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built and installable, **step 6 is next**, then 7.
+## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, installable and in the menu bar. **Step 7 — the default flip — is all that is left.**
 
 **Decision: the launcher becomes a real desktop application built on Qt Quick
 (PySide6), and `Stenograf.app` is installed locally by `steno setup`.** This
@@ -167,10 +167,10 @@ regression tests possible in CI (`screencapture` from inside the app instead
 
 ### Sequencing
 
-Each step ships working; none blocks the platform work below. Steps 2–5 are
-done and step 1's remainder is deferred, so **the next thing to build is step
-6** — which step 5 unblocked rather than constrained: the Info.plist coupling
-the plan expected turned out not to exist (see step 6).
+Each step ships working; none blocks the platform work below. Steps 2–6 are
+done and step 1's remainder is deferred, so **all that is left is step 7** —
+and it is gated on use, not on code: nothing in the automated tests can tell
+whether the live screen reads well over half an hour.
 
 1. **Half done 2026-07-25; the watt half deliberately deferred.** The
    per-process half is measured and the app is clean: on the idle home screen
@@ -260,21 +260,51 @@ the plan expected turned out not to exist (see step 6).
    grant even survives an Intel↔Apple-Silicon migration. No `python3.13` row
    appeared. The step-2 test bundle's grant was replaced rather than migrated,
    which is the freeze rule demonstrated from the other side.
-6. Menu-bar / taskbar mode via `QSystemTrayIcon`, degrading to the launcher
-   where no tray host exists. Rule 4 gives this a power argument the toolkit
-   comparison did not: a tray-only app has no visible window, so it idles at ~1
-   wakeup/s instead of the display-refresh floor.
+6. **Done 2026-07-25.** `stenograf/gui/tray.py`: a `QSystemTrayIcon` carrying
+   the app icon's two commas without their tile (`assets/tray.svg`, re-inked at
+   runtime — a macOS template image when idle, red while recording, amber while
+   finishing), a menu that can open the window, start, stop, open the meetings
+   folder and quit, and `steno --gui --tray` to start with no window at all.
+   Where `isSystemTrayAvailable()` is false — stock GNOME without the
+   AppIndicator extension — `install()` returns `None` and nothing below
+   happens: the window is the app and closing it quits, exactly as before.
 
-   **Still independently shippable — the feared plist coupling does not exist**
-   (measured 2026-07-25, `native/appbundle/README.md`). LaunchServices moves the
-   bundle's registration onto the spawned Qt child when it checks in (one Dock
-   tile, our icon, `originalPid` still the stub), and the child owns its own
-   activation policy at runtime: `setActivationPolicy(accessory)` flips the
-   record from `Foreground` to `UIElement` live. So menu-bar mode is a call in
-   the child, not an `LSUIElement` key in the frozen Info.plist — which was
-   tried and rejected anyway, because a UIElement app cannot be activated by
-   `open` and the window then opens *behind* the frontmost one.
-7. Flip the default (`[gui]` moves into `dependencies`, bare `steno` opens the
+   Two behaviour changes ride along, both worth more than the icon. **Closing
+   the window hides it and a running meeting carries on**, which is what makes
+   rule 4's occlusion lever reachable — and **quitting mid-meeting now waits for
+   the finalize** instead of relying on the after-the-loop `join_meetings`,
+   because with no window in front of it Quit becomes the normal way a meeting
+   ends rather than an accident. The menu bar says so while it waits, and a
+   second Quit abandons it (the checkpoint survives; a wait with no way out is
+   the worse bug).
+
+   The feared plist coupling never existed (measured in step 5,
+   `native/appbundle/README.md`): LaunchServices moves the bundle's registration
+   onto the spawned Qt child, and the child flips its own activation policy —
+   `setActivationPolicy(accessory)` via `objc_msgSend`, since AppKit is already
+   loaded and one selector does not justify pyobjc. Measured through the real
+   bundle on 2026-07-25, and the two findings that shaped the code:
+
+   - **A second `open` on an accessory app starts no second instance** —
+     LaunchServices still tracks it — but AppKit's default reopen handling has
+     no window to order front, so the gesture does nothing. It arrives as
+     `QEvent::ApplicationActivate`, which is now what restores the window.
+   - **The launch activation looks identical**, and obeying it would put a
+     window on screen in `--tray` mode. The first one is therefore ignored,
+     which is also why `LSUIElement` stays rejected: it additionally stops
+     `open` from bringing the window forward at all.
+
+   Landmine paid for: **`QSystemTrayIcon` needs a `QApplication`.** It is a
+   QtWidgets class and its menu is a real QWidget; under the `QGuiApplication` a
+   pure Qt Quick app would use, the process dies on `qFatal` before any Python
+   exception can be raised. `run()` and the test fixture now build a
+   `QApplication`.
+
+   **Not measured:** the wakeup claim itself. Step 1 showed a visible window at
+   the ~120/s display floor and an occluded one at ~1/s, and a hidden window
+   should be at least as good, but the tray-mode number was not taken — it
+   belongs with step 1's deferred watt half, on the same quiet machine.
+7. **Next.** Flip the default (`[gui]` moves into `dependencies`, bare `steno` opens the
    window); retire the Textual launcher once parity is reached. Not before the
    app has been *used* for real meetings — nothing in the automated tests can
    tell whether the live screen reads well over half an hour.

@@ -1646,19 +1646,42 @@ def test_gui_flag_opens_the_desktop_app_without_needing_a_tty(monkeypatch):
     import stenograf.ui
 
     calls = []
-    monkeypatch.setattr(stenograf.gui, "run_gui", lambda: calls.append(1))
+    monkeypatch.setattr(stenograf.gui, "run_gui", lambda *, tray: calls.append(tray))
     monkeypatch.setattr(stenograf.ui, "run_launcher", lambda: (_ for _ in ()).throw(AssertionError))
 
     result = CliRunner().invoke(cli.main, ["--gui"])
 
     assert result.exit_code == 0
-    assert calls == [1]
+    assert calls == [False]
+
+
+def test_tray_flag_starts_the_desktop_app_in_the_menu_bar(monkeypatch):
+    # Phase 8 step 6: the windowless launch, and the one that idles at the
+    # wakeup floor. It is a mode of the app, not a second front end.
+    import stenograf.gui
+
+    calls = []
+    monkeypatch.setattr(stenograf.gui, "run_gui", lambda *, tray: calls.append(tray))
+
+    result = CliRunner().invoke(cli.main, ["--gui", "--tray"])
+
+    assert result.exit_code == 0
+    assert calls == [True]
+
+
+def test_tray_without_gui_is_a_usage_error():
+    result = CliRunner().invoke(cli.main, ["--tray"])
+
+    assert result.exit_code != 0
+    assert "--gui" in result.output
 
 
 def test_gui_flag_with_a_subcommand_is_a_usage_error(monkeypatch):
     import stenograf.gui
 
-    monkeypatch.setattr(stenograf.gui, "run_gui", lambda: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(
+        stenograf.gui, "run_gui", lambda **kwargs: (_ for _ in ()).throw(AssertionError)
+    )
 
     result = CliRunner().invoke(cli.main, ["--gui", "profiles", "list"])
 

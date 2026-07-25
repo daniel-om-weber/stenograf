@@ -35,10 +35,16 @@ ApplicationWindow {
                 app: root.app,
                 screen: root.app.screen(page)
             };
-            if (mode === "replace")
+            if (mode === "replace") {
                 stack.replace(url, props);
-            else
+            } else {
+                // "root" comes from outside the window (the menu bar), which
+                // knows nothing of where the stack was left: unwind to Home
+                // first so the page cannot land on top of a copy of itself.
+                if (mode === "root")
+                    stack.pop(null);
                 stack.push(url, props);
+            }
         }
     }
 

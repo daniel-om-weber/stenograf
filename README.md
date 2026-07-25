@@ -126,6 +126,20 @@ On macOS, setup then replaces the Desktop shortcut with a real **Stenograf.app**
 once, under its own name rather than your terminal's, and keeps that permission
 across every later upgrade.
 
+The app also lives in the **menu bar** (system tray on Windows and Linux),
+which is where it belongs for most of a meeting: the icon turns red while
+you are recording, and its menu can start, stop and finish a meeting without
+a window. Closing the window puts the app there rather than quitting it — a
+meeting in progress keeps running — and re-opening the app brings the window
+back. Start that way with:
+
+```sh
+steno --gui --tray                         # menu bar only, no window
+```
+
+Desktops with no tray host (stock GNOME, unless the AppIndicator extension is
+installed) simply get a window, as before.
+
 It runs the same library the CLI does — same meeting folders, same
 settings.toml, same transcripts — so you can switch between the two freely, or
 never use it at all.

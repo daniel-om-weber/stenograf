@@ -16,8 +16,10 @@ everything else).
 from __future__ import annotations
 
 
-def run_gui() -> None:
-    """Open the desktop app and block until its window closes.
+def run_gui(*, tray: bool = False) -> None:
+    """Open the desktop app and block until it quits.
+
+    With ``tray`` it starts in the menu bar with no window (Phase 8 step 6).
 
     Qt is an optional dependency while the GUI is opt-in, so a missing PySide6
     is a plain instruction rather than an ImportError traceback."""
@@ -34,6 +36,6 @@ def run_gui() -> None:
         )
     from stenograf.gui.app import run
 
-    code = run()
+    code = run(tray=tray)
     if code:
         raise SystemExit(code)

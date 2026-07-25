@@ -91,6 +91,7 @@ class MeetingScreen(Screen, LiveView):
 
     def _reset(self) -> None:
         self.set(
+            active=False,
             phase="rec",
             phaseLabel=_PHASE_LABEL["rec"],
             elapsed="0:00",
@@ -130,6 +131,10 @@ class MeetingScreen(Screen, LiveView):
         self._captions.clear()
         self._started = time.monotonic()
         self._clock.start()
+        # Announced rather than derived: `phase` reads "rec" before anything has
+        # started and "done" while the notes tail is still running, so the menu
+        # bar (gui/tray.py) cannot tell from it whether a meeting is under way.
+        self.set(active=True)
         self._thread = self.work(
             lambda: self._meeting(request),
             done=self._finished,
@@ -151,6 +156,7 @@ class MeetingScreen(Screen, LiveView):
     def _finished(self, transcript: Transcript | None) -> None:
         """The meeting thread returned (capture stopped, finalize and notes done)."""
         self._clock.stop()
+        self.set(active=False)
         if isinstance(transcript, Transcript):
             if self._state.get("phase") != "done":  # a run that never emitted the event
                 self._show(transcript)
@@ -166,7 +172,13 @@ class MeetingScreen(Screen, LiveView):
 
     def _failed(self, message: str) -> None:
         self._clock.stop()
-        self.set(phase="failed", phaseLabel=_PHASE_LABEL["failed"], canStop=False, status=message)
+        self.set(
+            active=False,
+            phase="failed",
+            phaseLabel=_PHASE_LABEL["failed"],
+            canStop=False,
+            status=message,
+        )
 
     @property
     def running(self) -> bool:

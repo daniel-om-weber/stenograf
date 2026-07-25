@@ -39,9 +39,14 @@ from stenograf.cli import (  # noqa: F401
     is_flag=True,
     help="Open the native desktop app instead of the terminal launcher (needs stenograf[gui]).",
 )
+@click.option(
+    "--tray",
+    is_flag=True,
+    help="With --gui: start in the menu bar with no window (needs a system tray).",
+)
 @click.version_option(__version__, prog_name="stenograf")
 @click.pass_context
-def main(ctx: click.Context, gui: bool) -> None:
+def main(ctx: click.Context, gui: bool, tray: bool) -> None:
     """Accuracy-first local meeting transcription. Audio never touches disk.
 
     Run without a subcommand in a terminal to open the interactive launcher,
@@ -57,9 +62,11 @@ def main(ctx: click.Context, gui: bool) -> None:
             stream.reconfigure(errors="replace")
 
     if ctx.invoked_subcommand is not None:
-        if gui:  # --gui is about the entry, not about any one command
+        if gui or tray:  # both are about the entry, not about any one command
             raise click.UsageError("--gui opens the desktop app; it takes no subcommand")
         return
+    if tray and not gui:
+        raise click.UsageError("--tray is a mode of the desktop app; pass --gui as well")
 
     # Bare `steno` in a terminal opens the launcher (Phase 7); in a
     # pipe or script it prints help instead — Textual needs a real TTY, and a
@@ -69,7 +76,7 @@ def main(ctx: click.Context, gui: bool) -> None:
     if gui:
         from stenograf.gui import run_gui
 
-        run_gui()
+        run_gui(tray=tray)
     elif _interactive_terminal():
         from stenograf.ui import run_launcher
 

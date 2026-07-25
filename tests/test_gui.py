@@ -11,9 +11,10 @@ Two kinds of test, because a GUI has two kinds of failure:
   them (``opened()``, ``start()``, ``stop()``) and asserted on ``state`` — the
   same plain-text-mirror rule the Textual screens follow.
 
-Everything runs headless (``QT_QPA_PLATFORM=offscreen``) with no window ever
-shown; work started on a worker thread is awaited by pumping the Qt event loop,
-which is also what delivers the marshalled replies.
+Everything runs headless (``QT_QPA_PLATFORM=offscreen``); work started on a
+worker thread is awaited by pumping the Qt event loop, which is also what
+delivers the marshalled replies. Only the tray's close-to-hide test realizes a
+window at all, and offscreen means nothing appears on a screen.
 """
 
 import os
@@ -31,6 +32,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QEventLoop, QtMsgType, qInstallMessageHandler  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlComponent  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from stenograf.gui.app import MENU, QML_DIR, build  # noqa: E402
 
@@ -39,8 +41,13 @@ PAGES = ("Home", "Setup", "Meeting", "Transcribe", "Notes", "Settings", "Doctor"
 
 @pytest.fixture(scope="session")
 def qt_app():
-    """The one QGuiApplication a process may have."""
-    return QGuiApplication.instance() or QGuiApplication([])
+    """The one application object a process may have.
+
+    A ``QApplication``, not the ``QGuiApplication`` a pure Qt Quick app would
+    need, because that is what ``run()`` builds: ``QSystemTrayIcon``'s menu is a
+    QtWidgets widget, and constructing one under a bare ``QGuiApplication``
+    aborts the process on ``qFatal`` rather than raising."""
+    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture
@@ -60,6 +67,12 @@ def gui(qt_app, monkeypatch):
     monkeypatch.setattr(loaders, "make_provider", no_capture)
     engine, shell = build(qt_app)
     yield shell, engine
+
+
+def qt_app_instance():
+    application = QApplication.instance()
+    assert application is not None
+    return application
 
 
 def pump(until, timeout=30.0):
@@ -502,3 +515,173 @@ class TestDoctorScreen:
         pump(lambda: not screen.state["busy"])
         assert [check["state"] for check in screen.state["checks"]] == ["good", "optional", "bad"]
         assert "1 problem(s)" in screen.state["status"]
+
+
+class TestTray:
+    """Menu-bar / system-tray mode (Phase 8 step 6).
+
+    The status item is built directly rather than through ``tray.install``,
+    which correctly declines here: the offscreen platform hosts no tray, and
+    that path is its own test below."""
+
+    @pytest.fixture
+    def tray(self, gui):
+        from stenograf.gui.tray import Tray
+
+        shell, _engine = gui
+        return Tray(shell)
+
+    def test_no_tray_host_means_no_status_item(self, gui):
+        # Stock GNOME without the AppIndicator extension is the case that
+        # matters; offscreen stands in for it. A None here is what keeps the
+        # window quitting the app on close, so it must stay a supported result.
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        from stenograf.gui import tray as tray_module
+
+        shell, _engine = gui
+        assert not QSystemTrayIcon.isSystemTrayAvailable()
+        assert tray_module.install(shell) is None
+
+    def test_the_mark_renders_in_every_state(self, qt_app):
+        # A missing or unrenderable tray.svg leaves an empty menu bar, which
+        # looks exactly like an app that failed to start.
+        from stenograf.gui.tray import MARK, _icon
+
+        assert MARK.is_file(), f"{MARK} is missing from the wheel"
+        for tint in (None, "#ff5f56"):
+            icon = _icon(tint)
+            assert not icon.isNull()
+            assert not icon.pixmap(22, 22).toImage().allGray(), "the mark rendered blank"
+
+    def test_the_icon_follows_the_meeting_but_not_its_clock(self, tray, gui):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        assert tray.state() == "idle"  # `phase` alone says "rec" before any run
+
+        meeting.set(active=True, phase="rec")
+        assert tray.state() == "rec"
+        assert "Recording" in tray.summary()
+
+        # The notes tail runs on past phase="done"; the menu bar must still say
+        # the meeting is being finished, not that nothing is happening.
+        meeting.set(phase="done")
+        assert tray.state() == "busy"
+        meeting.set(active=False)
+        assert tray.state() == "idle"
+
+    def test_the_menu_labels_itself_only_when_it_opens(self, tray, gui):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        meeting.set(active=True, phase="rec", elapsed="12:34")
+
+        tray.menu.aboutToShow.emit()  # what a click on the icon does
+        assert tray.status.text() == "Recording · 12:34"
+        assert tray.stop.isEnabled()
+        assert not tray.start.isEnabled(), "a second meeting cannot be started over this one"
+
+        meeting.set(active=False, phase="done")
+        assert tray.status.text() == "Recording · 12:34", "stale until the menu is opened again"
+        tray.menu.aboutToShow.emit()
+        assert tray.status.text() == "No meeting running"
+        assert not tray.stop.isEnabled()
+        assert tray.start.isEnabled()
+
+    def test_stop_from_the_menu_bar_needs_no_window(self, tray, gui):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        stopped = []
+        meeting.set(active=True, phase="rec")
+        meeting.set_stop(lambda: stopped.append(True))
+        pump(lambda: meeting.state["canStop"] is True)
+
+        tray._stop()
+        assert meeting.state["phase"] == "finalizing"
+        pump(lambda: stopped == [True])
+
+    def test_start_from_the_menu_bar_unwinds_the_stack(self, tray, gui):
+        # The menu bar has no idea what the window was left on, so it may not
+        # push a page on top of a copy of itself.
+        shell, _engine = gui
+        seen = []
+        shell.navigation.connect(lambda page, mode: seen.append((page, mode)))
+        tray._start()
+        assert seen == [("Setup", "root")]
+
+    def test_re_opening_the_app_brings_a_hidden_window_back(self, tray, gui):
+        # macOS delivers a double-click on Stenograf.app while it sits in the
+        # menu bar as an activation, and AppKit has no window to order front —
+        # so the gesture is ours to honour. Measured through the real bundle.
+        from PySide6.QtCore import QEvent
+
+        shell, _engine = gui
+        assert shell.window is not None
+
+        # The launch activation must NOT count, or --tray puts a window on
+        # screen at startup, which is the one thing it exists to avoid.
+        tray.eventFilter(qt_app_instance(), QEvent(QEvent.Type.ApplicationActivate))
+        assert not shell.window.isVisible()
+
+        tray.eventFilter(qt_app_instance(), QEvent(QEvent.Type.ApplicationActivate))
+        assert shell.window.isVisible()
+        shell.hide_window()
+
+    def test_closing_the_window_hides_it_and_keeps_the_meeting(self, tray, gui):
+        from PySide6.QtGui import QCloseEvent
+
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        stopped = []
+        meeting.set(active=True, phase="rec")
+        meeting.set_stop(lambda: stopped.append(True))
+        pump(lambda: meeting.state["canStop"] is True)
+
+        shell.show_window()
+        assert shell.window is not None and shell.window.isVisible()
+        QApplication.sendEvent(shell.window, QCloseEvent())
+
+        assert not shell.window.isVisible()
+        assert stopped == [], "closing to the tray must not end the meeting"
+        assert meeting.state["phase"] == "rec"
+
+
+class TestQuitting:
+    def test_quitting_mid_meeting_finishes_it_before_leaving(self, gui):
+        # The tray makes this the normal case rather than an accident: with no
+        # window in front of it, Quit is how a meeting most often ends.
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        stopped = []
+        meeting.set_stop(lambda: stopped.append(True))
+        pump(lambda: meeting.state["canStop"] is True)
+        meeting.set(active=True, phase="rec")
+        meeting._thread = threading.Thread(target=lambda: time.sleep(0.05))
+        meeting._thread.start()
+        announced = []
+        shell.quitting.connect(lambda: announced.append(True))
+
+        shell.quit_app()
+        assert shell.quitting_now
+        assert announced == [True]  # so the menu bar can explain the wait
+        pump(lambda: stopped == [True] and not meeting.running)
+
+        # The meeting is finished, so the after-the-loop fallback has nothing
+        # left to wait for.
+        shell.join_meetings()
+        assert stopped == [True]
+
+    def test_a_second_quit_gives_up_on_the_finalize(self, gui):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        meeting.set(active=True, phase="rec")
+        meeting.set_stop(lambda: None)
+        pump(lambda: meeting.state["canStop"] is True)
+        never_ends = threading.Event()
+        meeting._thread = threading.Thread(target=never_ends.wait, daemon=True)
+        meeting._thread.start()
+
+        shell.quit_app()
+        shell.quit_app()  # impatient: a wait with no way out is the worse bug
+        # Would otherwise block forever on the meeting thread.
+        shell.join_meetings()
+        never_ends.set()

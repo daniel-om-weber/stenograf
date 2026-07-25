@@ -93,12 +93,20 @@ freeze rule from the other direction, since nothing migrates an old grant.
   pointing at the stub. There is no second, nameless tile to suppress.
 - **The child owns its activation policy at runtime.**
   `setActivationPolicy(accessory)` flips the record from `Foreground` to
-  `UIElement` live, so **step 6's menu-bar mode needs no Info.plist key** — the
-  coupling the plan feared does not exist. `LSUIElement` was tried and rejected:
-  it also stops `open` from bringing the window forward, so the app opened
-  behind whatever was in front.
+  `UIElement` live, so **the menu-bar mode needs no Info.plist key** — the
+  coupling the plan feared does not exist, and `gui/tray.py` does exactly this.
+  `LSUIElement` was tried and rejected: it also stops `open` from bringing the
+  window forward, so the app opened behind whatever was in front.
 - A second `open` re-activates the running instance instead of starting a
-  second one, which is the single-instance behaviour we want for free.
+  second one, which is the single-instance behaviour we want for free — and it
+  **still holds once the child has flipped to accessory**, so menu-bar mode
+  cannot end up with two copies running.
+- **What that second `open` delivers is `QEvent::ApplicationActivate`**, and
+  nothing else: AppKit's default reopen handling has no window to order front,
+  so without acting on it the gesture does nothing at all. `gui/tray.py` shows
+  the window there. The activation the app receives *at launch* is
+  indistinguishable, so the first one is ignored — otherwise `--tray` would put
+  a window on screen at startup.
 
 ## Rebuilding (don't, unless you mean it)
 
