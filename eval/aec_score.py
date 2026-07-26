@@ -131,7 +131,10 @@ def main() -> None:
 
     metrics = signal_metrics(mic, lpb, enh)
     if "erle_db" not in metrics:
-        print(f"far end was never active above {FAR_ACTIVE_DBFS:.0f} dBFS — nothing to score")
+        # ASCII, like every line this script prints: it runs on Windows, where a
+        # piped stdout encodes as cp1252 and an em-dash raises at the end of a
+        # long run. See eval/aec_echo_present.py's docstring.
+        print(f"far end was never active above {FAR_ACTIVE_DBFS:.0f} dBFS: nothing to score")
         sys.exit(1)
     if not args.no_aecmos:
         metrics |= aecmos_metrics(mic, lpb, enh, args.scenario)

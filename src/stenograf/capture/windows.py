@@ -17,7 +17,13 @@ delivery cadence, a 440 Hz test tone recovered bit-clean through loopback
 (the ~1 s startup gap SoundCard showed under PipeWire is a Pulse-backend
 artifact; it does not occur on the native Windows backend).
 
-Two WASAPI behaviours the design leans on:
+Three WASAPI behaviours the design leans on:
+
+- **The loopback tap is a longer path than the microphone**, so the two
+  channels' arrival-stamped timelines disagree by a constant — measured ~60 ms
+  here, with the tap's labels the late ones. It does not show in a transcript
+  and it broke echo cancellation completely until it was compensated
+  (:data:`FAR_END_LAG_S`).
 
 - **Loopback delivers no packets while nothing renders.** ``soundcard``
   papers over this by synthesizing zeros from the measured idle time, so the
@@ -62,6 +68,31 @@ arrival-derived clock before the session clock re-anchors. Generous enough
 that delivery jitter (one frame + WASAPI buffering, ~0.25 s worst measured)
 never trips it; tight enough that a mis-estimated silence gap cannot skew the
 AEC's far-end alignment or the transcript for the rest of the meeting."""
+
+
+FAR_END_LAG_S = 0.15
+"""How late the loopback tap's timestamps run against the mic's — see
+:attr:`~stenograf.capture.base.CaptureProvider.far_end_lag_s`.
+
+Both channels are stamped on arrival, and the loopback path is longer than the
+mic path: render buffer → endpoint mix → loopback capture → WASAPI's own
+resampler (``AUTOCONVERTPCM``) → us. The difference is a *constant* — it is the
+two streams' latency at the moment each anchored — and on this codec it measured
+**44 ms at sample resolution, 60 ms on the 10 ms tick grid** (a Realtek HDAudio
+endpoint, 2026-07-26, from one ``--aec-dump`` triple: the mic's echo leads the
+reference that caused it, which is physically impossible and so can only be
+labelling).
+
+**Set to 2.5× the measured value on purpose.** The error AEC3 cannot survive is
+one-sided (see the module docstring in :mod:`stenograf.aec`): a reference that
+arrives after its own echo is unusable, while one that arrives early is what its
+delay estimator is built to search. The same dump scored 4.7 dB ERLE
+uncorrected, 15.1 dB at 60 ms, and 14.5 dB still at 250 ms — so overshooting
+costs a fraction of a decibel and undershooting costs the whole canceller, and
+the device period (hence the true lag) varies per driver. The cost of the
+headroom is that much extra mic buffering before a tick can be cancelled, which
+``_MAX_HOLD_S`` accounts for and the caption cadence does not notice.
+"""
 
 
 _SILENT_MIC_WARN_S = 5.0
@@ -204,6 +235,10 @@ class WindowsCaptureProvider(QueueStreamingProvider[None]):
             on_log=on_log,
         )
         self._soundcard = backend if backend is not None else _import_soundcard()
+
+    @property
+    def far_end_lag_s(self) -> float:
+        return FAR_END_LAG_S
 
     def _open_channel(self, channel: Channel) -> None:
         return None  # COM: the device must be resolved inside the pump thread

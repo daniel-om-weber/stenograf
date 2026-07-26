@@ -22,9 +22,12 @@ notebook, which is the machine the open item still needs.
 - The panel runs **1920×1080 at 150 % scale** (1280×720 logical). It was
   3840×2160 when this file was first written; the *scale* is what the app sees
   and that has not moved.
-- Realtek HD Audio, real speakers and a built-in mic. **The capture endpoint
-  has driver audio-processing objects installed and enabled**, which turns out
-  to matter more than the speakers do — see W4.
+- Realtek HD Audio, real speakers and a built-in mic. The capture endpoint has
+  driver audio-processing objects installed and enabled (`FxProperties`
+  populated, `Disable_SysFx` unset) — **which turned out not to matter**: at
+  90 % output volume the mic hears the speakers 22 dB above its own noise floor
+  with the enhancements left on. **Volume is the knob, not the APO.** At 40 % no
+  echo reaches the mic at all, which cost one 33-minute run (W4).
 - Windows Terminal (`wt.exe`) present; the microphone consent store reads
   `Allow`, so `steno setup`'s privacy-toggle check passes here.
 - **The default SAPI voice is `Microsoft Hedda Desktop` (de-DE).** Left alone it
@@ -138,55 +141,89 @@ to gate, plus the two code items it specified.
 
 ---
 
-## Open — needs this machine
+## W4 — AEC over real speakers
 
-### W4 — AEC over real speakers, ≥30 minutes
+### The canceller was broken on Windows, and it is fixed (2026-07-26, second session)
 
-**Attempted 2026-07-26 and inconclusive, for a reason worth more than the
-attempt.** A 33-minute far-end track (84 s of en-US speech, 15 s of silence, ×20)
-was played over the Realtek speakers at 40 % while `steno start --local 1
---remote 1 --aec-dump` captured mic + loopback. It was stopped at 6 minutes once
-the dump had already settled the question:
+Two attempts, and the second one found a real bug. Read this before running
+anything: the shape of the failure is now known and the open work is much
+narrower than "run it for 30 minutes".
 
-    duration            366.0 s  (far end active 252.2 s)
-    mic during far      -40.5 dBFS
-    residual (enh)      -41.2 dBFS
-    ERLE                  0.7 dB
+**Attempt 1 was inconclusive** — 33 minutes of far-end audio at 40 % volume,
+scored 0.7 dB ERLE, and the reason was that **no echo ever reached the
+microphone**: it sat at its own noise floor (−50.7 dBFS playing, −49.7 dBFS
+silent) either way. ERLE is undefined without an echo path, so nothing about the
+canceller was measured. `eval/aec_echo_present.py` exists because of that run.
 
-0.7 dB reads as a dead canceller. It is not. **No echo ever reached the
-microphone**: the mic sits at −50.7 dBFS while the speakers play and −49.7 dBFS
-while they are silent — the same level, i.e. its own noise floor either way —
-and the loopback↔mic envelope correlation is ~0.07 with no stable lag (the
-per-minute best lag wanders between −1360 ms and +2000 ms, which is what
-correlating noise against noise looks like). ERLE is undefined without an echo
-path, so **this run did not exercise the canceller at all**. The most likely
-cause is the driver audio-processing on the capture endpoint (`FxProperties` is
-populated and `Disable_SysFx` is unset) doing its own echo suppression upstream
-of us; the 40 % volume on a small chassis is the other candidate.
+**Attempt 2 established the echo path with the volume knob alone.** 90 % instead
+of 40 % put the mic 22.5 dB above its noise floor while the speakers played — so
+the driver audio-processing (`FxProperties` populated, `Disable_SysFx` unset)
+was **not** the blocker, and nothing in Windows Settings had to be touched. That
+hypothesis is now retired.
 
-One thing the run *did* show, and it is the user-visible failure this whole
-feature exists to prevent: in six minutes, one caption of far-end text —
-`"comes down to operation."`, a fragment of *"the decision therefore comes down
-to operational cost"* — was attributed to the **local** channel. Faint residual
-is still occasionally decodable by Parakeet even when it is 50 dB down.
+And with a real echo path, 80 seconds was enough to expose the defect:
 
-**Before the next attempt, establish the echo path** — `eval/aec_echo_present.py`
-is the one-minute check that exists because this run skipped it:
+| | attempt 2, as shipped | after the fix |
+|---|---|---|
+| ERLE | **2.6 dB** | **13.7 dB** |
+| residual | −29.6 dBFS | −42.1 dBFS |
+| far-end lines attributed to `Local-1` | **2** | **0** |
 
-    steno start --local 1 --remote 1 --max-seconds 60 --aec-dump probe \
-        --out probe-meeting --plain     # …with speech over the speakers…
-    uv run python eval/aec_echo_present.py probe
+(macOS, for scale: 37.6 dB, −65 dBFS, 0 leaked lines.) The two leaked lines were
+`"numbers from left one."` and `"we have all cast."` — garbled echoes of *"…the
+throughput numbers from last week"* and *"…comes down to operational cost"*,
+which is exactly the user-visible failure this feature exists to prevent.
 
-It passes when the mic is ≥ 6 dB louder while the speakers play than while they
-rest. To get there: turn the microphone's **audio enhancements off** (Settings →
-System → Sound → the input device → Audio enhancements → Off) and raise the
-output volume. Only then is the ≥30-minute run worth anyone's speakers — and it
-wants a machine nobody is sitting at, since it is half an hour of audio out loud.
-The failure to look for is unchanged: remote voices transcribed as a local
-speaker, especially after a multi-second silence, because WASAPI loopback
-delivers no packets while nothing renders (`soundcard` synthesizes zeros from
-wall-clock time) and the session clock re-anchors past
-`_REANCHOR_TOLERANCE_S = 0.5`, which moves far-end alignment.
+**The cause was timestamps, not the canceller.** `EchoCanceller` pairs the two
+channels *by timestamp*, and `SessionClock` stamps every channel when its frames
+**arrive**, so each channel's timeline carries its own transport latency as a
+constant offset. WASAPI's loopback tap is the longer path (render buffer →
+endpoint mix → loopback capture → `AUTOCONVERTPCM` resampler → us), so the
+reference was labelled **~60 ms later than its own echo** — measured off one dump
+as −44 ms at sample resolution and −60 ms on the tick grid, stable across all
+four quarters of the run, i.e. an offset and not drift. AEC3 aligns the near end
+against far-end *history*: a reference that arrives after the echo is unusable at
+any `set_stream_delay_ms` value, which is why the hint measured irrelevant back
+in the design work and why this looked like a dead canceller.
+
+Proven before any code changed, by re-running the real AEC3 over the captured
+dump with the reference advanced by a sweep of offsets:
+
+    0 ms → 4.7 dB    40 ms → 4.7 dB    60 ms → 15.1 dB    80 ms → 15.8 dB
+    100 ms → 15.2 dB    150 ms → 14.5 dB    250 ms → 14.7 dB
+
+A cliff at 60 ms and a flat plateau after it. **The error is one-sided** — early
+is what the estimator searches, late is fatal — so the fix declares a *generous*
+correction rather than a precise one: `CaptureProvider.far_end_lag_s` (0.0 for
+everyone whose channels share a clock) with `capture.windows.FAR_END_LAG_S =
+0.15`, 2.5× the measured value, subtracted when the canceller files the
+reference. Only the canceller's copy moves; the forwarded frame keeps the
+provider's timeline, so the transcript, the dump and the merge are untouched.
+`_MAX_HOLD_S` grows by the same amount, or the extra wait for a corrected
+reference would be charged to the stalled-tap budget and every healthy meeting
+would report reference loss.
+
+**Do not judge the fix by re-measuring the dump.** `--aec-dump` records frames as
+the provider stamped them, so `lpb.wav` still trails `mic.wav` by ~60 ms
+afterwards. ERLE and leaked `Local-N` lines are the measurements that moved.
+
+### Still open — needs a machine nobody is sitting at
+
+The ≥30-minute run, now against a canceller that works. What is left to learn is
+specifically what 80 seconds cannot show:
+
+- Whether alignment holds over half an hour. `soundcard` synthesizes zeros from
+  wall-clock time while nothing renders, and the session clock re-anchors forward
+  past `_REANCHOR_TOLERANCE_S = 0.5` — which moves far-end alignment, and is
+  exactly what the 150 ms of headroom may or may not absorb. Multi-second
+  silences before speech are the case to watch.
+- Whether the residual gap to macOS (13.7 dB against 37.6 dB) is the chassis, the
+  driver's processing, or a lag constant that could be tighter.
+- Double-talk, which no run on this machine has covered at all.
+
+Recipe: `eval/aec_echo_present.py` first (volume at 90 %), then the long run with
+`--aec-dump`, then `eval/aec_score.py` and a count of `Local-N` lines in the
+transcript. It is half an hour of speech out loud, so it wants an empty room.
 
 ---
 
@@ -214,6 +251,14 @@ wall-clock time) and the session clock re-anchors past
   one file written once per install.
 - **`soundcard` over `pyaudiowpatch`** (spiked on real hardware 2026-07-11): one
   API for both channels, and server-side resampling via `AUTOCONVERTPCM`.
+- **The far-end lag is a declared constant, generously set, not a measured
+  runtime value.** A per-meeting delay estimator would be a second delay
+  estimator in front of AEC3's own, and AEC3's works fine once the sign is right:
+  the sweep is flat from 60 ms to 250 ms, so precision buys nothing and the only
+  real risk is a driver whose tap is slower than 150 ms. Nor is it a setting —
+  it is a property of a transport, not a preference, and no user can measure it.
+  Revisit only if a machine turns up where the mic hears the speakers (the probe
+  passes) and ERLE stays near zero anyway.
 - **The diarizer runs `cpu` here** (`diarization/speakrs.py`); the `cuda`
   feature type-checks in CI but is not in the shipped wheel, and nothing asks
   for it yet.

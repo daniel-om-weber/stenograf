@@ -26,8 +26,13 @@ history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
 items closed on 2026-07-26 (the `.lnk` launcher and the AppUserModelID shipped;
 the app on a real session, the TUI in Windows Terminal and DirectML on the AMD
 tier measured green), leaving **one open — the ≥30-min AEC meeting over
-speakers**, whose first attempt proved only that no echo reached the mic. Its
-closed half is now evidence you should not re-derive, and its last section is
+speakers**. W4's second session found and fixed a real bug on the way there:
+echo cancellation was dead on Windows because the loopback tap's timestamps run
+~60 ms behind the mic's and AEC3 only searches its far-end history backwards, so
+`CaptureProvider.far_end_lag_s` now carries a per-provider correction
+(2.6 → 13.7 dB ERLE, two leaked lines → none). **The same shape is unmeasured on
+Linux**, which also runs one subprocess per channel — see PLAN.md. Its closed
+half is now evidence you should not re-derive, and its last section is
 the observation recipe for that machine (harness traps, screenshots, SAPI voice
 selection). Read it before touching anything Windows. **`PLAN-ASR-CHALLENGER.md` is the
 second side-plan** and holds no build work at all: it gates the recurring "the

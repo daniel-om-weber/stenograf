@@ -228,6 +228,43 @@ dump triple, and `rig.json`. Keep volume, lid angle, and source clip fixed
 across runs you compare. Measured 2026-07-10 (MacBook speakers, volume 63):
 AEC on → 37.6 dB ERLE, −65 dBFS residual, AECMOS echo 4.73, **0 leaked lines
 before any text backstop**; AEC off → −27 dBFS raw echo, AECMOS echo 1.49.
+(`aec_rig.py` itself is macOS-only — it drives `afplay`.)
+
+### Before any of it: is there an echo path?
+
+```sh
+steno start --local 1 --remote 1 --max-seconds 60 --aec-dump probe \
+    --out probe-meeting --plain      # …with speech over the speakers…
+uv run python eval/aec_echo_present.py probe     # PASS = the mic hears them
+```
+
+ERLE is undefined when no echo reaches the microphone, and `aec_score.py` cannot
+tell that apart from a canceller that failed: both read as ~0 dB. A 33-minute
+Windows run was spent learning this on 2026-07-26. The mic must be ≥6 dB louder
+while the speakers play than while they rest — **output volume is the first
+knob** (40 % on a laptop chassis gave no echo path at all; 90 % gave 22 dB) and a
+capture endpoint's driver audio-enhancements the second.
+
+### Windows, measured 2026-07-26 (GPD notebook, Realtek, volume 90)
+
+80 s far-only, from the notebook's built-in speakers into its own mic:
+**2.6 dB ERLE, −29.6 dBFS residual, 2 leaked `Local-1` lines** — against
+macOS's 37.6 dB above. The cause was not the canceller but the timestamps it
+pairs channels by: WASAPI's loopback tap is a longer transport than the mic, both
+are stamped on arrival, so the reference was labelled ~60 ms *after* its own
+echo, and AEC3 searches its far-end history backwards only. With
+`capture.windows.FAR_END_LAG_S` compensating it: **13.7 dB ERLE, −42.1 dBFS,
+0 leaked lines** on a re-run of the same script.
+
+Two notes for whoever measures this next:
+
+- The dump records frames as the provider stamped them, so `lpb.wav` still
+  trails `mic.wav` by ~60 ms *after* the fix — the correction lives in the
+  canceller, not in the timeline the dump is written on. Judge the fix by ERLE
+  and by leaked lines, not by re-measuring the dump's own alignment.
+- 13.7 dB is a working canceller on a small chassis, not parity with the Mac's
+  37.6 dB. Whether the remaining gap is the speaker's nonlinearity, the driver's
+  own processing, or a lag constant that could be tighter is unmeasured.
 
 ## Contextual-biasing evaluation (Phase 5)
 

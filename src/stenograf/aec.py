@@ -25,6 +25,16 @@ Two properties of AEC3 shape the design:
 - Its internal delay estimator does the real work; ``set_stream_delay_ms`` is a
   hint. Feeding a deliberately wrong 500 ms hint measured the same 26 dB ERLE as
   the correct 25 ms, so the constant below is a nicety, not a load-bearing value.
+- **The estimator only searches backwards.** It aligns the near end against
+  far-end history, so a reference that arrives *after* its own echo cannot be
+  used at all — the error is one-sided, and being early costs almost nothing
+  while being late costs everything. Pairing the two channels by timestamp is
+  only as good as the timestamps: a provider whose tap labels run late
+  (``far_end_lag_s``, and Windows' WASAPI loopback runs ~60 ms late) hands AEC3
+  a future reference and measures as a dead canceller. Measured on the Windows
+  notebook 2026-07-26, sweeping the correction over one real dump: 4.7 dB ERLE
+  at 0 ms, 15.1 dB at 60 ms, and a flat 14.5-15.8 dB plateau all the way out to
+  250 ms. Hence a *generous* correction rather than a precise one.
 
 Measured across the AEC scenario matrix (quiet/loud, batch/live,
 built-in/Bluetooth, double-talk), a canceller with a live reference leaks
@@ -168,11 +178,13 @@ class EchoCanceller:
         delay_ms: int = DEFAULT_DELAY_MS,
         noise_suppression: bool = False,
         cancel: bool = True,
+        far_end_lag_s: float = 0.0,
     ) -> None:
         self.enabled = cancel and Channel.MIC in channels and Channel.SYSTEM in channels
         self.far_end_missing_ticks = 0
         self._zero_run = 0  # consecutive all-zero reference ticks under a live mic
         self._delay_ms = delay_ms
+        self._far_lag_s = far_end_lag_s
         self._near = _Track(Channel.MIC)
         self._far = _Track(Channel.SYSTEM)
         self._apm = None
@@ -195,7 +207,11 @@ class EchoCanceller:
         if not self.enabled:
             return [frame]
         if frame.channel is Channel.SYSTEM:
-            self._far.add(frame.timestamp, frame.samples)
+            # Filed under a corrected timestamp when the provider's tap labels
+            # run late (``far_end_lag_s``). Only the canceller's copy moves: the
+            # frame forwarded below keeps the provider's own timeline, which the
+            # transcript, the dump and the merge are all built on.
+            self._far.add(frame.timestamp - self._far_lag_s, frame.samples)
             return [frame]
         self._near.add(frame.timestamp, frame.samples)
         return self._drain()
@@ -207,7 +223,12 @@ class EchoCanceller:
         return self._drain(flush=True)
 
     def _drain(self, *, flush: bool = False) -> list[AudioFrame]:
-        hold = int(_MAX_HOLD_S * SAMPLE_RATE)
+        # The hold budget is time spent waiting *beyond* the expected alignment
+        # wait, so a provider whose reference is filed early enlarges it: with
+        # `far_end_lag_s` subtracted, a mic tick at t needs reference frames that
+        # only arrive at t + lag, and charging that to the stalled-tap budget
+        # would make a healthy Windows meeting report reference loss.
+        hold = int((_MAX_HOLD_S + self._far_lag_s) * SAMPLE_RATE)
         ticks: list[np.ndarray] = []
         first_ts: float | None = None
 
@@ -357,6 +378,7 @@ class EchoCancellingProvider(CaptureProvider):
             delay_ms=self._delay_ms,
             noise_suppression=self._noise_suppression,
             cancel=self._cancel,
+            far_end_lag_s=self._inner.far_end_lag_s,
         )
         if self._dump_dir is not None:
             self._dump = AecDump(self._dump_dir)

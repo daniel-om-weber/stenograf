@@ -15,6 +15,13 @@ Point it at a short ``--aec-dump`` directory (60 s is plenty)::
     # …with speech playing over the speakers…
     uv run python eval/aec_echo_present.py /tmp/probe
 
+Everything this script *prints* is ASCII, unlike the rest of ``eval/``. That is
+not a style choice: this is the one eval tool written to be run on Windows, and
+a piped Python stdout there encodes as cp1252, which raises
+``UnicodeEncodeError`` on the em-dash the house style would otherwise use — at
+the end of the run, after the audio is gone. ``aec_score.py`` follows the same
+rule for the same reason; the rest of the harness is macOS-only.
+
 A **pass** means the mic hears the speakers well enough for the canceller to
 have work to do. A **fail** means fix the room before measuring anything: raise
 the output volume, and on Windows turn the capture endpoint's driver processing
@@ -71,22 +78,23 @@ def main() -> int:
     print(f"duration            {count / 100:.1f} s")
     print(f"far end playing     {playing.mean() * 100:.0f}% of frames")
     if playing.mean() < MIN_FAR_FRACTION or playing.all():
-        print("\nINCONCLUSIVE — the far end must play for part of the run and rest for part")
+        print("\nINCONCLUSIVE: the far end must play for part of the run and rest for part")
         return 2
 
     loud, quiet = dbfs(mic[playing].mean()), dbfs(mic[~playing].mean())
     print(f"mic while playing   {loud:.1f} dBFS")
     print(f"mic while silent    {quiet:.1f} dBFS")
-    print(f"echo above noise    {loud - quiet:.1f} dB  (need ≥ {ECHO_MARGIN_DB:.0f})")
+    print(f"echo above noise    {loud - quiet:.1f} dB  (need >= {ECHO_MARGIN_DB:.0f})")
 
     if loud - quiet >= ECHO_MARGIN_DB:
-        print("\nPASS — the mic hears the speakers; an AEC measurement here means something")
+        print("\nPASS: the mic hears the speakers; an AEC measurement here means something")
         return 0
     print(
-        "\nFAIL — no echo path, so ERLE would be undefined and a long run would measure "
-        "nothing.\n  Raise the output volume, and on Windows turn the microphone's audio "
-        "enhancements off\n  (a driver APO that suppresses echo upstream of us looks exactly "
-        "like this)."
+        "\nFAIL: no echo path, so ERLE would be undefined and a long run would measure "
+        "nothing.\n  Raise the output volume first -- 40% on a laptop chassis was not "
+        "enough and 90% was\n  (2026-07-26); if that is not it, turn the microphone's audio "
+        "enhancements off, since a\n  driver APO suppressing echo upstream of us looks "
+        "exactly like this."
     )
     return 1
 

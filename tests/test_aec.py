@@ -50,13 +50,19 @@ def _energy_db(x: np.ndarray) -> float:
 
 
 def _interleave(
-    mic: np.ndarray, system: np.ndarray | None, *, mic_ts: float = 0.05
+    mic: np.ndarray, system: np.ndarray | None, *, mic_ts: float = 0.05, sys_ts: float = 0.0
 ) -> list[AudioFrame]:
-    """Frames in arrival order: the tap runs ahead of the mic, as it does live."""
+    """Frames in arrival order: the tap runs ahead of the mic, as it does live.
+
+    ``sys_ts`` offsets the tap's *labels* without touching what it carries — the
+    Windows shape, where the loopback transport is longer than the mic's and
+    both are stamped on arrival, so the reference is labelled later than the
+    echo it produced.
+    """
     frames: list[tuple[float, int, AudioFrame]] = []
     if system is not None:
         for i in range(0, system.size - SYS_CHUNK + 1, SYS_CHUNK):
-            ts = i / SAMPLE_RATE
+            ts = sys_ts + i / SAMPLE_RATE
             frames.append((ts, 0, AudioFrame(Channel.SYSTEM, ts, system[i : i + SYS_CHUNK])))
     for i in range(0, mic.size - MIC_CHUNK + 1, MIC_CHUNK):
         ts = mic_ts + i / SAMPLE_RATE
@@ -66,9 +72,9 @@ def _interleave(
 
 
 def _run(
-    frames: list[AudioFrame], channels: set[Channel] = BOTH
+    frames: list[AudioFrame], channels: set[Channel] = BOTH, *, far_end_lag_s: float = 0.0
 ) -> tuple[np.ndarray, EchoCanceller]:
-    aec = EchoCanceller(channels)
+    aec = EchoCanceller(channels, far_end_lag_s=far_end_lag_s)
     out: list[np.ndarray] = []
     for frame in frames:
         for produced in aec.process(frame):
@@ -111,6 +117,47 @@ class TestCancellation:
         # Speaking over the echo must survive far above what the echo alone leaves.
         margin = _energy_db(_tail(both)) - _energy_db(_tail(echo_only))
         assert margin > 10, f"local speech only {margin:.1f} dB above the residual echo"
+
+
+class TestLateTap:
+    """A reference labelled later than its own echo — the Windows loopback shape.
+
+    Found on the notebook 2026-07-26: 2.6 dB ERLE against macOS's 37.6 dB, and
+    two lines of far-end speech attributed to the local speaker in 80 seconds.
+    Nothing was wrong with the canceller; the tap's timestamps ran ~60 ms behind
+    the mic's, so AEC3 was handed a reference from *after* the echo, which a
+    backwards-searching delay estimator cannot use at any hint value.
+    """
+
+    LAG = 0.15
+
+    def _erle(self, *, far_end_lag_s: float) -> float:
+        far = _speech(SECONDS, seed=11)
+        near = _echo_of(far)
+        out, aec = _run(
+            _interleave(_i16(near), _i16(far), sys_ts=self.LAG), far_end_lag_s=far_end_lag_s
+        )
+        assert aec.far_end_missing_ticks == 0, "a late tap is not a missing one"
+        return _energy_db(_tail(_i16(near)[: out.size])) - _energy_db(_tail(out))
+
+    def test_a_late_tap_defeats_cancellation_when_uncompensated(self) -> None:
+        assert self._erle(far_end_lag_s=0.0) < 6.0
+
+    def test_the_provider_declared_lag_restores_it(self) -> None:
+        # The same bar the aligned case is held to: correcting the label is all
+        # AEC3 needed. Generous is fine — 0.15 against a 0.15 lag here, and
+        # 2.5x the real one in production (capture.windows.FAR_END_LAG_S).
+        assert self._erle(far_end_lag_s=self.LAG) > 12.0
+
+    def test_waiting_for_the_corrected_reference_is_not_reference_loss(self) -> None:
+        # The hold budget has to grow with the lag, or every healthy Windows
+        # meeting reports the tap as stalled and arms the echo-text backstop.
+        far = _speech(SECONDS, seed=12)
+        _, aec = _run(
+            _interleave(_i16(_echo_of(far)), _i16(far), sys_ts=0.45),
+            far_end_lag_s=0.45,
+        )
+        assert aec.far_end_missing_ticks == 0
 
 
 class TestPassThrough:
@@ -218,10 +265,15 @@ class TestFailureModes:
 
 
 class _FakeProvider(CaptureProvider):
-    def __init__(self, frames: list[AudioFrame]) -> None:
+    def __init__(self, frames: list[AudioFrame], *, far_end_lag_s: float = 0.0) -> None:
         self._frames = frames
+        self._far_end_lag_s = far_end_lag_s
         self.started: set[Channel] | None = None
         self.stopped = False
+
+    @property
+    def far_end_lag_s(self) -> float:
+        return self._far_end_lag_s
 
     def start(self, channels: set[Channel]) -> None:
         self.started = channels
@@ -247,6 +299,30 @@ class TestProvider:
         assert {f.channel for f in out} == BOTH
         mic = np.concatenate([f.samples for f in out if f.channel is Channel.MIC])
         assert mic.size % TICK_SAMPLES == 0
+
+    def test_the_inner_providers_far_end_lag_reaches_the_canceller(self) -> None:
+        # The value is the platform's, so it can only come from the provider —
+        # measured for the transport it opened (capture/windows.py).
+        far = _speech(SECONDS, seed=13)
+        lag = 0.15
+        frames = _interleave(_i16(_echo_of(far)), _i16(far), sys_ts=lag)
+        cancelled = {}
+        for declared in (0.0, lag):
+            provider = EchoCancellingProvider(_FakeProvider(frames, far_end_lag_s=declared))
+            provider.start(BOTH)
+            out = [f for f in provider.frames() if f.channel is Channel.MIC]
+            provider.stop()
+            cancelled[declared] = _energy_db(_tail(np.concatenate([f.samples for f in out])))
+
+        # Declaring the lag is what makes the wrapper cancel a late-tap stream;
+        # the untouched forwarded frames are identical either way.
+        assert cancelled[0.0] - cancelled[lag] > 6.0
+
+    def test_a_provider_declares_no_lag_by_default(self) -> None:
+        # macOS's helper and file replay stamp both channels off one clock. The
+        # base property is what says so, and it is what every provider but
+        # Windows relies on.
+        assert _FakeProvider([]).far_end_lag_s == 0.0
 
 
 class TestDump:

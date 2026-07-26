@@ -326,13 +326,29 @@ crashed-instance case no other platform exercises), the TUI by eye in Windows
 Terminal, and DirectML on the AMD tier — byte-identical to CPU, with the speed
 win landing at 1.3–1.5× on an iGPU against 6.6× on a discrete card.
 
-**Still open: the ≥30-min speakers-not-headphones AEC meeting (W4).** The
-attempt scored 0.7 dB ERLE, which turned out to mean *no echo ever reached the
-microphone* — the mic reads the same level whether the speakers play or not —
-so the canceller was never exercised. `eval/aec_echo_present.py` is the
-one-minute precondition check that came out of it; the next attempt needs the
-mic's driver audio-enhancements off, louder speakers, and a machine nobody is
-sitting at. This is what gates the "supported" claim now.
+**W4 found a real bug and fixed it; the long run is what is still open.** With
+the speakers at 90 % instead of 40 % (the volume knob, not the driver's audio
+enhancements, is what establishes an echo path) 80 seconds was enough: 2.6 dB
+ERLE and two lines of far-end speech attributed to the local speaker, against
+macOS's 37.6 dB. The cause was not the canceller but the timestamps it pairs
+channels by — WASAPI's loopback tap is the longer transport and both channels are
+stamped on arrival, so AEC3 was handed a reference labelled ~60 ms *after* its own
+echo, and its delay estimator only searches backwards. `CaptureProvider.far_end_lag_s`
+now carries the per-provider correction (`capture.windows.FAR_END_LAG_S = 0.15`,
+2.5× measured, because the error is one-sided): **13.7 dB ERLE, 0 leaked lines**
+on a re-run of the same script. What the ≥30-minute run still has to show is
+whether alignment survives the forward re-anchor after long silences, plus
+double-talk, which nothing on this machine has covered. It wants an empty room.
+This is what gates the "supported" claim now.
+
+**Unmeasured, and raised by that fix: the same shape on Linux.** `parec` runs as
+one subprocess per channel, both stamped on arrival by the same `SessionClock`,
+so a monitor-source transport slower than the mic's would misalign the reference
+there exactly as WASAPI's did — silently, since it costs nothing but echo
+cancellation. The AEC numbers in `eval/README.md` are all macOS, where one helper
+stamps both channels. One 60-second `--aec-dump` over speakers on the CachyOS
+notebook answers it: `eval/aec_echo_present.py` to confirm the echo path, then
+`eval/aec_score.py`, then compare ERLE against a sweep of `far_end_lag_s`.
 
 **The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
 ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live

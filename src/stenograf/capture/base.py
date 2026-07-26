@@ -158,3 +158,25 @@ class CaptureProvider(ABC):
     @abstractmethod
     def stop(self) -> None:
         """End capture and release devices; ``frames`` iterators finish."""
+
+    @property
+    def far_end_lag_s(self) -> float:
+        """How much later this provider labels far-end audio than near-end audio.
+
+        Both channels are stamped when their frames *arrive* (``SessionClock``),
+        so each channel's timeline carries its own transport latency as a
+        constant offset. When the two differ, the system channel's timestamps
+        are wrong relative to the mic's by the difference — and the echo
+        canceller pairs the two channels *by timestamp*, so it then hands AEC3 a
+        reference that does not line up with the echo it is supposed to remove.
+
+        A positive value says "the system channel's labels run this far behind
+        the mic's", i.e. the far-end audio the pipeline believes was played at
+        *t* was really played at *t* minus this. :class:`~stenograf.aec.EchoCanceller`
+        subtracts it when it files the reference.
+
+        Zero for every provider whose two channels come from one transport with
+        one clock (macOS's helper, file replay) — measure before overriding, and
+        see :data:`stenograf.capture.windows.FAR_END_LAG_S` for how.
+        """
+        return 0.0

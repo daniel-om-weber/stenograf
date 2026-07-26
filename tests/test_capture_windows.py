@@ -17,6 +17,7 @@ import pytest
 
 from stenograf.capture.base import SAMPLE_RATE, Channel
 from stenograf.capture.windows import (
+    FAR_END_LAG_S,
     CaptureUnavailableError,
     WindowsCaptureProvider,
     default_devices,
@@ -168,6 +169,18 @@ class TestWindowsCaptureProvider:
         deltas = np.diff([f.timestamp for f in frames])
         assert np.allclose(deltas, len(frames[0].samples) / SAMPLE_RATE)
         assert frames[0].timestamp < 0.5  # anchored near session start
+
+    def test_the_loopback_taps_label_lag_is_declared_to_the_canceller(self):
+        # Both channels are stamped on arrival and the loopback path is longer,
+        # so the tap's timeline runs behind the mic's by a constant (~60 ms
+        # measured). Only the echo canceller cares — it pairs the two channels
+        # by timestamp — and it can only learn the number from the provider.
+        provider = WindowsCaptureProvider(backend=fake_backend())
+        assert provider.far_end_lag_s == FAR_END_LAG_S
+        # Generous on purpose: AEC3 searches its far-end history backwards, so a
+        # reference that arrives early is usable and one that arrives late is
+        # not. Under-declaring is the failure that costs the whole canceller.
+        assert FAR_END_LAG_S >= 0.06
 
     def test_reanchors_after_underfilled_loopback_silence(self):
         class FakeClock:
