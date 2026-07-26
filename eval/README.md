@@ -256,12 +256,34 @@ echo, and AEC3 searches its far-end history backwards only. With
 `capture.windows.FAR_END_LAG_S` compensating it: **13.7 dB ERLE, −42.1 dBFS,
 0 leaked lines** on a re-run of the same script.
 
+`eval/aec_alignment.py` is that whole diagnosis in one command — it measures the
+lag, replays the dump through the **real** `EchoCanceller` at a sweep of
+corrections, and prints the `far_end_lag_s` to ship:
+
+```sh
+uv run python eval/aec_alignment.py probe            # measure + sweep
+uv run python eval/aec_alignment.py probe --no-sweep # measure only
+```
+
+It compares what it measures against what the capturing provider already
+declares, so a fixed machine reads PASS. **Run it on Linux** — `parec` is one
+subprocess per channel with the same arrival stamping, so the same silent failure
+is possible there and every AEC number on record is from macOS, which is exempt
+by construction (its helper anchors both channels to one clock).
+
 Two notes for whoever measures this next:
 
 - The dump records frames as the provider stamped them, so `lpb.wav` still
-  trails `mic.wav` by ~60 ms *after* the fix — the correction lives in the
-  canceller, not in the timeline the dump is written on. Judge the fix by ERLE
-  and by leaked lines, not by re-measuring the dump's own alignment.
+  trails `mic.wav` *after* the fix — the correction lives in the canceller, not in
+  the timeline the dump is written on. Judge the fix by ERLE and by leaked lines,
+  not by re-measuring the dump's own alignment.
+- **The lag is re-rolled at every meeting start**, since each channel anchors on
+  its own first frame and the two pump threads open independently: the two runs
+  above measured 60 ms and 10–25 ms, minutes apart on one machine. So one dump is
+  one sample — fit a constant to it and the next meeting can be dead. It is also
+  why per-quarter lag figures come with their correlation and no drift verdict:
+  over 20 s the estimate is noisy enough to invent a 250 ms shift, and a quarter
+  with little far-end activity correlates silence against silence.
 - 13.7 dB is a working canceller on a small chassis, not parity with the Mac's
   37.6 dB. Whether the remaining gap is the speaker's nonlinearity, the driver's
   own processing, or a lag constant that could be tighter is unmeasured.

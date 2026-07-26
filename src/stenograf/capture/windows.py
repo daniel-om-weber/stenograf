@@ -76,22 +76,26 @@ FAR_END_LAG_S = 0.15
 
 Both channels are stamped on arrival, and the loopback path is longer than the
 mic path: render buffer → endpoint mix → loopback capture → WASAPI's own
-resampler (``AUTOCONVERTPCM``) → us. The difference is a *constant* — it is the
-two streams' latency at the moment each anchored — and on this codec it measured
-**44 ms at sample resolution, 60 ms on the 10 ms tick grid** (a Realtek HDAudio
-endpoint, 2026-07-26, from one ``--aec-dump`` triple: the mic's echo leads the
-reference that caused it, which is physically impossible and so can only be
-labelling).
+resampler (``AUTOCONVERTPCM``) → us. So the mic's echo *leads* the reference that
+caused it, which is physically impossible and can therefore only be labelling.
 
-**Set to 2.5× the measured value on purpose.** The error AEC3 cannot survive is
-one-sided (see the module docstring in :mod:`stenograf.aec`): a reference that
+**The offset is fixed within a meeting and re-rolled at every start**, because
+each channel anchors on its own first frame and the two pump threads open their
+recorders independently (:class:`~stenograf.capture.streaming.SessionClock`). Two
+80-second runs on the same Realtek endpoint, minutes apart (2026-07-26), measured
+**60 ms** and **10–25 ms**. There is therefore no per-machine value to look up,
+which is the whole argument for the paragraph below.
+
+**Set to 2.5× the larger measurement on purpose.** The error AEC3 cannot survive
+is one-sided (see the module docstring in :mod:`stenograf.aec`): a reference that
 arrives after its own echo is unusable, while one that arrives early is what its
-delay estimator is built to search. The same dump scored 4.7 dB ERLE
+delay estimator is built to search. The first dump scored 4.7 dB ERLE
 uncorrected, 15.1 dB at 60 ms, and 14.5 dB still at 250 ms — so overshooting
-costs a fraction of a decibel and undershooting costs the whole canceller, and
-the device period (hence the true lag) varies per driver. The cost of the
-headroom is that much extra mic buffering before a tick can be cancelled, which
-``_MAX_HOLD_S`` accounts for and the caption cadence does not notice.
+costs a fraction of a decibel, undershooting costs the whole canceller, and a
+value fitted to one run would have been 25 ms and dead on the next meeting. The
+cost of the headroom is that much extra mic buffering before a tick can be
+cancelled, which ``_MAX_HOLD_S`` accounts for and the caption cadence does not
+notice. ``eval/aec_alignment.py`` measures all of this from one ``--aec-dump``.
 """
 
 

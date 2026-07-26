@@ -194,9 +194,20 @@ dump with the reference advanced by a sweep of offsets:
 
 A cliff at 60 ms and a flat plateau after it. **The error is one-sided** — early
 is what the estimator searches, late is fatal — so the fix declares a *generous*
-correction rather than a precise one: `CaptureProvider.far_end_lag_s` (0.0 for
+correction rather than a precise one.
+
+**And the lag is not a per-machine number to look up: it is re-rolled at every
+meeting start.** Each channel anchors on its own first frame and the two pump
+threads open their recorders independently, so the same Realtek endpoint measured
+60 ms on one 80-second run and 10–25 ms on the next, minutes later. A constant
+fitted to the second run would have been 25 ms — dead on the first. That kills any
+"measure it once per machine at install" idea, and it is the strongest argument
+for the safety factor. `eval/aec_alignment.py` carries a 0.1 s floor for exactly
+this reason.
+
+The fix: `CaptureProvider.far_end_lag_s` (0.0 for
 everyone whose channels share a clock) with `capture.windows.FAR_END_LAG_S =
-0.15`, 2.5× the measured value, subtracted when the canceller files the
+0.15`, 2.5× the larger measurement, subtracted when the canceller files the
 reference. Only the canceller's copy moves; the forwarded frame keeps the
 provider's timeline, so the transcript, the dump and the merge are untouched.
 `_MAX_HOLD_S` grows by the same amount, or the extra wait for a corrected
@@ -204,8 +215,12 @@ reference would be charged to the stalled-tap budget and every healthy meeting
 would report reference loss.
 
 **Do not judge the fix by re-measuring the dump.** `--aec-dump` records frames as
-the provider stamped them, so `lpb.wav` still trails `mic.wav` by ~60 ms
-afterwards. ERLE and leaked `Local-N` lines are the measurements that moved.
+the provider stamped them, so `lpb.wav` still trails `mic.wav` afterwards. ERLE
+and leaked `Local-N` lines are the measurements that moved.
+`eval/aec_alignment.py` does the whole diagnosis in one command — measure the lag,
+replay the dump through the real canceller at a sweep of corrections, print the
+constant to ship — and it compares against what the provider already declares, so
+a fixed machine reads PASS instead of shouting about the raw timeline.
 
 ### Still open — needs a machine nobody is sitting at
 
