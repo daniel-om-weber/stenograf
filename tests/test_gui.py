@@ -68,6 +68,15 @@ def gui(qt_app, monkeypatch):
     monkeypatch.setattr(loaders, "make_provider", no_capture)
     engine, shell = build(qt_app)
     yield shell, engine
+    # Join any meeting the test left running *before* monkeypatch unwinds. The
+    # worker is a daemon thread and `MeetingRun.__init__` does a first-time
+    # import before it reaches capture, so a test that returns without joining
+    # leaves a thread that calls `make_provider` after the stub above has been
+    # restored — and on Windows, where capture needs no helper and no
+    # permission, the real one then says yes and writes a meeting folder into
+    # the developer's own ~/Documents/Meetings. pytest finalizes this fixture
+    # before `monkeypatch` precisely because it depends on it.
+    shell.screen("Meeting").shutdown()
 
 
 def qt_app_instance():
@@ -169,7 +178,13 @@ class TestQmlTree:
 
 class TestSetupScreen:
     def test_start_resolves_a_request_and_replaces_the_form(self, gui, tmp_path, monkeypatch):
+        from stenograf import output
+
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        # This one really starts a meeting (recordAudio below), so it needs the
+        # same output redirect as every other test that does — $STENOGRAF_DATA
+        # does not cover it, the transcript home is resolved separately.
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
         shell, _engine = gui
         setup = shell.screen("Setup")
         seen = []
@@ -687,6 +702,39 @@ class TestTray:
         assert not shell.window.isVisible()
         assert stopped == [], "closing to the tray must not end the meeting"
         assert meeting.state["phase"] == "rec"
+
+
+class TestWindowsIdentity:
+    """The AppUserModelID, without which the taskbar cannot find its own app.
+
+    Windows' half of what ``setDesktopFileName`` does on Wayland: the shell
+    matches a window to the shortcut that launched it by this string, so a
+    missing one groups the window under ``pythonw.exe``, leaves a pinned
+    shortcut unmatched, and signs our toasts as Python. Qt sets none."""
+
+    def test_claiming_it_is_a_no_op_where_there_is_nothing_to_claim(self):
+        from stenograf.gui.app import claim_windows_identity
+
+        claim_windows_identity()  # every platform reaches this line in run()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="no AppUserModelID exists elsewhere")
+    def test_the_process_reports_the_id_the_shortcut_declares(self):
+        import ctypes
+
+        from stenograf.gui.app import claim_windows_identity
+        from stenograf.shortcut import APP_USER_MODEL_ID
+
+        claim_windows_identity()
+
+        # Read back through the shell rather than trusting the setter: the call
+        # returns an HRESULT nobody looks at, and the failure mode is silence.
+        reported = ctypes.c_wchar_p()
+        ctypes.oledll.shell32.GetCurrentProcessExplicitAppUserModelID(ctypes.byref(reported))
+        try:
+            # The same constant the .lnk carries — one string, or no match.
+            assert reported.value == APP_USER_MODEL_ID
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(reported)
 
 
 class TestSingleInstance:

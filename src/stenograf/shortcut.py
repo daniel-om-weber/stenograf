@@ -16,14 +16,14 @@ there and the terminal launcher when it is not:
   ``--gui`` outside a terminal, or the TUI inside one — plus the app icon
   copied into the user's icon theme, so the entry names an icon instead of
   pointing into site-packages (:func:`_install_icon`).
-- **Windows**: a Desktop ``Stenograf.cmd`` — ``steno`` is a console app, so a
-  ``.lnk`` would open a console window anyway, and the batch wrapper is a plain
-  text file this module can regenerate without COM. The app variant runs
-  ``pythonw.exe`` through ``start``, so the console it does open belongs to the
-  wrapper and closes immediately. A ``.lnk`` would avoid even that flash, but
-  it needs COM (or a PowerShell detour) plus an ``.ico`` this project does not
-  ship, and the obvious script wrappers that dodge COM are VBScript, which
-  Windows is in the middle of removing.
+- **Windows with the ``gui`` extra**: two ``Stenograf.lnk`` shell links, in the
+  Start Menu and on the Desktop, written through COM
+  (:mod:`stenograf.winlink`) so both can carry the app's icon *and* its
+  :data:`APP_USER_MODEL_ID` — the string the taskbar matches a window against.
+  They target ``pythonw.exe`` directly, so there is no console to flash.
+- **Windows without it**: a Desktop ``Stenograf.cmd``. ``steno`` is a console
+  app; a console is where the TUI lives and where a crash stays readable, which
+  is the same reason macOS keeps ``Stenograf.command`` without the extra.
 
 The terminal launchers embed the absolute interpreter and run ``-m stenograf``:
 a double-clicked launcher gets a login-shell PATH that may lack uv's shim
@@ -60,6 +60,19 @@ from stenograf import ASSETS
 BUNDLE_TEMPLATE = ASSETS / "Stenograf.app"
 ICON = ASSETS / "icon.png"
 
+WINDOWS_ICON = ASSETS / "icon.ico"
+"""The multi-size icon the Windows shell links point at (16…256 px).
+
+Named as a path into the installed package rather than copied out to a stable
+location, which is the opposite of what :func:`_install_icon` does on Linux —
+and for a reason that only holds here. Linux copies because a ``.desktop``
+entry's ``Icon=`` is read forever by whatever draws it; a ``.lnk``'s icon path
+is read by ``steno setup``'s own successor, since every upgrade path
+(``install.ps1``, the manual ``uv tool install --upgrade``) ends in ``steno
+setup`` and rewrites both links. Rendered by ``native/appbundle/render_ico.py``
+from the same ``icon.svg`` as everything else.
+"""
+
 DESKTOP_FILE_NAME = "stenograf"
 """Basename of the Linux desktop entry, the app_id the window reports, and the
 name its icon is installed under.
@@ -91,6 +104,23 @@ It is the X11 ``WM_CLASS`` *class* (hence ``StartupWMClass`` below), the tray
 item's title, and the name notifications are attributed to. Shared for the same
 reason as :data:`DESKTOP_FILE_NAME`: the entry declares a string the window has
 to carry, and the two may not drift.
+"""
+
+APP_USER_MODEL_ID = "dev.stenograf.app"
+"""The Windows identity, claimed by ``gui/app.py`` and written into every ``.lnk``.
+
+Windows' spelling of what :data:`DESKTOP_FILE_NAME` does on Wayland: the shell
+matches a running window back to the shortcut that launched it by
+AppUserModelID and by nothing else — that match is what makes taskbar grouping,
+pinning, and a toast attributed to *Stenograf* rather than to ``pythonw.exe``
+work at all. Qt sets no id of its own, so the process claims one explicitly and
+:func:`~stenograf.winlink.write_shortcut` stamps the same string into the
+shortcut's property store. Shared for the reason the other two constants are:
+the halves must be equal or the match fails silently, which is the worst way for
+it to fail.
+
+``dev.stenograf.app`` is also the macOS bundle identifier — one identity per
+app, spelled the same wherever a platform asks for one.
 """
 
 _MACOS_COMMAND = """\
@@ -175,7 +205,7 @@ def install_shortcut() -> Path | None:
     if sys.platform.startswith("linux"):
         return _install_desktop_entry(gui=gui)
     if sys.platform == "win32":
-        return _install_cmd_file(gui=gui)
+        return _install_windows_launcher(gui=gui)
     return None
 
 
@@ -241,15 +271,124 @@ def _install_icon(data_home: Path) -> Path:
     return target
 
 
-def _install_cmd_file(*, gui: bool) -> Path:
-    """The Windows Desktop wrapper, pointed at the app or at the TUI.
+def _install_windows_launcher(*, gui: bool) -> Path:
+    """Shell links for the app, a batch file for the TUI — and only ever one.
 
-    The two variants trade opposite things away. The terminal one keeps its
-    console — that is where the TUI lives, and where a crash stays readable.
-    The app one has no console to report into: ``start`` returns the moment the
-    app is handed over, so a launch that fails (the extra uninstalled from under
-    it, an import error) fails silently, and ``steno --gui`` from a terminal is
-    what shows why.
+    The split is not cosmetic. A console app *wants* a console: the TUI lives in
+    it and a crash stays readable there, which is why the batch file survives
+    (the same reasoning that keeps ``Stenograf.command`` on macOS without the
+    extra). The app wants the opposite, and it wants two things a ``.cmd`` file
+    cannot express at all — an icon, and the
+    :data:`APP_USER_MODEL_ID` that lets the taskbar recognize its own window.
+    """
+    if not gui:
+        _retire_windows_links()
+        return _install_cmd_file(gui=False)
+    try:
+        return _install_windows_links()
+    except OSError as exc:
+        # Never fatal: COM can be refused by policy or by a locked-down profile,
+        # and the batch file it degrades to still starts the app. Losing the
+        # icon and the taskbar identity beats losing the launcher.
+        print(
+            f"could not write the Stenograf shortcut ({exc}) — falling back to a "
+            "batch file on the Desktop, without an icon",
+            file=sys.stderr,
+        )
+        return _install_cmd_file(gui=True)
+
+
+def _windows_link_paths() -> list[Path]:
+    """Where the app's shell links go — the Start Menu first, then the Desktop.
+
+    The Start Menu entry is the one that carries weight: it is what the search
+    box finds, what can be pinned to Start or the taskbar, and what Windows
+    insists a desktop app have before it will attribute a toast to that app
+    rather than to the interpreter. The Desktop copy is there because that is
+    where this project's launcher has always been, and where `steno setup` has
+    been telling people to look.
+    """
+    return [_windows_programs() / "Stenograf.lnk", _windows_desktop() / "Stenograf.lnk"]
+
+
+def _install_windows_links() -> Path:
+    """Write both shell links, retire the batch file, and return the Start-menu one."""
+    # The ignore is the type checker's platform, not a real doubt: `winlink`
+    # guards its whole body on `sys.platform == "win32"`, and pyright runs on
+    # macOS (the only place the mlx deps resolve), where that makes the module's
+    # contents unreachable and therefore invisible. Same reason the same import
+    # is repeated in `_retire_windows_links` rather than hoisted: it must stay
+    # inside a win32-only call path at runtime.
+    from stenograf.winlink import write_shortcut  # pyright: ignore[reportAttributeAccessIssue]
+
+    paths = _windows_link_paths()
+    for path in paths:
+        write_shortcut(
+            path,
+            target=_windowed_python(),
+            arguments="-m stenograf --gui",
+            # Home, so anything the app ever resolves relatively lands somewhere
+            # the user owns rather than inside the venv Explorer would default to.
+            working_directory=Path.home(),
+            description="Meeting transcription",
+            icon=WINDOWS_ICON,
+            app_id=APP_USER_MODEL_ID,
+        )
+    _retire_cmd_file()
+    return paths[0]
+
+
+def _retire_cmd_file() -> None:
+    """Remove the batch launcher the shell links replace — but only if we wrote it.
+
+    Same rule as :func:`_retire_command_file` on macOS, for the same reason: two
+    launchers named Stenograf that behave differently is the confusing outcome,
+    and anything that does not look like our own generated file is the user's.
+    """
+    legacy = _windows_desktop() / "Stenograf.cmd"
+    try:
+        content = legacy.read_text(encoding="ascii")
+    except (OSError, ValueError):  # missing, unreadable, or not the ASCII we write
+        return
+    if content.startswith("@echo off") and "-m stenograf" in content:
+        legacy.unlink(missing_ok=True)
+
+
+def _retire_windows_links() -> None:
+    """The mirror: drop the app's shell links when the ``gui`` extra is gone.
+
+    A link is ours if it declares our :data:`APP_USER_MODEL_ID`, which nothing
+    else has a reason to — the same "only if we wrote it" discipline as above,
+    with the identity doing the work the ``@echo off`` sniff does there.
+
+    The existence check comes first so the common path never loads COM at all:
+    every ``steno setup`` on a machine that has never had the extra would
+    otherwise pay for an apartment and two shell-link objects to discover there
+    is nothing to delete.
+    """
+    paths = [path for path in _windows_link_paths() if path.is_file()]
+    if not paths:
+        return
+    from stenograf.winlink import read_shortcut  # pyright: ignore[reportAttributeAccessIssue]
+
+    for path in paths:
+        try:
+            ours = read_shortcut(path).app_id == APP_USER_MODEL_ID
+        except OSError:
+            continue  # unreadable is not ours to delete
+        if ours:
+            path.unlink(missing_ok=True)
+
+
+def _install_cmd_file(*, gui: bool) -> Path:
+    """The Windows Desktop batch wrapper: the TUI launcher, and the app's fallback.
+
+    The app variant has no console to report into — ``start`` returns the moment
+    the app is handed over, so a launch that fails (the extra uninstalled from
+    under it, an import error) fails silently, and ``steno --gui`` from a
+    terminal is what shows why. That is one of the three costs
+    :func:`_install_windows_links` exists to remove, and it is only paid now
+    when COM refuses.
     """
     target = _windows_desktop() / "Stenograf.cmd"
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -380,9 +519,24 @@ def _windows_desktop() -> Path:
     OneDrive's folder backup relocates the Desktop (``~/OneDrive/Desktop``) on
     a large share of Windows 11 machines, leaving ``~/Desktop`` an invisible
     decoy — the shell's User Shell Folders key knows where it really is.
-    Falls back to ``~/Desktop`` when the key is unreadable.
     """
-    fallback = Path.home() / "Desktop"
+    return _windows_shell_folder("Desktop", Path.home() / "Desktop")
+
+
+def _windows_programs() -> Path:
+    """The user's Start Menu → Programs folder, i.e. where an app is listed.
+
+    Per-user, not the machine-wide ``%ProgramData%`` copy: everything `steno
+    setup` writes belongs to the account that ran it, and writing under
+    ProgramData would need elevation. Redirected far less often than the
+    Desktop, but read through the same key for the same reason.
+    """
+    default = Path.home() / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu"
+    return _windows_shell_folder("Programs", default / "Programs")
+
+
+def _windows_shell_folder(name: str, fallback: Path) -> Path:
+    """One entry from the shell's User Shell Folders key, or ``fallback``."""
     if sys.platform != "win32":  # also lets the type checker use win32 stubs
         return fallback
     import winreg
@@ -392,7 +546,7 @@ def _windows_desktop() -> Path:
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
         ) as key:
-            value, _ = winreg.QueryValueEx(key, "Desktop")
+            value, _ = winreg.QueryValueEx(key, name)
     except OSError:
         return fallback
     if not isinstance(value, str) or not value:

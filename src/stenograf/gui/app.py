@@ -54,7 +54,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
 
 from stenograf import ASSETS
-from stenograf.shortcut import APPLICATION_NAME, DESKTOP_FILE_NAME
+from stenograf.shortcut import APP_USER_MODEL_ID, APPLICATION_NAME, DESKTOP_FILE_NAME
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -427,6 +427,31 @@ def _instance_name() -> str:
     return f"stenograf-{getpass.getuser()}"
 
 
+def claim_windows_identity() -> None:
+    """Tell the Windows shell which application this process is (no-op elsewhere).
+
+    The Windows half of the identity ``setDesktopFileName`` establishes on
+    Wayland, and the same class of defect when it is missing: with no
+    AppUserModelID the shell has nothing to match a window against, so every
+    window groups under ``pythonw.exe`` in the taskbar, a pinned shortcut never
+    lights up as the running app, and a tray balloon is attributed to Python.
+    Qt claims none of its own.
+
+    **Before the first window exists.** The shell reads the id off the process
+    when a window is created and stamps it onto that window; setting it
+    afterwards leaves the windows already on screen carrying the default, which
+    is the confusing half-state. The ``.lnk`` that ``steno setup`` installs
+    declares the same :data:`~stenograf.shortcut.APP_USER_MODEL_ID` in its
+    property store (:mod:`stenograf.winlink`) — the match is between those two
+    strings, so they come from one constant.
+    """
+    if sys.platform != "win32":  # also lets the type checker use win32 stubs
+        return
+    import ctypes
+
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+
+
 def _relaunched(server: QLocalServer, gui: StenografGui) -> None:
     """Answer a second launch: drain its connection and put the window up.
 
@@ -463,6 +488,7 @@ def run(*, tray: bool = False) -> int:
     # window arrives iconless and separate from its own launcher. Ignored on
     # macOS and Windows. The constant lives with the entry that must match it.
     app.setDesktopFileName(DESKTOP_FILE_NAME)
+    claim_windows_identity()
     # Named here rather than left to the platform: launched from
     # `Stenograf.app` the Dock already shows the bundle's icon, but started
     # from a terminal — or on Linux and Windows — this is the only thing
@@ -513,5 +539,6 @@ __all__ = [
     "StenografGui",
     "build",
     "claim_single_instance",
+    "claim_windows_identity",
     "run",
 ]

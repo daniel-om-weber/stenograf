@@ -70,6 +70,11 @@ def setup(models_only: bool) -> None:
                     "  The app asks for microphone access once, the first time you start a "
                     "meeting from it."
                 )
+            elif launcher.suffix == ".lnk":  # Windows with the gui extra: two shell links
+                click.echo(
+                    '  Look for "Stenograf" in the Start menu — pin it there or to the '
+                    "taskbar — or double-click the copy on your Desktop."
+                )
             elif sys.platform.startswith("linux"):  # menu entry; the others land on the Desktop
                 click.echo('  Look for "Stenograf" in your application menu.')
             else:

@@ -8,10 +8,11 @@ explicitly opt into keeping a recording.
 Built for Apple Silicon (M-series) first; Linux and Windows support is designed
 in from the start.
 
-> **Status: early release.** On macOS and Linux the pipeline is complete end
-> to end: live system-audio + microphone capture, live captions, and the
-> high-accuracy speaker-labelled finalize pass, plus meeting notes. Windows
-> support is in progress.
+> **Status: early release.** On macOS, Linux and Windows the pipeline is
+> complete end to end: live system-audio + microphone capture, live captions,
+> and the high-accuracy speaker-labelled finalize pass. Meeting notes need
+> [Ollama](https://ollama.com) on Linux and Windows; on Apple Silicon they run
+> in-process with no setup.
 
 ## Why another transcription tool?
 
@@ -40,15 +41,17 @@ downloads, and a desktop launcher:
 curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh
 ```
 
-That's the only command you have to type. Afterwards, double-click
-**Stenograf** on your Desktop (macOS) or start **Stenograf** from the
-application menu (Linux) to open the launcher — every workflow below is
-reachable there with the mouse. Re-running the command upgrades stenograf.
+That's the only command you have to type. Afterwards, open **Stenograf** from
+your Desktop (macOS), the application menu (Linux) or the Start menu (Windows)
+— every workflow below is reachable there with the mouse. Re-running the
+command upgrades stenograf.
 
 Works on macOS 14.4+ on Apple Silicon (the wheel ships the signed capture
-helper — no toolchain needed) and Linux with PipeWire or PulseAudio (capture
-uses `parec`, shipped with pipewire-pulse / pulseaudio-utils on every desktop
-distro; ASR runs ONNX on CPU).
+helper — no toolchain needed), Linux with PipeWire or PulseAudio (capture uses
+`parec`, shipped with pipewire-pulse / pulseaudio-utils on every desktop
+distro), and Windows 10/11 (capture is WASAPI, mic plus loopback of whatever is
+playing). Off Apple Silicon, ASR runs ONNX on CPU; on Windows any DX12 GPU can
+be opted into with `[asr] provider = "dml"`.
 
 ### Manual install
 
@@ -78,8 +81,13 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dan
 ```
 
 Windows never prompts for the microphone, so capture stays silent until you flip
-the toggle under Settings > Privacy & security > Microphone. Windows Terminal is
-recommended for the live-caption TUI.
+the toggle under Settings > Privacy & security > Microphone — `steno setup`
+reads that toggle up front and says so rather than letting you find out from a
+transcript of silence. Windows Terminal is recommended for the live-caption TUI.
+
+`steno setup` puts **Stenograf** in the Start menu and on the Desktop. Meeting
+notes need [Ollama](https://ollama.com) installed and running; everything else
+works without it (`steno doctor` reports it as an optional check).
 
 ### From a checkout
 
@@ -97,8 +105,8 @@ Every command below is then `uv run steno …` from the repo.
 ## The launcher
 
 Double-click **Stenograf** (the Desktop icon on macOS, the application-menu
-entry on Linux) — or run bare `steno` in a terminal — and a mouse-driven
-launcher opens:
+entry on Linux, the Start-menu entry on Windows) — or run bare `steno` in a
+terminal — and a mouse-driven launcher opens:
 
 - **Start meeting** — capture this meeting with live captions; the
   speaker-labelled transcript replaces them the moment you stop.
@@ -124,13 +132,19 @@ steno --gui                                # …or just open the app
 The launcher follows the extra on every platform: once Qt is installed,
 `steno setup` rewrites the shortcut it already made so that double-clicking it
 opens the app instead of a terminal window — on Linux the application-menu
-entry, on Windows the Desktop `Stenograf.cmd`. Uninstall the extra, re-run
-setup, and they turn back into the terminal launcher.
+entry. Uninstall the extra, re-run setup, and they turn back into the terminal
+launcher.
 
 On macOS it goes further and replaces the Desktop shortcut with a real
 **Stenograf.app** — its own icon, Dock tile and Spotlight entry. It asks for
 microphone access once, under its own name rather than your terminal's, and
 keeps that permission across every later upgrade.
+
+On Windows the batch file becomes a pair of real shortcuts — one in the
+**Start menu**, one on the Desktop — with the app's icon and no console window
+behind them. The Start-menu entry is the one worth pinning: Windows matches a
+running window to it, so the app gets its own taskbar button and its
+notifications arrive under the name *Stenograf* rather than *pythonw.exe*.
 
 The app also lives in the **menu bar** (system tray on Windows and Linux),
 which is where it belongs for most of a meeting: the icon turns red while
@@ -144,7 +158,10 @@ steno --gui --tray                         # menu bar only, no window
 ```
 
 Desktops with no tray host (stock GNOME, unless the AppIndicator extension is
-installed) simply get a window, as before.
+installed) simply get a window, as before. On Windows 11 the icon starts in the
+notification-area **overflow** — click the `^` next to the clock and drag
+Stenograf onto the taskbar to keep it in sight; Windows hides every new
+notification icon that way, not just this one.
 
 It runs the same library the CLI does — same meeting folders, same
 settings.toml, same transcripts — so you can switch between the two freely, or

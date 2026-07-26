@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import plistlib
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -65,9 +66,11 @@ def _linux(monkeypatch, tmp_path: Path, *, qt: bool) -> None:
 def _windows(monkeypatch, tmp_path: Path, *, qt: bool) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(shortcut, "gui_installed", lambda: qt)
-    # Bypass the registry lookup: on POSIX hosts winreg doesn't exist, and on
-    # a real Windows host it would point at the user's actual Desktop.
+    # Bypass the registry lookups: on POSIX hosts winreg doesn't exist, and on
+    # a real Windows host they would point at the user's actual Desktop and
+    # Start menu — which no test may write into.
     monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
+    monkeypatch.setattr(shortcut, "_windows_programs", lambda: tmp_path / "Programs")
 
 
 def _fingerprint(root: Path) -> str:
@@ -274,18 +277,89 @@ def test_installing_the_extra_converts_the_linux_entry_in_place(tmp_path, monkey
     assert "Terminal=false" in second.read_text()
 
 
-def test_windows_launcher_opens_the_app_when_qt_is_installed(tmp_path, monkeypatch):
+def test_the_windows_icon_ships_every_size_the_shell_asks_for():
+    # An .ico is a *directory* of independent images and Windows picks the entry
+    # nearest the size it wants, so one 256 px image would be downsampled into
+    # mush at 16 px — which is the size the taskbar and the title bar use.
+    # Parsed rather than trusted: the file is committed, and nothing else reads
+    # it until a user is looking at their Start menu.
+    header = shortcut.WINDOWS_ICON.read_bytes()
+    reserved, kind, count = struct.unpack("<HHH", header[:6])
+    assert (reserved, kind) == (0, 1)  # an icon directory, not a cursor
+    sizes = set()
+    for index in range(count):
+        width, height = header[6 + 16 * index], header[7 + 16 * index]
+        assert width == height  # square, or the shell letterboxes it
+        sizes.add(width or 256)  # one byte per dimension, so the format spells 256 as 0
+    assert sizes == {16, 24, 32, 48, 64, 128, 256}
+
+
+@pytest.mark.skipif(not WINDOWS, reason="only the Windows shell can write a shell link")
+def test_windows_installs_shell_links_that_carry_the_app_identity(tmp_path, monkeypatch):
+    from stenograf import winlink
+
     _windows(monkeypatch, tmp_path, qt=True)
-    monkeypatch.setattr(shortcut, "_windowed_python", lambda: r"C:\venv\pythonw.exe")
 
     target = shortcut.install_shortcut()
 
-    assert target == tmp_path / "Desktop" / "Stenograf.cmd"
-    content = target.read_text()
-    assert r'start "Stenograf" "C:\venv\pythonw.exe" -m stenograf --gui' in content
-    # The terminal wrapper's `pause` would strand the app behind a console
-    # waiting for a keypress nobody is there to give.
-    assert "pause" not in content
+    # The Start-menu entry is what setup names: it is the pinnable one, and the
+    # one Windows wants before it will put our name on a toast.
+    assert target == tmp_path / "Programs" / "Stenograf.lnk"
+    desktop = tmp_path / "Desktop" / "Stenograf.lnk"
+    assert desktop.is_file()
+    for path in (target, desktop):
+        link = winlink.read_shortcut(path)
+        # pythonw.exe, so there is no console window behind the app at all —
+        # the flash the `start` wrapper could only shorten.
+        assert link.target == shortcut._windowed_python()
+        assert link.arguments == "-m stenograf --gui"
+        assert link.icon == str(shortcut.WINDOWS_ICON)
+        # The whole reason this is COM and not a `WScript.Shell` one-liner: the
+        # taskbar matches a window to its launcher by this string and nothing
+        # else, and the detour cannot reach the property store that holds it.
+        assert link.app_id == shortcut.APP_USER_MODEL_ID
+
+
+@pytest.mark.skipif(not WINDOWS, reason="only the Windows shell can write a shell link")
+def test_installing_the_extra_converts_the_windows_launcher(tmp_path, monkeypatch):
+    _windows(monkeypatch, tmp_path, qt=False)
+    batch = shortcut.install_shortcut()
+    assert batch is not None and batch.exists()
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: True)
+
+    link = shortcut.install_shortcut()
+
+    assert link is not None and link.is_file()
+    assert not batch.exists()  # one launcher named Stenograf, never two
+
+
+@pytest.mark.skipif(not WINDOWS, reason="only the Windows shell can write a shell link")
+def test_removing_the_extra_converts_it_back(tmp_path, monkeypatch):
+    _windows(monkeypatch, tmp_path, qt=True)
+    start_menu = shortcut.install_shortcut()
+    desktop_link = tmp_path / "Desktop" / "Stenograf.lnk"
+    assert start_menu is not None and desktop_link.is_file()
+    monkeypatch.setattr(shortcut, "gui_installed", lambda: False)
+
+    batch = shortcut.install_shortcut()
+
+    assert batch == tmp_path / "Desktop" / "Stenograf.cmd"
+    assert not start_menu.exists() and not desktop_link.exists()
+
+
+@pytest.mark.skipif(not WINDOWS, reason="only the Windows shell can write a shell link")
+def test_a_foreign_shell_link_is_left_alone(tmp_path, monkeypatch):
+    # Same rule as the macOS command file: a shortcut we did not write is the
+    # user's. Ours are identified by the app id, which nothing else declares.
+    from stenograf import winlink
+
+    _windows(monkeypatch, tmp_path, qt=False)
+    theirs = tmp_path / "Desktop" / "Stenograf.lnk"
+    winlink.write_shortcut(theirs, target=sys.executable, description="mine, not yours")
+
+    shortcut.install_shortcut()
+
+    assert theirs.is_file()
 
 
 def test_the_windows_app_launcher_prefers_the_console_less_interpreter(tmp_path, monkeypatch):
@@ -371,13 +445,15 @@ def test_windows_shortcut_is_a_cmd_wrapper(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(not WINDOWS, reason="reads the real User Shell Folders registry key")
-def test_windows_desktop_is_the_shell_folder():
-    # Redirected (OneDrive) or not, the shell key names an absolute, existing
-    # dir with no unexpanded %VARS% left in it.
-    desktop = shortcut._windows_desktop()
-    assert desktop.is_absolute()
-    assert "%" not in str(desktop)
-    assert desktop.is_dir()
+@pytest.mark.parametrize("folder", ["_windows_desktop", "_windows_programs"])
+def test_windows_shell_folders_resolve(folder):
+    # Redirected (OneDrive backs up the Desktop on a large share of Windows 11
+    # machines) or not, the shell key names an absolute, existing dir with no
+    # unexpanded %VARS% left in it.
+    resolved = getattr(shortcut, folder)()
+    assert resolved.is_absolute()
+    assert "%" not in str(resolved)
+    assert resolved.is_dir()
 
 
 def test_unsupported_platform_installs_nothing(tmp_path, monkeypatch):

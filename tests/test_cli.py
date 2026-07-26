@@ -1260,7 +1260,9 @@ def test_setup_windows_checks_the_privacy_toggle_then_prefetches(tmp_path, monke
     from stenograf.capture import windows as capture_windows
 
     monkeypatch.setattr(capture_windows, "mic_access_blocked", lambda: None)
+    # Both shell folders, or setup writes into the developer's own Start menu.
     monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
+    monkeypatch.setattr(shortcut, "_windows_programs", lambda: tmp_path / "Programs")
     monkeypatch.setattr(shortcut, "gui_installed", lambda: True)  # the extra is in the dev group
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
@@ -1269,7 +1271,10 @@ def test_setup_windows_checks_the_privacy_toggle_then_prefetches(tmp_path, monke
     assert "microphone access is allowed" in result.output
     assert "shows no permission prompt" in result.output  # no prompt is ever coming
     assert "launcher installed" in result.output
-    assert (tmp_path / "Desktop" / "Stenograf.cmd").exists()
+    # With the extra: a Start-menu entry to pin, plus the Desktop copy.
+    assert (tmp_path / "Programs" / "Stenograf.lnk").exists()
+    assert (tmp_path / "Desktop" / "Stenograf.lnk").exists()
+    assert "Start menu" in result.output
     assert "stenograf[gui]" not in result.output  # already installed: nothing to offer
     assert fetched
 
