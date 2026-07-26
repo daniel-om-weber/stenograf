@@ -266,6 +266,25 @@ transcript. It is half an hour of speech out loud, so it wants an empty room.
   one file written once per install.
 - **`soundcard` over `pyaudiowpatch`** (spiked on real hardware 2026-07-11): one
   API for both channels, and server-side resampling via `AUTOCONVERTPCM`.
+- **Device-side timestamps — the real fix — are deferred, with a trigger.** macOS
+  has no far-end lag because its helper does not use arrival time at all: CoreAudio
+  hands it each buffer's Mach host time, for both taps, in one clock domain. Both
+  other platforms expose the same thing — Windows in
+  `IAudioCaptureClient::GetBuffer`'s `pu64QPCPosition`/`pu64DevicePosition` (QPC is
+  machine-wide, so a mic stream and a loopback stream are directly comparable),
+  Linux in `pa_timing_info`/`pa_stream_get_time` or PipeWire's `pw_time`. Neither
+  of our *transports* carries them: `soundcard` returns bare sample arrays and drops
+  the packet metadata, and `parec` is a pipe of raw PCM where every timestamp dies
+  at the process boundary (`--latency-msec` only requests a target). So this is a
+  transport rewrite on both — owning WASAPI capture through ctypes COM, and taking
+  the libpulse/PipeWire dependency that the parec decision exists to avoid — for
+  one number that a generous constant already gets right. **The trigger: a constant
+  can only fix a constant.** If the ≥30-minute run shows the offset moving
+  mid-meeting — plausible, since the forward re-anchor deliberately jumps a
+  channel's timeline when `soundcard`'s zero-fill under-estimates a silence gap —
+  then no declared value works and this becomes the fix rather than a refinement.
+  It would retire the re-anchor heuristic at the same time, which is the other
+  thing arrival stamping made necessary.
 - **The far-end lag is a declared constant, generously set, not a measured
   runtime value.** A per-meeting delay estimator would be a second delay
   estimator in front of AEC3's own, and AEC3's works fine once the sign is right:
