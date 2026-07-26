@@ -7,7 +7,7 @@ platform still gets the pure `py3-none-any` wheel, and pip prefers the
 specific tag wherever one exists:
 
     macosx_14_0_arm64      stenocap (required) + stenodiar
-    manylinux_2_28_x86_64  stenodiar
+    manylinux_2_39_x86_64  stenodiar
     win_amd64              stenodiar
 
 macOS builds its helpers on any wheel build — stenocap is mandatory there and

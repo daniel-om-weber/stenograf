@@ -34,8 +34,21 @@ echo cancellation was dead on Windows because the loopback tap's timestamps run
 Linux**, which also runs one subprocess per channel — see PLAN.md. Its closed
 half is now evidence you should not re-derive, and its last section is
 the observation recipe for that machine (harness traps, screenshots, SAPI voice
-selection). Read it before touching anything Windows. **`PLAN-ASR-CHALLENGER.md` is the
-second side-plan** and holds no build work at all: it gates the recurring "the
+selection). Read it before touching anything Windows.
+**`PLAN-CAPTURE-HELPER.md` is the second side-plan and the live design work**
+(2026-07-26, evidenced, not built): arrival-stamped audio is the root cause
+behind both the Windows far-end lag and the unmeasured Linux one, and the fix is
+a native Rust capture helper per platform emitting the frame format
+`capture/macos.py:9-16` already defines — one clock for both taps, as `stenocap`
+has always done. It deletes `far_end_lag_s` rather than tuning it, drops
+`soundcard` and `parec`, and expands the wheel matrix (capture becomes
+mandatory, so today's untagged platforms would otherwise lose it). Vendoring or
+monkeypatching soundcard, and PortAudio, are rejected there with reasons; the
+livekit question is deferred with a trigger. `eval/wasapi_timestamps.py` is its
+evidence and re-runs in twelve seconds. **Read it before touching capture,
+`aec.py`, or `hatch_build.py` on any platform.**
+**`PLAN-ASR-CHALLENGER.md` is the third
+side-plan** and holds no build work at all: it gates the recurring "the
 leaderboard has a new leader" question (currently Cohere Transcribe) behind one
 adjudication run, and records why Voxtral and Canary already lost. Read it
 before evaluating *any* ASR model, and delete it if the gate fails.

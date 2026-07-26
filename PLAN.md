@@ -346,9 +346,20 @@ one subprocess per channel, both stamped on arrival by the same `SessionClock`,
 so a monitor-source transport slower than the mic's would misalign the reference
 there exactly as WASAPI's did — silently, since it costs nothing but echo
 cancellation. The AEC numbers in `eval/README.md` are all macOS, where one helper
-stamps both channels. One 60-second `--aec-dump` over speakers on the CachyOS
-notebook answers it: `eval/aec_echo_present.py` to confirm the echo path, then
-`eval/aec_score.py`, then compare ERLE against a sweep of `far_end_lag_s`.
+stamps both channels.
+
+**Both of those are one root cause, and it now has its own plan:
+`PLAN-CAPTURE-HELPER.md` (designed 2026-07-26, not built).** Arrival-stamped
+audio is the disease and `far_end_lag_s` is the symptom cream. The fix is a
+native capture helper per platform emitting the frame format
+`capture/macos.py:9-16` already defines — one clock for both taps, the way
+`stenocap` has worked all along. What overturned the earlier deferral was
+reading the dependency instead of the plan: soundcard already asks
+`IAudioCaptureClient::GetBuffer` for `pu64QPCPosition` and passes NULL
+(`mediafoundation.py:699`), so no COM rewrite was ever needed to find out.
+`eval/wasapi_timestamps.py` measures it in twelve seconds — **both taps
+populated, monotonic, stable to ±0.1 ms over 30 s**. Read that plan before
+touching capture, `aec.py`, or the wheel matrix on any platform.
 
 **The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
 ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live

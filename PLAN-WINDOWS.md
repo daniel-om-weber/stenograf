@@ -224,6 +224,17 @@ a fixed machine reads PASS instead of shouting about the raw timeline.
 
 ### Still open — needs a machine nobody is sitting at
 
+**Reframed 2026-07-26 by `PLAN-CAPTURE-HELPER.md`.** The alignment half of this
+run — "does the constant hold for half an hour" — is superseded: the constant is
+being replaced by device-side timestamps, and `eval/wasapi_timestamps.py` already
+showed both WASAPI taps carry populated, monotonic QPC stamps stable to ±0.1 ms.
+It also showed the steady-state transport term is ~20 ms *in the safe direction*,
+so the dangerous ~60 ms is per-meeting anchor skew, which no declared value can
+track. **This run is therefore no longer the gate on the "supported" claim** — it
+is better spent validating the helper than adjudicating the constant it replaces.
+What remains genuinely open below is the AEC-quality half, which timestamps do not
+touch.
+
 The ≥30-minute run, now against a canceller that works. What is left to learn is
 specifically what 80 seconds cannot show:
 
