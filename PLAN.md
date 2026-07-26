@@ -313,57 +313,34 @@ whether the live screen reads well over half an hour.
 
 ## Platform work still open
 
-**Windows real-hardware validation.** Everything automatable passes on the
-desktop (transcribe, `--replay`, live WASAPI capture, DML byte-identity). Three
-items need the Windows notebook with real speakers: a ≥30-min
-**speakers-not-headphones** meeting exercising AEC across WASAPI loopback
-silence gaps (livekit's APM is installed but never exercised on Windows
-hardware, and the 0.5 s re-anchor moves far-end alignment, so re-convergence
-after long system silence is unverified); a by-eye TUI check in Windows
-Terminal (captions, resize, clean Ctrl-C); and re-running the three automatable
-items on the notebook's GPU (different DML vendor tier). This gates the
-"supported" claim, and there is nothing to code until it finds something.
+**Windows — the one live side-plan; see `PLAN-WINDOWS.md`.** It holds the whole
+picture as of 2026-07-26: two code items that need no hardware (**W1** a real
+`.lnk` launcher with an `.ico` and a Start-menu entry, where Windows today gets
+a batch file with the generic icon while macOS gets an `.app`; **W2** the
+missing `SetCurrentProcessExplicitAppUserModelID`, without which the window
+groups under `pythonw.exe` and no pinned shortcut matches it — the Windows
+analogue of the Wayland/X11 identity work Linux needed), and four that need the
+notebook: the **desktop app on a real Windows session** (never run outside
+`QT_QPA_PLATFORM=offscreen`), the **≥30-min speakers-not-headphones AEC
+meeting**, a **by-eye TUI check in Windows Terminal**, and **DirectML on a
+second vendor tier**. That machine — a GPD notebook, AMD Radeon 890M, 4K panel
+at 150 %, real speakers — is where the 2026-07-26 session ran, so all four are
+now reachable; it also has no Rust and no Ollama, which changes what a checkout
+there can exercise. This gates the "supported" claim.
 
-**The desktop app on Linux — measured and fixed 2026-07-25; nothing open. See
-`PLAN-LINUX.md`** for the evidence, the decisions and the desktops it has never
-run on. The app was run on a real Linux session (KDE Plasma 6.7.3, Wayland,
-150 % scale) including a live meeting captured through PipeWire from the GUI,
-and the six problems that found were fixed the same day: nothing stopped a
-second instance (now a `QLocalServer` claim in `gui/app.py`, unconditional on
-every platform), the output home ignored a localised documents dir (now resolved
-from `user-dirs.dirs`, so `~/Dokumente/Meetings` — with **no legacy branch**, so
-an existing `~/Documents/Meetings` is left where it is and `steno doctor` names
-whichever one is in force), four fixes to the desktop entry, the doubled window
-title, the X11 `WM_CLASS`, and the window default. Rung 0 of that file's ladder —
-an isolated session bus — was then climbed the same day and took three items off
-the unmeasured list with no second machine: the **degrade-to-window path** ran
-with a window on the real compositor and, the half that matters, a window closed
-**mid-meeting** with no tray to close into still stopped capture, finalized and
-wrote the transcript; **X11 launcher identity** turned out to be more than
-`WM_CLASS` (Qt exports `_KDE_NET_WM_DESKTOP_FILE` and `_GTK_APPLICATION_ID` too,
-so Plasma and GNOME group the window with its launcher without it); and a
-**light system theme** leaves the app's own palette alone and the file dialog
-readable. The two gestures no harness can make were then made by hand: the
-K-menu entry shows a busy cursor and a second click starts no second app, and
-Plasma renders `Stop _& finalize` as `Stop & finalize` — which is also where the
-seventh Linux bug turned up. *Open Stenograf* was greyed whenever the window was
-merely **buried** behind the video call, because `isVisible()` means mapped, not
-looked at; the same predicate had been suppressing the "Meeting finished"
-notification in exactly that, the normal, case. Both now key off focus instead,
-and both were re-measured on the desktop. What is left needs one Ubuntu/XFCE
-container (a `WM_CLASS`-only taskbar, a non-Plasma panel drawing the SNI menu,
-another desktop) and a VM for nothing.
-
-**The desktop app on Windows — never run on a real desktop.** The code is
-portable and the launcher follows the `gui` extra (`shortcut.py`: a
-`pythonw.exe` + `start` wrapper), but every run so far has been
-`QT_QPA_PLATFORM=offscreen` in CI. What needs a real session: does the tray
-icon appear, does the window match its launcher in the taskbar, fonts and
-HiDPI at 125/150/200 %, and closing the window during a live meeting. The
-single-instance claim the Linux work added is deliberately unconditional, so
-Windows is covered in code — as a *named pipe* rather than a socket, which is the
-one half of it no Linux or macOS run exercises. Nothing else here is worth
-coding against blind.
+**The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
+ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live
+meeting captured through PipeWire from the GUI; seven problems were found and
+fixed the same day — the single-instance claim (now a `QLocalServer` in
+`gui/app.py`, unconditional on **every** platform), the localised documents dir
+(resolved from `user-dirs.dirs`, no legacy branch), the desktop entry, the
+doubled window title, the X11 `WM_CLASS`, the window default, and *Open
+Stenograf* greyed for a merely **buried** window (`isVisible()` means mapped,
+not looked at — it now keys off focus, as does the "Meeting finished"
+notification the same predicate had been suppressing). `PLAN-LINUX.md` carried
+the evidence, the decisions and the container ladder for the desktops it has
+never run on, and was deleted on 2026-07-26 with nothing open:
+`git log --follow -p PLAN-LINUX.md`.
 
 **stenodiar off macOS — done 2026-07-26, nothing open.** The
 release-attachment plan was dropped for platform wheels; `release.yml` cut all

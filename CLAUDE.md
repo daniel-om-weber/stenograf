@@ -22,12 +22,15 @@ quiet machine), plus the open platform items and the declined list. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
-`PLAN-CLEANUP.md`). **`PLAN-LINUX.md` is the one live side-plan**: the desktop
-app measured on a real KDE/Wayland session on 2026-07-25, and the six problems
-that found fixed the same day — it now holds no open work, only what was
-measured (do not re-verify it), the decisions, the desktops it has never run on
-plus the container ladder for reaching them (never a VM), and the recipe for
-observing a running GUI on that machine. Measured evidence for the shipped defaults is in
+`PLAN-CLEANUP.md`). **`PLAN-WINDOWS.md` is the one live side-plan**, and unlike
+its Linux predecessor it holds *open* work: two code items (a real `.lnk`
+launcher with an icon; the missing AppUserModelID) and four that need the
+Windows notebook the 2026-07-26 session ran on — the app on a real session, the
+AEC meeting over speakers, the TUI by eye, DirectML on a second vendor tier.
+Read it before touching anything Windows. `PLAN-LINUX.md` closed with nothing
+open and was deleted on 2026-07-26; its evidence, decisions and container ladder
+are in `git log --follow -p PLAN-LINUX.md` — do not re-measure Linux from
+scratch without reading it. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
 
