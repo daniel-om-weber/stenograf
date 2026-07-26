@@ -22,12 +22,19 @@ quiet machine), plus the open platform items and the declined list. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
-`PLAN-CLEANUP.md`). **`PLAN-WINDOWS.md` is the one live side-plan**, and unlike
-its Linux predecessor it holds *open* work: two code items (a real `.lnk`
-launcher with an icon; the missing AppUserModelID) and four that need the
-Windows notebook the 2026-07-26 session ran on — the app on a real session, the
-AEC meeting over speakers, the TUI by eye, DirectML on a second vendor tier.
-Read it before touching anything Windows. `PLAN-LINUX.md` closed with nothing
+`PLAN-CLEANUP.md`). **`PLAN-WINDOWS.md` is a live side-plan**: five of its six
+items closed on 2026-07-26 (the `.lnk` launcher and the AppUserModelID shipped;
+the app on a real session, the TUI in Windows Terminal and DirectML on the AMD
+tier measured green), leaving **one open — the ≥30-min AEC meeting over
+speakers**, whose first attempt proved only that no echo reached the mic. Its
+closed half is now evidence you should not re-derive, and its last section is
+the observation recipe for that machine (harness traps, screenshots, SAPI voice
+selection). Read it before touching anything Windows. **`PLAN-ASR-CHALLENGER.md` is the
+second side-plan** and holds no build work at all: it gates the recurring "the
+leaderboard has a new leader" question (currently Cohere Transcribe) behind one
+adjudication run, and records why Voxtral and Canary already lost. Read it
+before evaluating *any* ASR model, and delete it if the gate fails.
+`PLAN-LINUX.md` closed with nothing
 open and was deleted on 2026-07-26; its evidence, decisions and container ladder
 are in `git log --follow -p PLAN-LINUX.md` — do not re-measure Linux from
 scratch without reading it. Measured evidence for the shipped defaults is in

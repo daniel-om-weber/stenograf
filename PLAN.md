@@ -313,20 +313,26 @@ whether the live screen reads well over half an hour.
 
 ## Platform work still open
 
-**Windows — the one live side-plan; see `PLAN-WINDOWS.md`.** It holds the whole
-picture as of 2026-07-26: two code items that need no hardware (**W1** a real
-`.lnk` launcher with an `.ico` and a Start-menu entry, where Windows today gets
-a batch file with the generic icon while macOS gets an `.app`; **W2** the
-missing `SetCurrentProcessExplicitAppUserModelID`, without which the window
-groups under `pythonw.exe` and no pinned shortcut matches it — the Windows
-analogue of the Wayland/X11 identity work Linux needed), and four that need the
-notebook: the **desktop app on a real Windows session** (never run outside
-`QT_QPA_PLATFORM=offscreen`), the **≥30-min speakers-not-headphones AEC
-meeting**, a **by-eye TUI check in Windows Terminal**, and **DirectML on a
-second vendor tier**. That machine — a GPD notebook, AMD Radeon 890M, 4K panel
-at 150 %, real speakers — is where the 2026-07-26 session ran, so all four are
-now reachable; it also has no Rust and no Ollama, which changes what a checkout
-there can exercise. This gates the "supported" claim.
+**Windows — five of six items closed 2026-07-26; see `PLAN-WINDOWS.md` for the
+evidence and the one that is left.** Shipped that day: a real `.lnk` launcher
+(Start Menu + Desktop) with a multi-size `.ico`, written through `IShellLink`
+COM in the new `winlink.py`, and the `SetCurrentProcessExplicitAppUserModelID`
+call that makes the taskbar recognize its own window — together they are why a
+finish notification now arrives as a toast titled *Stenograf* instead of
+*pythonw.exe*. Measured green on the notebook the same day: the desktop app on a
+real session (tray, toast, taskbar identity, 125/150/200 % scale,
+close-during-meeting, and the named-pipe single instance including the
+crashed-instance case no other platform exercises), the TUI by eye in Windows
+Terminal, and DirectML on the AMD tier — byte-identical to CPU, with the speed
+win landing at 1.3–1.5× on an iGPU against 6.6× on a discrete card.
+
+**Still open: the ≥30-min speakers-not-headphones AEC meeting (W4).** The
+attempt scored 0.7 dB ERLE, which turned out to mean *no echo ever reached the
+microphone* — the mic reads the same level whether the speakers play or not —
+so the canceller was never exercised. `eval/aec_echo_present.py` is the
+one-minute precondition check that came out of it; the next attempt needs the
+mic's driver audio-enhancements off, louder speakers, and a machine nobody is
+sitting at. This is what gates the "supported" claim now.
 
 **The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
 ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live
@@ -376,6 +382,15 @@ Kept here so future sessions don't re-open them.
 - **Packaged signed installers / any downloadable artifact.** Needs the $99
   Developer ID plus notarization; revisit only if non-terminal users ask to
   double-click an installer.
+- **The TUI's caption log does not re-wrap when the terminal narrows** (found
+  2026-07-26 in Windows Terminal, but it is Textual's behaviour everywhere).
+  `RichLog` renders strips at write time, so shrinking the window leaves the
+  existing lines at their old wrap behind a horizontal scrollbar; widening
+  restores them, and the on-stop finalize re-renders at the current width. The
+  fix would be an `on_resize` that clears and re-writes from the screen's own
+  `committed_lines` — cheap, but it needs the channel kept alongside the text to
+  rebuild the markup. Left undone deliberately: the Textual launcher is on the
+  retirement path once the Qt app reaches parity (Phase 8 step 7).
 - **Lower-priority, independent:** greedy re-ID → Hungarian assignment;
   SRT/VTT dropping text not covered by `words` (latent — Parakeet emits
   full-or-none); meeting-mode auto-detect; hybrid cross-channel dedup;
