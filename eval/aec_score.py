@@ -137,7 +137,15 @@ def main() -> None:
         print(f"far end was never active above {FAR_ACTIVE_DBFS:.0f} dBFS: nothing to score")
         sys.exit(1)
     if not args.no_aecmos:
-        metrics |= aecmos_metrics(mic, lpb, enh, args.scenario)
+        try:
+            metrics |= aecmos_metrics(mic, lpb, enh, args.scenario)
+        except ImportError:
+            # speechmos ships in the `eval` dependency group, which cannot be
+            # installed on Windows at all (it pulls mlx, and a second
+            # onnxruntime flavor this platform forbids). The signal metrics
+            # below are the ones that decide anything, so report and continue
+            # rather than making a Windows caller discover --no-aecmos.
+            print("AECMOS skipped: speechmos is not installed (expected on Windows)")
 
     lines = [
         f"duration          {metrics['duration_s']:>7.1f} s"

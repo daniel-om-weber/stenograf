@@ -236,9 +236,55 @@ specifically what 80 seconds cannot show:
   driver's processing, or a lag constant that could be tighter.
 - Double-talk, which no run on this machine has covered at all.
 
-Recipe: `eval/aec_echo_present.py` first (volume at 90 %), then the long run with
-`--aec-dump`, then `eval/aec_score.py` and a count of `Local-N` lines in the
-transcript. It is half an hour of speech out loud, so it wants an empty room.
+**The harness now exists, and it is one command** (2026-07-26, third session).
+`eval/aec_rig.py` drives Windows speakers, so the long run is
+`uv run python eval/aec_rig.py far-only --seconds 1800 --volume 90` and nothing
+else — it synthesizes the far end, fixes the output level, plays, captures,
+scores and restores the volume. **Plain `uv run`, never `--group eval`**: that
+group cannot resolve on this platform at all (it pulls `mlx`, which has no
+`win_amd64` wheel, and a second onnxruntime flavor). The casualty is AECMOS,
+which is now reported as skipped instead of raising. Six things had to be fixed
+to get there and all six were silent-until-too-late, which is why previous
+sessions' harnesses never survived: `afplay`; a `--no-archive` flag that no
+longer exists; a transcript glob that misses the bare `transcript.json` that
+`--out` writes; `≥` in the results print, which has no cp1252 mapping and so
+crashed *after* the audio; the child's UTF-8 stdout decoded as cp1252; and an
+unguarded `speechmos` import.
+
+**The German locale is a first-class hazard here, in three places.** SAPI's
+default voice follows the system language — `Microsoft Hedda Desktop` (de-DE) —
+so `aec_windows.VOICE` pins `Microsoft David Desktop` and the rig fails loudly
+if it is missing rather than quietly reading English with German phonetics.
+PowerShell formats floats in the system locale, so reading the endpoint volume
+returned `0,4` and `float()` rejected it (`ToString(InvariantCulture)` fixes it;
+number *literals* are dot-separated whatever the locale). And the cp1252 pipe
+encoding above is the same root cause wearing a third hat.
+
+**The 60-second precondition run passed** (2026-07-26, 90 % volume, 8 English
+sentences with 2–6 s silences, batch mode):
+
+| | this probe | the 80 s run that validated the fix |
+|---|---|---|
+| echo above mic noise | **19.8 dB** (need ≥ 6) | 22.5 dB |
+| leaked `Local-N` lines | **0 of 7 entries** | 0 |
+| ERLE | **5.9 dB** | 13.7 dB |
+| residual | −38.5 dBFS | −42.1 dBFS |
+
+`eval/aec_alignment.py` reads **PASS** against the same dump — the reference
+arrives +150 ms *before* its echo, so the shipped `FAR_END_LAG_S = 0.15` is
+doing its job and the sign of the bug has not come back. **The ERLE gap is the
+thing to explain, not to panic about**: the mic sat 4 dB quieter during far-end
+activity than in the validating run (−32.6 vs ≈−28.4 dBFS), and this clip is
+39 % active with 6 s holes, so AEC3 re-converges after every gap and has a
+weaker echo to work on. It is a plausible reason and it is not yet evidence.
+Treat 5.9 dB as the number to beat with a longer, denser run, and note that the
+per-quarter lag estimates scattered (−120, +150, −560, +150 ms) at correlations
+of only 0.28–0.44 — too weakly determined at 60 s to say whether alignment
+wanders, which is precisely the question the long run exists to settle.
+
+Recipe: the one command above with `--seconds 1800`, then a count of `Local-N`
+lines (the rig prints it) and `eval/aec_alignment.py` on the dump. It is half an
+hour of speech out loud, so it wants an empty room.
 
 ---
 

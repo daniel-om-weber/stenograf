@@ -18,15 +18,31 @@ the ``--aec-dump`` triple, and ``rig.json`` (layer-0 signal metrics via
 ``aec_score`` + the layer-1 line counts). Compare runs, don't stare at one:
 ``--no-aec`` records the uncancelled baseline with the same scenario.
 
-Reproducibility notes: set the system output volume to a fixed level (75%
-unless you are probing the loud-speaker nonlinearity at 100%), keep the lid
-angle and room constant, and use the same source clip across runs. The far-end
-clip loops for the whole capture.
+Reproducibility notes: keep the output volume, the lid angle and the room
+constant, and use the same source clip across runs. The far-end clip loops for
+the whole capture. ``--volume`` fixes the level for you and restores it
+afterwards (Windows only) -- treat it as part of the measurement, not a
+preference: 40 % on a laptop chassis puts *no* echo into the microphone and
+cost a 33-minute run, 90 % puts it 22 dB above its noise floor.
 
-Usage:
+macOS and Windows are both driven; the Windows-only pieces (SAPI source clip,
+``winsound`` playback, endpoint volume) live in ``aec_windows.py``. On Windows
+with no ``--source`` the far end is synthesized on the spot, because
+``eval/audio/`` is gitignored and a fresh checkout has no speech in it. Linux
+is not wired up: ``parec``-side far-end alignment is an open question in
+PLAN.md and wants its own session.
+
+Usage (macOS):
     uv run --group eval eval/aec_rig.py far-only [--seconds 60] [--no-aec]
     uv run --group eval eval/aec_rig.py near-only
     uv run --group eval eval/aec_rig.py double-talk --source eval/audio/en-1.wav
+
+Usage (Windows) -- **plain ``uv run``, no ``--group eval``**, which cannot
+resolve here: it pulls mlx (no win_amd64 wheel) and a second onnxruntime
+flavor, and this platform allows exactly one. Everything the rig needs beyond
+the package itself is numpy, which is a main dependency; the one casualty is
+the learned AECMOS score, and the run says so instead of dying:
+    uv run python eval/aec_rig.py far-only --seconds 60 --volume 90
 """
 
 from __future__ import annotations
@@ -43,8 +59,12 @@ from pathlib import Path
 import aec_score
 from common import AUDIO_DIR
 
+WINDOWS = sys.platform == "win32"
+if WINDOWS:
+    import aec_windows
+
 AEC_OUT_DIR = Path(__file__).parent / "out" / "aec"
-DEFAULT_SOURCE = AUDIO_DIR / "en-1.wav"
+DEFAULT_SOURCE = AUDIO_DIR / ("far-en.wav" if WINDOWS else "en-1.wav")
 
 SCENARIOS = {
     # scenario -> (plays far end, AECMOS talk type, operator instruction)
@@ -66,7 +86,9 @@ def steno_command(
         "start",
         "--live" if live else "--no-live",
         "--plain",
-        "--no-archive",
+        # No --no-archive: [archive] was renamed to [output] (settings.py) and
+        # the flag went with it. --out already keeps the run out of the
+        # meetings folder, which is all it was ever here for.
         "--out",
         str(run_dir),
         "--aec-dump",
@@ -79,10 +101,18 @@ def steno_command(
     return cmd
 
 
+def player_command(source: Path) -> list[str]:
+    """The one-shot "play this WAV out the default device" command."""
+    if WINDOWS:
+        return aec_windows.player_command(source)
+    return ["afplay", str(source)]
+
+
 def play_far_end(source: Path, stop: threading.Event) -> None:
     """Loop the clip out the default output until told to stop."""
+    command = player_command(source)
     while not stop.is_set():
-        player = subprocess.Popen(["afplay", str(source)])
+        player = subprocess.Popen(command)
         while player.poll() is None:
             if stop.wait(0.5):
                 player.terminate()
@@ -92,7 +122,16 @@ def play_far_end(source: Path, stop: threading.Event) -> None:
 def run_capture(cmd: list[str], far_source: Path | None) -> int:
     """Run steno, starting far-end playback once capture is actually up."""
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        # Not bare text=True: that decodes with the *locale* encoding, which is
+        # cp1252 on a German Windows, while click hands us UTF-8. The captions
+        # this relays are meeting speech, so a non-ASCII byte is the norm and
+        # not the exception -- it killed a run on the very first status line.
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
     )
     stop = threading.Event()
     player: threading.Thread | None = None
@@ -114,7 +153,10 @@ def run_capture(cmd: list[str], far_source: Path | None) -> int:
 
 def local_lines(run_dir: Path) -> tuple[list, list]:
     """(local ≥3-word lines, all entries) from the run's transcript JSON."""
-    transcripts = sorted(run_dir.glob("*.transcript.json"))
+    # "*transcript.json", not "*.transcript.json": with --out (which the rig
+    # always passes) the meeting writes a bare transcript.json, and only a
+    # date-named folder gets the <slug>. prefix.
+    transcripts = sorted(run_dir.glob("*transcript.json"))
     if not transcripts:
         raise SystemExit(f"no transcript JSON in {run_dir} — did the run fail?")
     from stenograf.transcript import Transcript
@@ -129,13 +171,30 @@ def local_lines(run_dir: Path) -> tuple[list, list]:
 
 
 def main() -> None:
+    if WINDOWS:
+        # Belt to the ASCII discipline's braces. A piped stdout here is cp1252,
+        # and this script relays steno's own output as well as printing its
+        # own; one unmappable character would otherwise end a finished run in
+        # a traceback, with the audio already gone and unrepeatable.
+        sys.stdout.reconfigure(errors="replace")
+
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("scenario", choices=sorted(SCENARIOS))
     parser.add_argument(
         "--source",
         type=Path,
-        default=DEFAULT_SOURCE,
-        help=f"far-end speech WAV to play [default: {DEFAULT_SOURCE}]",
+        default=None,
+        help=f"far-end speech WAV to play [default: {DEFAULT_SOURCE}, "
+        "synthesized on Windows if absent]",
+    )
+    parser.add_argument(
+        "--volume",
+        type=float,
+        default=None,
+        metavar="PERCENT",
+        help="set the master output volume for the run and restore it after "
+        "(Windows only). 90 is the level measured to establish an echo path on "
+        "a laptop chassis; 40 established none at all.",
     )
     parser.add_argument("--seconds", type=float, default=60.0, help="capture length [60]")
     parser.add_argument(
@@ -154,13 +213,27 @@ def main() -> None:
     args = parser.parse_args()
 
     plays_far, talk_type, instruction = SCENARIOS[args.scenario]
-    if plays_far and not args.source.exists():
-        raise SystemExit(
-            f"{args.source} not found — pass --source; any 16 kHz speech WAV works "
-            "(eval/audio/ is gitignored, see eval/README.md)"
-        )
-    if shutil.which("afplay") is None and plays_far:
-        raise SystemExit("afplay not found — this rig drives macOS speakers")
+    source = args.source or DEFAULT_SOURCE
+    if plays_far:
+        if not WINDOWS and shutil.which("afplay") is None:
+            raise SystemExit("afplay not found - this rig drives macOS or Windows speakers")
+        if not source.exists():
+            if args.source is not None or not WINDOWS:
+                raise SystemExit(
+                    f"{source} not found - pass --source; any 16 kHz speech WAV works "
+                    "(eval/audio/ is gitignored, see eval/README.md)"
+                )
+            print(f"synthesizing far end ({aec_windows.VOICE}) -> {source}")
+            print(f"  {aec_windows.synthesize(source):.1f} s of speech with silences")
+
+    if args.volume is not None:
+        if not WINDOWS:
+            raise SystemExit("--volume is implemented for Windows only")
+        restore_volume = aec_windows.output_volume()
+        aec_windows.set_output_volume(args.volume / 100)
+        print(f"output volume {restore_volume * 100:.0f}% -> {args.volume:.0f}% (restored after)")
+    else:
+        restore_volume = None
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     label = args.scenario if args.aec else f"{args.scenario}-noaec"
@@ -171,14 +244,19 @@ def main() -> None:
     run_dir.mkdir(parents=True)
 
     mode = "live" if args.live else "batch"
-    print(f"scenario: {args.scenario}  ({mode}, aec {'on' if args.aec else 'OFF — baseline'})")
+    print(f"scenario: {args.scenario}  ({mode}, aec {'on' if args.aec else 'OFF - baseline'})")
     print(f">>> {instruction}")
     print(f">>> {args.seconds:.0f} s once capture starts; results in {run_dir}")
 
-    code = run_capture(
-        steno_command(run_dir, dump_dir, args.seconds, args.aec, args.live),
-        args.source if plays_far else None,
-    )
+    try:
+        code = run_capture(
+            steno_command(run_dir, dump_dir, args.seconds, args.aec, args.live),
+            source if plays_far else None,
+        )
+    finally:
+        if restore_volume is not None:
+            aec_windows.set_output_volume(restore_volume)
+            print(f"output volume restored to {restore_volume * 100:.0f}%")
     if code != 0:
         raise SystemExit(f"steno exited with {code}")
 
@@ -186,7 +264,17 @@ def main() -> None:
     mic, lpb, enh = (aec_score.read_wav(dump_dir / f"{n}.wav") for n in aec_score.TRIPLE)
     metrics = aec_score.signal_metrics(mic, lpb, enh)
     if "erle_db" in metrics:
-        metrics |= aec_score.aecmos_metrics(mic, lpb, enh, talk_type)
+        try:
+            metrics |= aec_score.aecmos_metrics(mic, lpb, enh, talk_type)
+        except ImportError:
+            # speechmos lives in the `eval` dependency group, which cannot
+            # resolve on Windows at all: it pulls mlx (no win_amd64 wheel) and
+            # a second onnxruntime flavor, which this platform forbids. ERLE,
+            # the residual and the leaked-line count are what decide anything
+            # here; throwing away a finished capture over the optional learned
+            # score would be the worse trade.
+            metrics["aecmos"] = "unavailable (speechmos not installed)"
+            print("aecmos: skipped, speechmos not installed")
     metrics |= {
         "scenario": args.scenario,
         "aec": args.aec,
@@ -202,9 +290,12 @@ def main() -> None:
     for key in ("erle_db", "residual_dbfs", "aecmos_echo", "aecmos_deg"):
         if key in metrics:
             print(f"{key:>14}: {metrics[key]}")
-    print(f"{'local lines':>14}: {len(leaked)} of {len(entries)} entries (≥{ECHO_MIN_WORDS} words)")
+    # ASCII only from here down: a piped stdout on a German Windows encodes as
+    # cp1252, where U+2265 has no mapping -- this line used to raise
+    # UnicodeEncodeError at the end of the run, with the audio already gone.
+    print(f"{'local lines':>14}: {len(leaked)} of {len(entries)} ({ECHO_MIN_WORDS}+ words)")
     if args.scenario == "far-only":
-        verdict = "PASS — no echo reached the transcript" if not leaked else "FAIL — leaked echo:"
+        verdict = "PASS - no echo reached the transcript" if not leaked else "FAIL - leaked echo:"
         print(f"{'far-only':>14}: {verdict}")
         for entry in leaked:
             print(f"{'':>16}[{entry.start:6.1f}s] {entry.speaker}: {entry.text}")
