@@ -1,8 +1,10 @@
 # One capture helper, two backends — retiring arrival-stamped audio
 
 **Status: designed and evidenced, not built.** Decided 2026-07-26 after the
-Windows AEC work (`PLAN-WINDOWS.md`) exposed the root cause and one measurement
-overturned the cost estimate that had deferred the fix.
+Windows AEC work exposed the root cause and one measurement overturned the cost
+estimate that had deferred the fix. That work lived in `PLAN-WINDOWS.md`, which
+closed and was deleted on 2026-07-27 — where this file cites it below, read
+`git log --follow -p PLAN-WINDOWS.md`.
 
 Read the problem first, then the evidence, then what is decided and what is not.
 The evidence section is the part not to re-derive: `eval/wasapi_timestamps.py`
@@ -45,7 +47,7 @@ mean simultaneous (`capture/macos.py:9-16`).
 
 ## The evidence that changed the decision
 
-`PLAN-WINDOWS.md` deferred device-side timestamps as "a transport rewrite on
+The Windows plan deferred device-side timestamps as "a transport rewrite on
 both — owning WASAPI capture through ctypes COM", priced against one number a
 constant already got right. **That premise was wrong**, and it took reading the
 dependency rather than the plan to see it:
@@ -243,7 +245,8 @@ Each step ships working; the constant stays until its replacement is proven.
    the never-measured Linux echo-cancellation risk.
 6. **Re-ask the livekit question** with the helper in place.
 
-The ≥30-minute Windows AEC run (`PLAN-WINDOWS.md`, W4) is **not** a prerequisite and
-its framing changes: its alignment half is superseded by step 1, and what remains —
-double-talk, the ERLE gap to macOS, whether cancellation holds over half an hour —
-is better spent validating the helper than adjudicating the constant it replaces.
+The ≥30-minute Windows AEC run (W4, in PLAN.md's platform section) is **not** a
+prerequisite and its framing changed: its alignment half is superseded by step 1,
+and what remains — double-talk, the ERLE gap to macOS, whether cancellation holds
+over half an hour — is better spent validating the helper than adjudicating the
+constant it replaces.

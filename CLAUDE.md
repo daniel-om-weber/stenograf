@@ -22,20 +22,8 @@ quiet machine), plus the open platform items and the declined list. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
-`PLAN-CLEANUP.md`). **`PLAN-WINDOWS.md` is a live side-plan**: five of its six
-items closed on 2026-07-26 (the `.lnk` launcher and the AppUserModelID shipped;
-the app on a real session, the TUI in Windows Terminal and DirectML on the AMD
-tier measured green), leaving **one open — the ≥30-min AEC meeting over
-speakers**. W4's second session found and fixed a real bug on the way there:
-echo cancellation was dead on Windows because the loopback tap's timestamps run
-~60 ms behind the mic's and AEC3 only searches its far-end history backwards, so
-`CaptureProvider.far_end_lag_s` now carries a per-provider correction
-(2.6 → 13.7 dB ERLE, two leaked lines → none). **The same shape is unmeasured on
-Linux**, which also runs one subprocess per channel — see PLAN.md. Its closed
-half is now evidence you should not re-derive, and its last section is
-the observation recipe for that machine (harness traps, screenshots, SAPI voice
-selection). Read it before touching anything Windows.
-**`PLAN-CAPTURE-HELPER.md` is the second side-plan and the live design work**
+`PLAN-CLEANUP.md`).
+**`PLAN-CAPTURE-HELPER.md` is the one live side-plan and the live design work**
 (2026-07-26, evidenced, not built): arrival-stamped audio is the root cause
 behind both the Windows far-end lag and the unmeasured Linux one, and the fix is
 a native Rust capture helper per platform emitting the frame format
@@ -47,15 +35,23 @@ monkeypatching soundcard, and PortAudio, are rejected there with reasons; the
 livekit question is deferred with a trigger. `eval/wasapi_timestamps.py` is its
 evidence and re-runs in twelve seconds. **Read it before touching capture,
 `aec.py`, or `hatch_build.py` on any platform.**
-**`PLAN-ASR-CHALLENGER.md` is the third
-side-plan** and holds no build work at all: it gates the recurring "the
-leaderboard has a new leader" question (currently Cohere Transcribe) behind one
-adjudication run, and records why Voxtral and Canary already lost. Read it
-before evaluating *any* ASR model, and delete it if the gate fails.
-`PLAN-LINUX.md` closed with nothing
-open and was deleted on 2026-07-26; its evidence, decisions and container ladder
-are in `git log --follow -p PLAN-LINUX.md` — do not re-measure Linux from
-scratch without reading it. Measured evidence for the shipped defaults is in
+
+**Three side-plans closed and were deleted; their evidence is in git history,
+and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
+(2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`
+(2026-07-27): five of six items green — the `.lnk` launcher, the
+AppUserModelID, the app on a real session, the TUI in Windows Terminal, DirectML
+on the AMD tier — plus the AEC bug it found (the loopback tap's arrival stamps
+run ~60 ms behind the mic's, AEC3 only searches backwards, so
+`CaptureProvider.far_end_lag_s` now corrects it: 2.6 → 13.7 dB ERLE, two leaked
+lines → none). Its last section is the observation recipe for a real Windows
+desktop session (screenshot DPI, SAPI voice selection, German-locale traps,
+driving the TUI without a pty) — read it before observing anything there. Its
+one leftover, an optional AEC-quality run, is in PLAN.md and gates nothing.
+`PLAN-ASR-CHALLENGER.md` (2026-07-27): the recurring "leaderboard has a new
+leader" question is **declined**, not gated — see PLAN.md's declined list before
+evaluating any ASR model. Retrieve any of them with
+`git log --follow -p <file>`. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
 
@@ -81,11 +77,32 @@ the index.
   than running them in the main loop.
 - Release = version bump + tag (CI publishes to PyPI).
 
-## Current focus: Phase 5 — Linux (ACTIVE since 2026-07-10)
+## Current focus: Phase 8 step 7 — the GUI becomes the default UI (ACTIVE since 2026-07-27)
 
-Two machines, sequenced: ONNX ASR backend on the Mac first (only place the MLX↔ONNX parity
-harness runs), then capture work moves to the CachyOS notebook (x86_64,
-real PipeWire); GitHub Actions Ubuntu is the stable-distro CI reference.
+Phase 5 (Linux) closed 2026-07-26. The focus is now the last step of Phase 8:
+`[gui]` moves from an extra into `dependencies` and bare `steno` opens the
+window instead of the Textual launcher. PLAN.md's step 7 holds the detail; three
+things govern the work.
+
+**The gate is use, not code.** The flip itself is small. It must not land before
+the app has driven *real* meetings end to end — nothing in `tests/test_gui.py`
+can tell whether the live caption screen reads well over half an hour, which is
+the only thing the flip is really betting on.
+
+**Retiring the Textual launcher is a separate decision from flipping the
+default, and it is not settled.** Screen parity was reached in step 4 (all six
+screens exist in both front-ends), but the TUI has one capability the Qt app
+structurally cannot have: it runs over SSH and on a machine with no display
+server. `cli/__init__.py:80` currently routes bare `steno` on a TTY to Textual;
+a flip that only swaps that arm strands headless users on a Qt window that
+cannot open. Decide deliberately whether Textual retires or stays as the
+no-display fallback — and if it stays, it is not "retired" and the two-front-end
+drift rule keeps applying.
+
+**`--gui` must keep working forever**, flip or no flip
+(`cli/__init__.py:34-37`): `Stenograf.app`'s launcher stub is the frozen binary
+holding every macOS user's microphone grant, and `--gui` is compiled into it as
+the fallback argv.
 
 ## Platform decisions
 

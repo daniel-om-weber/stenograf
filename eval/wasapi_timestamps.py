@@ -8,7 +8,7 @@ re-deriving the method.
 **Why it existed.** ``EchoCanceller`` pairs the mic and the system reference by
 timestamp, and both are stamped when they *arrive*, so each channel carries its
 own transport latency. Windows compensates with a declared constant
-(``capture.windows.FAR_END_LAG_S``). PLAN-WINDOWS.md deferred the real fix --
+(``capture.windows.FAR_END_LAG_S``). The Windows plan deferred the real fix --
 device-side timestamps, which is how macOS avoids the problem entirely -- on the
 belief that the transport does not carry them. It does: soundcard asks
 ``IAudioCaptureClient::GetBuffer`` for ``pu64DevicePosition`` /

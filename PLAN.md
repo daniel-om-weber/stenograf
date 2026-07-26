@@ -8,6 +8,16 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
+**The per-platform side-plans are down to one.** `PLAN-CAPTURE-HELPER.md` is
+live design work and the only one left. `PLAN-LINUX.md` (2026-07-26),
+`PLAN-WINDOWS.md` and `PLAN-ASR-CHALLENGER.md` (both 2026-07-27) were deleted;
+each one's evidence, decisions and rejected alternatives survive under
+`git log --follow -p <file>`, and what stayed open out of them is folded into
+the sections below. Read the Windows history before re-measuring anything on
+that platform — in particular its last section, which is the observation recipe
+for a real Windows desktop session (screenshot DPI, SAPI voice selection, the
+German-locale traps, how to drive the TUI without a pty).
+
 What ships today: `steno start` (live captions → diarized transcript → notes)
 on macOS, Linux and Windows, published to PyPI as `stenograf`, driven either by
 the CLI or by the Textual launcher (`steno` with no arguments).
@@ -168,9 +178,10 @@ regression tests possible in CI (`screencapture` from inside the app instead
 ### Sequencing
 
 Each step ships working; none blocks the platform work below. Steps 2–6 are
-done and step 1's remainder is deferred, so **all that is left is step 7** —
-and it is gated on use, not on code: nothing in the automated tests can tell
-whether the live screen reads well over half an hour.
+done and step 1's remainder is deferred, so **all that is left is step 7, and
+it is the project's current focus (2026-07-27)** — gated on use, not on code:
+nothing in the automated tests can tell whether the live screen reads well over
+half an hour.
 
 1. **Half done 2026-07-25; the watt half deliberately deferred.** The
    per-process half is measured and the app is clean: on the idle home screen
@@ -304,42 +315,93 @@ whether the live screen reads well over half an hour.
    the ~120/s display floor and an occluded one at ~1/s, and a hidden window
    should be at least as good, but the tray-mode number was not taken — it
    belongs with step 1's deferred watt half, on the same quiet machine.
-7. **Next.** Flip the default (`[gui]` moves into `dependencies`, bare `steno` opens the
-   window); retire the Textual launcher once parity is reached. Not before the
-   app has been *used* for real meetings — nothing in the automated tests can
-   tell whether the live screen reads well over half an hour.
+7. **ACTIVE since 2026-07-27 — the current focus.** Flip the default: `[gui]`
+   moves from `[project.optional-dependencies]` into `dependencies`, and bare
+   `steno` opens the window.
+
+   **The gate is use, not code, and it has not been met yet.** The app must have
+   driven real meetings end to end first — nothing in `tests/test_gui.py` can
+   tell whether the live caption screen reads well over half an hour, and that
+   is the whole bet. Running it for real is the work; the flip is the easy part.
+
+   Four things the flip has to decide, all found by reading the code rather than
+   the plan:
+
+   - **The dispatch is three-armed, not two** (`cli/__init__.py:76-85`):
+     `--gui` → the app, a TTY → the Textual launcher, otherwise → `--help`.
+     Flipping only the middle arm strands anyone with **no display server** —
+     SSH, a headless box — on a Qt window that cannot open. So bare `steno`
+     needs a display check, not just a swapped branch, and the `else` arm has to
+     decide between the TUI and the help text.
+   - **Therefore "retire the Textual launcher" is a real decision, not a
+     cleanup.** Screen parity arrived in step 4, but parity was never the whole
+     question: the TUI runs where Qt cannot. Either it stays as the no-display
+     fallback — in which case there are still two front-ends and the
+     thin-client rule in `CLAUDE.md` keeps applying to both — or it goes and
+     headless use goes with it. Pick one explicitly.
+   - **~110 MB of Qt becomes mandatory for everyone**, including users who only
+     ever run `steno transcribe` in a terminal. `pyproject.toml:101-108`
+     pre-decided this ("when the GUI becomes the default this moves into
+     `dependencies`") and the LGPL relinking obligation is satisfied either way
+     by a normal pip dependency — but the headless-server case is the one that
+     makes it worth a second look before it ships.
+   - **`steno setup`'s launcher branches collapse** once the extra is always
+     present (`cli/doctor_cmd.py:64-87`): the macOS `.command` and Windows
+     `.cmd` fallbacks exist only for installs without `[gui]`. Deleting them is
+     a simplification the flip earns — but only after the no-display decision
+     above, since a TUI-only install is exactly what those fallbacks serve.
+
+   **`--gui` keeps working forever regardless** (`cli/__init__.py:34-37`):
+   `Stenograf.app`'s frozen launcher stub compiles it in as the fallback argv,
+   and that stub cannot change without revoking every macOS user's microphone
+   grant.
 
 ---
 
 ## Platform work still open
 
-**Windows — five of six items closed 2026-07-26; see `PLAN-WINDOWS.md` for the
-evidence and the one that is left.** Shipped that day: a real `.lnk` launcher
-(Start Menu + Desktop) with a multi-size `.ico`, written through `IShellLink`
-COM in the new `winlink.py`, and the `SetCurrentProcessExplicitAppUserModelID`
-call that makes the taskbar recognize its own window — together they are why a
-finish notification now arrives as a toast titled *Stenograf* instead of
-*pythonw.exe*. Measured green on the notebook the same day: the desktop app on a
-real session (tray, toast, taskbar identity, 125/150/200 % scale,
-close-during-meeting, and the named-pipe single instance including the
-crashed-instance case no other platform exercises), the TUI by eye in Windows
-Terminal, and DirectML on the AMD tier — byte-identical to CPU, with the speed
-win landing at 1.3–1.5× on an iGPU against 6.6× on a discrete card.
+**Windows — closed 2026-07-26 except for one optional AEC-quality run.**
+`PLAN-WINDOWS.md` was deleted on 2026-07-27 with five of its six items green;
+`git log --follow -p PLAN-WINDOWS.md` holds the evidence. Shipped: a real `.lnk`
+launcher (Start Menu + Desktop) with a multi-size `.ico`, written through
+`IShellLink` COM in `winlink.py`, and the
+`SetCurrentProcessExplicitAppUserModelID` call that makes the taskbar recognize
+its own window — together they are why a finish notification arrives as a toast
+titled *Stenograf* instead of *pythonw.exe*. Measured green on the GPD notebook
+(Radeon 890M, Win 11 26200): the desktop app on a real session (tray, toast,
+taskbar identity, 125/150/200 % scale, close-during-meeting, and the named-pipe
+single instance including the crashed-instance case no other platform
+exercises), the TUI by eye in Windows Terminal, and DirectML on the AMD tier —
+byte-identical to CPU, with the speed win landing at 1.3–1.5× on an iGPU against
+6.6× on a discrete card.
 
-**W4 found a real bug and fixed it; the long run is what is still open.** With
-the speakers at 90 % instead of 40 % (the volume knob, not the driver's audio
-enhancements, is what establishes an echo path) 80 seconds was enough: 2.6 dB
-ERLE and two lines of far-end speech attributed to the local speaker, against
-macOS's 37.6 dB. The cause was not the canceller but the timestamps it pairs
-channels by — WASAPI's loopback tap is the longer transport and both channels are
-stamped on arrival, so AEC3 was handed a reference labelled ~60 ms *after* its own
-echo, and its delay estimator only searches backwards. `CaptureProvider.far_end_lag_s`
-now carries the per-provider correction (`capture.windows.FAR_END_LAG_S = 0.15`,
-2.5× measured, because the error is one-sided): **13.7 dB ERLE, 0 leaked lines**
-on a re-run of the same script. What the ≥30-minute run still has to show is
-whether alignment survives the forward re-anchor after long silences, plus
-double-talk, which nothing on this machine has covered. It wants an empty room.
-This is what gates the "supported" claim now.
+**W4 found a real bug and fixed it.** With the speakers at 90 % instead of 40 %
+(the volume knob, not the driver's audio enhancements, is what establishes an
+echo path) 80 seconds was enough: 2.6 dB ERLE and two lines of far-end speech
+attributed to the local speaker, against macOS's 37.6 dB. The cause was not the
+canceller but the timestamps it pairs channels by — WASAPI's loopback tap is the
+longer transport and both channels are stamped on arrival, so AEC3 was handed a
+reference labelled ~60 ms *after* its own echo, and its delay estimator only
+searches backwards. `CaptureProvider.far_end_lag_s` now carries the per-provider
+correction (`capture.windows.FAR_END_LAG_S = 0.15`, 2.5× measured, because the
+error is one-sided): **13.7 dB ERLE, 0 leaked lines** on a re-run of the same
+script.
+
+**What is left of W4 no longer gates anything.** Its alignment half — "does the
+constant hold for half an hour" — is superseded by the capture helper below,
+which deletes the constant rather than tuning it; `eval/wasapi_timestamps.py`
+already showed the dangerous ~60 ms is per-meeting anchor skew that no declared
+value can track. What remains is the **AEC-quality** half, which device
+timestamps do not touch: double-talk, which nothing on this machine has covered,
+and the residual gap to macOS (13.7 dB against 37.6 dB — chassis, driver
+processing, or a constant that could be tighter). Better spent validating the
+helper than adjudicating the constant it replaces, so it is optional and
+unscheduled. If it is run, it is one command —
+`uv run python eval/aec_rig.py far-only --seconds 1800 --volume 90`, **plain
+`uv run`, never `--group eval`** (that group cannot resolve on Windows: `mlx`
+has no `win_amd64` wheel) — plus `eval/aec_alignment.py` on the dump. It is half
+an hour of speech out loud, so it wants an empty room, and the rig pins an
+en-US SAPI voice because the system default is German.
 
 **Unmeasured, and raised by that fix: the same shape on Linux.** `parec` runs as
 one subprocess per channel, both stamped on arrival by the same `SessionClock`,
@@ -388,6 +450,24 @@ manylinux_2_39 and not lower — it is upstream onnxruntime's, not ours — is i
 
 Kept here so future sessions don't re-open them.
 
+- **Challenger ASR models — declined 2026-07-27.** The recurring "the
+  leaderboard has a new leader" question (most recently Cohere Transcribe
+  03-2026) is closed, and `PLAN-ASR-CHALLENGER.md` was deleted with it
+  (`git log --follow -p PLAN-ASR-CHALLENGER.md` for the candidate analysis and
+  the adjudication design). Two reasons, and neither is about that model.
+  **The contract:** `asr/base.py:13` makes word-level timestamps mandatory —
+  speaker assignment intersects them with diarization turns — so a
+  timestamp-free model can only ever be a finalize-only second pass with a merge
+  layer, on top of Parakeet, at roughly double the finalize cost. **The prior:**
+  every model that has beaten Parakeet on a read-speech benchmark has lost to it
+  on our meeting audio. Voxtral Small 24B led by a *wider* paper margin than
+  Cohere's and lost 32:38 head-to-head; Canary-1B-v2 lost every pairing ~1:2
+  (Phase 0, 161 blind adjudication sites, de+en). Parakeet holds the default on
+  being ~10× faster and 5× smaller at Whisper-large-v3-equal quality.
+  **What would reopen it:** a leaderboard leader that already emits word
+  timestamps — that one is not a challenger at all, it is a `BackendSpec` in
+  `asr/registry.py`, which is what the seam exists for. A model without them
+  does not get evaluated again.
 - **Hand-labelled RTTM references — declined.** Without them DER, word
   attribution, the 0.5 re-ID threshold and far-field speaker-count
   over-splitting (a small group measured as 8) stay unmeasured. The scorer is
