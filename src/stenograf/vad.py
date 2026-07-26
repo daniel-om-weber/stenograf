@@ -244,6 +244,36 @@ below it, the same model with context added wins the pivot referee ~2.5:1
 (23:9 under 3 s, 29:15 at 3–8 s); at or above it the effect is null (26:29)
 — eval/context_ab.py, 2026-07-19."""
 
+PREROLL_S = 0.3
+"""How far behind its padded start a window may still claim words
+(:func:`claim_start`).
+
+VAD onsets run late, so the first word of a window is often already under way
+at the reported onset. The pad puts it inside the decode slice — but the
+midpoint keep-rule then handed it to nobody, which is the onset clipping
+measured on de-0717s-mic ("Eine Frage habe ich noch" → "Habe ich noch", "Von
+meiner Seite" → "meiner Seite", leading "Ja," lost). On top of the shipped
+``pack_windows`` pad of 0.15 s this reaches 0.45 s behind the *reported* onset
+— Handy's ``VAD_PREFILL_FRAMES=15``, the pre-onset audio it retains, and the
+one preparation difference left standing after eval/handy_ab.py scored its
+whole chain as a wash.
+
+This is a rule about *ownership*, not about bounds: ``pack_windows`` is
+untouched (moving bounds re-rolls the greedy TDT tail and systematically loses
+— eval/README.md "window-length study"), and the floor at the previous window's
+end means no word is ever claimed twice.
+
+Measured on the six study meetings (7.5 h, 61 k words, both code arms
+re-transcribed): **+147 words, 133 added regions — 131 of them ≤3 words — and
+1 removed, 2 changed**. It only adds, because nothing about any decode moves;
+what comes back are sentence heads ("Ja," "Genau," "Okay," "I", "Timo,").
+Only short windows can claim: a long window decodes exactly its span, so
+there is no audio behind its start to claim from. Letting them claim by
+reading a 2 s pre-roll was tried in the same session and **rejected** — it
+recovered 89 more heads but re-rolled the greedy decode of every long window,
+and the same corpus went to −59 words with 324 removed / 495 changed
+regions."""
+
 
 def context_start(start: float, end: float) -> float:
     """Where the decode slice for the packed window ``[start, end)`` begins.
@@ -252,10 +282,10 @@ def context_start(start: float, end: float) -> float:
     dominant accuracy loss on short utterances (eval/out/context-ab.md). Short
     windows therefore decode from up to ``DECODE_CONTEXT_S`` of *contiguous*
     preceding audio, silence included (splicing distant speech across the gap
-    measured worse — the seam costs accuracy), and the caller drops the words
-    whose midpoint falls before ``start``. Long windows decode exactly their
-    span. Window packing is untouched: this changes only what the model reads,
-    never the window bounds.
+    measured worse — the seam costs accuracy), and the caller keeps only the
+    words the window owns (:func:`claim_start`). Long windows decode exactly
+    their span. Window packing is untouched: this changes only what the model
+    reads, never the window bounds.
 
     Both decode paths — ``pipeline._decode`` and
     ``WindowedLiveDecoder._decode_window`` — and the byte-identity test call
@@ -265,3 +295,20 @@ def context_start(start: float, end: float) -> float:
     if end - start < SHORT_WINDOW_S:
         return max(0.0, start - DECODE_CONTEXT_S)
     return start
+
+
+def claim_start(start: float, previous_end: float) -> float:
+    """Earliest word midpoint the window starting at ``start`` may keep.
+
+    The window owns its span plus ``PREROLL_S`` of the silence before it, so a
+    word the VAD noticed late is still claimed by the window it belongs to —
+    but never past ``previous_end``, the padded end of the window before it
+    (0.0 for the first). Windows are decoded in order over disjoint spans, so
+    that floor is exactly the point where the earlier window's own claim
+    stopped: no word can be emitted twice, and a hard split mid-speech (where
+    the windows touch) yields no pre-roll at all, which is right — the audio
+    there is already someone's.
+
+    Both decode paths call this; see :func:`context_start` on why.
+    """
+    return max(start - PREROLL_S, previous_end)

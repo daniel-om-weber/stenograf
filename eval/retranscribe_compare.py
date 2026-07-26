@@ -13,14 +13,19 @@ region textually against the Whisper pivot.
 Interpretation notes, learned the hard way: a batch re-decode of the SAME
 code reproduces a stored (live-reused) transcript almost exactly (measured
 −27 words / 10.5 k), so old-vs-new diffs are attributable to the code
-change — but confirm with a pre-change-batch control (git worktree at the
-old commit) before blaming a specific edit, and treat symmetric one-word
-filler churn as noise. Net word LOSS concentrated in `removed` regions is
-the signature that a change moved window bounds (greedy TDT tail
-instability).
+change — but confirm with a pre-change-batch control before blaming a
+specific edit, and treat symmetric one-word filler churn as noise. Net word
+LOSS concentrated in `removed` regions is the signature that a change moved
+window bounds (greedy TDT tail instability).
+
+``--old-dir`` is that control as a flag: point it at a re-transcription run
+from a git worktree at the pre-change commit and the comparison isolates the
+edit alone, with the stored transcripts (and their older code, glossary and
+live/finalize mix) out of the picture.
 
 Run:
     uv run --group eval python eval/retranscribe_compare.py --new-dir DIR
+    uv run --group eval python eval/retranscribe_compare.py --new-dir DIR --old-dir BASE
 """
 
 from __future__ import annotations
@@ -135,9 +140,17 @@ def main() -> int:
         help="directory holding one steno-transcribe output folder per meeting "
         "(same folder names as under ~/Documents/Meetings)",
     )
+    parser.add_argument(
+        "--old-dir",
+        type=Path,
+        default=MEETINGS_DIR,
+        help="the 'old' side: a second re-transcription directory (the "
+        "pre-change control) instead of the stored meeting transcripts",
+    )
     args = parser.parse_args()
     global SCRATCH
     SCRATCH = args.new_dir
+    old_dir = args.old_dir
     grand = {
         "old_words": 0,
         "new_words": 0,
@@ -156,9 +169,9 @@ def main() -> int:
     examples = {"recovered": [], "new_wins": [], "old_wins": [], "removed": []}
     rows = []
     for meeting in MEETINGS:
-        old_path = MEETINGS_DIR / meeting / "transcript.json"
+        old_path = old_dir / meeting / "transcript.json"
         new_path = SCRATCH / meeting / "transcript.json"
-        if not new_path.exists():
+        if not new_path.exists() or not old_path.exists():
             print(f"[skip] {meeting}: no re-transcription")
             continue
         old_t = json.loads(old_path.read_text())

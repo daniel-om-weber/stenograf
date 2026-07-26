@@ -421,8 +421,60 @@ class TestWindowedDecoder:
         assert [x.text for x in update.committed] == ["hallo", "welt"]
         assert abs(update.committed[0].start - 1.0) < 1e-6
 
+    def test_a_late_onset_word_is_claimed_from_the_preroll(self):
+        # Same window [0.85, 3.15] and slice as above. The speaker began before
+        # the VAD noticed: "ja" at 0.6–0.9 is inside the slice but ahead of the
+        # padded start, and the window's pre-roll (vad.claim_start) is what
+        # decides that it belongs here rather than nowhere. "kontext" is further
+        # back than the pre-roll reaches and stays dropped.
+        asr = ScriptedASR([[w("kontext", 0.1, 0.5), w("ja", 0.6, 0.9), w("hallo", 1.2, 1.6)]])
+        vad = PackingFakeVAD(
+            [
+                ([SpeechSegment(1.0, 3.0)], None),
+                ([], None),
+                ([], None),
+            ]
+        )
+        dec = WindowedLiveDecoder(asr, vad=vad, max_gap=5.0)
+        dec.feed(pcm(4.0), 0.0)
+        dec.feed(pcm(4.0), 4.0)
+        update = dec.feed(pcm(1.0), 8.0)
+        assert dec.decodes == 1
+        assert [x.text for x in update.committed] == ["ja", "hallo"]
+
+    def test_touching_windows_never_commit_the_same_word_twice(self):
+        # The budget splits two runs 0.2 s apart, so the pads collide and window
+        # 2 begins exactly where window 1's audio ended. Window 2 is short, so
+        # its slice reaches back over the seam and its decode sees the same word
+        # again, a hair later — and the floor at _decoded_to (vad.claim_start)
+        # leaves it to window 1, whose audio it was.
+        asr = ScriptedASR(
+            [
+                [w("naht", 28.9, 29.1)],  # window 1 = [0, 29.15]; slice at 0.0
+                [w("naht", 14.8, 15.0)],  # window 2 = [29.15, 35.15]; slice at 14.15
+            ]
+        )
+        vad = PackingFakeVAD(
+            [
+                ([SpeechSegment(0.0, 29.0)], None),
+                ([SpeechSegment(29.2, 35.0)], None),  # 35 - 0 > 30 → window 1 closes
+                ([], None),
+            ]
+        )
+        dec = WindowedLiveDecoder(asr, vad=vad, max_window=30.0, max_gap=5.0)
+        dec.feed(pcm(30.0), 0.0)
+        first = dec.feed(pcm(6.0), 30.0)
+        assert [x.text for x in first.committed] == ["naht"]
+        flushed = dec.flush()
+        assert dec.decodes == 2  # the seam word was decoded twice…
+        assert flushed.committed == ()  # …and committed once
+        assert [x.text for x in dec.committed_words] == ["naht"]
+
     def test_budget_split_matches_pack_windows(self):
-        asr = ScriptedASR([[w("a", 1.0, 2.0)]])
+        # Scripted times are relative to each decode's slice, which starts at
+        # vad.context_start — the window's own start for these two long windows,
+        # so 0.0 and 21.85 ([21.85, 35.15] is the second span).
+        asr = ScriptedASR([[w("a", 1.0, 2.0)], [w("b", 3.0, 4.0)]])
         vad = PackingFakeVAD(
             [
                 ([SpeechSegment(0.0, 20.0)], None),
@@ -437,7 +489,7 @@ class TestWindowedDecoder:
         assert dec.decodes == 1  # [0, 20] decoded; [22, 35] pends
         flushed = dec.flush()
         assert dec.decodes == 2  # the tail window decoded at end of stream
-        assert flushed.committed  # words from the second window
+        assert [x.text for x in flushed.committed] == ["b"]  # the second window's
 
     def test_open_run_past_budget_closes_the_window_early(self):
         asr = ScriptedASR([[w("a", 1.0, 2.0)]])

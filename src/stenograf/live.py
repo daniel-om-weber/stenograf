@@ -47,7 +47,13 @@ import numpy as np
 from stenograf.asr.base import ASRBackend, Word
 from stenograf.audio import SAMPLE_RATE, sample_index, to_float32
 from stenograf.config import Language
-from stenograf.vad import DECODE_CONTEXT_S, SileroVAD, SpeechSegment, context_start
+from stenograf.vad import (
+    DECODE_CONTEXT_S,
+    SileroVAD,
+    SpeechSegment,
+    claim_start,
+    context_start,
+)
 
 _WORD_KEY = re.compile(r"\W+", re.UNICODE)
 
@@ -473,8 +479,8 @@ class WindowedLiveDecoder:
 
     Cost: each second of speech is decoded exactly once, in finalize-sized
     windows — the same total ASR work the finalize pass alone would do (short
-    windows additionally re-read their left context, discarded again; see
-    ``vad.context_start`` — the batch pass pays the same).
+    windows additionally re-read their left context, mostly discarded again;
+    see ``vad.context_start`` — the batch pass pays the same).
     Captions land a window at a time (up to ``max_window`` s of speech plus
     ``max_gap`` of silence behind the live edge); there is no interim text.
     Chosen as the product default because the live view runs in the background
@@ -622,15 +628,17 @@ class WindowedLiveDecoder:
 
         The span floats and their sample_index() conversion mirror pack_windows
         + finalize_channel operation for operation, so the extracted slice is
-        byte-identical to the batch pass's — the reuse guarantee. A short
-        window's slice additionally reaches back into contiguous left context
-        (``vad.context_start``, same function as the batch pass), and the
-        re-read context words — midpoint before the span — are dropped again.
+        byte-identical to the batch pass's — the reuse guarantee. The slice
+        reaches back into contiguous left context (``vad.context_start``, same
+        function as the batch pass) and the window keeps the words it owns —
+        its span plus a pre-roll, never behind ``_decoded_to``
+        (``vad.claim_start``, same function again); the rest is dropped.
         """
         start, end = self._pending[0].start, self._pending[-1].end
         self._pending = []
         a = max(self._window.start or 0.0, start - self.pad, self._decoded_to)
         b = min(self._window.end(), end + self.pad)
+        keep_from = claim_start(a, self._decoded_to)
         self._decoded_to = b
         ctx = max(self._window.start or 0.0, context_start(a, b))
         self.decodes += 1
@@ -641,7 +649,7 @@ class WindowedLiveDecoder:
             Word(w.text, w.start + ctx, w.end + ctx, w.confidence)
             for seg in self._asr.transcribe(self._window.samples[lo:hi], self._language)
             for w in seg.words
-            if (w.start + w.end) / 2 + ctx >= a
+            if (w.start + w.end) / 2 + ctx >= keep_from
         ]
         return _extend_committed(self._committed, words)
 

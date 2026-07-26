@@ -13,6 +13,7 @@ from stenograf.pipeline import (
     relabel_speakers,
 )
 from stenograf.transcript import TranscriptEntry
+from stenograf.vad import SpeechSegment
 
 
 def word(text: str, start: float, end: float) -> Word:
@@ -144,6 +145,91 @@ class SilentASR(FakeASR):
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
         self.calls.append(len(samples))
         return []
+
+
+class WindowScriptASR(FakeASR):
+    """One queued word list per decoded window, at times relative to the slice.
+
+    The slice starts at ``vad.context_start``, not at the window — that offset
+    is the whole point of the tests using this.
+    """
+
+    name = "window-script"
+
+    def __init__(self, responses: list[list[Word]]) -> None:
+        super().__init__()
+        self._responses = responses
+
+    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
+        self.calls.append(len(samples))
+        words = self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
+        if not words:
+            return []
+        return [
+            Segment(
+                text=" ".join(x.text for x in words),
+                start=words[0].start,
+                end=words[-1].end,
+                words=tuple(words),
+            )
+        ]
+
+
+class ScriptedVAD:
+    """Fixed speech runs, independent of the audio (no model, no inspection)."""
+
+    def __init__(self, segments: list[SpeechSegment]) -> None:
+        self._segments = segments
+
+    def speech_segments(self, samples: np.ndarray) -> list[SpeechSegment]:
+        return list(self._segments)
+
+
+class TestWindowClaim:
+    """Which decoded words a window keeps (vad.claim_start, via _clip_context)."""
+
+    def test_a_late_onset_word_is_claimed_from_the_preroll(self):
+        # Speech reported at 20.0–23.0 → padded window [19.85, 23.15], short, so
+        # the slice starts 15 s earlier at 4.85 and slice-relative 15.0 is the
+        # window's start. The speaker actually began ~0.2 s before the VAD
+        # noticed: that word is in the slice, and nobody used to emit it.
+        asr = WindowScriptASR(
+            [
+                [
+                    word("kontext", 14.0, 14.3),  # 18.85–19.15: not ours
+                    word("eine", 14.6, 14.9),  # 19.45–19.75: the clipped onset
+                    word("frage", 15.5, 16.0),  # inside the window
+                ]
+            ]
+        )
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 60, dtype=np.float32),
+            asr=asr,
+            language=None,
+            vad=ScriptedVAD([SpeechSegment(20.0, 23.0)]),
+        )
+        assert [w.text for e in entries for w in e.words] == ["eine", "frage"]
+        assert abs(entries[0].start - 19.45) < 1e-6  # the recovered onset
+
+    def test_touching_windows_never_claim_the_same_word_twice(self):
+        # Two runs 0.2 s apart that the 30 s budget splits: their pads collide,
+        # so window 2 = [29.15, 35.15] begins exactly where window 1's audio
+        # ended. Window 2 is short, so its slice reaches back over the seam and
+        # its decode sees the same word again — and only window 1 may keep it.
+        asr = WindowScriptASR(
+            [
+                [word("naht", 28.9, 29.1)],  # window 1: [0, 29.15], no offset
+                [word("naht", 14.75, 14.95)],  # window 2: slice starts at 14.15
+            ]
+        )
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 60, dtype=np.float32),
+            asr=asr,
+            language=None,
+            vad=ScriptedVAD([SpeechSegment(0.0, 29.0), SpeechSegment(29.2, 35.0)]),
+        )
+        assert len(asr.calls) == 2
+        assert [w.text for e in entries for w in e.words] == ["naht"]
 
 
 def test_diarizer_default_embeddings_are_empty():

@@ -152,6 +152,39 @@ and interjection drops with decode-side changes, never by moving window
 bounds. The tail instability predates this study and explains occasional
 hard-split boundary losses in every earlier transcript.
 
+**Shipped fix (2026-07-26): the pre-roll claim — the onset clipping, fixed
+without touching a bound.** The onset words the study named lost ("Eine
+Frage habe ich noch" → "Habe ich noch", leading "Ja,") were *decoded* all
+along on short windows — the context-carry slice contains them — and then
+discarded, because a word belonged to the window containing its midpoint and
+theirs fell before the padded start. `vad.claim_start` moves that keep-rule
+to `max(start − 0.3 s, previous window end)`: the window owns 0.3 s of the
+silence ahead of it (0.45 s behind the *reported* onset once the 0.15 s pad
+is counted — Handy's `VAD_PREFILL_FRAMES=15`), floored so no word is ever
+claimed twice. Bounds, packing and every decode slice are byte-identical to
+before; only ownership changes.
+
+Measured by re-transcribing the six study meetings on **both code arms**
+(`retranscribe_compare.py --old-dir`, added for exactly this control):
+**+147 words / 61 k, 133 added regions (131 ≤3 words), 1 removed, 2
+changed** — the first change in this study that is purely additive, as it
+must be when no decode moves. A VAD-window probe over the same audio pins
+the mechanism: 1426 of 1450 windows have a non-empty pre-roll, 442 words are
+claimed from one, and **227 are text the old arm had nowhere within ±1 s** —
+sentence heads, "Ja," / "Genau," / "Okay," / "I think not." / "Timo, kannst
+du mir sagen". `live.py --mode window` stays at **0.0 % WER** (reuse
+guarantee intact).
+
+**Long windows cannot claim, and buying them the ability was rejected.** A
+window ≥8 s decodes exactly its span, so nothing precedes its start to claim.
+Giving them a 2 s pre-roll *read* was tried in the same session: it recovered
+**89 more** heads (227 → 138 short-window-only) and re-rolled the greedy
+decode of every long window, taking the corpus to **−59 words with 324
+removed / 495 changed regions** and a referee that could not tell the arms
+apart (71:58). The same lesson as the two retunes, one level down: it is not
+only *bounds* that must not move — anything that re-rolls a long window's
+decode pays coin-flip churn on ~1000 windows for a handful of words.
+
 **Cut-overlap decoding: shipped and REVERTED 2026-07-19** (design record +
 revert rationale in git history). The decode-side
 cut repair (edge classification, 2.5 s overhang, midpoint keep-rules,

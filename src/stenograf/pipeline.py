@@ -22,7 +22,7 @@ from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
 from stenograf.transcript import Transcript, TranscriptEntry
-from stenograf.vad import SileroVAD, context_start, pack_windows
+from stenograf.vad import SileroVAD, claim_start, context_start, pack_windows
 
 MAX_ENTRY_GAP = 1.5
 """Silence (s) between words of one speaker that still reads as one entry."""
@@ -118,32 +118,39 @@ def _decode(
     else:
         windows = [(0.0, duration)] if duration > 0 else []
     segments: list[Segment] = []
+    previous_end = 0.0
     for i, (start, end) in enumerate(windows):
         if on_progress is not None:
             on_progress(STAGE_ASR, i, len(windows))
-        # Short windows decode with contiguous left context (vad.context_start);
-        # the re-read context words are dropped again below. Mirrored operation
-        # for operation by WindowedLiveDecoder._decode_window (reuse guarantee).
+        # Short windows decode with contiguous left context (vad.context_start),
+        # and every window claims the words it owns — its span plus a pre-roll
+        # for a late VAD onset (vad.claim_start); the rest of the re-read
+        # context is dropped below. Mirrored operation for operation by
+        # WindowedLiveDecoder._decode_window (reuse guarantee).
         ctx = context_start(start, end)
+        keep_from = claim_start(start, previous_end)
+        previous_end = end
         window = samples[sample_index(ctx) : sample_index(end)]
         for seg in asr.transcribe(window, language):
-            clipped = _clip_context(_shift(seg, ctx), start)
+            clipped = _clip_context(_shift(seg, ctx), keep_from)
             if clipped is not None:
                 segments.append(clipped)
     segments.sort(key=lambda seg: seg.start)
     return segments
 
 
-def _clip_context(seg: Segment, start: float) -> Segment | None:
-    """Drop the left-context words a context-carried decode re-read.
+def _clip_context(seg: Segment, keep_from: float) -> Segment | None:
+    """Drop the words a context-carried decode re-read but does not own.
 
     A word belongs to the window containing its midpoint (the rule speaker
-    attribution uses). Most segments lie wholly inside the window and pass
-    through untouched (keeping the model's own sentence text); a segment
-    straddling the context boundary is rebuilt from its kept words, and one
-    entirely inside the context disappears — its window already emitted it.
+    attribution uses), where a window reaches ``keep_from`` — its padded start
+    less a pre-roll, floored at the previous window's end (``vad.claim_start``).
+    Most segments lie wholly inside the window and pass through untouched
+    (keeping the model's own sentence text); a segment straddling the boundary
+    is rebuilt from its kept words, and one entirely inside the context
+    disappears — its window already emitted it.
     """
-    kept = tuple(w for w in seg.words if (w.start + w.end) / 2 >= start)
+    kept = tuple(w for w in seg.words if (w.start + w.end) / 2 >= keep_from)
     if len(kept) == len(seg.words):
         return seg
     if not kept:

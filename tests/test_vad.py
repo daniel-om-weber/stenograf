@@ -6,7 +6,15 @@ import pytest
 
 from stenograf import models
 from stenograf.audio import SAMPLE_RATE
-from stenograf.vad import SileroVAD, SpeechSegment, pack_windows
+from stenograf.vad import (
+    DECODE_CONTEXT_S,
+    PREROLL_S,
+    SileroVAD,
+    SpeechSegment,
+    claim_start,
+    context_start,
+    pack_windows,
+)
 
 _EVAL_WAV = Path(__file__).resolve().parent.parent / "eval" / "audio" / "de-1.wav"
 
@@ -58,6 +66,48 @@ def test_long_silence_starts_a_new_window():
     assert len(windows) == 2
     windows = pack_windows([seg(0, 5), seg(9, 20)], total_duration=60.0, max_gap=5.0)
     assert len(windows) == 1
+
+
+class TestDecodeSlice:
+    """context_start/claim_start: what a window reads, and what it may keep."""
+
+    def test_only_short_windows_read_left_context(self):
+        assert context_start(40.0, 43.0) == 40.0 - DECODE_CONTEXT_S
+        # A long window decodes exactly its span, so its claim below has no
+        # audio to reach into and can never fire — measured, not incidental.
+        assert context_start(40.0, 60.0) == 40.0
+
+    def test_context_never_reaches_before_the_recording(self):
+        assert context_start(1.0, 2.0) == 0.0
+
+    def test_a_window_claims_a_preroll_behind_its_start(self):
+        # The onset the VAD reported late: the word is inside the decode slice
+        # either way, and this is what decides whether anyone emits it.
+        assert claim_start(40.0, previous_end=10.0) == 40.0 - PREROLL_S
+
+    def test_the_claim_never_reaches_into_the_previous_window(self):
+        # Windows that touch (a hard split mid-speech, or a pad that ran into
+        # its neighbour) get no pre-roll at all — that audio is already owned.
+        assert claim_start(40.0, previous_end=40.0) == 40.0
+        assert claim_start(40.0, previous_end=39.9) == 39.9
+        # First window of the channel: nothing before it, so the floor is 0.
+        assert claim_start(0.2, previous_end=0.0) == 0.0
+
+    def test_over_real_packing_only_touching_windows_lose_their_preroll(self):
+        # A 70 s unbroken run hard-splits into touching windows; the run after
+        # the long silence stands alone. Over pack_windows' own spans that is
+        # the difference between a window that may reach back and one that
+        # may not.
+        windows = pack_windows([seg(0, 70), seg(90, 95)], total_duration=120.0, max_window=30.0)
+        claims = []
+        previous_end = 0.0
+        for start, end in windows:
+            claims.append(claim_start(start, previous_end))
+            previous_end = end
+        assert claims[0] == 0.0  # first window: nothing before it
+        assert claims[1] == windows[0][1] and claims[2] == windows[1][1]  # touching
+        assert claims[3] == windows[3][0] - PREROLL_S  # isolated: full pre-roll
+        assert claims[3] > windows[2][1]  # …and still clear of the window before
 
 
 @pytest.mark.skipif(
