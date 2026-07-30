@@ -253,6 +253,39 @@ One meeting can use a different notes setup without touching settings.toml:
 (and `steno transcribe`) steer that run's notes step only, and `steno notes`
 takes the same per-run choices as `--backend`, `--model` and `--instructions`.
 
+### Meeting presets
+
+A recurring *kind* of meeting gets a preset — one named section in
+settings.toml bundling its title, language, extra vocabulary, notes setup,
+style instructions and protocol template:
+
+```toml
+[meetings.controlling]
+title    = "Controlling-Runde"
+language = "de"
+template = "~/steno/controlling.md"     # protocol layout: your markdown headings
+
+[meetings.controlling.notes]            # sparse: unset keys use [notes] above
+backend = "command"
+command = ["claude", "-p"]
+
+[meetings.controlling.vocab]            # merges with the standing [vocab]
+attendees = ["Anja Müller"]
+```
+
+```sh
+steno start --preset controlling        # transcribe and notes take it too
+steno presets                           # list what's defined
+```
+
+Typed flags still beat the preset's values. On a path key, `""` switches the
+standing value off for that preset — `[meetings.x.notes.export] dir = ""`
+keeps a confidential meeting out of the vault. A `command` notes backend runs
+in the meeting's folder with `STENOGRAF_MEETING_DIR`/`STENOGRAF_OUTPUT_HOME`
+set, so an agentic CLI can fetch whatever context the preset's instructions
+point it at (an issue board, earlier protocols); `steno doctor` checks every
+preset's backend, not just the standing one.
+
 Notes land as a sibling `transcript.notes.md` file. On Apple
 Silicon the default backend is `mlx` — a fully local in-process model, nothing
 to set up. To use a different backend, configure it once in

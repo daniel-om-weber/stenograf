@@ -435,3 +435,193 @@ def test_transcribe_without_notes_flag_never_touches_a_backend(tmp_path, monkeyp
     result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
+
+
+# ---- meeting presets (--preset) --------------------------------------------------
+
+
+CUSTOM_TEMPLATE = """\
+# <Titel der Besprechung>
+
+<Zusammenfassung>
+
+## Beschlüsse
+
+- <ein Beschluss pro Punkt>
+
+## Offene Punkte
+
+- <offener Punkt>
+"""
+
+GERMAN_MD = """\
+# Controlling-Runde Juli
+
+Es wurde das Budget besprochen.
+
+## Beschlüsse
+
+- Juli-Release freigegeben
+
+## Offene Punkte
+
+- Q3-Planung?
+"""
+
+
+def _write_preset_settings(tmp_path, template_path) -> None:
+    import os
+
+    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        f"""
+[notes]
+backend = "command"
+model = "claude-opus-4-8"
+command = ["claude", "-p"]
+
+[meetings.controlling]
+title = "Controlling-Runde"
+language = "de"
+template = "{template_path.as_posix()}"
+
+[meetings.controlling.notes]
+backend = "mlx"
+
+[meetings.controlling.vocab]
+attendees = ["Anja Preset"]
+""",
+        encoding="utf-8",
+    )
+
+
+def test_notes_preset_selects_backend_template_and_validates_against_it(tmp_path, monkeypatch):
+    template_path = tmp_path / "controlling.md"
+    template_path.write_text(CUSTOM_TEMPLATE, encoding="utf-8")
+    _write_preset_settings(tmp_path, template_path)
+    seen = {}
+
+    class Recording(FakeBackend):
+        def complete(self, messages):
+            seen["messages"] = messages
+            return self.response
+
+    def record_create(name, settings):
+        seen["name"] = name
+        seen["settings"] = settings
+        return Recording(response=GERMAN_MD)
+
+    monkeypatch.setattr(notes_pkg, "create_backend", record_create)
+    path = tmp_path / "transcript.json"
+    write_transcript_json(path)
+
+    result = CliRunner().invoke(cli.main, ["notes", str(path), "--preset", "controlling"])
+
+    assert result.exit_code == 0, result.output
+    assert "preset: controlling" in result.output  # echo-on-use
+    # The preset's backend is passed explicitly (beats env), with the standing
+    # model dropped (the pair rule — it was written for the command backend).
+    assert seen["name"] == "mlx"
+    assert seen["settings"].model is None
+    # The preset's template rides last in the prompt and is what validation
+    # matched GERMAN_MD against — German headings, zero warnings.
+    assert "## Beschlüsse" in seen["messages"][-1]["content"]
+    assert "notes warning" not in result.output
+    md = (tmp_path / "transcript.notes.md").read_text(encoding="utf-8")
+    assert "## Beschlüsse" in md
+
+
+def test_notes_explicit_backend_flag_beats_the_preset(tmp_path, monkeypatch):
+    template_path = tmp_path / "controlling.md"
+    template_path.write_text(CUSTOM_TEMPLATE, encoding="utf-8")
+    _write_preset_settings(tmp_path, template_path)
+    seen = {}
+
+    def record_create(name, settings):
+        seen["name"] = name
+        return FakeBackend(response=GERMAN_MD)
+
+    monkeypatch.setattr(notes_pkg, "create_backend", record_create)
+    path = tmp_path / "transcript.json"
+    write_transcript_json(path)
+
+    result = CliRunner().invoke(
+        cli.main, ["notes", str(path), "--preset", "controlling", "--backend", "command"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["name"] == "command"
+
+
+def test_notes_unknown_preset_fails_before_any_work(tmp_path, monkeypatch):
+    def explode(name, settings):
+        raise AssertionError("no backend may be created for an unknown preset")
+
+    monkeypatch.setattr(notes_pkg, "create_backend", explode)
+    path = tmp_path / "transcript.json"
+    write_transcript_json(path)
+
+    result = CliRunner().invoke(cli.main, ["notes", str(path), "--preset", "nope"])
+
+    assert result.exit_code != 0
+    assert "unknown meeting preset" in result.output
+
+
+def test_transcribe_preset_stamps_title_language_and_vocab(tmp_path, monkeypatch):
+    template_path = tmp_path / "controlling.md"
+    template_path.write_text(CUSTOM_TEMPLATE, encoding="utf-8")
+    _write_preset_settings(tmp_path, template_path)
+    monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--preset", "controlling"]
+    )
+
+    assert result.exit_code == 0, result.output
+    import json
+
+    profile = json.loads((tmp_path / "transcript.json").read_text(encoding="utf-8"))["profile"]
+    assert profile["title"] == "Controlling-Runde"
+    assert profile["language"] == "de"
+    assert "Anja Preset" in profile["attendee_names"]
+
+
+def test_presets_command_lists_names_and_facts(tmp_path):
+    template_path = tmp_path / "controlling.md"
+    template_path.write_text(CUSTOM_TEMPLATE, encoding="utf-8")
+    _write_preset_settings(tmp_path, template_path)
+
+    result = CliRunner().invoke(cli.main, ["presets"])
+
+    assert result.exit_code == 0, result.output
+    assert "controlling" in result.output
+    assert 'title "Controlling-Runde"' in result.output
+    assert "notes via mlx" in result.output
+    assert "template controlling.md" in result.output
+
+
+def test_presets_command_with_none_defined_points_at_settings(tmp_path):
+    result = CliRunner().invoke(cli.main, ["presets"])
+    assert result.exit_code == 0, result.output
+    assert "no meeting presets" in result.output
+
+
+def test_command_backend_is_positioned_in_the_meeting_dir(tmp_path, monkeypatch):
+    # The agentic contract: the notes command runs with the meeting folder as
+    # cwd and the position in its environment — fetching context is its job.
+    positions = []
+
+    class Positionable(FakeBackend):
+        def set_position(self, meeting_dir, output_home):
+            positions.append((meeting_dir, output_home))
+
+    monkeypatch.setattr(notes_pkg, "create_backend", lambda name, settings: Positionable())
+    meeting_dir = meeting_folder(tmp_path)
+
+    result = CliRunner().invoke(cli.main, ["notes", str(meeting_dir)])
+
+    assert result.exit_code == 0, result.output
+    assert positions == [(meeting_dir, meeting_dir.parent)]

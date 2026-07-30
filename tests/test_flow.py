@@ -60,6 +60,64 @@ class TestMeetingRequest:
             resolve_meeting_request(mic=True, system=True, diarize=False)
         assert "settings.toml" in str(excinfo.value)
 
+    def test_a_preset_resolves_identically_to_the_cli_overlay(self, tmp_path, monkeypatch):
+        # The parity the preset layer exists for: the UI path and the CLI must
+        # produce the same effective configuration for the same preset.
+        from stenograf.config import Language
+        from stenograf.settings import apply_meeting_preset, load_settings
+
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text(
+            """
+[notes]
+backend = "command"
+model = "claude-opus-4-8"
+command = ["claude", "-p"]
+
+[vocab]
+attendees = ["Standing Name"]
+
+[meetings.controlling]
+title = "Controlling-Runde"
+language = "de"
+
+[meetings.controlling.notes]
+backend = "mlx"
+
+[meetings.controlling.vocab]
+attendees = ["Preset Name"]
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        request = resolve_meeting_request(
+            mic=True, system=False, diarize=False, preset="controlling"
+        )
+        expected, _preset = apply_meeting_preset(load_settings(), "controlling")
+        assert request.settings.notes == expected.notes  # incl. model=None (pair rule)
+        assert request.profile.title == "Controlling-Runde"
+        assert request.profile.language == Language.GERMAN
+        # Preset vocab merges — it never replaces the standing baseline.
+        assert set(request.profile.attendee_names) >= {"Standing Name", "Preset Name"}
+
+    def test_a_typed_title_still_beats_the_preset(self, tmp_path, monkeypatch):
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text(
+            '[meetings.x]\ntitle = "Preset-Titel"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        request = resolve_meeting_request(
+            mic=True, system=False, diarize=False, title="Getippter Titel", preset="x"
+        )
+        assert request.profile.title == "Getippter Titel"
+
+    def test_an_unknown_preset_is_a_reported_error(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        with pytest.raises(MeetingRequestError, match="unknown meeting preset"):
+            resolve_meeting_request(mic=True, system=False, diarize=False, preset="nope")
+
     def test_the_settings_report_names_the_file_and_every_table(self, tmp_path, monkeypatch):
         monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         lines, ok = settings_report()

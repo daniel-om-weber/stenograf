@@ -66,6 +66,46 @@ def settings_edit() -> None:
     click.echo(f"{path} OK")
 
 
+@click.command("presets")
+def presets_command() -> None:
+    """List the meeting presets ([meetings.<name>] in settings.toml).
+
+    A preset bundles what a *kind* of meeting sets — title, language,
+    vocabulary, notes backend, protocol template — selected per run with
+    --preset NAME on start, transcribe and notes.
+    """
+    from stenograf.settings import SettingsError, load_settings
+
+    try:
+        settings = load_settings()
+    except SettingsError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not settings.meetings:
+        click.echo(
+            "no meeting presets defined — add a [meetings.<name>] section in "
+            "settings.toml (`steno settings edit`; the template shows an example)"
+        )
+        return
+    for name in sorted(settings.meetings):
+        preset = settings.meetings[name]
+        facts = []
+        if preset.title:
+            facts.append(f'title "{preset.title}"')
+        if preset.language:
+            facts.append(preset.language)
+        if preset.notes.backend:
+            facts.append(f"notes via {preset.notes.backend}")
+        if preset.template:
+            facts.append(f"template {preset.template.name}")
+        if preset.instructions:
+            facts.append(f"instructions {preset.instructions.name}")
+        if preset.vocab.attendees or preset.vocab.glossary_file:
+            facts.append("own vocabulary")
+        if "export.dir" in preset.cleared:
+            facts.append("no vault export")
+        click.echo(f"  {name}" + (f" — {', '.join(facts)}" if facts else ""))
+
+
 def _ensure_settings_file() -> tuple[Path, bool]:
     """settings.toml's path, created from the commented template when missing.
 
@@ -141,6 +181,7 @@ def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
             None,
         ),
         ("notes", "instructions", settings.notes.instructions, "(none)", None),
+        ("notes", "template", settings.notes.template, "(built-in)", None),
         ("notes", "ollama_url", settings.notes.ollama_url, DEFAULT_URL, "OLLAMA_HOST"),
         (
             "notes",

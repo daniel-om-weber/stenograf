@@ -59,6 +59,15 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
 
 @click.command()
 @click.option(
+    "--preset",
+    "preset",
+    default=None,
+    metavar="NAME",
+    help="Meeting preset from settings.toml ([meetings.NAME]): title, language, "
+    "vocabulary, notes setup and protocol template for this kind of meeting. "
+    "`steno presets` lists them; typed flags still beat the preset's values.",
+)
+@click.option(
     "--lang",
     type=click.Choice([lang.value for lang in Language]),
     default=None,
@@ -198,6 +207,7 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
 )
 @_notes_options
 def start(
+    preset: str | None,
     lang: str | None,
     local_speakers: int | None,
     remote_speakers: int | None,
@@ -243,11 +253,20 @@ def start(
         glossary_threshold=glossary_threshold,
         reid_threshold=reid_threshold,
         profile_store=profile_store,
+        preset=preset,
     )
     settings, write_formats = cfg.settings, cfg.write_formats
     glossary_terms, attendee_names = cfg.glossary_terms, cfg.attendee_names
     glossary_threshold, reid_threshold = cfg.glossary_threshold, cfg.reid_threshold
     reid_store = cfg.reid_store
+    if cfg.preset is not None:
+        # Preset values are defaults a typed flag still beats.
+        title = title or cfg.preset.title
+        lang = lang or cfg.preset.language
+        # Explicit, not just overlaid into settings: a CLI-level backend choice
+        # (flag, then preset) beats STENOGRAF_NOTES_BACKEND, which would win
+        # over the overlaid [notes] table inside create_backend.
+        notes_backend = notes_backend or cfg.preset.notes.backend
 
     diarize = _resolve_diarization(
         diarization_flag, settings.speakers.diarization, local_speakers, remote_speakers

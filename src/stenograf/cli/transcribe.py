@@ -39,6 +39,15 @@ if TYPE_CHECKING:
 @click.command()
 @click.argument("audio_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
+    "--preset",
+    "preset",
+    default=None,
+    metavar="NAME",
+    help="Meeting preset from settings.toml ([meetings.NAME]): title, language, "
+    "vocabulary, notes setup and protocol template for this kind of meeting. "
+    "`steno presets` lists them; typed flags still beat the preset's values.",
+)
+@click.option(
     "--lang",
     type=click.Choice([lang.value for lang in Language]),
     default=None,
@@ -116,6 +125,7 @@ if TYPE_CHECKING:
 @_notes_options
 def transcribe(
     audio_file: Path,
+    preset: str | None,
     lang: str | None,
     speakers: int | None,
     channels_mode: str,
@@ -162,11 +172,17 @@ def transcribe(
         glossary_threshold=glossary_threshold,
         reid_threshold=reid_threshold,
         profile_store=profile_store,
+        preset=preset,
     )
     settings, write_formats = cfg.settings, cfg.write_formats
     glossary_terms, attendee_names = cfg.glossary_terms, cfg.attendee_names
     glossary_threshold, reid_threshold = cfg.glossary_threshold, cfg.reid_threshold
     reid_store = cfg.reid_store
+    if cfg.preset is not None:
+        # Preset values are defaults a typed flag still beats.
+        title = title or cfg.preset.title
+        lang = lang or cfg.preset.language
+        notes_backend = notes_backend or cfg.preset.notes.backend  # flag > preset > env
     given_language = Language(lang) if lang else None
     language = given_language
 

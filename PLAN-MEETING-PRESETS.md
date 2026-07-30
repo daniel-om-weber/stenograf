@@ -51,10 +51,40 @@ evidence base for whether the preset layer below is worth building.
   needs the Popen restructure recorded in the deferred price list.
 - **`steno settings show` displays `[asr] boost`** (`ac8f738`).
 
-## The preset layer — deferred design, corrected by review
+## The preset layer — **BUILT 2026-07-30** (Daniel reversed the deferral)
 
-Everything below waits for the step-7 / Textual decision. Recorded now so it is
-not re-derived; the review corrections are baked in.
+Steps 1–3 shipped the same day the deferral was reversed: the
+`[meetings.<name>]` loader with per-section error labels, the sparse overlay
+with the pair rule and the `""` off-marker, `--preset` on
+`start`/`transcribe`/`notes` (entering through `_resolve_run_config` /
+`resolve_meeting_request` / the notes loader branch, so per-preset `[vocab]`
+reaches TurboBias), per-preset (and standing `[notes]`) `template` +
+`instructions`, `steno presets`, `set_position` on the command backend
+(cwd + `STENOGRAF_MEETING_DIR`/`STENOGRAF_OUTPUT_HOME`), and per-preset
+doctor checks with the effective-PATH/app-launch detail.
+
+Two implementation decisions that deviate from the review draft, with reasons:
+
+- **The pair rule is asymmetric.** A preset backend without a model drops the
+  standing model (the guard's whole point); a preset *model* without a backend
+  applies to the standing backend rather than nulling it — nulling would hand
+  the model to whatever the env/built-in default picks, which is the exact
+  leak the rule prevents.
+- **`STENOGRAF_NOTES_BACKEND` still beats a preset's backend on the UI run
+  path only.** The CLI passes the preset's backend explicitly (flag > preset >
+  env holds there); `flow.MeetingRun`'s notes tail calls `create_backend(None,
+  …)`, where the env override wins. Documented in
+  `resolve_meeting_request`'s docstring — the env var is a developer escape
+  hatch, not worth plumbing an override channel through `MeetingRequest`.
+
+**Still open (unchanged blockers):** the UI half — a preset picker in the
+setup forms and `settings_report(preset=…)`/`steno settings show --preset` —
+stays behind the Phase 8 step-7 / Textual decision, so it is not written for
+a front-end that may retire. Until then presets are CLI-first;
+`resolve_meeting_request(preset=…)` is already the library seam a picker
+will call.
+
+### Design record (as built, corrections baked in)
 
 ### Naming — not "type"
 

@@ -70,6 +70,33 @@ optional; a missing file is simply all defaults. The full schema::
     [notes.export]
     dir = "~/Obsidian/Meetings"         # combined-note export target (unset = off)
 
+    [meetings.controlling]              # a meeting preset ("Besprechungsart"):
+    title    = "Controlling-Runde"      # everything a *kind* of meeting sets,
+    language = "de"                     # selected per run with --preset NAME.
+    template = "~/steno/controlling.md" # protocol layout (markdown headings)
+    instructions = "~/steno/stil.md"    # style file for this kind of meeting
+
+    [meetings.controlling.notes]        # sparse [notes] overlay: unset keys
+    backend = "command"                 # fall through to [notes] above
+    command = ["claude", "-p"]
+    timeout_s = 1800
+
+    [meetings.controlling.vocab]        # merges with the standing [vocab]
+    attendees = ["Anja Müller"]
+
+Preset overlay rules: a key the preset sets wins over ``[notes]``; unset keys
+fall through. ``[meetings.*.vocab]`` *merges* (a preset adds vocabulary, it
+never removes the standing baseline); ``glossary_threshold`` is a scalar and
+replaces. On a path key, ``""`` explicitly switches the standing value OFF —
+``[meetings.x.notes.export] dir = ""`` keeps a confidential meeting out of the
+vault, ``template = ""``/``instructions = ""`` return to the built-ins. A
+preset that names a ``backend`` without a ``model`` drops the standing model
+(it was written for the standing backend — ``[notes] model`` must never ride
+into another backend as a bogus repo id); a preset ``model`` without a
+``backend`` applies to the standing backend. Presets are personal: they live
+only in this machine-local file, never in a shared checkout, because
+``[notes] command`` is an argv executed unattended after every meeting.
+
 Precedence everywhere a value is consumed: CLI flag > environment variable
 (``STENOGRAF_ASR_BACKEND``, ``STENOGRAF_ASR_PROVIDER``, ``STENOGRAF_NOTES_BACKEND``,
 ``STENOGRAF_NOTES_MODEL``, ``OLLAMA_HOST``) > this file > built-in default. Almost every value is a
@@ -97,7 +124,7 @@ on Windows).
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import NoReturn
 
@@ -163,11 +190,30 @@ SETTINGS_TEMPLATE = """\
 # command = ["claude", "-p"]               # argv for backend = "command"
 # timeout_s = 600                          # command backend time limit
 # instructions = "~/notes-style.md"        # appended to the system prompt
+# template = "~/steno/protokoll.md"        # protocol layout (markdown headings);
+#                                          # unset = the built-in sections
 # thinking = true                          # mlx: run the model's reasoning pass
 # ollama_url = "http://localhost:11434"    # ollama server base URL
 
 [notes.export]
 # dir = "~/Obsidian/Meetings"              # also write one combined note here
+
+# Meeting presets ("Besprechungsart") — everything a *kind* of meeting sets,
+# selected per run with `--preset NAME` and listed by `steno presets`. Keys a
+# preset leaves unset fall through to the tables above; [meetings.*.vocab]
+# merges with the standing [vocab]; "" on a path key switches it off for this
+# preset (e.g. export dir = "" keeps a confidential meeting out of the vault).
+#
+# [meetings.controlling]
+# title    = "Controlling-Runde"
+# language = "de"
+# template = "~/steno/controlling.md"
+# instructions = "~/steno/controlling-stil.md"
+#
+# [meetings.controlling.notes]
+# backend = "command"
+# command = ["claude", "-p"]
+# timeout_s = 1800
 """
 """The commented-out starter file ``steno settings edit`` creates on first run.
 
@@ -246,6 +292,9 @@ class NotesSettings:
     command: tuple[str, ...] = ()
     timeout_s: float | None = None
     instructions: Path | None = None
+    template: Path | None = None
+    """Markdown protocol template (its headings are the output's validated
+    structure — :mod:`stenograf.notes.template`); ``None`` = the built-in."""
     ollama_url: str | None = None
     export_dir: Path | None = None
     max_input_chars: int | None = None
@@ -257,6 +306,28 @@ class NotesSettings:
 
 
 @dataclass(frozen=True)
+class MeetingPreset:
+    """One ``[meetings.<name>]`` section — everything a *kind* of meeting sets.
+
+    The notes overlay is sparse (:func:`apply_meeting_preset`); ``vocab``
+    *merges* with the standing baseline at the run-config seams rather than
+    replacing it; ``title``/``language`` are form defaults a CLI flag or typed
+    value still beats. ``cleared`` holds the keys the preset explicitly
+    switched OFF with ``""`` (``"template"``, ``"instructions"``,
+    ``"export.dir"``) — the overlay's only way to *remove* a standing value,
+    since "non-``None`` wins" can only ever add."""
+
+    name: str
+    title: str | None = None
+    language: str | None = None
+    template: Path | None = None
+    instructions: Path | None = None
+    notes: NotesSettings = field(default_factory=NotesSettings)
+    vocab: VocabSettings = field(default_factory=VocabSettings)
+    cleared: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class Settings:
     transcript: TranscriptSettings = field(default_factory=TranscriptSettings)
     vocab: VocabSettings = field(default_factory=VocabSettings)
@@ -264,6 +335,7 @@ class Settings:
     speakers: SpeakerSettings = field(default_factory=SpeakerSettings)
     asr: AsrSettings = field(default_factory=AsrSettings)
     notes: NotesSettings = field(default_factory=NotesSettings)
+    meetings: dict[str, MeetingPreset] = field(default_factory=dict)
 
 
 def settings_path() -> Path:
@@ -301,6 +373,7 @@ def load_settings(path: Path | None = None) -> Settings:
             speakers=_speakers_from_table(top.table("speakers")),
             asr=_asr_from_table(top.table("asr")),
             notes=_notes_from_table(top.table("notes")),
+            meetings=_presets_from_table(top.table("meetings")),
         )
         top.reject_unknown()
         return settings
@@ -337,6 +410,14 @@ class _Table:
 
     def path(self, key: str) -> Path | None:
         value = self.str_(key)
+        if value == "":
+            # Path("") silently normalizes to "." — never what a settings file
+            # means. The empty string has exactly one defined use: switching a
+            # standing path OFF inside a [meetings.*] preset, which is handled
+            # before this reader sees the table.
+            self._err(
+                key, 'must not be "" (only a [meetings.*] preset uses "" to switch a key off)'
+            )
         return Path(value).expanduser() if value is not None else None
 
     def bool_(self, key: str) -> bool | None:
@@ -403,8 +484,10 @@ def _transcript_from_table(data: dict) -> TranscriptSettings:
     return TranscriptSettings(formats=formats)
 
 
-def _vocab_from_table(data: dict) -> VocabSettings:
-    t = _Table("vocab", data)
+def _vocab_from_table(data: dict, label: str = "vocab") -> VocabSettings:
+    # ``label`` keeps error messages honest when the same reader parses a
+    # preset's [meetings.<name>.vocab] — a typo must name the section it is in.
+    t = _Table(label, data)
     settings = VocabSettings(
         glossary_file=t.path("glossary_file"),
         attendees=t.str_list("attendees"),
@@ -452,8 +535,10 @@ def _asr_from_table(data: dict) -> AsrSettings:
     return AsrSettings(backend=backend, provider=provider, boost=boost)
 
 
-def _notes_from_table(data: dict) -> NotesSettings:
-    t = _Table("notes", data)
+def _notes_from_table(data: dict, label: str = "notes") -> NotesSettings:
+    # ``label`` keeps error messages honest when the same reader parses a
+    # preset's [meetings.<name>.notes] — a typo must name the section it is in.
+    t = _Table(label, data)
     backend = t.str_("backend")
     if backend is not None:
         from stenograf.notes.backend import available_backends
@@ -462,7 +547,7 @@ def _notes_from_table(data: dict) -> NotesSettings:
             raise ValueError(
                 f"unknown notes backend {backend!r} (choose from {', '.join(available_backends())})"
             )
-    export = _Table("notes.export", t.table("export"))
+    export = _Table(f"{label}.export", t.table("export"))
     settings = NotesSettings(
         auto=t.bool_("auto"),
         backend=backend,
@@ -470,6 +555,7 @@ def _notes_from_table(data: dict) -> NotesSettings:
         command=t.str_list("command"),
         timeout_s=t.number("timeout_s"),
         instructions=t.path("instructions"),
+        template=t.path("template"),
         ollama_url=t.str_("ollama_url"),
         export_dir=export.path("dir"),
         max_input_chars=t.pos_int("max_input_chars"),
@@ -478,3 +564,106 @@ def _notes_from_table(data: dict) -> NotesSettings:
     export.reject_unknown()
     t.reject_unknown()
     return settings
+
+
+def _presets_from_table(data: dict) -> dict[str, MeetingPreset]:
+    """Every ``[meetings.<name>]`` section. The *names* are user-chosen, so
+    ``reject_unknown`` cannot catch a typo'd preset name — ``steno presets``
+    listing them and ``--preset`` echoing its pick are the mitigation."""
+    outer = _Table("meetings", data)
+    presets = {}
+    for name in data:
+        presets[name] = _preset_from_table(name, outer.table(name))
+    outer.reject_unknown()
+    return presets
+
+
+def _preset_from_table(name: str, data: dict) -> MeetingPreset:
+    label = f"meetings.{name}"
+    t = _Table(label, data)
+    language = t.str_("language")
+    if language is not None:
+        from stenograf.config import Language
+
+        codes = [lang.value for lang in Language]
+        if language not in codes:
+            raise ValueError(f"{label}.language must be one of {', '.join(codes)}")
+    cleared: set[str] = set()
+    template = _clearable_path(t, "template", cleared)
+    instructions = _clearable_path(t, "instructions", cleared)
+    notes_raw = dict(t.table("notes"))
+    export_raw = notes_raw.get("export")
+    if isinstance(export_raw, dict) and export_raw.get("dir") == "":
+        # `dir = ""` switches the standing export OFF for this preset (the
+        # confidential-meeting case) — recorded as a clear, hidden from the
+        # shared reader, which treats "" as the typo it is everywhere else.
+        cleared.add("export.dir")
+        notes_raw["export"] = {k: v for k, v in export_raw.items() if k != "dir"}
+    preset = MeetingPreset(
+        name=name,
+        title=t.str_("title"),
+        language=language,
+        template=template,
+        instructions=instructions,
+        notes=_notes_from_table(notes_raw, label=f"{label}.notes"),
+        vocab=_vocab_from_table(t.table("vocab"), label=f"{label}.vocab"),
+        cleared=frozenset(cleared),
+    )
+    t.reject_unknown()
+    return preset
+
+
+def _clearable_path(t: _Table, key: str, cleared: set[str]) -> Path | None:
+    """A preset path key where ``""`` means "switch the standing value off"."""
+    raw = t.str_(key)
+    if raw == "":
+        cleared.add(key)
+        return None
+    return Path(raw).expanduser() if raw is not None else None
+
+
+def apply_meeting_preset(settings: Settings, name: str) -> tuple[Settings, MeetingPreset]:
+    """Overlay preset ``name`` onto ``settings``; unknown names fail loudly.
+
+    Returns the overlaid :class:`Settings` (its ``[notes]`` table carries the
+    preset's sparse choices) plus the preset itself, whose ``title`` /
+    ``language`` / ``vocab`` the run-config seams consume — those never enter
+    ``Settings``, because vocab *merges* and title/language are form defaults a
+    flag still beats.
+
+    The backend/model pair rule: a preset backend without a preset model drops
+    the standing model (``create_backend``'s stale-model guard compares
+    ``spec.name != settings.backend``, so overlaying the backend alone would
+    make them *agree* and ride ``[notes] model`` into a backend it was never
+    written for). A preset model without a backend applies to the standing
+    backend — nulling the backend instead would hand the model to whatever the
+    env/built-in default picks, which is the exact leak the rule prevents."""
+    preset = settings.meetings.get(name)
+    if preset is None:
+        available = ", ".join(sorted(settings.meetings)) or "none defined"
+        raise SettingsError(f"unknown meeting preset {name!r} (available: {available})")
+    changes: dict[str, object] = {}
+    for f in fields(NotesSettings):
+        value = getattr(preset.notes, f.name)
+        if value is not None and value != ():
+            changes[f.name] = value
+    if preset.notes.backend is not None and preset.notes.model is None:
+        changes["model"] = None
+    if preset.template is not None:
+        changes["template"] = preset.template
+    if preset.instructions is not None:
+        changes["instructions"] = preset.instructions
+    cleared_fields = {
+        "template": "template",
+        "instructions": "instructions",
+        "export.dir": "export_dir",
+    }
+    for key in preset.cleared:
+        changes[cleared_fields[key]] = None
+    vocab = settings.vocab
+    if preset.vocab.glossary_threshold is not None:
+        # The one [vocab] scalar: it replaces (merging makes no sense for a
+        # threshold); the file and attendee lists merge at the run-config seam.
+        vocab = replace(vocab, glossary_threshold=preset.vocab.glossary_threshold)
+    overlaid = replace(settings, notes=replace(settings.notes, **changes), vocab=vocab)  # type: ignore[arg-type]
+    return overlaid, preset

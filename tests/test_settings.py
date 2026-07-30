@@ -243,3 +243,116 @@ def test_settings_template_loads_as_all_defaults(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text(SETTINGS_TEMPLATE, encoding="utf-8")
     assert load_settings(path) == Settings()
+
+
+# ---- meeting presets ([meetings.<name>]) ---------------------------------------
+
+
+PRESETS_TOML = """
+[notes]
+backend = "command"
+model = "claude-opus-4-8"
+command = ["claude", "-p"]
+instructions = "~/standing.md"
+
+[notes.export]
+dir = "~/vault"
+
+[meetings.controlling]
+title = "Controlling-Runde"
+language = "de"
+template = "~/steno/controlling.md"
+
+[meetings.controlling.notes]
+backend = "mlx"
+
+[meetings.controlling.vocab]
+attendees = ["Anja"]
+glossary_threshold = 0.9
+
+[meetings.geheim]
+instructions = ""
+
+[meetings.geheim.notes]
+timeout_s = 1800
+
+[meetings.geheim.notes.export]
+dir = ""
+"""
+
+
+def write_presets(tmp_path) -> Path:
+    path = tmp_path / "settings.toml"
+    path.write_text(PRESETS_TOML, encoding="utf-8")
+    return path
+
+
+def test_presets_parse_with_their_fields(tmp_path):
+    loaded = load_settings(write_presets(tmp_path))
+    assert sorted(loaded.meetings) == ["controlling", "geheim"]
+    preset = loaded.meetings["controlling"]
+    assert preset.title == "Controlling-Runde"
+    assert preset.language == "de"
+    assert preset.template == Path("~/steno/controlling.md").expanduser()
+    assert preset.vocab.attendees == ("Anja",)
+    assert preset.vocab.glossary_threshold == 0.9
+
+
+def test_preset_overlay_is_sparse_and_pairs_backend_with_model(tmp_path):
+    from stenograf.settings import apply_meeting_preset
+
+    loaded = load_settings(write_presets(tmp_path))
+    overlaid, preset = apply_meeting_preset(loaded, "controlling")
+    # Sparse: unset preset keys fall through to [notes].
+    assert overlaid.notes.command == ("claude", "-p")
+    assert overlaid.notes.instructions == Path("~/standing.md").expanduser()
+    # Pair rule: the standing model was written for the standing backend; a
+    # preset backend without a model must not inherit it (mlx would fetch
+    # "claude-opus-4-8" as an HF repo id).
+    assert overlaid.notes.backend == "mlx"
+    assert overlaid.notes.model is None
+    # The preset's template reaches the notes table.
+    assert overlaid.notes.template == preset.template
+
+
+def test_preset_empty_string_switches_a_standing_path_off(tmp_path):
+    from stenograf.settings import apply_meeting_preset
+
+    loaded = load_settings(write_presets(tmp_path))
+    overlaid, preset = apply_meeting_preset(loaded, "geheim")
+    assert overlaid.notes.export_dir is None  # confidential: not into the vault
+    assert overlaid.notes.instructions is None  # back to the built-in prompt
+    assert overlaid.notes.timeout_s == 1800.0  # ordinary keys still overlay
+    assert preset.cleared == {"export.dir", "instructions"}
+
+
+def test_unknown_preset_name_fails_loudly_listing_available(tmp_path):
+    from stenograf.settings import apply_meeting_preset
+
+    loaded = load_settings(write_presets(tmp_path))
+    with pytest.raises(SettingsError, match="controling.*controlling, geheim"):
+        apply_meeting_preset(loaded, "controling")
+
+
+def test_preset_typo_names_its_own_section(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text("[meetings.x.notes]\ntimeuot_s = 30\n", encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"\[meetings.x.notes\]: timeuot_s"):
+        load_settings(path)
+    path.write_text("[meetings.x]\ntitel = 'X'\n", encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"\[meetings.x\]: titel"):
+        load_settings(path)
+
+
+def test_preset_language_is_validated(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[meetings.x]\nlanguage = "fr"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match="meetings.x.language"):
+        load_settings(path)
+
+
+def test_empty_string_path_outside_a_preset_is_rejected(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[notes]\ninstructions = ""\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match='must not be ""'):
+        load_settings(path)

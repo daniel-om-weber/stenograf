@@ -45,6 +45,15 @@ if TYPE_CHECKING:
 )
 @click.option("--ollama-url", default=None, metavar="URL", help="Ollama server URL.")
 @click.option(
+    "--preset",
+    "preset",
+    default=None,
+    metavar="NAME",
+    help="Meeting preset ([meetings.NAME] in settings.toml): its notes setup, "
+    "protocol template and instructions apply to this regeneration. "
+    "`steno presets` lists them; explicit flags still win.",
+)
+@click.option(
     "--instructions",
     "instructions_file",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -71,6 +80,7 @@ def notes_command(
     backend_name: str | None,
     model: str | None,
     ollama_url: str | None,
+    preset: str | None,
     instructions_file: Path | None,
     export_dir: Path | None,
     no_export: bool,
@@ -89,6 +99,20 @@ def notes_command(
     from stenograf.output import created_at_from_dir_name
     from stenograf.settings import SettingsError
     from stenograf.transcript import UnsupportedTranscriptVersion
+
+    notes_settings = None
+    if preset is not None:
+        from stenograf.settings import apply_meeting_preset, load_settings
+
+        try:
+            overlaid, preset_obj = apply_meeting_preset(load_settings(), preset)
+        except SettingsError as exc:
+            raise click.UsageError(str(exc)) from exc
+        click.echo(f"preset: {preset}")  # echo-on-use: the typo mitigation
+        notes_settings = overlaid.notes
+        # Explicit, so a preset backend beats STENOGRAF_NOTES_BACKEND (a
+        # CLI-level choice; --backend still beats the preset).
+        backend_name = backend_name or preset_obj.notes.backend
 
     path = _resolve_notes_target(meeting, last)
     try:
@@ -114,6 +138,7 @@ def notes_command(
             instructions_file=instructions_file,
             export_dir=export_dir,
             no_export=no_export,
+            notes_settings=notes_settings,
         )
     except (NotesBackendError, SettingsError, ValueError, OSError) as exc:
         # The documented failure modes become clean CLI errors; anything else
@@ -211,18 +236,32 @@ def _generate_and_write_notes(
             ollama_url=ollama_url or settings.ollama_url,
         )
     backend = create_backend(backend_name, settings)
+    position = getattr(backend, "set_position", None)
+    if position is not None:
+        # The agentic contract (command backend only): the meeting folder is
+        # the working directory, the parent — where the meetings live — rides
+        # in the environment. Fetching context is the command's job.
+        position(out_dir, out_dir.parent)
     instructions = None
     # A per-run --instructions file replaces the standing one, it does not
     # append: the flag exists to try a different style, not to stack two.
     instructions_path = instructions_file or settings.instructions
     if instructions_path is not None:
         instructions = instructions_path.read_text(encoding="utf-8")
+    from stenograf.notes.template import DEFAULT_TEMPLATE
+
+    # [notes] template (or a preset's) is the protocol layout; its headings
+    # are what validation matches the response against.
+    template = DEFAULT_TEMPLATE
+    if settings.template is not None:
+        template = settings.template.read_text(encoding="utf-8")
 
     notes = generate_notes(
         transcript,
         backend,
         instructions=instructions,
         on_progress=on_progress or (lambda message: click.echo(f"notes: {message}")),
+        template=template,
         fallback_title=f"{created_at:%Y-%m-%d}",
     )
 

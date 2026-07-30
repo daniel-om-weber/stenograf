@@ -15,7 +15,7 @@ from stenograf.transcript import DEFAULT_FORMATS, FORMATS, Transcript
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from stenograf.settings import Settings
+    from stenograf.settings import MeetingPreset, Settings
 
 
 def _cli_settings():
@@ -57,6 +57,12 @@ class _RunConfig:
     glossary_threshold: float | None
     reid_threshold: float | None
     reid_store: Path | None
+    preset: MeetingPreset | None = None
+    """The applied ``--preset``, for the values that never enter ``Settings``:
+    ``title``/``language`` are form defaults a typed value beats, and the
+    preset's notes backend must be passed *explicitly* to ``create_backend``
+    (a CLI-level choice beats ``STENOGRAF_NOTES_BACKEND``, which would
+    otherwise win over the overlaid table)."""
 
 
 def _resolve_run_config(
@@ -68,10 +74,26 @@ def _resolve_run_config(
     glossary_threshold: float | None,
     reid_threshold: float | None,
     profile_store: Path | None,
+    preset: str | None = None,
 ) -> _RunConfig:
     settings = _cli_settings()
+    preset_obj = None
+    if preset is not None:
+        from stenograf.settings import SettingsError, apply_meeting_preset
+
+        try:
+            settings, preset_obj = apply_meeting_preset(settings, preset)
+        except SettingsError as exc:
+            raise click.UsageError(str(exc)) from exc
+        click.echo(f"preset: {preset}")  # echo-on-use: the typo mitigation
+    # The preset must enter HERE, before _collect_terms — its [vocab] feeds
+    # decode-time biasing, not just the notes prompt.
     glossary_terms, attendee_names = _collect_terms(
-        glossary, glossary_file, attendee, vocab=settings.vocab
+        glossary,
+        glossary_file,
+        attendee,
+        vocab=settings.vocab,
+        extra_vocab=preset_obj.vocab if preset_obj is not None else None,
     )
     return _RunConfig(
         settings=settings,
@@ -85,6 +107,7 @@ def _resolve_run_config(
             settings.speakers.reid_threshold if reid_threshold is None else reid_threshold
         ),
         reid_store=profile_store or settings.speakers.profile_store,
+        preset=preset_obj,
     )
 
 
@@ -339,15 +362,18 @@ def _collect_terms(
     attendee: tuple[str, ...],
     *,
     vocab=None,
+    extra_vocab=None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Gather glossary terms (inline + file) and attendee names from the options.
 
     ``vocab`` (the ``[vocab]`` settings table) is the standing baseline: its
     glossary file and attendees come first and per-run ``--glossary``/
     ``--glossary-file``/``--attendee`` values *merge* on top — configuring a
-    vocabulary must never make the flags stop working, or vice versa. Inline
-    values may each be comma-separated; a file is one term per line. Both lists
-    are de-duplicated preserving first-seen order.
+    vocabulary must never make the flags stop working, or vice versa.
+    ``extra_vocab`` (a meeting preset's ``[meetings.*.vocab]``) merges the same
+    way: a preset adds vocabulary for its kind of meeting, it never removes the
+    baseline. Inline values may each be comma-separated; a file is one term per
+    line. Both lists are de-duplicated preserving first-seen order.
     """
     terms: list[str] = []
     names: list[str] = []
@@ -355,6 +381,14 @@ def _collect_terms(
         if vocab.glossary_file is not None:
             terms.extend(_read_glossary_lines(vocab.glossary_file, source="[vocab] glossary_file"))
         names.extend(vocab.attendees)
+    if extra_vocab is not None:
+        if extra_vocab.glossary_file is not None:
+            terms.extend(
+                _read_glossary_lines(
+                    extra_vocab.glossary_file, source="[meetings.*.vocab] glossary_file"
+                )
+            )
+        names.extend(extra_vocab.attendees)
     for value in glossary:
         terms.extend(part.strip() for part in value.split(",") if part.strip())
     if glossary_file is not None:

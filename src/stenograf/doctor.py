@@ -59,6 +59,7 @@ def run_checks() -> list[Check]:
     checks.append(_models_check())
     checks.append(_settings_check())
     checks.append(_notes_check())
+    checks.extend(_preset_checks())
     return checks
 
 
@@ -292,6 +293,67 @@ def _models_check() -> Check:
     else:
         detail = f"VAD + diarization cached in {models.cache_dir()} (ASR weights via HuggingFace)"
     return Check(name="Models", ok=not missing, detail=detail)
+
+
+def _preset_checks() -> list[Check]:
+    """One check per meeting preset that changes the notes setup.
+
+    ``_notes_check`` greens the *standing* backend — a preset selecting another
+    one (say ``command`` while settings.toml runs mlx) would otherwise get a
+    green doctor and a failed notes run after a real meeting. For a command
+    backend the check resolves ``argv[0]`` under the *effective* PATH, which
+    matters most from the app bundle: launchd's PATH is widened but no shell rc
+    runs, so a binary (or an exported credential) visible in a terminal may
+    not exist there — ``STENOGRAF_APP_BUNDLE`` marks that context."""
+    import os
+    import shutil
+
+    from stenograf.notes import NotesBackendError, create_backend
+    from stenograf.settings import SettingsError, apply_meeting_preset, load_settings
+
+    try:
+        settings = load_settings()
+    except SettingsError:
+        return []  # _settings_check already reports the broken file
+    checks = []
+    for name in sorted(settings.meetings):
+        preset = settings.meetings[name]
+        if preset.notes == type(preset.notes)():
+            continue  # no notes overlay — the standing check covers it
+        check_name = f"Preset '{name}' notes (optional)"
+        try:
+            overlaid, _preset = apply_meeting_preset(settings, name)
+            backend = create_backend(preset.notes.backend, overlaid.notes)
+        except (SettingsError, NotesBackendError, ValueError) as exc:
+            checks.append(Check(name=check_name, ok=False, detail=str(exc), optional=True))
+            continue
+        if not backend.is_available():
+            argv0 = getattr(backend, "argv", (backend.model or backend.name,))[0]
+            app = " (app launch: shell PATH/env not sourced)" if _app_launch() else ""
+            checks.append(
+                Check(
+                    name=check_name,
+                    ok=False,
+                    detail=f"backend {backend.name!r}: {argv0!r} not available on "
+                    f"PATH={os.environ.get('PATH', '')!r}{app}",
+                    optional=True,
+                )
+            )
+            continue
+        argv = getattr(backend, "argv", None)
+        if argv:
+            detail = f"{backend.name}: {argv[0]} → {shutil.which(argv[0])}"
+        else:
+            detail = f"{backend.name}, model {backend.model}"
+        checks.append(Check(name=check_name, ok=True, detail=detail))
+    return checks
+
+
+def _app_launch() -> bool:
+    """Whether this process was started from the app bundle (no shell rc ran)."""
+    import os
+
+    return bool(os.environ.get("STENOGRAF_APP_BUNDLE"))
 
 
 def _notes_check() -> Check:

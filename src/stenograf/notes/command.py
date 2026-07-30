@@ -10,6 +10,7 @@ need no API key handling here.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from typing import TYPE_CHECKING
@@ -17,6 +18,8 @@ from typing import TYPE_CHECKING
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from stenograf.settings import NotesSettings
 
 DEFAULT_TIMEOUT_S = 600.0
@@ -50,6 +53,25 @@ class CommandBackend:
         # Provenance label only — the model is whatever the command runs.
         self.model = model or self.argv[0]
         self.max_input_chars = max_input_chars or DEFAULT_MAX_INPUT_CHARS
+        self.cwd: Path | None = None
+        self.extra_env: dict[str, str] = {}
+
+    def set_position(self, meeting_dir: Path, output_home: Path) -> None:
+        """Tell the command where this run's meeting lives.
+
+        The agentic contract: stenograf supplies the *position*, never fetched
+        payload — an agent driven through this backend runs with the meeting
+        folder as its working directory and ``STENOGRAF_MEETING_DIR`` /
+        ``STENOGRAF_OUTPUT_HOME`` in its environment, and the user's
+        instructions file tells it what to read from there (an issue board,
+        past protocols, whatever that kind of meeting needs). Duck-typed:
+        the notes writer calls it when the backend has it; mlx/ollama don't
+        (a local model has no tools to fetch with)."""
+        self.cwd = meeting_dir
+        self.extra_env = {
+            "STENOGRAF_MEETING_DIR": str(meeting_dir),
+            "STENOGRAF_OUTPUT_HOME": str(output_home),
+        }
 
     @classmethod
     def from_settings(cls, settings: NotesSettings) -> CommandBackend:
@@ -87,6 +109,8 @@ class CommandBackend:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_s,
+                cwd=self.cwd,
+                env={**os.environ, **self.extra_env} if self.extra_env else None,
             )
         except FileNotFoundError as exc:
             raise NotesBackendUnavailableError(

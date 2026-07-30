@@ -436,6 +436,34 @@ def test_command_unconfigured_raises_with_settings_hint():
         CommandBackend(())
 
 
+def test_command_runs_positioned_in_the_meeting_dir(tmp_path):
+    # set_position (the agentic contract): cwd = the meeting folder, and the
+    # position rides in the child's environment for the instructions to use.
+    backend = CommandBackend(
+        python_argv(
+            "import os; print(os.getcwd()); "
+            "print(os.environ['STENOGRAF_MEETING_DIR']); "
+            "print(os.environ['STENOGRAF_OUTPUT_HOME'])"
+        )
+    )
+    meeting_dir = tmp_path / "meeting-20260730-120000"
+    meeting_dir.mkdir()
+    backend.set_position(meeting_dir, tmp_path)
+    lines = backend.complete(MESSAGES).splitlines()
+    assert lines[0] == str(meeting_dir.resolve())
+    assert lines[1] == str(meeting_dir)
+    assert lines[2] == str(tmp_path)
+
+
+def test_command_without_a_position_runs_with_the_parent_env():
+    # No set_position call (steno's own prompt path before positioning, tests,
+    # third-party callers): the child sees the unmodified environment and cwd.
+    backend = CommandBackend(
+        python_argv("import os; print(os.environ.get('STENOGRAF_MEETING_DIR', 'unset'))")
+    )
+    assert backend.complete(MESSAGES).strip() == "unset"
+
+
 def test_command_from_settings():
     backend = CommandBackend.from_settings(
         NotesSettings(command=("claude", "-p"), timeout_s=42.0, model="claude-opus-4-8")

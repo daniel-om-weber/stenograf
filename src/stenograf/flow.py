@@ -97,6 +97,7 @@ def resolve_meeting_request(
     title: str = "",
     notes: bool = False,
     record_audio: bool = False,
+    preset: str | None = None,
 ) -> MeetingRequest:
     """Turn a setup form's controls into a runnable :class:`MeetingRequest`.
 
@@ -107,6 +108,16 @@ def resolve_meeting_request(
     speakers, and without diarization a live source is exactly 1 — which is what
     keeps the diarizer model unloaded.
 
+    ``preset`` applies a ``[meetings.<name>]`` section exactly as the CLI's
+    ``--preset`` does: its notes setup rides in the returned request's
+    ``settings``, its vocabulary merges into the profile, and its
+    title/language are defaults a form's typed values (``title``,
+    ``language``) still beat. One known precedence gap on this UI path only:
+    ``STENOGRAF_NOTES_BACKEND`` still beats a preset's *backend* inside
+    ``create_backend`` (the CLI passes the backend explicitly; this path has
+    no override channel) — the env var is a developer escape hatch, so
+    documented rather than plumbed.
+
     Raises :class:`MeetingRequestError` with a message meant for the user."""
     # The CLI's own resolution seams, reused so both entries share one source of
     # defaults (the thin-client rule): load_settings for the tables,
@@ -114,13 +125,26 @@ def resolve_meeting_request(
     from click import ClickException
 
     from stenograf.cli.run import _collect_terms
-    from stenograf.settings import SettingsError, load_settings
+    from stenograf.settings import SettingsError, apply_meeting_preset, load_settings
 
     try:
         settings = load_settings()
-        glossary_terms, attendee_names = _collect_terms((), None, (), vocab=settings.vocab)
+        preset_obj = None
+        if preset is not None:
+            settings, preset_obj = apply_meeting_preset(settings, preset)
+        glossary_terms, attendee_names = _collect_terms(
+            (),
+            None,
+            (),
+            vocab=settings.vocab,
+            extra_vocab=preset_obj.vocab if preset_obj is not None else None,
+        )
     except (SettingsError, ClickException) as exc:  # e.g. a stale [vocab] glossary_file
         raise MeetingRequestError(getattr(exc, "message", str(exc))) from exc
+    if preset_obj is not None:
+        title = title or (preset_obj.title or "")
+        if language is None and preset_obj.language is not None:
+            language = Language(preset_obj.language)
 
     def count(enabled: bool, chosen: int | None) -> int | None:
         """The profile count a source's controls mean: 0 = off, 1 = one speaker,

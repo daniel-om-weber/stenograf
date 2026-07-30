@@ -277,3 +277,33 @@ def test_doctor_exit_gate_ignores_optional_failures(monkeypatch):
 
     monkeypatch.setattr(cli.doctor_cmd, "run_checks", lambda: [ok, opt, hard])
     assert CliRunner().invoke(cli.main, ["doctor"]).exit_code == 1
+
+
+def test_preset_notes_checks_cover_what_the_standing_check_misses(tmp_path, monkeypatch):
+    # doctor greens the standing backend; a preset selecting another one used
+    # to get a green doctor and a failed notes run after a real meeting.
+    from stenograf import doctor
+
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "settings.toml").write_text(
+        """
+[meetings.agentic.notes]
+backend = "command"
+command = ["definitely-not-a-real-binary-xyz"]
+
+[meetings.plain]
+title = "No notes overlay"
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STENOGRAF_DATA", str(data))
+
+    checks = {check.name: check for check in doctor._preset_checks()}
+
+    assert "Preset 'plain' notes (optional)" not in checks  # nothing to check
+    check = checks["Preset 'agentic' notes (optional)"]
+    assert not check.ok
+    assert check.optional  # notes are opt-in; a broken preset must not fail doctor
+    assert "definitely-not-a-real-binary-xyz" in check.detail
+    assert "PATH" in check.detail
