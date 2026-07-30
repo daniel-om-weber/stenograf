@@ -413,6 +413,104 @@ class TestMeetingScreen:
         meeting.stop()
         assert seen == [("", "pop")]
 
+    def _stub_offline_meeting(self, monkeypatch, tmp_path):
+        """Offline meeting fakes: replayed silence in, FakeASR out."""
+        import conftest
+
+        from stenograf import loaders, output
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+        mic = tmp_path / "mic.wav"
+        conftest.write_wav(mic)
+        monkeypatch.setattr(
+            loaders,
+            "load_backends",
+            lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None: (
+                conftest.FakeASR(),
+                None,
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            loaders,
+            "make_provider",
+            lambda replay, plans, *, paced=True, aec=True, announce=None, on_log=None: (
+                FileCaptureProvider({Channel.MIC: mic})
+            ),
+        )
+
+    @staticmethod
+    def _mic_only_form(notes: bool) -> dict:
+        return {
+            "mic": True,
+            "system": False,
+            "diarize": False,
+            "local": -1,
+            "remote": -1,
+            "language": "auto",
+            "title": "",
+            "recordAudio": False,
+            "notes": notes,
+        }
+
+    def test_closing_the_window_does_not_wait_out_a_notes_run(self, gui, tmp_path, monkeypatch):
+        # An agentic [notes] command backend legitimately runs for many
+        # minutes, and by the time the notes tail starts the transcript is
+        # already on disk — so the window's force-quit must not block on the
+        # notes join for up to [notes] timeout_s.
+        from stenograf.cli import notes as cli_notes
+
+        self._stub_offline_meeting(monkeypatch, tmp_path)
+        notes_started, release = threading.Event(), threading.Event()
+
+        def slow_notes(view, transcript, out_dir, basename, *, created_at, notes_settings):
+            notes_started.set()
+            release.wait(10)
+            return True
+
+        monkeypatch.setattr(cli_notes, "_generate_notes", slow_notes)
+
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.screen("Setup").start(self._mic_only_form(notes=True))
+        pump(notes_started.is_set)
+
+        began = time.monotonic()
+        meeting.shutdown()
+        assert time.monotonic() - began < 5, "shutdown must not wait out the notes run"
+        assert meeting.running, "the notes thread is abandoned (daemon), not joined"
+        release.set()
+        meeting.join()
+
+    def test_a_quit_before_the_notes_step_skips_it(self, gui, tmp_path, monkeypatch):
+        # abandon_notes raised before the notes tail begins: the step is
+        # skipped entirely (steno notes --last regenerates), never started
+        # into a run whose window is already gone.
+        import stenograf.flow as flow_mod
+        from stenograf.cli import notes as cli_notes
+
+        self._stub_offline_meeting(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            cli_notes, "_generate_notes", lambda *args, **kwargs: calls.append(args) or True
+        )
+
+        class AbandonedRun(flow_mod.MeetingRun):
+            def __init__(self, request):
+                super().__init__(request)
+                self.abandon_notes.set()  # the quit arrived before the run
+
+        monkeypatch.setattr(flow_mod, "MeetingRun", AbandonedRun)
+
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.screen("Setup").start(self._mic_only_form(notes=True))
+        pump(lambda: meeting.state["phase"] == "done" and not meeting.running)
+        assert calls == [], "an abandoned run must not start its notes step"
+
 
 class TestTranscribeScreen:
     def test_pick_and_transcribe_writes_a_transcript(self, gui, tmp_path, monkeypatch):

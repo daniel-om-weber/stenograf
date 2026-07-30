@@ -32,6 +32,7 @@ Ordering matters twice in :meth:`MeetingRun.run`:
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -184,6 +185,18 @@ class MeetingRun:
         """Write-the-transcript-once callback; hand it to the view so the files
         land at the ``finalized`` event rather than after the user closes the
         screen."""
+        self.abandon_notes = threading.Event()
+        """Set by a front-end that is going away (window closed, app quitting):
+        a notes step that has not started yet is skipped. The transcript is
+        already persisted at the ``finalized`` event, so skipping notes loses
+        nothing that ``steno notes --last`` cannot regenerate — while a quit
+        that waited on an agentic notes backend could block for its full
+        ``[notes] timeout_s``."""
+        self.notes_running = False
+        """Whether the run is currently inside the notes step — the only phase a
+        departing front-end may abandon instead of joining (see
+        :attr:`abandon_notes`; capture teardown and finalize must be waited on,
+        or the meeting itself is lost)."""
 
     def run(self, view: LiveView) -> Transcript | None:
         """Capture, finalize, and (if asked) write notes, reporting through ``view``.
@@ -281,17 +294,21 @@ class MeetingRun:
         if transcript is not None:
             # Persisted already, at the finalized event — this is display only.
             notes_ok = True
-            if self.request.notes:
+            if self.request.notes and not self.abandon_notes.is_set():
                 from stenograf.cli.notes import _generate_notes
 
-                notes_ok = _generate_notes(
-                    view,
-                    transcript,
-                    self.out_dir,
-                    self.basename,
-                    created_at=self.created_at,
-                    notes_settings=settings.notes,
-                )
+                self.notes_running = True
+                try:
+                    notes_ok = _generate_notes(
+                        view,
+                        transcript,
+                        self.out_dir,
+                        self.basename,
+                        created_at=self.created_at,
+                        notes_settings=settings.notes,
+                    )
+                finally:
+                    self.notes_running = False
             if notes_ok:  # a notes failure keeps its own message visible
                 # No "press q" hint: two views render this line and only one of
                 # them is a terminal. Each says how to leave in its own footer.

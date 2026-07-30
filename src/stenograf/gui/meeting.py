@@ -50,7 +50,7 @@ if TYPE_CHECKING:
     from stenograf.asr.base import Word
     from stenograf.capture.base import Channel
     from stenograf.config import Language
-    from stenograf.flow import MeetingRequest
+    from stenograf.flow import MeetingRequest, MeetingRun
     from stenograf.gui.app import StenografGui
 
 _PHASE_LABEL = {
@@ -86,6 +86,7 @@ class MeetingScreen(Screen, LiveView):
         self._persist: Callable[[Transcript], object] | None = None
         self._stop_capture: Callable[[], None] | None = None
         self._thread: threading.Thread | None = None
+        self._run: MeetingRun | None = None
         self._started = 0.0
         self._reset()
 
@@ -150,6 +151,7 @@ class MeetingScreen(Screen, LiveView):
         # The transcript reaches disk at the ``finalized`` event, before the user
         # can close the window on the done screen.
         self._persist = run.persist
+        self._run = run  # shutdown() needs its abandon-notes handle
         self.post(self.set, folder=str(run.out_dir))
         return run.run(self)
 
@@ -195,13 +197,31 @@ class MeetingScreen(Screen, LiveView):
         Closing the window is the GUI's force-quit, and unlike the TUI's it can
         happen mid-capture — where a plain join would wait forever on a meeting
         nothing will ever stop. So stop capture first (the same callback the Stop
-        button uses), then wait: the finalize and the notes tail run to
-        completion and the transcript lands on disk, exactly as if Stop had been
-        pressed."""
+        button uses), then wait for what losing would actually cost: capture
+        teardown and the finalize, which put the transcript on disk.
+
+        The notes tail is the exception. It is regenerable (``steno notes
+        --last``), the worker is a daemon, and an agentic ``[notes] command``
+        backend legitimately runs for many minutes — joining it would block the
+        quit for up to ``[notes] timeout_s`` with the window already gone. So a
+        notes step that has not started is skipped (``abandon_notes``), and one
+        already in flight is left to die with the process."""
+        run = self._run
+        if run is not None:
+            run.abandon_notes.set()  # a notes step not yet started is skipped
         if self._stop_capture is not None and self._state.get("phase") == "rec":
             with contextlib.suppress(Exception):  # a stop error must not block the exit
                 self._stop_capture()
-        self.join()
+        # abandon_notes is set, so notes_running can only be True here if notes
+        # were already in flight before this shutdown began — never rechecked
+        # into True during the wait.
+        thread = self._thread
+        while (
+            thread is not None
+            and thread.is_alive()
+            and not (run is not None and run.notes_running)
+        ):
+            thread.join(0.2)
 
     # -- the 1 Hz tick -----------------------------------------------------
 

@@ -335,8 +335,8 @@ class StenografGui(QObject):
             return
         print(
             "the app quit with a meeting still running — stopping capture and "
-            "finishing it (finalize/notes); Ctrl-C abandons it, and "
-            "`steno notes --last` regenerates missing notes afterwards",
+            "finishing the transcript; Ctrl-C abandons it. A notes run is not "
+            "waited on — `steno notes --last` regenerates it afterwards",
             file=sys.stderr,
         )
         meeting.shutdown()
