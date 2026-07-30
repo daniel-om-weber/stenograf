@@ -8,10 +8,11 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**The per-platform side-plans are down to one.** `PLAN-CAPTURE-HELPER.md` is
-live design work and the only one left. `PLAN-LINUX.md` (2026-07-26),
-`PLAN-WINDOWS.md` and `PLAN-ASR-CHALLENGER.md` (both 2026-07-27) were deleted;
-each one's evidence, decisions and rejected alternatives survive under
+**The side-plans are down to one.** `PLAN-CAPTURE-HELPER.md` is live design
+work and the only one left. `PLAN-LINUX.md` (2026-07-26), `PLAN-WINDOWS.md` and
+`PLAN-ASR-CHALLENGER.md` (both 2026-07-27), and `PLAN-NOTES-MARKDOWN.md` +
+`PLAN-MEETING-PRESETS.md` (both 2026-07-30, built) were deleted; each one's
+evidence, decisions and rejected alternatives survive under
 `git log --follow -p <file>`, and what stayed open out of them is folded into
 the sections below. Read the Windows history before re-measuring anything on
 that platform — in particular its last section, which is the observation recipe
@@ -346,6 +347,101 @@ one thing still open in this phase.
 
 ---
 
+## Notes and presets — both built 2026-07-30; what is open is gates and one UI half
+
+`PLAN-NOTES-MARKDOWN.md` and `PLAN-MEETING-PRESETS.md` were deleted with this
+section; their design records, adversarial-review findings and rejected
+alternatives are in `git log --follow -p <file>`. Read the notes plan before
+touching `notes/` — in particular the four jobs the deleted JSON schema was
+doing (structure, sanitizing, truncation detection, refusal detection) and
+which replacement covers each, because three of the four are non-obvious.
+
+**Notes are markdown now: the template is the schema** (`d5963dd`). Headings
+are matched verbatim against the template actually used, zero matches is a hard
+fail, missing or empty sections are warnings that travel on
+`NotesProvenance.warnings`, and truncation is read off the backend's own
+completion signal (`finish_reason` / `done_reason`) rather than a text
+heuristic. `.notes.json` is no longer written. **Three gates remain, and two of
+them need a machine this desk does not have:**
+
+- **Gate 0 — the Ollama probe. Not run; needs the CachyOS notebook.** One
+  `/api/chat` call to qwen3:8b, no `format`, oversized prompt, answering three
+  things at once: whether `prompt_eval_count` shows the server silently
+  truncating the head (`ollama.py` sends no `options.num_ctx`, so its char
+  ceiling may be a client-side fiction — if so, derive `num_ctx` from
+  `max_input_chars`), whether `done_reason` is present (the truncation check
+  above depends on it), and whether reasoning arrives in `message.thinking` or
+  leaks into `message.content` (the latter needs the shared
+  `strip_reasoning()`). Do not write the conclusion up as "`format=` was doing
+  this": the repo reads neither field today, so the mechanism is unknown.
+- **Gate A — equivalence on real meetings. Captured; Daniel's read pending.**
+  Before/after pairs on the same transcripts live in `gate-a/` (gitignored,
+  real meeting content). `small-claude` and `mid-claude` succeeded on both
+  paths, all headings matched, zero warnings. **mlx has no before-note to
+  read** — the JSON path failed 2 of 2 attempts on the small meeting ("missing
+  a usable 'title'", from the pinned `4fe5c76` worktree; mechanism not
+  investigated, the path is deleted) where the markdown path succeeded first
+  try. n=2 against n=1, so the direction is the claim, not the size: the
+  shipped macOS default could not produce notes for that real meeting on the
+  old path and can on the new one.
+- **Gate B — template adherence on Ollama. Not run; needs CachyOS or
+  Windows.** Run twice on the same box — first with `format=` still in place
+  (check out `4fe5c76`, the last commit that has it), then without — because a
+  single unconstrained run cannot attribute a failure between "removing
+  `format=` broke it" and "this path never worked" (a real Ollama notes e2e has
+  never been run at all; it is in the declined list below). **It does not block
+  the macOS default; it blocks declaring the Ollama path healthy** — which is
+  worth remembering before a release, since Ollama is the notes default on both
+  non-macOS platforms.
+
+Accepted regressions, decided rather than discovered later, and all of them
+release-notes material: `.notes.json` is gone; **owner-grouped action items are
+gone** (the vault note shows action items as the model wrote them); the vault
+note gains Highlights and inline `[h:mm:ss]` timestamps it used to strip; and a
+decision-free meeting now gains an empty `## Decisions` section, since a
+template makes the model emit every heading — the per-section emptiness warning
+is that one's trace.
+
+**Meeting presets shipped too** (`b00ef0b`, after `4fe5c76`'s per-run
+baseline): `[meetings.<name>]` sections, the sparse overlay with the `""`
+off-marker, `--preset` on `start`/`transcribe`/`notes`, per-preset `template` +
+`instructions` + `[vocab]` (which reaches TurboBias, so a transcript recorded
+under a preset is not reproducible without it), `steno presets`, `cwd` +
+`STENOGRAF_MEETING_DIR`/`STENOGRAF_OUTPUT_HOME` on the command backend, and
+per-preset doctor checks that resolve each `argv[0]` under the effective PATH.
+Three things stayed open:
+
+- **The UI half — a preset picker in the Qt setup form, plus
+  `settings_report(preset=…)` / `steno settings show --preset`.** Its old
+  blocker (which front-end survives step 7) is settled, so it targets
+  `gui/screens.py` + `Setup.qml`, and `resolve_meeting_request(preset=…)` is
+  already the library seam it will call. What it waits on now is the evidence
+  question below.
+- **The evidence question, which is the whole point of the staging.** The
+  per-run flags (`--notes-backend`, `--notes-model`, `--instructions`) are the
+  baseline the preset layer has to beat on real use; persistence, per-kind
+  `[vocab]` and a GUI picker are the three things that baseline structurally
+  cannot do. If real use shows the flags suffice, the UI half never gets built
+  — an acceptable outcome of that plan, not a failure of it.
+- **One known asymmetry, documented in `resolve_meeting_request`'s docstring:**
+  `STENOGRAF_NOTES_BACKEND` still beats a preset's backend on the UI run path
+  (`flow.MeetingRun` calls `create_backend(None, …)`), while the CLI passes the
+  preset's backend explicitly and holds flag > preset > env. The env var is a
+  developer escape hatch; plumbing an override channel through `MeetingRequest`
+  was judged not worth it.
+
+Two designs from those plans are **rejected and should not be re-opened**: a
+directory of preset *files* (a shared checkout is arbitrary code execution —
+`[notes] command` argv runs unattended after every meeting, and `git pull` must
+never change which commands run, triggered by recording a meeting; if sharing
+becomes real it returns as a directory loaded *without* executable keys unless
+settings.toml allowlists them), and any **preset-name stamp in the
+`MeetingProfile`** (profiles serialize into every transcript and must record
+resolved values, not machine-local late-bound references — regenerating notes
+for an old meeting takes `--preset` explicitly).
+
+---
+
 ## Platform work still open
 
 **Windows — closed 2026-07-26 except for one optional AEC-quality run.**
@@ -470,6 +566,11 @@ Kept here so future sessions don't re-open them.
   battery against a control worktree.
 - **Never move VAD window bounds.** Both bound-moving fixes were tried and
   reverted; only the decode slice may change.
+- **A cancel button for an in-flight notes call.** Quitting the app no longer
+  waits one out (`5a6b902`: `shutdown()` abandons it, the transcript is already
+  persisted at `finalized`, and `steno notes --last` regenerates), but actually
+  *interrupting* a blocking `subprocess.run` / mlx generate needs the Popen
+  restructure priced in the deleted presets plan. Deferred, not declined.
 - **On-device notes backends.** Windows and Linux CPU stay Ollama-default; the
   in-process fallback, if ever needed, is llama-cpp-python with off-PyPI
   wheels. onnxruntime-genai-directml was evaluated and rejected (DX12-GPU-only
@@ -481,5 +582,5 @@ Kept here so future sessions don't re-open them.
   SRT/VTT dropping text not covered by `words` (latent — Parakeet emits
   full-or-none); meeting-mode auto-detect; hybrid cross-channel dedup;
   acoustic first-segment LID for the live pass; a real Ollama notes e2e (needs
-  a machine with Ollama installed); re-running the winning biasing config over
-  the full test set.
+  a machine with Ollama installed — now also the reason Gates 0 and B above are
+  unrun); re-running the winning biasing config over the full test set.

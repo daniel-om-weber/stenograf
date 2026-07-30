@@ -37,7 +37,7 @@ livekit question is deferred with a trigger. `eval/wasapi_timestamps.py` is its
 evidence and re-runs in twelve seconds. **Read it before touching capture,
 `aec.py`, or `hatch_build.py` on any platform.**
 
-**Three side-plans closed and were deleted; their evidence is in git history,
+**Five side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 (2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`
 (2026-07-27): five of six items green — the `.lnk` launcher, the
@@ -51,7 +51,15 @@ driving the TUI without a pty) — read it before observing anything there. Its
 one leftover, an optional AEC-quality run, is in PLAN.md and gates nothing.
 `PLAN-ASR-CHALLENGER.md` (2026-07-27): the recurring "leaderboard has a new
 leader" question is **declined**, not gated — see PLAN.md's declined list before
-evaluating any ASR model. Retrieve any of them with
+evaluating any ASR model. `PLAN-NOTES-MARKDOWN.md` and
+`PLAN-MEETING-PRESETS.md` (both 2026-07-30, both built): notes are markdown
+against a template that *is* the schema, and a meeting kind is a
+`[meetings.<name>]` section selected with `--preset`. Read the notes plan's
+history before touching `notes/` — the deleted JSON schema was quietly doing
+four jobs (structure, sanitizing, truncation detection, refusal detection) and
+which replacement covers each is not guessable from the code. Their leftovers —
+two Ollama gates that need a non-macOS box, Gate A's read, and the presets UI
+half — are in PLAN.md. Retrieve any of them with
 `git log --follow -p <file>`. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
