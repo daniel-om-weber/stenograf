@@ -223,11 +223,11 @@ jobs:
 
   smoke-windows:
     # Nothing verified a clean Windows install before publish until 0.2.1
-    # shipped a launcher that died on every meeting start. The launcher/TUI
-    # itself is covered by the headless real-stack smoke in ci.yml's windows
-    # unit job; this leg is the *installed artifact* check: the wheel installs,
-    # carries its helper, renders through a redirected stdout, and runs the
-    # pipeline end to end from a file.
+    # shipped a launcher that died on every meeting start. The GUI controllers
+    # are covered by the offscreen Qt tests in ci.yml's windows unit job; this
+    # leg is the *installed artifact* check: the wheel installs, carries its
+    # helper, renders through a redirected stdout, and runs the pipeline end
+    # to end from a file.
     needs: build-windows
     runs-on: windows-latest
     timeout-minutes: 45

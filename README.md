@@ -42,9 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/inst
 ```
 
 That's the only command you have to type. Afterwards, open **Stenograf** from
-your Desktop (macOS), the application menu (Linux) or the Start menu (Windows)
-— every workflow below is reachable there with the mouse. Re-running the
-command upgrades stenograf.
+Spotlight or the Dock (macOS), the application menu (Linux) or the Start menu
+(Windows) — every workflow below is reachable there with the mouse. Re-running
+the command upgrades stenograf.
 
 Works on macOS 14.4+ on Apple Silicon (the wheel ships the signed capture
 helper — no toolchain needed), Linux with PipeWire or PulseAudio (capture uses
@@ -83,7 +83,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dan
 Windows never prompts for the microphone, so capture stays silent until you flip
 the toggle under Settings > Privacy & security > Microphone — `steno setup`
 reads that toggle up front and says so rather than letting you find out from a
-transcript of silence. Windows Terminal is recommended for the live-caption TUI.
+transcript of silence.
 
 `steno setup` puts **Stenograf** in the Start menu and on the Desktop. Meeting
 notes need [Ollama](https://ollama.com) installed and running; everything else
@@ -102,11 +102,11 @@ uv run steno setup
 
 Every command below is then `uv run steno …` from the repo.
 
-## The launcher
+## The desktop app
 
-Double-click **Stenograf** (the Desktop icon on macOS, the application-menu
+Open **Stenograf** (Spotlight or the Dock on macOS, the application-menu
 entry on Linux, the Start-menu entry on Windows) — or run bare `steno` in a
-terminal — and a mouse-driven launcher opens:
+terminal — and a native window (Qt Quick) opens with one screen per workflow:
 
 - **Start meeting** — capture this meeting with live captions; the
   speaker-labelled transcript replaces them the moment you stop.
@@ -115,32 +115,17 @@ terminal — and a mouse-driven launcher opens:
 - **Settings** — show the active configuration.
 - **Check setup** — verify models, permissions, and audio devices.
 
-Everything the launcher does is also a plain CLI command — the rest of this
-document — so terminal users and scripts lose nothing.
+Everything the app does is also a plain CLI command — the rest of this
+document — so terminal users and scripts lose nothing. (Bare `steno` opens
+the window only from an interactive terminal with a display; in a pipe,
+a script, or an SSH session it prints the command overview instead.)
 
-### The desktop app (preview)
+On macOS the app is a real **Stenograf.app** in `~/Applications` — its own
+icon, Dock tile and Spotlight entry. It asks for microphone access once,
+under its own name rather than your terminal's, and keeps that permission
+across every later upgrade.
 
-The same five workflows also exist as a real native window, built on Qt Quick.
-It is opt-in while it settles; the terminal launcher above stays the default.
-
-```sh
-uv tool install --force 'stenograf[gui]'   # adds Qt (~110 MB); one time
-steno setup                                # points the desktop launcher at the app
-steno --gui                                # …or just open the app
-```
-
-The launcher follows the extra on every platform: once Qt is installed,
-`steno setup` rewrites the shortcut it already made so that double-clicking it
-opens the app instead of a terminal window — on Linux the application-menu
-entry. Uninstall the extra, re-run setup, and they turn back into the terminal
-launcher.
-
-On macOS it goes further and replaces the Desktop shortcut with a real
-**Stenograf.app** — its own icon, Dock tile and Spotlight entry. It asks for
-microphone access once, under its own name rather than your terminal's, and
-keeps that permission across every later upgrade.
-
-On Windows the batch file becomes a pair of real shortcuts — one in the
+On Windows `steno setup` writes a pair of real shortcuts — one in the
 **Start menu**, one on the Desktop — with the app's icon and no console window
 behind them. The Start-menu entry is the one worth pinning: Windows matches a
 running window to it, so the app gets its own taskbar button and its
@@ -175,10 +160,12 @@ steno start --lang de --local 3 --remote 2  # hybrid meeting, German
 steno transcribe recording.mov              # batch-transcribe an existing file
 ```
 
-`steno start` streams **live captions** while the meeting runs — a full-screen
-TUI on a terminal, a plain line-by-line stream when piped — and replaces them
-with the high-accuracy, speaker-labelled transcript the moment you stop
-(Ctrl-C). The audio stays in RAM throughout; only the transcript is written.
+`steno start` streams **live captions** while the meeting runs — committed
+lines, one per utterance, equally readable on a terminal or piped into a log —
+and replaces them with the high-accuracy, speaker-labelled transcript the
+moment you stop (Ctrl-C). The audio stays in RAM throughout; only the
+transcript is written. (The desktop app's meeting screen shows the same
+captions with a live interim tail.)
 
 Useful flags:
 
@@ -315,8 +302,8 @@ themselves. Three more levers in `[notes]`: `instructions = "~/style.md"`
 appends your house style to the built-in prompt, `thinking = false` skips the
 mlx model's reasoning pass (faster, less careful), and `auto = true` makes
 notes the default for every meeting — `steno start` summarizes without
-`--notes`, and the launcher's "Generate notes after the meeting" switch starts
-on. Out of the box notes never run unless you ask (`--notes`, the launcher
+`--notes`, and the app's "Generate notes after the meeting" switch starts
+on. Out of the box notes never run unless you ask (`--notes`, the app's
 switch, or `steno notes` afterwards); with `auto = true`, `--no-notes` still
 skips them for one run. A notes failure never touches the transcript.
 
@@ -443,13 +430,12 @@ uv run steno doctor
 
 The test suite is label-free and runs without a meeting: model-gated and
 real-audio tests self-skip when their assets are absent. The desktop app's
-tests run headless (`QT_QPA_PLATFORM=offscreen`, no window is ever shown) and
-skip entirely where PySide6 is not installed.
+tests run headless (`QT_QPA_PLATFORM=offscreen`, no window is ever shown).
 
-Three front-ends share one library: the CLI (`stenograf/cli/`), the terminal
-launcher (`stenograf/ui/`) and the desktop app (`stenograf/gui/`). None of them
-holds pipeline logic — the workflows they drive live in `stenograf/flow.py`, so
-a behaviour change lands in all three at once.
+Two front-ends share one library: the CLI (`stenograf/cli/`) and the desktop
+app (`stenograf/gui/`). Neither holds pipeline logic — the workflows they
+drive live in `stenograf/flow.py`, so a behaviour change lands in both at
+once.
 
 See [PLAN.md](PLAN.md) for the remaining roadmap;
 `native/README.md` for the capture helper and its wire protocol; `eval/README.md`

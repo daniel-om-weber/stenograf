@@ -3,22 +3,23 @@
 Meeting transcription pipeline: capture → live captions (TUI) → finalize
 (diarized transcript) → notes. Shipped on PyPI as `stenograf`.
 
-**Three front-ends, one library.** The CLI (`cli/`), the Textual launcher
-(`ui/`) and the Qt desktop app (`gui/`, `steno --gui`) are all thin: they gather
-inputs and call library entry points. The workflows they share live in
-`flow.py` (meeting request → run, transcribe, notes, settings report) and
-`captions.py` (live-caption line rules). Logic a screen needs that the library
-lacks goes into the library — never into one front-end, or the two UIs drift.
+**Two front-ends, one library.** The CLI (`cli/`) and the Qt desktop app
+(`gui/` — bare `steno`, `steno --gui`, or the app icon; the Textual launcher
+was retired 2026-07-30) are both thin: they gather inputs and call library
+entry points. The workflows they share live in `flow.py` (meeting request →
+run, transcribe, notes, settings report) and `captions.py` (live-caption line
+rules). Logic a screen needs that the library lacks goes into the library —
+never into one front-end, or the Qt app and the CLI drift.
 
-`PLAN.md` holds **only unbuilt work** — the active plan is Phase 8's remainder
-(the app is built, opt-in, installed as `~/Applications/Stenograf.app` by
-`steno setup`, and lives in the menu bar; **only step 7 — the default flip — is
-left, and it is gated on real use, not on code**. Step 5's bundle is FROZEN:
-its bytes are every user's microphone grant, so read
-`native/appbundle/README.md` before touching anything under it or under
-`src/stenograf/assets/` — new sibling files there are fine, the `.app` tree is
-not. Step 1's per-process profile is done and its watt half is deferred to a
-quiet machine), plus the open platform items and the declined list. Everything
+`PLAN.md` holds **only unbuilt work** — Phase 8 closed 2026-07-30 (all seven
+steps shipped; the app is the default UI, installed as
+`~/Applications/Stenograf.app` by `steno setup`, and lives in the menu bar).
+What remains there: step 1's watt half (deferred to a quiet machine), the
+step-7 observation gates still to run on this Mac, the open platform items
+and the declined list. Step 5's bundle is FROZEN: its bytes are every user's
+microphone grant, so read `native/appbundle/README.md` before touching
+anything under it or under `src/stenograf/assets/` — new sibling files there
+are fine, the `.app` tree is not. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
@@ -77,32 +78,23 @@ the index.
   than running them in the main loop.
 - Release = version bump + tag (CI publishes to PyPI).
 
-## Current focus: Phase 8 step 7 — the GUI becomes the default UI (ACTIVE since 2026-07-27)
+## Current focus: post-flip observation (Phase 8 step 7 SHIPPED 2026-07-30)
 
-Phase 5 (Linux) closed 2026-07-26. The focus is now the last step of Phase 8:
-`[gui]` moves from an extra into `dependencies` and bare `steno` opens the
-window instead of the Textual launcher. PLAN.md's step 7 holds the detail; three
-things govern the work.
+The GUI is the default UI and the Textual front-end is retired — Daniel
+answered step 7's "pick one" with full retirement, not a no-display fallback:
+bare `steno` opens the Qt window only from an interactive terminal with a
+display (`_interactive_terminal()` + `_display_available()` in
+`cli/__init__.py`); everywhere else it prints help, and headless/SSH use is
+the line-oriented CLI (`steno start` streams plain captions; `--plain` is a
+hidden accepted no-op). The decision record and review findings:
+`git log --follow -p PLAN-GUI-DEFAULT.md`. What remains is observation, listed
+in PLAN.md's Phase 8 section: the real-meeting and launch-gesture checks on
+this Mac.
 
-**The gate is use, not code.** The flip itself is small. It must not land before
-the app has driven *real* meetings end to end — nothing in `tests/test_gui.py`
-can tell whether the live caption screen reads well over half an hour, which is
-the only thing the flip is really betting on.
-
-**Retiring the Textual launcher is a separate decision from flipping the
-default, and it is not settled.** Screen parity was reached in step 4 (all six
-screens exist in both front-ends), but the TUI has one capability the Qt app
-structurally cannot have: it runs over SSH and on a machine with no display
-server. `cli/__init__.py:80` currently routes bare `steno` on a TTY to Textual;
-a flip that only swaps that arm strands headless users on a Qt window that
-cannot open. Decide deliberately whether Textual retires or stays as the
-no-display fallback — and if it stays, it is not "retired" and the two-front-end
-drift rule keeps applying.
-
-**`--gui` must keep working forever**, flip or no flip
-(`cli/__init__.py:34-37`): `Stenograf.app`'s launcher stub is the frozen binary
-holding every macOS user's microphone grant, and `--gui` is compiled into it as
-the fallback argv.
+**`--gui` must keep working forever** (`cli/__init__.py`): `Stenograf.app`'s
+launcher stub is the frozen binary holding every macOS user's microphone
+grant, and `--gui` is compiled into it as the fallback argv — it bypasses
+both dispatch gates by design.
 
 ## Platform decisions
 

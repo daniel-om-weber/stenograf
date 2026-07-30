@@ -20,17 +20,35 @@ German-locale traps, how to drive the TUI without a pty).
 
 What ships today: `steno start` (live captions → diarized transcript → notes)
 on macOS, Linux and Windows, published to PyPI as `stenograf`, driven either by
-the CLI or by the Textual launcher (`steno` with no arguments).
+the CLI or by the Qt desktop app (bare `steno`, `steno --gui`, or the app
+icon). The Textual launcher was retired 2026-07-30 with step 7's flip.
 
 ---
 
-## Phase 8 — native GUI (Qt Quick). Decided 2026-07-25; app built, installable and in the menu bar. **Step 7 — the default flip — is all that is left.**
+## Phase 8 — native GUI (Qt Quick). CLOSED 2026-07-30: all seven steps shipped; only step 1's deferred watt measurement remains open (below).
 
 **Decision: the launcher becomes a real desktop application built on Qt Quick
 (PySide6), and `Stenograf.app` is installed locally by `steno setup`.** This
-absorbs the old Phase 7 Tier 2 (tray + packaged installers). The CLI
-subcommands and the whole library stay untouched; the Textual launcher stays
-the default until the Qt screens reach parity.
+absorbed the old Phase 7 Tier 2 (tray + packaged installers). **Step 7 shipped
+2026-07-30: PySide6 is a base dependency, bare `steno` in an interactive
+terminal with a display opens the window, and the Textual front-end is retired
+entirely** — Daniel declared the use-gate met (the desktop app / tray icon is
+the default way of using the tool) and picked retirement over a no-display
+fallback: one real UI (Qt), one thin line-oriented CLI. The full design,
+review findings and accepted costs are in the deleted `PLAN-GUI-DEFAULT.md`
+(`git log --follow -p PLAN-GUI-DEFAULT.md`); in one breath: a double dispatch
+gate (TTY + display seam) instead of a graceful-error promise, because a Qt
+platform-plugin failure is an uncatchable C++ abort; `--plain` a hidden no-op;
+`--gui` gate-free forever (the frozen stub); the glibc-2.39 arm64 install
+floor accepted; setup's terminal-launcher arms deleted with the retirement
+calls kept.
+
+Still to observe on this Mac, from the shipped flip's gate list: one real
+plain-mode meeting in a terminal (plain is now the *only* terminal live mode),
+one bare-`steno` launch from a terminal and one from the app icon, one bare
+`steno` with the tray app already running (must print its one line), and —
+blocked on enabling Remote Login — an SSH bare-`steno` to see the macOS arm of
+the display heuristic on the case it bets on.
 
 **Built 2026-07-25 (steps 3 + 4): `stenograf/gui/` — all six screens, opt-in
 behind `steno --gui`,** with PySide6 as the optional `[gui]` extra; step 5 put
@@ -45,7 +63,8 @@ with its real controller and the Qt message handler must stay silent — a QML
 binding error is a warning, not an exception, so an unwatched app "works" while
 rendering nothing.
 
-Landmines paid for while building it, beyond the spike's:
+Landmines paid for while building it, beyond the spike's (they outlive the
+retired Textual screens — the Qt app keeps all three):
 
 - **A QML property may not be named `onSomething`** — `readonly property color
   onAccent` is parsed as a signal handler and kills the whole singleton with
@@ -149,9 +168,9 @@ regression tests possible in CI (`screencapture` from inside the app instead
 
 ### Rules the port inherits
 
-1. The GUI stays a thin client of the library — the same rule the CLI and the
-   Textual UI follow: screens gather inputs and call library entry points;
-   logic a screen needs that the library lacks goes into the library.
+1. The GUI stays a thin client of the library — the same rule the CLI
+   follows: screens gather inputs and call library entry points; logic a
+   screen needs that the library lacks goes into the library.
 2. Slow work goes to a worker thread with signals — the Qt equivalent of
    `@work(thread=True)`. Blocking the GUI thread freezes rendering.
 3. Notes generation still goes through the existing entry point on the thread
@@ -177,11 +196,8 @@ regression tests possible in CI (`screencapture` from inside the app instead
 
 ### Sequencing
 
-Each step ships working; none blocks the platform work below. Steps 2–6 are
-done and step 1's remainder is deferred, so **all that is left is step 7, and
-it is the project's current focus (2026-07-27)** — gated on use, not on code:
-nothing in the automated tests can tell whether the live screen reads well over
-half an hour.
+Each step shipped working; step 1's watt remainder is deferred and is the
+one thing still open in this phase.
 
 1. **Half done 2026-07-25; the watt half deliberately deferred.** The
    per-process half is measured and the app is clean: on the idle home screen
@@ -315,46 +331,17 @@ half an hour.
    the ~120/s display floor and an occluded one at ~1/s, and a hidden window
    should be at least as good, but the tray-mode number was not taken — it
    belongs with step 1's deferred watt half, on the same quiet machine.
-7. **ACTIVE since 2026-07-27 — the current focus.** Flip the default: `[gui]`
-   moves from `[project.optional-dependencies]` into `dependencies`, and bare
-   `steno` opens the window.
-
-   **The gate is use, not code, and it has not been met yet.** The app must have
-   driven real meetings end to end first — nothing in `tests/test_gui.py` can
-   tell whether the live caption screen reads well over half an hour, and that
-   is the whole bet. Running it for real is the work; the flip is the easy part.
-
-   Four things the flip has to decide, all found by reading the code rather than
-   the plan:
-
-   - **The dispatch is three-armed, not two** (`cli/__init__.py:76-85`):
-     `--gui` → the app, a TTY → the Textual launcher, otherwise → `--help`.
-     Flipping only the middle arm strands anyone with **no display server** —
-     SSH, a headless box — on a Qt window that cannot open. So bare `steno`
-     needs a display check, not just a swapped branch, and the `else` arm has to
-     decide between the TUI and the help text.
-   - **Therefore "retire the Textual launcher" is a real decision, not a
-     cleanup.** Screen parity arrived in step 4, but parity was never the whole
-     question: the TUI runs where Qt cannot. Either it stays as the no-display
-     fallback — in which case there are still two front-ends and the
-     thin-client rule in `CLAUDE.md` keeps applying to both — or it goes and
-     headless use goes with it. Pick one explicitly.
-   - **~110 MB of Qt becomes mandatory for everyone**, including users who only
-     ever run `steno transcribe` in a terminal. `pyproject.toml:101-108`
-     pre-decided this ("when the GUI becomes the default this moves into
-     `dependencies`") and the LGPL relinking obligation is satisfied either way
-     by a normal pip dependency — but the headless-server case is the one that
-     makes it worth a second look before it ships.
-   - **`steno setup`'s launcher branches collapse** once the extra is always
-     present (`cli/doctor_cmd.py:64-87`): the macOS `.command` and Windows
-     `.cmd` fallbacks exist only for installs without `[gui]`. Deleting them is
-     a simplification the flip earns — but only after the no-display decision
-     above, since a TUI-only install is exactly what those fallbacks serve.
-
-   **`--gui` keeps working forever regardless** (`cli/__init__.py:34-37`):
-   `Stenograf.app`'s frozen launcher stub compiles it in as the fallback argv,
-   and that stub cannot change without revoking every macOS user's microphone
-   grant.
+7. **Done 2026-07-30 — shipped in four commits, each CI-green.** PySide6
+   into `dependencies` (`gui = []` stays an empty extra so old install
+   commands resolve), the double-gated dispatch (`_interactive_terminal()` +
+   the new `_display_available()` seam), `src/stenograf/ui/` deleted,
+   `steno setup`'s terminal-launcher arms collapsed with the retirement calls
+   kept, docs and the `verify` skill rewritten. The decision record is
+   `git log --follow -p PLAN-GUI-DEFAULT.md`; the observation gates still to
+   run on this Mac are listed at the top of this section. `--gui` keeps
+   working forever (`cli/__init__.py`): the frozen stub compiles it in as the
+   fallback argv, and that stub cannot change without revoking every macOS
+   user's microphone grant.
 
 ---
 
@@ -489,15 +476,6 @@ Kept here so future sessions don't re-open them.
 - **Packaged signed installers / any downloadable artifact.** Needs the $99
   Developer ID plus notarization; revisit only if non-terminal users ask to
   double-click an installer.
-- **The TUI's caption log does not re-wrap when the terminal narrows** (found
-  2026-07-26 in Windows Terminal, but it is Textual's behaviour everywhere).
-  `RichLog` renders strips at write time, so shrinking the window leaves the
-  existing lines at their old wrap behind a horizontal scrollbar; widening
-  restores them, and the on-stop finalize re-renders at the current width. The
-  fix would be an `on_resize` that clears and re-writes from the screen's own
-  `committed_lines` — cheap, but it needs the channel kept alongside the text to
-  rebuild the markup. Left undone deliberately: the Textual launcher is on the
-  retirement path once the Qt app reaches parity (Phase 8 step 7).
 - **Lower-priority, independent:** greedy re-ID → Hungarian assignment;
   SRT/VTT dropping text not covered by `words` (latent — Parakeet emits
   full-or-none); meeting-mode auto-detect; hybrid cross-channel dedup;
