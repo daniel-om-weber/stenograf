@@ -78,18 +78,17 @@ the index.
   than running them in the main loop.
 - Release = version bump + tag (CI publishes to PyPI).
 
-## Current focus: post-flip observation (Phase 8 step 7 SHIPPED 2026-07-30)
+## Phase 8 step 7 SHIPPED and OBSERVED 2026-07-30 — the GUI is the default UI
 
-The GUI is the default UI and the Textual front-end is retired — Daniel
-answered step 7's "pick one" with full retirement, not a no-display fallback:
-bare `steno` opens the Qt window only from an interactive terminal with a
-display (`_interactive_terminal()` + `_display_available()` in
-`cli/__init__.py`); everywhere else it prints help, and headless/SSH use is
-the line-oriented CLI (`steno start` streams plain captions; `--plain` is a
-hidden accepted no-op). The decision record and review findings:
-`git log --follow -p PLAN-GUI-DEFAULT.md`. What remains is observation, listed
-in PLAN.md's Phase 8 section: the real-meeting and launch-gesture checks on
-this Mac.
+The Textual front-end is retired — Daniel answered step 7's "pick one" with
+full retirement, not a no-display fallback: bare `steno` opens the Qt window
+only from an interactive terminal with a display (`_interactive_terminal()` +
+`_display_available()` in `cli/__init__.py`); everywhere else it prints help,
+and headless/SSH use is the line-oriented CLI (`steno start` streams plain
+captions; `--plain` is a hidden accepted no-op). The observation gates are
+green (Daniel ran the three launch gestures the same day). The decision
+record and review findings: `git log --follow -p PLAN-GUI-DEFAULT.md`. The
+shipped flip has not been released yet — release = version bump + tag.
 
 **`--gui` must keep working forever** (`cli/__init__.py`): `Stenograf.app`'s
 launcher stub is the frozen binary holding every macOS user's microphone

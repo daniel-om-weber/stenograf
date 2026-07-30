@@ -43,12 +43,13 @@ platform-plugin failure is an uncatchable C++ abort; `--plain` a hidden no-op;
 floor accepted; setup's terminal-launcher arms deleted with the retirement
 calls kept.
 
-Still to observe on this Mac, from the shipped flip's gate list: one real
-plain-mode meeting in a terminal (plain is now the *only* terminal live mode),
-one bare-`steno` launch from a terminal and one from the app icon, one bare
-`steno` with the tray app already running (must print its one line), and —
-blocked on enabling Remote Login — an SSH bare-`steno` to see the macOS arm of
-the display heuristic on the case it bets on.
+**The gate list is green (observed 2026-07-30).** The plain-mode replay
+meeting, the pipe/script help check, and Daniel's three launch gestures on
+this Mac — bare `steno` from a terminal, the app icon, and bare `steno` with
+the tray app already running (it printed its one line) — all passed. The one
+unobserved case stays optional and blocked on enabling Remote Login: an SSH
+bare-`steno` to see the macOS arm of the display heuristic on the case it
+bets on.
 
 **Built 2026-07-25 (steps 3 + 4): `stenograf/gui/` — all six screens, opt-in
 behind `steno --gui`,** with PySide6 as the optional `[gui]` extra; step 5 put
@@ -337,8 +338,8 @@ one thing still open in this phase.
    the new `_display_available()` seam), `src/stenograf/ui/` deleted,
    `steno setup`'s terminal-launcher arms collapsed with the retirement calls
    kept, docs and the `verify` skill rewritten. The decision record is
-   `git log --follow -p PLAN-GUI-DEFAULT.md`; the observation gates still to
-   run on this Mac are listed at the top of this section. `--gui` keeps
+   `git log --follow -p PLAN-GUI-DEFAULT.md`; the observation gates were run
+   the same day and are green (top of this section). `--gui` keeps
    working forever (`cli/__init__.py`): the frozen stub compiles it in as the
    fallback argv, and that stub cannot change without revoking every macOS
    user's microphone grant.
