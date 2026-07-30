@@ -117,8 +117,8 @@ def test_profile_title_wins_over_derived_title():
 def test_over_backend_budget_forces_map_reduce():
     # The budget is the BACKEND's property — a small-window backend map-reduces
     # a meeting that a frontier backend takes in one pass.
-    entries = [entry("w" * 500, start=float(i)) for i in range(10)]
-    backend = FakeBackend(max_input_chars=2000)
+    entries = [entry("w" * 2000, start=float(i)) for i in range(10)]
+    backend = FakeBackend(max_input_chars=8000)
     progress: list[str] = []
     notes = generate_notes(transcript(entries), backend, on_progress=progress.append)
     assert len(backend.calls) > 2  # at least two map calls + one reduce
@@ -138,6 +138,27 @@ def test_same_meeting_is_single_shot_for_a_large_window_backend():
     notes = generate_notes(transcript(entries), backend)
     assert len(backend.calls) == 1
     assert notes.provenance.strategy == "single-shot"
+
+
+def test_system_prompt_counts_against_the_chunk_budget():
+    # Same entries, same backend window: a large instructions file must shrink
+    # what one chunk may carry — the system prompt does not ride for free.
+    entries = [entry("w" * 500, start=float(i)) for i in range(10)]
+    lean = FakeBackend(max_input_chars=7000)
+    generate_notes(transcript(entries), lean)
+    assert len(lean.calls) == 1  # one pass with a lean system prompt
+    fat = FakeBackend(max_input_chars=7000)
+    generate_notes(transcript(entries), fat, instructions="x" * 2000)
+    assert len(fat.calls) > 1  # the instructions ate the single-pass budget
+
+
+def test_oversized_instructions_fail_loudly_before_any_model_call():
+    # A system prompt that eats the input window must not degenerate into one
+    # model call per speaker turn — it names the cause and stops.
+    backend = FakeBackend(max_input_chars=48_000)
+    with pytest.raises(NotesGenerationError, match="instructions"):
+        generate_notes(transcript(), backend, instructions="x" * 47_000)
+    assert backend.calls == []
 
 
 def test_fenced_json_is_extracted():

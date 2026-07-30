@@ -115,6 +115,17 @@ def _system_prompt(
     return system
 
 
+def system_overhead(transcript: Transcript, *, instructions: str | None) -> int:
+    """Rendered size of this meeting's system prompt, in chars.
+
+    The *map* variant, which is the longest one a run can send — a chunk budget
+    derived from it can never exceed what any actual call has left. Exists so
+    :mod:`.generate` can charge the system prompt against
+    ``max_input_chars`` instead of letting instructions and meeting context
+    ride for free."""
+    return len(_system_prompt(transcript, instructions=instructions, partial=True))
+
+
 def build_messages(
     transcript: Transcript,
     *,

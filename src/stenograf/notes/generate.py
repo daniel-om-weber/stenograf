@@ -21,8 +21,15 @@ from stenograf.notes.prompt import (
     build_messages,
     build_reduce_messages,
     chunk_entries,
+    system_overhead,
 )
 from stenograf.transcript import Transcript
+
+_MIN_CHUNK_BUDGET = 4_000
+"""Smallest transcript-chunk budget worth running. Below this the system
+prompt has eaten the window and chunking degenerates toward one model call per
+speaker turn — a runaway, not a meeting summary. Fail loudly instead and name
+what to cut."""
 
 
 def generate_notes(
@@ -58,7 +65,19 @@ def _generate(
     on_progress: Callable[[str], None] | None,
 ) -> MeetingNotes:
     progress = on_progress or (lambda _message: None)
-    chunks = chunk_entries(transcript.entries, max_chars=backend.max_input_chars)
+    # The system prompt (rules, meeting context, [notes] instructions) rides on
+    # every call, so it is charged against the backend's input budget — only the
+    # remainder is available for rendered transcript entries.
+    overhead = system_overhead(transcript, instructions=instructions)
+    budget = backend.max_input_chars - overhead
+    if budget < _MIN_CHUNK_BUDGET:
+        raise NotesGenerationError(
+            f"the notes system prompt (rules, meeting context, [notes] instructions) "
+            f"is {overhead} chars, leaving {budget} of the backend's "
+            f"{backend.max_input_chars}-char input budget for the transcript — "
+            "shorten the [notes] instructions file or raise [notes] max_input_chars"
+        )
+    chunks = chunk_entries(transcript.entries, max_chars=budget)
     if len(chunks) == 1:
         progress(f"summarizing with {backend.name} ({backend.model}), single pass")
         messages = build_messages(transcript, instructions=instructions)
