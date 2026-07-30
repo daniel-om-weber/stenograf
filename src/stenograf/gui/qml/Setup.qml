@@ -19,6 +19,39 @@ Panel {
     Component.onCompleted: if (page.screen)
         page.screen.opened()
 
+    // The meeting type comes first because it sets defaults for the controls
+    // below it — and it is hidden entirely on a machine whose settings.toml
+    // defines no [meetings.*] section, so the form nobody has presets for looks
+    // exactly as it did before this control existed.
+    ColumnLayout {
+        spacing: 6
+        visible: page.screen.state.presets.length > 1
+        Layout.fillWidth: true
+        Layout.bottomMargin: 4  // the summary must not crowd the first switch
+
+        Text {
+            text: "Meeting type"
+            color: Theme.text
+            font.pixelSize: 13
+        }
+
+        Combo {
+            id: preset
+
+            model: page.screen.state.presets
+            Layout.fillWidth: true
+        }
+
+        Text {
+            text: preset.currentOption ? (preset.currentOption.hint || "") : ""
+            visible: text.length > 0
+            color: Theme.muted
+            font.pixelSize: 12
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
+    }
+
     Toggle {
         id: mic
 
@@ -145,6 +178,7 @@ Panel {
             primary: true
             Layout.fillWidth: true
             onClicked: page.screen.start({
+                "preset": preset.value || "",
                 "mic": mic.checked,
                 "system": system.checked,
                 "diarize": diarize.checked,

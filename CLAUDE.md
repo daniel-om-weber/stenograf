@@ -79,13 +79,14 @@ leader" question is **declined**, not gated — see PLAN.md's declined list befo
 evaluating any ASR model. `PLAN-NOTES-MARKDOWN.md` and
 `PLAN-MEETING-PRESETS.md` (both 2026-07-30, both built): notes are markdown
 against a template that *is* the schema, and a meeting kind is a
-`[meetings.<name>]` section selected with `--preset`. Read the notes plan's
+`[meetings.<name>]` section selected with `--preset` (its UI half — the
+"Meeting type" picker in the Qt setup form and the Settings screen, plus
+`steno settings show --preset` — shipped 2026-07-31). Read the notes plan's
 history before touching `notes/` — the deleted JSON schema was quietly doing
 four jobs (structure, sanitizing, truncation detection, refusal detection) and
 which replacement covers each is not guessable from the code. Their leftovers —
-two Ollama gates that need a non-macOS box, Gate A's read, and the presets UI
-half — are in PLAN.md. Retrieve any of them with
-`git log --follow -p <file>`. Measured evidence for the shipped defaults is in
+two Ollama gates that need a non-macOS box and Gate A's read — are in PLAN.md.
+Retrieve any of them with `git log --follow -p <file>`. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
 

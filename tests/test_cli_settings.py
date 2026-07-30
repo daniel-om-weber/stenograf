@@ -236,6 +236,42 @@ def test_settings_show_covers_every_settings_key():
     assert not missing, f"settings show has no row for: {', '.join(missing)}"
 
 
+def test_settings_show_resolves_a_preset(tmp_path, monkeypatch):
+    """``--preset`` answers what a preset run uses — the CLI half of the setup
+    form's picker, which shows the same report."""
+    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+    write_settings(
+        """
+[notes]
+backend = "command"
+command = ["claude", "-p"]
+
+[meetings.controlling]
+title = "Controlling-Runde"
+
+[meetings.controlling.notes]
+backend = "mlx"
+
+[meetings.controlling.vocab]
+attendees = ["Anja"]
+"""
+    )
+
+    result = CliRunner().invoke(cli.main, ["settings", "show", "--preset", "controlling"])
+
+    assert result.exit_code == 0, result.output
+    assert 'preset:   [meetings.controlling] — title "Controlling-Runde", notes via mlx' in (
+        result.output
+    )
+    assert "backend         = mlx  ([meetings.controlling])" in result.output
+    # Vocabulary merges instead of overlaying, so it gets a sentence, not a row.
+    assert "merges into the standing vocabulary" in result.output
+
+    unknown = CliRunner().invoke(cli.main, ["settings", "show", "--preset", "nope"])
+    assert unknown.exit_code != 0
+    assert "unknown meeting preset" in unknown.output
+
+
 def test_settings_show_names_a_missing_file(tmp_path):
     result = CliRunner().invoke(cli.main, ["settings", "show"])
     assert result.exit_code == 0, result.output

@@ -355,7 +355,7 @@ one thing still open in this phase.
 
 ---
 
-## Notes and presets — both built 2026-07-30; what is open is gates and one UI half
+## Notes and presets — both built 2026-07-30, the presets UI 2026-07-31; what is open is gates
 
 `PLAN-NOTES-MARKDOWN.md` and `PLAN-MEETING-PRESETS.md` were deleted with this
 section; their design records, adversarial-review findings and rejected
@@ -419,24 +419,38 @@ under a preset is not reproducible without it), `steno presets`, `cwd` +
 per-preset doctor checks that resolve each `argv[0]` under the effective PATH.
 Three things stayed open:
 
-- **The UI half — a preset picker in the Qt setup form, plus
-  `settings_report(preset=…)` / `steno settings show --preset`.** Its old
-  blocker (which front-end survives step 7) is settled, so it targets
-  `gui/screens.py` + `Setup.qml`, and `resolve_meeting_request(preset=…)` is
-  already the library seam it will call. What it waits on now is the evidence
-  question below.
-- **The evidence question, which is the whole point of the staging.** The
-  per-run flags (`--notes-backend`, `--notes-model`, `--instructions`) are the
-  baseline the preset layer has to beat on real use; persistence, per-kind
-  `[vocab]` and a GUI picker are the three things that baseline structurally
-  cannot do. If real use shows the flags suffice, the UI half never gets built
-  — an acceptable outcome of that plan, not a failure of it.
-- **One known asymmetry, documented in `resolve_meeting_request`'s docstring:**
-  `STENOGRAF_NOTES_BACKEND` still beats a preset's backend on the UI run path
-  (`flow.MeetingRun` calls `create_backend(None, …)`), while the CLI passes the
-  preset's backend explicitly and holds flag > preset > env. The env var is a
-  developer escape hatch; plumbing an override channel through `MeetingRequest`
-  was judged not worth it.
+- ~~**The UI half.**~~ **Built 2026-07-31, ahead of the evidence question
+  below** — Daniel asked for the picker directly. "Meeting type" is the first
+  control in the Qt setup form (hidden entirely when settings.toml defines no
+  `[meetings.*]`, so a machine without presets sees the form it always had),
+  each entry carrying the one-line summary `steno presets` prints —
+  `MeetingPreset.summary()` is now the single source both render. The Settings
+  screen got the same picker: it re-renders the read-only report under
+  `settings_report(preset=…)`, which is `steno settings show --preset NAME`'s
+  library seam. Both reports **attribute** rows now — a key the preset set reads
+  `([meetings.NAME])`, one it switched off with `""` reads
+  `([meetings.NAME] switched it off)`, and an env var that beats a preset key
+  says so — because the overlay is sparse, so reading the section tells you what
+  it sets but not what wins. Vocabulary gets a sentence rather than a row: it
+  merges, so there is no single effective value to print.
+- **The evidence question is now moot for the picker but still open for the
+  layer.** The per-run flags (`--notes-backend`, `--notes-model`,
+  `--instructions`) were the baseline the preset layer had to beat on real use;
+  persistence, per-kind `[vocab]` and a GUI picker are the three things that
+  baseline structurally cannot do. The picker exists ahead of that verdict, so
+  what real use decides now is whether presets *get written at all* — if
+  `[meetings.*]` sections stay empty on this machine after a few weeks, the
+  layer is the thing to reconsider, not the control.
+- **One known asymmetry, documented in `resolve_meeting_request`'s docstring —
+  and now user-visible, which it was not when it was accepted:** a user picking
+  a meeting type whose summary reads "notes via mlx" gets a different backend if
+  `STENOGRAF_NOTES_BACKEND` is set. Still judged not worth an override channel
+  through `MeetingRequest` (the var is a developer escape hatch, and the
+  Settings screen's report names it as beating the preset), but the reason it
+  was cheap has changed. The mechanism: `flow.MeetingRun` calls
+  `create_backend(None, …)`, so the env var wins inside `default_backend_name`,
+  while the CLI passes the preset's backend explicitly and holds
+  flag > preset > env.
 
 Two designs from those plans are **rejected and should not be re-opened**: a
 directory of preset *files* (a shared checkout is arbitrary code execution —

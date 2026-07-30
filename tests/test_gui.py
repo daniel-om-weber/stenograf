@@ -232,6 +232,83 @@ class TestSetupScreen:
         assert meeting.state["profile"] == "local 2"
         assert meeting.state["language"] == "de"
 
+    def test_the_meeting_type_picker_offers_the_presets_and_applies_one(
+        self, gui, tmp_path, monkeypatch
+    ):
+        from stenograf import output
+
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text(
+            """
+[meetings.controlling]
+title = "Controlling-Runde"
+language = "de"
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        setup.opened()
+        # "" first (no preset), then the sections, each with the line `steno
+        # presets` prints.
+        assert setup.state["presets"] == [
+            {"label": "None", "value": "", "hint": ""},
+            {
+                "label": "controlling",
+                "value": "controlling",
+                "hint": 'title "Controlling-Runde", de',
+            },
+        ]
+
+        setup.start(
+            {
+                "preset": "controlling",
+                "mic": True,
+                "system": False,
+                "diarize": False,
+                "local": -1,
+                "remote": -1,
+                "language": "auto",  # the preset's language fills the gap
+                "title": "",  # …and its title
+                "recordAudio": False,
+                "notes": False,
+            }
+        )
+
+        # The form sent language "auto" and no title, so a German meeting on the
+        # live page is the preset having reached the library through the picker.
+        assert setup.state["error"] == ""
+        assert shell.screen("Meeting").state["language"] == "de"
+
+    def test_a_preset_the_file_no_longer_defines_keeps_the_form_open(
+        self, gui, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        shell, _engine = gui
+        seen = []
+        shell.navigation.connect(lambda page, mode: seen.append((page, mode)))
+
+        shell.screen("Setup").start(
+            {
+                "preset": "gone",
+                "mic": True,
+                "system": False,
+                "diarize": False,
+                "local": -1,
+                "remote": -1,
+                "language": "auto",
+                "title": "",
+                "recordAudio": False,
+                "notes": False,
+            }
+        )
+        assert seen == []
+        assert "unknown meeting preset" in shell.screen("Setup").state["error"]
+
     def test_an_impossible_profile_keeps_the_form_open(self, gui, tmp_path, monkeypatch):
         shell, _engine = gui
         seen = []
@@ -680,6 +757,50 @@ class TestSettingsScreen:
         screen.opened()
         assert screen.state["ok"] is False
         assert any("settings.toml" in line for line in screen.lines[1:])
+
+    def test_a_meeting_type_re_renders_the_report_under_its_overlay(
+        self, gui, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text(
+            '[notes]\nbackend = "command"\ncommand = ["claude"]\n'
+            '\n[meetings.controlling.notes]\nbackend = "mlx"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+
+        shell, _engine = gui
+        screen = shell.screen("Settings")
+        screen.opened()
+        assert [entry["value"] for entry in screen.state["presets"]] == ["", "controlling"]
+        assert any("backend" in line and "command" in line for line in screen.lines)
+
+        screen.show("controlling")
+        assert screen.state["preset"] == "controlling"
+        assert any("[meetings.controlling]" in line and "mlx" in line for line in screen.lines)
+
+    def test_a_deleted_meeting_type_drops_off_the_picker_on_reload(
+        self, gui, tmp_path, monkeypatch
+    ):
+        """The report must never render an error because the picker is still
+        holding a name the file no longer defines."""
+        data = tmp_path / "data"
+        data.mkdir()
+        settings = data / "settings.toml"
+        settings.write_text('[meetings.controlling]\ntitle = "C"\n', encoding="utf-8")
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+
+        shell, _engine = gui
+        screen = shell.screen("Settings")
+        screen.opened()
+        screen.show("controlling")
+
+        settings.write_text("", encoding="utf-8")
+        screen.opened()  # the Reload button
+        assert screen.state["preset"] == ""
+        assert screen.state["ok"] is True
 
 
 class TestDoctorScreen:

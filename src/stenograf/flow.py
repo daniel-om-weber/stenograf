@@ -610,24 +610,42 @@ def transcribe_recording(
     return TranscribeResult(paths=paths, out_dir=out_dir, duration=duration, elapsed=elapsed)
 
 
-def settings_report() -> tuple[list[str], bool]:
+def settings_report(preset: str | None = None) -> tuple[list[str], bool]:
     """``steno settings show`` as plain lines, plus whether the file loaded.
 
-    Every key with its value and where it came from (env override,
-    settings.toml, built-in default), rendered through the same
+    Every key with its value and where it came from (env override, a meeting
+    preset, settings.toml, built-in default), rendered through the same
     :func:`~stenograf.settings.settings_rows` helper the CLI prints from, so no
     two entries can disagree about the effective configuration. A broken file
     renders its error instead and returns ``False`` — what to *do* about it is
     the calling UI's line to write, since one has a keybinding and the other a
-    button."""
+    button.
+
+    ``preset`` answers "what does this meeting type actually change?" the way
+    ``steno settings show --preset NAME`` does: the ``[meetings.<name>]``
+    overlay applied, its keys attributed to it. An unknown name is a failure
+    like an unreadable file — same error rendering, same ``False``, because a
+    picker offering a name settings.toml no longer defines is exactly as
+    broken."""
     path = settings_path()
     suffix = "" if path.exists() else " (not present — all defaults)"
     lines = [f"settings: {path}{suffix}"]
     try:
         settings = load_settings()
+        preset_obj = None
+        if preset is not None:
+            settings, preset_obj = apply_meeting_preset(settings, preset)
     except SettingsError as exc:
         return [*lines, "", str(exc)], False
-    for table, rows in settings_rows(settings):
+    if preset_obj is not None:
+        summary = preset_obj.summary()
+        lines.append(
+            f"preset:   [meetings.{preset_obj.name}]" + (f" — {summary}" if summary else "")
+        )
+        if preset_obj.vocab.attendees or preset_obj.vocab.glossary_file:
+            # Vocabulary merges rather than overlays, so no row can show it.
+            lines.append("          its [vocab] merges into the standing vocabulary")
+    for table, rows in settings_rows(settings, preset_obj):
         lines.append("")
         lines.append(f"[{table}]")
         width = max(len(key) for key, _, _ in rows)

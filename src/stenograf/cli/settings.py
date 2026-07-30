@@ -13,15 +13,24 @@ def settings() -> None:
 
 
 @settings.command("show")
-def settings_show() -> None:
+@click.option(
+    "--preset",
+    "preset",
+    metavar="NAME",
+    default=None,
+    help="Show what a --preset NAME run resolves to: the [meetings.NAME] "
+    "overlay applied, with its keys attributed to it.",
+)
+def settings_show(preset: str | None) -> None:
     """Print the effective configuration and where each value comes from.
 
-    Sources: an environment override, settings.toml, or the built-in default.
-    (CLI flags outrank all three but are per-run, so they never appear here.)
+    Sources: an environment override, a meeting preset, settings.toml, or the
+    built-in default. (CLI flags outrank all four but are per-run, so they
+    never appear here.)
     """
     from stenograf.flow import settings_report
 
-    lines, ok = settings_report()
+    lines, ok = settings_report(preset)
     if not ok:
         click.echo(lines[0])  # the settings-path header still helps
         raise click.ClickException(f"{lines[-1]} — fix it with `steno settings edit`")
@@ -71,20 +80,5 @@ def presets() -> None:
         )
         return
     for name in sorted(settings.meetings):
-        preset = settings.meetings[name]
-        facts = []
-        if preset.title:
-            facts.append(f'title "{preset.title}"')
-        if preset.language:
-            facts.append(preset.language)
-        if preset.notes.backend:
-            facts.append(f"notes via {preset.notes.backend}")
-        if preset.template:
-            facts.append(f"template {preset.template.name}")
-        if preset.instructions:
-            facts.append(f"instructions {preset.instructions.name}")
-        if preset.vocab.attendees or preset.vocab.glossary_file:
-            facts.append("own vocabulary")
-        if "export.dir" in preset.cleared:
-            facts.append("no vault export")
-        click.echo(f"  {name}" + (f" — {', '.join(facts)}" if facts else ""))
+        summary = settings.meetings[name].summary()
+        click.echo(f"  {name}" + (f" — {summary}" if summary else ""))

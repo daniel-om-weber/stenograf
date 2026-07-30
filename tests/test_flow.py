@@ -109,6 +109,60 @@ attendees = ["Preset Name"]
         assert lines[0].startswith("settings: ")
         assert "[asr]" in lines
 
+    def test_the_report_attributes_a_presets_keys_to_it(self, tmp_path, monkeypatch):
+        # The picker's whole point: which values does *this* meeting type
+        # decide? A row the preset set must not read as plain settings.toml.
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text(
+            """
+[notes]
+backend = "command"
+instructions = "~/standing.md"
+
+[notes.export]
+dir = "~/vault"
+
+[meetings.geheim]
+title = "Vertraulich"
+
+[meetings.geheim.notes]
+backend = "mlx"
+
+[meetings.geheim.notes.export]
+dir = ""
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
+
+        plain, _ = settings_report()
+        lines, ok = settings_report("geheim")
+        assert ok is True
+        assert any(line.startswith("preset:   [meetings.geheim]") for line in lines), lines
+
+        def row(report, table, key):
+            """One ``key`` row out of one ``[table]`` — ``dir`` exists twice."""
+            rest = report[report.index(f"[{table}]") + 1 :]
+            body = rest[: next(i for i, line in enumerate([*rest, ""]) if not line.strip())]
+            return next(line for line in body if line.strip().split(" ")[0] == key)
+
+        # Overlaid and attributed…
+        assert "command" in row(plain, "notes", "backend")
+        assert "mlx" in row(lines, "notes", "backend")
+        assert row(lines, "notes", "backend").endswith("([meetings.geheim])")
+        # …a key the preset leaves alone still reads as the file…
+        assert row(lines, "notes", "instructions").endswith("(settings.toml)")
+        # …and one it switched off with "" says so, rather than looking unset.
+        assert row(lines, "notes.export", "dir").endswith("([meetings.geheim] switched it off)")
+
+    def test_an_unknown_preset_fails_the_report_like_a_broken_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        lines, ok = settings_report("nope")
+        assert ok is False
+        assert any("unknown meeting preset" in line for line in lines), lines
+
 
 class TestMeetingRunAbort:
     """The pre-capture cancel: between Start and ``set_stop`` nothing is

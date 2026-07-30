@@ -260,6 +260,31 @@ class MeetingPreset:
     vocab: VocabSettings = field(default_factory=VocabSettings)
     cleared: frozenset[str] = frozenset()
 
+    def summary(self) -> str:
+        """What this preset decides, in one line (empty for a preset that sets nothing).
+
+        ``steno presets`` prints it and the setup form's picker shows it under
+        the drop-down, so the list and the picker can never describe the same
+        preset differently. Deliberately the *headline* facts, not the full
+        overlay — the whole resolved configuration is
+        ``steno settings show --preset NAME``."""
+        facts = []
+        if self.title:
+            facts.append(f'title "{self.title}"')
+        if self.language:
+            facts.append(self.language)
+        if self.notes.backend:
+            facts.append(f"notes via {self.notes.backend}")
+        if self.template:
+            facts.append(f"template {self.template.name}")
+        if self.instructions:
+            facts.append(f"instructions {self.instructions.name}")
+        if self.vocab.attendees or self.vocab.glossary_file:
+            facts.append("own vocabulary")
+        if "export.dir" in self.cleared:
+            facts.append("no vault export")
+        return ", ".join(facts)
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -619,14 +644,22 @@ def ensure_settings_file() -> tuple[Path, bool]:
     return path, True
 
 
-def settings_rows(settings: Settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
+def settings_rows(
+    settings: Settings, preset: MeetingPreset | None = None
+) -> list[tuple[str, list[tuple[str, str, str]]]]:
     """``(table, [(key, value, source), …])`` rows behind every settings report.
 
     One renderer for ``steno settings show`` and the app's Settings screen, so
     no two entries can disagree about the effective configuration. Values are
     TOML-flavored so a line can be pasted into the file; defaults that aren't
     literal values (an unset optional, a per-backend choice) read as a
-    parenthesized description instead."""
+    parenthesized description instead.
+
+    ``preset`` is the :class:`MeetingPreset` already applied to ``settings``
+    (never one still to apply — this function overlays nothing). Its only job
+    here is *attribution*: the keys that preset set say so, instead of reading
+    as plain ``settings.toml`` and leaving the user to diff two reports to find
+    out what the preset actually changed."""
     from stenograf.asr.biasing import DEFAULT_ALPHA
     from stenograf.asr.registry import default_backend_name as asr_default
     from stenograf.glossary import DEFAULT_THRESHOLD as GLOSSARY_THRESHOLD
@@ -701,17 +734,61 @@ def settings_rows(settings: Settings) -> list[tuple[str, list[tuple[str, str, st
         ("notes.export", "dir", settings.notes.export_dir, "(off)", None),
     ]
 
-    def pick(file_value: object, default: object, env_var: str | None) -> tuple[str, str]:
+    set_by_preset, cleared_by_preset = _preset_keys(preset)
+    label = f"[meetings.{preset.name}]" if preset is not None else ""
+
+    def pick(
+        row: tuple[str, str], file_value: object, default: object, env_var: str | None
+    ) -> tuple[str, str]:
+        # An env override still wins the *display*, because it wins wherever it
+        # is read — but a preset that also set the key is named, since on the
+        # run path (flag > preset > env) the preset is what would apply.
         if env_var and (env_value := os.environ.get(env_var)):
-            return _fmt_setting(env_value), f"${env_var}"
+            beaten = f" (beats {label})" if row in set_by_preset else ""
+            return _fmt_setting(env_value), f"${env_var}{beaten}"
         if file_value is not None and file_value != ():
-            return _fmt_setting(file_value), "settings.toml"
+            return _fmt_setting(file_value), label if row in set_by_preset else "settings.toml"
+        # A key the preset switched off with "" reads as its default, but the
+        # reason it is the default is the preset, not the absence of a value.
+        if row in cleared_by_preset:
+            return _fmt_setting(default), f"{label} switched it off"
         return _fmt_setting(default), "default"
 
     tables: dict[str, list[tuple[str, str, str]]] = {}
     for table, key, file_value, default, env_var in descriptors:
-        tables.setdefault(table, []).append((key, *pick(file_value, default, env_var)))
+        tables.setdefault(table, []).append(
+            (key, *pick((table, key), file_value, default, env_var))
+        )
     return list(tables.items())
+
+
+def _preset_keys(
+    preset: MeetingPreset | None,
+) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """The ``(table, key)`` rows an applied preset set, and the ones it cleared.
+
+    Mirrors :func:`apply_meeting_preset`'s overlay — the sparse ``[notes]``
+    fields plus the two paths a preset can name at its top level (``template``,
+    ``instructions``) and the one ``[vocab]`` key that overlays rather than
+    merges. Vocabulary merges have no row to claim, so they are reported
+    separately by the caller."""
+    if preset is None:
+        return set(), set()
+    # The one key with a table of its own — spelled `export_dir` as a field and
+    # `export.dir` in `cleared` (which names TOML paths, not attributes).
+    row = {"export_dir": ("notes.export", "dir"), "export.dir": ("notes.export", "dir")}
+    was_set = {
+        row.get(f.name, ("notes", f.name))
+        for f in fields(preset.notes)
+        if (value := getattr(preset.notes, f.name)) is not None and value != ()
+    }
+    for name in ("template", "instructions"):
+        if getattr(preset, name) is not None:
+            was_set.add(("notes", name))
+    if preset.vocab.glossary_threshold is not None:
+        was_set.add(("vocab", "glossary_threshold"))
+    cleared = {row.get(key, ("notes", key)) for key in preset.cleared}
+    return was_set, cleared
 
 
 def _fmt_setting(value: object) -> str:

@@ -11,11 +11,39 @@ Panel {
     property var screen
 
     heading: "Settings"
-    hint: "Where each value comes from: an environment override, settings.toml, or the built-in default."
+    hint: "Where each value comes from: an environment override, a meeting type, settings.toml, or the built-in default."
     cardWidth: 720
 
     Component.onCompleted: if (page.screen)
         page.screen.opened()
+
+    // Not an editor: picking a meeting type re-renders the same read-only report
+    // with that [meetings.*] overlay applied, which is the only way to see what
+    // a type actually changes. Hidden when no presets are defined.
+    RowLayout {
+        spacing: 10
+        visible: page.screen.state.presets.length > 1
+        Layout.fillWidth: true
+        Layout.bottomMargin: 4
+
+        Text {
+            text: "Meeting type"
+            color: Theme.text
+            font.pixelSize: 13
+        }
+
+        Combo {
+            id: preset
+
+            model: page.screen.state.presets
+            // Driven by the screen's own selection, so Reload (which re-reads
+            // the file and may drop a deleted preset) and the report can never
+            // disagree about which type is on display.
+            currentIndex: Math.max(0, preset.model.findIndex(entry => entry.value === page.screen.state.preset))
+            Layout.fillWidth: true
+            onActivated: page.screen.show(preset.value || "")
+        }
+    }
 
     // Selectable, so a path or a value can be copied out; wrapped, because a
     // long glossary path or attendee list would otherwise run off the card.

@@ -30,6 +30,7 @@ from stenograf.gui.app import Screen
 
 if TYPE_CHECKING:
     from stenograf.gui.app import StenografGui
+    from stenograf.settings import Settings
 
 _AUTO = -1
 """Combo-box sentinel for "estimate the speaker count" (see the setup form)."""
@@ -52,13 +53,14 @@ def _local(url: str) -> Path:
 class SetupScreen(Screen):
     """The few choices that matter before capture starts.
 
-    One concept per control: which sources to capture, whether to tell speakers
-    apart (the per-channel counts only mean something while that is on),
-    language, an optional title, the audio-recording opt-in and the notes
-    toggle. Everything else — formats, vocabulary, re-ID, AEC, checkpoint
-    cadence — comes from settings.toml exactly as it does for a flagless
-    ``steno start``. The switches' standing defaults are refreshed on every
-    visit, because settings.toml may have been edited between two of them."""
+    One concept per control: the meeting type, which sources to capture,
+    whether to tell speakers apart (the per-channel counts only mean something
+    while that is on), language, an optional title, the audio-recording opt-in
+    and the notes toggle. Everything else — formats, vocabulary, re-ID, AEC,
+    checkpoint cadence — comes from settings.toml exactly as it does for a
+    flagless ``steno start``. The switches' standing defaults are refreshed on
+    every visit, because settings.toml may have been edited between two of
+    them — and so is the preset list, for the same reason."""
 
     def __init__(self, app: StenografGui) -> None:
         super().__init__(app)
@@ -73,8 +75,25 @@ class SetupScreen(Screen):
             diarize=standing.speakers.diarization is True,
             recordAudio=standing.output.record_audio is True,
             notes=standing.notes.auto is True,
+            presets=self._presets(standing),
             error="",
         )
+
+    @staticmethod
+    def _presets(standing: Settings) -> list[dict[str, str]]:
+        """The meeting types on offer: ``[meetings.<name>]``, "None" first.
+
+        ``""`` is the no-preset value, so a form that never touches the picker
+        sends exactly what it sent before presets existed. Each entry carries
+        the preset's own one-line summary (:meth:`MeetingPreset.summary`, the
+        line ``steno presets`` prints) — the picker shows it under the
+        drop-down, so choosing a type says what the type does. A machine with
+        no presets, or an unreadable settings.toml, yields the "None" entry
+        alone and the QML hides the control."""
+        return [{"label": "None", "value": "", "hint": ""}] + [
+            {"label": name, "value": name, "hint": standing.meetings[name].summary()}
+            for name in sorted(standing.meetings)
+        ]
 
     @Property("QVariantList", constant=True)  # type: ignore[operator]  # PySide decorator
     def languages(self) -> list[dict[str, str]]:
@@ -96,8 +115,9 @@ class SetupScreen(Screen):
         """Resolve the form into a request and hand it to the meeting screen.
 
         A form that cannot describe a meeting (both sources off, an unreadable
-        settings file) stays open with the reason shown, through the same
-        library call every front-end resolves with."""
+        settings file, a preset settings.toml no longer defines) stays open with
+        the reason shown, through the same library call every front-end resolves
+        with."""
         from stenograf.config import Language
         from stenograf.flow import MeetingRequestError, resolve_meeting_request
 
@@ -117,6 +137,8 @@ class SetupScreen(Screen):
                 title=str(form.get("title", "")),
                 notes=bool(form.get("notes")),
                 record_audio=bool(form.get("recordAudio")),
+                # "" is the picker's no-preset entry; the library takes None.
+                preset=str(form.get("preset", "")) or None,
             )
         except MeetingRequestError as exc:
             self.set(error=str(exc))
@@ -235,19 +257,40 @@ class SettingsScreen(Screen):
     A settings *form* is where UI effort balloons — explicitly out of scope. The
     file is the editor: *Open* hands settings.toml to whatever the desktop uses
     for it (creating the commented template first, exactly like ``steno settings
-    edit``), and *Reload* re-reads it, so an edit is one alt-tab away."""
+    edit``), and *Reload* re-reads it, so an edit is one alt-tab away.
+
+    The meeting-type picker is the one control here, and it is still not a form:
+    it re-renders the same read-only report with a ``[meetings.<name>]`` overlay
+    applied, which is the only way to answer "what does this type actually
+    change?" — a preset's overlay is sparse, so reading its section tells you
+    what it sets but not what wins."""
 
     def __init__(self, app: StenografGui) -> None:
         super().__init__(app)
         self.lines: list[str] = []  # plain-text mirror (tests, debugging)
-        self.set(text="", ok=True, path="")
+        self.set(text="", ok=True, path="", preset="", presets=[])
 
     @Slot()
     def opened(self) -> None:
+        from stenograf.flow import standing_settings
+
+        # The list is refreshed first and the selection dropped if the file no
+        # longer defines it, so an edit between two visits cannot leave the
+        # picker showing a name that would now render as an error.
+        presets = SetupScreen._presets(standing_settings())
+        chosen = str(self.get("preset", ""))
+        if chosen and all(entry["value"] != chosen for entry in presets):
+            chosen = ""
+        self.set(presets=presets)
+        self.show(chosen)
+
+    @Slot(str)
+    def show(self, preset: str) -> None:
+        """Render the report, optionally under a meeting preset (``""`` = none)."""
         from stenograf.flow import settings_report
 
-        self.lines, ok = settings_report()
-        self.set(text="\n".join(self.lines), ok=ok)
+        self.lines, ok = settings_report(preset or None)
+        self.set(preset=preset, text="\n".join(self.lines), ok=ok)
 
     @Slot()
     def edit(self) -> None:
