@@ -45,6 +45,15 @@ if TYPE_CHECKING:
 )
 @click.option("--ollama-url", default=None, metavar="URL", help="Ollama server URL.")
 @click.option(
+    "--instructions",
+    "instructions_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    metavar="FILE",
+    help="Style/structure instructions appended to the notes prompt for this run "
+    "[default: [notes] instructions in settings.toml].",
+)
+@click.option(
     "--export-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
@@ -62,6 +71,7 @@ def notes_command(
     backend_name: str | None,
     model: str | None,
     ollama_url: str | None,
+    instructions_file: Path | None,
     export_dir: Path | None,
     no_export: bool,
 ) -> None:
@@ -101,6 +111,7 @@ def notes_command(
             backend_name=backend_name,
             model=model,
             ollama_url=ollama_url,
+            instructions_file=instructions_file,
             export_dir=export_dir,
             no_export=no_export,
         )
@@ -152,6 +163,7 @@ def _generate_and_write_notes(
     backend_name: str | None = None,
     model: str | None = None,
     ollama_url: str | None = None,
+    instructions_file: Path | None = None,
     export_dir: Path | None = None,
     no_export: bool = False,
     notes_settings=None,
@@ -190,8 +202,11 @@ def _generate_and_write_notes(
         )
     backend = create_backend(backend_name, settings)
     instructions = None
-    if settings.instructions is not None:
-        instructions = settings.instructions.read_text(encoding="utf-8")
+    # A per-run --instructions file replaces the standing one, it does not
+    # append: the flag exists to try a different style, not to stack two.
+    instructions_path = instructions_file or settings.instructions
+    if instructions_path is not None:
+        instructions = instructions_path.read_text(encoding="utf-8")
 
     notes = generate_notes(
         transcript,
@@ -219,6 +234,9 @@ def _notes_after_run(
     *,
     created_at: datetime,
     notes_settings=None,
+    backend_name: str | None = None,
+    model: str | None = None,
+    instructions_file: Path | None = None,
 ) -> None:
     """The opt-in ``--notes`` step after a transcript is safely written.
 
@@ -226,7 +244,14 @@ def _notes_after_run(
     any notes failure warns and returns — rerun later with ``steno notes``."""
     try:
         written, _notes = _generate_and_write_notes(
-            transcript, out_dir, basename, created_at=created_at, notes_settings=notes_settings
+            transcript,
+            out_dir,
+            basename,
+            created_at=created_at,
+            notes_settings=notes_settings,
+            backend_name=backend_name,
+            model=model,
+            instructions_file=instructions_file,
         )
     except Exception as exc:
         click.secho(f"notes failed: {exc}", fg="yellow")
@@ -243,6 +268,9 @@ def _generate_notes(
     *,
     created_at: datetime,
     notes_settings,
+    backend_name: str | None = None,
+    model: str | None = None,
+    instructions_file: Path | None = None,
 ) -> bool:
     """The ``--notes`` tail for a run behind a live TUI: non-fatal, progress via
     the view.
@@ -262,6 +290,9 @@ def _generate_notes(
             basename,
             created_at=created_at,
             notes_settings=notes_settings,
+            backend_name=backend_name,
+            model=model,
+            instructions_file=instructions_file,
             on_progress=lambda message: view.status(f"notes: {message}"),
         )
     except Exception as exc:  # noqa: BLE001 — non-fatal by contract

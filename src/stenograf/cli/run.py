@@ -105,10 +105,14 @@ def _finish_run(
     settings,
     notes_flag: bool | None,
     print_markdown: bool,
+    notes_backend: str | None = None,
+    notes_model: str | None = None,
+    notes_instructions: Path | None = None,
 ) -> None:
     """The tail both commands share: optional notes, optional stdout print.
 
-    Notes run per :func:`_notes_enabled`."""
+    Notes run per :func:`_notes_enabled`; the per-run trio overrides the
+    ``[notes]`` snapshot for this run only."""
     from stenograf.cli.notes import _notes_after_run
 
     if _notes_enabled(notes_flag, settings):
@@ -118,6 +122,9 @@ def _finish_run(
             basename,
             created_at=created_at,
             notes_settings=settings.notes,
+            backend_name=notes_backend,
+            model=notes_model,
+            instructions_file=notes_instructions,
         )
     if print_markdown:
         click.echo()
@@ -257,7 +264,12 @@ def _reid_format_options(func: Callable) -> Callable:
 
 
 def _notes_options(func: Callable) -> Callable:
-    """Shared post-transcript options for ``start`` and ``transcribe``."""
+    """Shared post-transcript options for ``start`` and ``transcribe``.
+
+    The per-run notes trio (backend/model/instructions) exists so one meeting
+    can use a different notes setup — say, an agentic CLI with a
+    protocol-style file — without editing settings.toml. They only steer the
+    notes step of *this* run; ``steno notes`` has its own equivalents."""
     for option in reversed(
         (
             click.option(
@@ -268,6 +280,32 @@ def _notes_options(func: Callable) -> Callable:
                 "(summary, decisions, action items) with the backend configured in "
                 "settings.toml. Non-fatal: a notes failure never loses the transcript "
                 "[default: [notes] auto in settings.toml, else off].",
+            ),
+            click.option(
+                "--notes-backend",
+                "notes_backend",
+                default=None,
+                metavar="NAME",
+                help="Notes backend for this run: mlx (local, in-process), ollama "
+                "(local server), or command (any CLI, e.g. claude) "
+                "[default: settings.toml, else mlx where installed, else ollama].",
+            ),
+            click.option(
+                "--notes-model",
+                "notes_model",
+                default=None,
+                metavar="NAME",
+                help="Notes model for this run (HF repo id for mlx, Ollama model tag "
+                "for ollama; a provenance label for command backends).",
+            ),
+            click.option(
+                "--instructions",
+                "notes_instructions",
+                type=click.Path(exists=True, dir_okay=False, path_type=Path),
+                default=None,
+                metavar="FILE",
+                help="Style/structure instructions appended to the notes prompt for "
+                "this run [default: [notes] instructions in settings.toml].",
             ),
             click.option(
                 "--print", "print_markdown", is_flag=True, help="Also print the transcript."

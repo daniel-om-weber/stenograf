@@ -305,6 +305,82 @@ def test_transcribe_notes_failure_is_nonfatal(tmp_path, monkeypatch):
     assert "steno notes" in result.output  # retry guidance
 
 
+def test_transcribe_per_run_notes_trio_reaches_the_backend(tmp_path, monkeypatch):
+    # --notes-backend/--notes-model/--instructions steer only this run's notes
+    # step — the live-meeting/batch equivalent of `steno notes --backend` etc.
+    monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
+    seen = {}
+
+    class Recording(FakeBackend):
+        def complete(self, messages, schema):
+            seen["messages"] = messages
+            return self.response
+
+    def record_create(name, settings):
+        seen["name"] = name
+        seen["settings"] = settings
+        return Recording()
+
+    monkeypatch.setattr(notes_pkg, "create_backend", record_create)
+    style = tmp_path / "style.md"
+    style.write_text("Immer Du-Form verwenden.", encoding="utf-8")
+    audio = tmp_path / "meeting.wav"
+    write_wav(audio)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "transcribe",
+            str(audio),
+            "--out",
+            str(tmp_path),
+            "--notes",
+            "--notes-backend",
+            "command",
+            "--notes-model",
+            "claude",
+            "--instructions",
+            str(style),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["name"] == "command"
+    assert seen["settings"].model == "claude"
+    assert "Immer Du-Form verwenden." in seen["messages"][0]["content"]
+
+
+def test_notes_instructions_flag_replaces_the_settings_file(tmp_path, monkeypatch):
+    # The per-run file replaces the standing one — trying a different style
+    # must not stack the two.
+    import os
+
+    standing = tmp_path / "standing.md"
+    standing.write_text("Standing style.", encoding="utf-8")
+    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(f'[notes]\ninstructions = "{standing.as_posix()}"\n', encoding="utf-8")
+    seen = {}
+
+    class Recording(FakeBackend):
+        def complete(self, messages, schema):
+            seen["messages"] = messages
+            return self.response
+
+    monkeypatch.setattr(notes_pkg, "create_backend", lambda name, settings: Recording())
+    path = tmp_path / "transcript.json"
+    write_transcript_json(path)
+    per_run = tmp_path / "per-run.md"
+    per_run.write_text("Per-run style.", encoding="utf-8")
+
+    result = CliRunner().invoke(cli.main, ["notes", str(path), "--instructions", str(per_run)])
+
+    assert result.exit_code == 0, result.output
+    system = seen["messages"][0]["content"]
+    assert "Per-run style." in system
+    assert "Standing style." not in system
+
+
 def test_transcribe_without_notes_flag_never_touches_a_backend(tmp_path, monkeypatch):
     def explode(name, settings):
         raise AssertionError("--notes was not given; no backend may be created")

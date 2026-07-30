@@ -248,6 +248,11 @@ steno notes path/to/transcript.json   # …or any transcript file
 steno start --notes                   # generate notes right after the meeting
 ```
 
+One meeting can use a different notes setup without touching settings.toml:
+`--notes-backend`, `--notes-model` and `--instructions FILE` on `steno start`
+(and `steno transcribe`) steer that run's notes step only, and `steno notes`
+takes the same per-run choices as `--backend`, `--model` and `--instructions`.
+
 Notes land as sibling `transcript.notes.md`/`.notes.json` files. On Apple
 Silicon the default backend is `mlx` — a fully local in-process model, nothing
 to set up. To use a different backend, configure it once in

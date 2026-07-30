@@ -224,6 +224,9 @@ def start(
     profile_store: Path | None,
     full_finalize: bool,
     notes_flag: bool | None,
+    notes_backend: str | None,
+    notes_model: str | None,
+    notes_instructions: Path | None,
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
@@ -382,6 +385,9 @@ def start(
                 basename,
                 created_at=created_at,
                 notes_settings=settings.notes,
+                backend_name=notes_backend,
+                model=notes_model,
+                instructions_file=notes_instructions,
             )
 
         notes_in_tui = _notes_step
@@ -466,6 +472,9 @@ def start(
         # the non-fatal contract) — don't generate them a second time here.
         notes_flag=False if notes_in_tui is not None else notes_flag,
         print_markdown=print_markdown,
+        notes_backend=notes_backend,
+        notes_model=notes_model,
+        notes_instructions=notes_instructions,
     )
 
 

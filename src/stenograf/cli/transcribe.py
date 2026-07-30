@@ -134,6 +134,9 @@ def transcribe(
     glossary_threshold: float | None,
     profile_store: Path | None,
     notes_flag: bool | None,
+    notes_backend: str | None,
+    notes_model: str | None,
+    notes_instructions: Path | None,
     print_markdown: bool,
 ) -> None:
     """Transcribe an audio/video file (batch finalize pass).
@@ -322,6 +325,9 @@ def transcribe(
         settings=settings,
         notes_flag=notes_flag,
         print_markdown=print_markdown,
+        notes_backend=notes_backend,
+        notes_model=notes_model,
+        notes_instructions=notes_instructions,
     )
 
 
