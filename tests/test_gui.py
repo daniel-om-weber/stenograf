@@ -8,8 +8,8 @@ Two kinds of test, because a GUI has two kinds of failure:
   the regression test that matters most and the one no amount of Python
   coverage replaces.
 - **The controllers do what the screens promise**, driven exactly as QML drives
-  them (``opened()``, ``start()``, ``stop()``) and asserted on ``state`` — the
-  same plain-text-mirror rule the Textual screens follow.
+  them (``opened()``, ``start()``, ``stop()``) and asserted on ``state``,
+  the screens' plain-text mirror.
 
 Everything runs headless (``QT_QPA_PLATFORM=offscreen``); work started on a
 worker thread is awaited by pumping the Qt event loop, which is also what

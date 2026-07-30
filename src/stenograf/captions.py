@@ -6,7 +6,7 @@ plus a provisional tail that is replaced on every feed. Turning that into
 something a person can read — one growing line per run of speech, broken when
 the channel changes or a pause opens, flushed into the scrollback before it
 outgrows the screen — is a pile of small timing rules that must not exist twice.
-So it lives here, and the Textual screen and the Qt meeting screen only *render*
+So it lives here, and a meeting screen (today: the Qt one) only *renders*
 what this decides.
 
 The rules, and why each exists:

@@ -1,14 +1,14 @@
 """The workflows a *UI* runs: meeting, transcribe, notes — without any UI in them.
 
-``steno start``'s command body is the CLI's; this module is the equivalent for
-the button-driven entries, and it exists because there are now two of them.
-The Textual launcher (:mod:`stenograf.ui`) and the Qt desktop app
-(:mod:`stenograf.gui`) must run the *same* meeting — same folder allocation,
-same load order, same notes tail — or they drift into two products. So the
-screens keep only what a screen is: gathering inputs, showing progress,
-handling the answer. Everything between those lives here, expressed against
-:class:`~stenograf.view.LiveView` and plain callbacks, so it is drivable from a
-Textual worker, a Qt worker thread, or a test with no UI at all.
+``steno start``'s command body is the CLI's; this module is the equivalent
+for the button-driven entry, the Qt desktop app (:mod:`stenograf.gui`) — and
+the reason it must stay out of the screens: the app and the CLI must run the
+*same* meeting — same folder allocation, same load order, same notes tail —
+or they drift into two products. So the screens keep only what a screen is:
+gathering inputs, showing progress, handling the answer. Everything between
+those lives here, expressed against :class:`~stenograf.view.LiveView` and
+plain callbacks, so it is drivable from a Qt worker thread or a test with no
+UI at all.
 
 Differences from the CLI are deliberate scope, not drift: no ``--out``/``--force``
 (a fresh date-named folder can't collide), no replay/AEC-dump/full-finalize

@@ -104,9 +104,9 @@ class TestMacOSCaptureProvider:
         provider.stop()
 
     def test_on_log_keeps_helper_stderr_off_the_terminal(self, capfd):
-        # The TUI path: helper chatter must reach the sink line-by-line and
-        # never the real stderr, where it would be painted over the Textual
-        # screen (the "device format at start / stopped at Ctrl-C" bug).
+        # The GUI path: helper chatter must reach the sink line-by-line and
+        # never the real stderr, which a GUI process has no terminal to show
+        # (the "device format at start / stopped at Ctrl-C" bug).
         lines = []
         provider = MacOSCaptureProvider(command=[*FAKE, "--chatter"], on_log=lines.append)
         provider.start({Channel.MIC})

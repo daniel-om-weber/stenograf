@@ -1,9 +1,9 @@
 """The desktop application shell: one window, a screen stack, one base class.
 
-Phase 8. The Qt side of the launcher is deliberately thin — the
-same rule the CLI and the Textual UI follow: a screen gathers inputs, shows
-progress and calls a library entry point (:mod:`stenograf.flow`); anything it
-needs that the library lacks belongs in the library, not here.
+Phase 8. The Qt side is deliberately thin — the same rule the CLI follows:
+a screen gathers inputs, shows progress and calls a library entry point
+(:mod:`stenograf.flow`); anything it needs that the library lacks belongs in
+the library, not here.
 
 Three decisions carry most of the design:
 
@@ -14,15 +14,15 @@ per field, which is where PySide UIs usually drown in boilerplate. Streams
 (captions) still use real signals: appending to a list model must not
 re-evaluate every binding on the screen.
 
-**Slow work goes to a worker thread with a marshalled reply** (:meth:`Screen.work`
-— the Qt equivalent of Textual's ``@work(thread=True)``). Blocking the GUI
+**Slow work goes to a worker thread with a marshalled reply**
+(:meth:`Screen.work`). Blocking the GUI
 thread freezes rendering, and a Qt object may only be touched from its own
 thread; :meth:`Screen.post` is the single hop back, built on the fact that a
 signal emitted off-thread to a slot on a GUI-thread object queues itself.
 
-**The redraw budget carries over from the TUI** (``TEXTUAL_FPS`` +
-``animation_level = "none"``): bind the view to model updates, never to a
-clock. There is exactly one periodic timer in the whole app — the meeting
+**The redraw budget carries over from the retired TUI** (which pinned
+``TEXTUAL_FPS`` and switched animations off): bind the view to model updates,
+never to a clock. There is exactly one periodic timer in the whole app — the meeting
 screen's 1 Hz elapsed clock — and no idle animations; the StackView's page
 transitions are switched off in ``Main.qml`` for the same reason. Hover
 feedback animates because it is event-driven and stops. A spinner, a pulsing
@@ -113,7 +113,7 @@ class Screen(QObject):
         self._state: dict[str, object] = {}
         # The thread hop. Both ends live on the GUI thread, so an emit from a
         # worker resolves to a queued connection and the call runs on the event
-        # loop — Qt's supported equivalent of Textual's call_from_thread.
+        # loop.
         self._posted.connect(self._run_posted)
 
     # -- state -------------------------------------------------------------

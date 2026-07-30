@@ -255,9 +255,9 @@ class TestWindowsCaptureProvider:
         assert capsys.readouterr().err.count("only silence") == 1
 
     def test_on_log_keeps_diagnostics_off_the_terminal(self, capsys):
-        # The TUI path: with a sink installed, the pump's diagnostics must go
-        # there and never to stderr, where they would be painted over the
-        # Textual screen (parity with the subprocess transports' stderr pipe).
+        # The GUI path: with a sink installed, the pump's diagnostics must go
+        # there and never to stderr, which a GUI process has no terminal to
+        # show (parity with the subprocess transports' stderr pipe).
         lines = []
         provider = WindowsCaptureProvider(
             backend=fake_backend(mic_script=[0.0] * 30), frame_ms=200, on_log=lines.append

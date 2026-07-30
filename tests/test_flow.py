@@ -1,7 +1,7 @@
 """The UI-shared layer: meeting-request resolution and caption segmentation.
 
-Both are used by two front-ends now (the Textual launcher and the Qt app), so
-they are tested here once, directly, rather than twice through a screen. The
+Both are library layer shared by every front-end (today: the Qt app), so
+they are tested here once, directly, rather than through a screen. The
 screens' own tests then only have to prove they call this correctly.
 """
 

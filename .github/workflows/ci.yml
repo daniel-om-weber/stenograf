@@ -106,7 +106,7 @@ jobs:
           pactl set-sink-mute steno_ci 0
           pactl set-default-sink steno_ci
           uv run steno doctor
-          uv run steno start --local 0 --remote 1 --max-seconds 40 --out meeting --plain \
+          uv run steno start --local 0 --remote 1 --max-seconds 40 --out meeting \
             > live.log 2>&1 &
           # generous: the fp32 ONNX model can take minutes to load on 2 CI cores
           for i in $(seq 1 600); do

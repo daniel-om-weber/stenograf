@@ -6,16 +6,17 @@ out-of-band notices (status, language lock, the finalize hand-off). A
 :class:`LiveView` is the sink for those events; a concrete view renders them
 however it likes. This module ships the first, dependency-free renderer,
 :class:`PlainLiveView`, which streams committed captions to stdout with
-``click.echo`` — usable over a pipe, into a log file, or any non-TTY. The
-Textual TUI (Task 6) is a second :class:`LiveView` behind the same interface.
+``click.echo`` — the terminal live mode, and equally usable over a pipe or
+into a log file. The Qt meeting screen is a second view behind the same
+interface (:mod:`stenograf.gui.meeting`).
 
 Live captions are **channel-coarse**: the live pass does not diarize, so it can
 only say which channel spoke (``You`` = mic/local, ``Remote`` = system audio).
 The on-stop finalize replaces the whole live transcript with diarized
 ``Local-N``/``Remote-M`` speakers, surfaced via :meth:`finalized`.
-In a non-TTY stream the captions already printed cannot be rewritten, so the
-plain view drops the interim tail (there is no cursor to erase it) and prints
-only committed text; the live grey tail is the Textual view's concern.
+Captions already printed cannot be rewritten, so the plain view drops the
+interim tail (there is no cursor to erase it) and prints only committed text;
+the live grey tail is the Qt view's concern.
 """
 
 from __future__ import annotations
@@ -51,8 +52,8 @@ class LiveView:
     through :meth:`update` — committed + interim words for a channel, straight
     from the worker's ``on_update`` — plus the out-of-band notices
     :meth:`status`, :meth:`language`, :meth:`finalizing`, :meth:`finalized`, and
-    :meth:`error`. A view may hold display resources (the Textual TUI does), so
-    it is a context manager whose :meth:`close` tears them down.
+    :meth:`error`. A view may hold display resources, so it is a context
+    manager whose :meth:`close` tears them down.
     """
 
     def __enter__(self) -> LiveView:
@@ -111,12 +112,13 @@ class LiveView:
 
 
 class PlainLiveView(LiveView):
-    """Streams committed captions to a (typically non-TTY) stream via ``click.echo``.
+    """Streams committed captions line-by-line via ``click.echo``.
 
-    The first shippable live view: no Textual dependency, works over
-    a pipe or into a file. Committed words stream onto a per-channel line — the
-    line continues while one channel keeps talking and breaks when the channel
-    changes or a pause opens, so the log reads as utterance-sized paragraphs. The
+    The terminal live view (and the first shippable one): works over a pipe or
+    into a file just as well as on a TTY. Committed words stream onto a
+    per-channel line — the line continues while one channel keeps talking and
+    breaks when the channel changes or a pause opens, so the log reads as
+    utterance-sized paragraphs. The
     provisional grey tail is dropped: a non-TTY stream has no cursor to erase it,
     and committed text is the durable contract.
 

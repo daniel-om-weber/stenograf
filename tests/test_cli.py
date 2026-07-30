@@ -744,10 +744,10 @@ def test_persist_once_retries_after_a_failed_write():
 
 
 def test_capture_log_buffers_chatter_and_surfaces_problems(capsys):
-    # The TUI's stderr sink: routine transport chatter (formats, stopped) is
-    # buffered and never reaches the terminal — it used to be painted straight
-    # over the Textual screen. Problem lines flash in the view's header live
-    # and replay onto the scrollback after the app exits.
+    # The GUI's stderr sink (flow.py wires it into the Qt meeting run): routine
+    # transport chatter (formats, stopped) is buffered and never reaches the
+    # terminal. Problem lines flash in the view live and replay() echoes them
+    # once more to stderr afterwards.
     class RecordingView(LiveView):
         def __init__(self):
             self.errors = []
@@ -769,91 +769,51 @@ def test_capture_log_buffers_chatter_and_surfaces_problems(capsys):
     assert "mic format" not in err and "stopped" not in err  # routine stays buffered
 
 
-def test_plain_forces_the_stream_even_on_a_tty(tmp_path, monkeypatch):
-    served = []
-
-    class FakeTUI(LiveView):  # records if the TUI was chosen; never opens a terminal
-        def __init__(self, profile, *, language=None, stop=None, persist=None):
-            self.stop = stop
-            self.persist = persist
-
-        def serve(self, meeting):
-            served.append(self)
-            return meeting()
-
+def test_plain_flag_stays_an_accepted_no_op(tmp_path, monkeypatch):
+    # --plain used to force the line stream instead of the full-screen Textual
+    # TUI. The TUI is retired and the stream is the only live terminal mode,
+    # but external scripts still pass the flag — it must stay accepted (and
+    # change nothing) rather than turn into a usage error.
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
-    monkeypatch.setattr(cli.start, "_stdout_is_tty", lambda: True)  # pretend we're on a terminal
-    monkeypatch.setattr("stenograf.ui.meeting.TextualLiveView", FakeTUI)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
-    tui_run = CliRunner().invoke(
-        cli.main,
-        [
-            "start",
-            "--local",
-            "1",
-            "--remote",
-            "0",
-            "--replay",
-            str(mic),
-            "--out",
-            str(tmp_path / "tui"),
-        ],
-    )
-    assert tui_run.exit_code == 0, tui_run.output
-    assert served, "on a TTY the default live run should pick the Textual view"
-    assert served[0].persist is not None, "the TUI should get the write-at-finalize hook"
+    for name, flags in (("bare", []), ("plain", ["--plain"])):
+        result = CliRunner().invoke(
+            cli.main,
+            [
+                "start",
+                *flags,
+                "--local",
+                "1",
+                "--remote",
+                "0",
+                "--replay",
+                str(mic),
+                "--out",
+                str(tmp_path / name),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "You:" in result.output  # the plain caption stream ran
 
-    served.clear()
-    plain_run = CliRunner().invoke(
-        cli.main,
-        [
-            "start",
-            "--plain",
-            "--local",
-            "1",
-            "--remote",
-            "0",
-            "--replay",
-            str(mic),
-            "--out",
-            str(tmp_path / "plain"),
-        ],
-    )
-    assert plain_run.exit_code == 0, plain_run.output
-    assert not served, "--plain must bypass the TUI even on a TTY"
-    assert "You:" in plain_run.output
+    help_text = CliRunner().invoke(cli.main, ["start", "--help"]).output
+    assert "--plain" not in help_text  # accepted, but no longer advertised
 
 
-def test_start_tui_generates_notes_while_the_screen_is_still_up(tmp_path, monkeypatch):
-    # Launcher parity (ui/flow.py): the TUI shape runs notes on the meeting
-    # thread — while the "done" screen is up — not in the CLI tail after the
-    # user quits, where they used to wait on the quit keypress.
+def test_start_generates_notes_through_the_finish_tail(tmp_path, monkeypatch):
+    # With the TUI gone there is exactly one notes path for `steno start`:
+    # _finish_run, after the transcript is safely written — same as the
+    # no-TTY runs always had.
     notes_calls: list = []
-    notes_done_when_serve_returned: list = []
-
-    class FakeTUI(LiveView):
-        def __init__(self, profile, *, language=None, stop=None, persist=None):
-            self.statuses: list[str] = []
-
-        def status(self, message: str) -> None:
-            self.statuses.append(message)
-
-        def serve(self, meeting):
-            transcript = meeting()  # the meeting thread's work, incl. the notes step
-            notes_done_when_serve_returned.append(len(notes_calls))
-            return transcript
 
     def fake_generate(transcript, out_dir, basename, **kwargs):
         from stenograf.notes import MeetingNotes
 
         notes_calls.append(basename)
-        return [], MeetingNotes(title="T", body="S")
+        return [tmp_path / "notes.md"], MeetingNotes(title="T", body="S")
 
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
-    monkeypatch.setattr(cli.start, "_stdout_is_tty", lambda: True)
-    monkeypatch.setattr("stenograf.ui.meeting.TextualLiveView", FakeTUI)
     monkeypatch.setattr("stenograf.cli.notes._generate_and_write_notes", fake_generate)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
@@ -863,10 +823,11 @@ def test_start_tui_generates_notes_while_the_screen_is_still_up(tmp_path, monkey
         ["start", "--notes", "--local", "1", "--remote", "0", "--replay", str(mic)],
     )
     assert run.exit_code == 0, run.output
-    assert notes_done_when_serve_returned == [1], (
-        "notes must be generated on the meeting thread, before serve() returns"
+    assert notes_calls == ["transcript"]
+    assert "notes: wrote" in run.output
+    assert run.output.index("wrote transcript") < run.output.index("notes: wrote"), (
+        "the transcript must be persisted before notes generation starts"
     )
-    assert "notes: wrote" not in run.output, "_finish_run must not generate the notes again"
 
 
 def test_doctor_runs_and_prints_checks():

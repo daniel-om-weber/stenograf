@@ -267,7 +267,7 @@ before any text backstop**; AEC off → −27 dBFS raw echo, AECMOS echo 1.49.
 
 ```sh
 steno start --local 1 --remote 1 --max-seconds 60 --aec-dump probe \
-    --out probe-meeting --plain      # …with speech over the speakers…
+    --out probe-meeting              # …with speech over the speakers…
 uv run python eval/aec_echo_present.py probe     # PASS = the mic hears them
 ```
 

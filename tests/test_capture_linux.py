@@ -88,8 +88,8 @@ class TestLinuxCaptureProvider:
         assert provider._procs == {}
 
     def test_on_log_keeps_parec_stderr_off_the_terminal(self, monkeypatch, capfd):
-        # The TUI path: server messages must reach the sink per line, never the
-        # real stderr, where they would be painted over the Textual screen.
+        # The GUI path: server messages must reach the sink per line, never
+        # the real stderr, which a GUI process has no terminal to show.
         monkeypatch.setenv("FAKE_PAREC_CHATTER", "1")
         lines = []
         provider = LinuxCaptureProvider(command=FAKE, on_log=lines.append)

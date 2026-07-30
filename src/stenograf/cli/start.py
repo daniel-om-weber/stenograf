@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -22,7 +21,6 @@ from stenograf.cli.run import (
     _echo_glossary,
     _finish_run,
     _load_reid,
-    _notes_enabled,
     _notes_options,
     _prepare_output,
     _reid_format_options,
@@ -172,8 +170,11 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
 @click.option(
     "--plain",
     is_flag=True,
-    help="Force the plain line-by-line caption stream instead of the full-screen "
-    "TUI (also the automatic choice when stdout is not a terminal).",
+    hidden=True,
+    # Accepted no-op: it used to force the line stream instead of the
+    # full-screen Textual TUI. The TUI is retired and the line stream is the
+    # only live terminal mode, but external scripts still pass the flag, so
+    # deleting it would break them for nothing.
 )
 @click.option(
     "--aec/--no-aec",
@@ -292,17 +293,12 @@ def start(
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
 
     plans = plan_channels(profile)
-    # The full-screen TUI owns the terminal, so it can only run on a real TTY
-    # and unless the user forced the plain stream (or turned live off entirely).
-    # Decided before the provider exists: the TUI also needs the capture
-    # transports' stderr chatter kept off its screen (CaptureLog below).
-    use_tui = live and not plain and _stdout_is_tty()
-    capture_log = loaders.CaptureLog() if use_tui else None
     # Pace file replay to wall-clock only when it feeds the live pass, so
     # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
-    provider = loaders.make_provider(
-        replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump, on_log=capture_log
-    )
+    # No on_log sink: the capture transports inherit stderr, so their chatter
+    # (and any FATAL line) prints straight to the terminal — this command owns
+    # no screen a raw write could corrupt.
+    provider = loaders.make_provider(replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump)
     if aec_dump is not None:
         from stenograf.aec import EchoCancellingProvider
 
@@ -325,11 +321,8 @@ def start(
     out_dir, basename, audio_default = _prepare_output(out, created_at, settings, force=force)
 
     channels = ", ".join(p.channel.value for p in plans)
-    if use_tui:  # the TUI header carries REC / elapsed once it is up
-        click.echo(f"recording: {channels} (captions open when the models finish loading)")
-    else:
-        stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
-        click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
+    stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
+    click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
     if len(plans) > 1:
         state = "on" if use_aec else "off"
         click.echo(f"echo cancellation: {state} (mic cancelled against system audio)")
@@ -386,69 +379,26 @@ def start(
 
     persist = _PersistOnce(_persist_files)
 
-    # The TUI shape generates notes on the meeting thread, while the "done"
-    # screen is still up (launcher parity — ui/flow.py) — not after the user
-    # quits it. ``notes_in_tui`` is that step, or None when notes are off or
-    # the run has no TUI; ``_finish_run`` stays the notes path for the
-    # plain/batch shapes (and never re-runs them after the TUI already did).
-    run_notes = _notes_enabled(notes_flag, settings)
-    notes_in_tui = None
-    if use_tui and run_notes:
-        from stenograf.cli.notes import _generate_notes
-
-        def _notes_step(view, transcript: Transcript) -> bool:
-            return _generate_notes(
-                view,
-                transcript,
-                out_dir,
-                basename,
-                created_at=created_at,
-                notes_settings=settings.notes,
-                backend_name=notes_backend,
-                model=notes_model,
-                instructions_file=notes_instructions,
-            )
-
-        notes_in_tui = _notes_step
-
     try:
         result = _run_meeting(
             recorder,
             provider,
             live=live,
-            use_tui=use_tui,
-            profile=profile,
             on_frame=tee.add if tee else None,
             out_dir=out_dir,
             basename=basename,
             flush_interval=flush_interval,
             max_seconds=max_seconds,
-            persist=persist,
-            capture_log=capture_log,
-            notes=notes_in_tui,
         )
     except CaptureHelperError as exc:
         # Capture died with nothing recorded (session.py refuses to publish an
         # empty transcript): a real failure, not a traceback-worthy crash. The
-        # finally below still replays the helper's buffered FATAL lines.
+        # helper's FATAL detail already printed on inherited stderr.
         raise click.ClickException(str(exc)) from exc
     finally:
         if tee is not None:
             tee.close()
             click.echo(f"recorded audio: {tee.path}")
-        if capture_log is not None:
-            # The TUI has released the terminal — repeat any capture problems
-            # (already flashed in its header) on the scrollback, where they can
-            # actually be read. Routine transport chatter stays buffered-only.
-            capture_log.replay()
-
-    if result is None:
-        # Defensive: a live view exited without producing a transcript. There is
-        # nothing authoritative to write; leave any .partial checkpoint in place
-        # for recovery rather than deleting it or crashing on None.
-        raise click.ClickException(
-            "meeting ended before a transcript was produced; any .partial checkpoint is kept"
-        )
 
     # The canceller counts every 10 ms mic tick that ran without a usable system
     # reference — frames that never arrived, or a dead tap delivering bit-exact
@@ -472,10 +422,6 @@ def start(
         )
 
     transcript = result.transcript
-    # Usually already persisted at the ``finalized`` event (the TUI path writes
-    # while the app still shows the "done" screen); this is the no-op replay
-    # then, and the write for the plain/batch paths — or the retry if the
-    # event-time write failed, surfacing the error as a normal CLI error here.
     paths = persist(transcript)
     elapsed = time.monotonic() - started
     _report_speaker_counts(result.speaker_counts)
@@ -486,10 +432,7 @@ def start(
         basename,
         created_at=created_at,
         settings=settings,
-        # The TUI shape already ran notes on the meeting thread (a failure
-        # there was warned in the header and stays a `steno notes` rerun, per
-        # the non-fatal contract) — don't generate them a second time here.
-        notes_flag=False if notes_in_tui is not None else notes_flag,
+        notes_flag=notes_flag,
         print_markdown=print_markdown,
         notes_backend=notes_backend,
         notes_model=notes_model,
@@ -502,82 +445,30 @@ def _run_meeting(
     provider,
     *,
     live: bool,
-    use_tui: bool,
-    profile: MeetingProfile,
     on_frame,
     out_dir: Path,
     basename: str,
     flush_interval: float,
     max_seconds: float | None,
-    persist: Callable[[Transcript], object] | None = None,
-    capture_log=None,
-    notes: Callable[..., bool] | None = None,
-) -> MeetingResult | None:
+) -> MeetingResult:
     """Run the capture session through the right live view and return its result.
 
     The caller has already started the provider (capture begins before the
-    models load and frames buffer meanwhile), so every shape runs with
+    models load and frames buffer meanwhile), so both shapes run with
     ``provider_started=True``.
 
-    Three shapes behind one call:
+    Two shapes behind one call:
 
-    - **TUI** (live, on a TTY, not ``--plain``): the Textual view runs the app on
-      this thread while the meeting runs on a background thread; its quit binding
-      crosses to ``provider.stop`` to end capture. Checkpoints are written silently
-      (the TUI owns the screen). ``persist`` is wired into the view's ``finalized``
-      event, so the transcript reaches disk while the app still shows the "done"
-      screen — only the TUI has a gap between finalize and return worth closing;
-      the other two shapes return immediately and the caller persists then.
-      ``notes`` (the in-TUI notes step) runs on the meeting thread right after,
-      with the "done" screen still up — launcher parity, instead of making the
-      notes wait for the quit keypress.
-    - **Plain live** (live, no TTY or ``--plain``): the meeting runs on this thread
-      and streams committed captions to stdout; checkpoints written silently.
-    - **Batch** (``--no-live``): no live pass; status and checkpoint notices echo
-      as before.
+    - **Live** (the default): the meeting runs on this thread and streams
+      committed captions to stdout; checkpoints written silently. Ctrl-C is the
+      stop gesture (session.py catches it, stops the provider and joins
+      capture; the finalize is shielded against a second Ctrl-C).
+    - **Batch** (``--no-live``): no live pass; status and checkpoint notices
+      echo as before.
     """
     from stenograf.session import CheckpointConfig
 
     checkpoint = CheckpointConfig(checkpoint_writer(out_dir, basename), flush_interval)
-    if use_tui:
-        from stenograf.ui.meeting import TextualLiveView
-
-        view = TextualLiveView(
-            profile, language=profile.language, stop=provider.stop, persist=persist
-        )
-        if capture_log is not None:
-            # From here, capture problems flash in the meeting header live;
-            # the caller replays them onto the scrollback after the app exits.
-            capture_log.view = view
-        # The TUI speaks Transcript (that is what it renders); the run report
-        # travels back to this caller beside it.
-        results: list[MeetingResult] = []
-
-        def meeting() -> Transcript:
-            result = recorder.run(
-                provider,
-                live=True,
-                view=view,
-                on_frame=on_frame,
-                checkpoint=checkpoint,
-                max_seconds=max_seconds,
-                provider_started=True,
-            )
-            results.append(result)
-            # The transcript is persisted (the ``finalized`` event fired inside
-            # run); a force-quit from here on cannot lose it, and serve() joins
-            # this thread, so an early quit does not cancel the notes either —
-            # they finish on the freed terminal.
-            if (
-                notes is not None
-                and result.transcript is not None
-                and notes(view, result.transcript)
-            ):
-                view.status("notes saved · q to exit")
-            return result.transcript
-
-        view.serve(meeting)
-        return results[-1] if results else None
     if live:
         from stenograf.view import PlainLiveView
 
@@ -619,22 +510,13 @@ def _run_meeting(
     )
 
 
-def _stdout_is_tty() -> bool:
-    """Whether stdout is an interactive terminal (a seam so the view choice is testable)."""
-    return sys.stdout.isatty()
-
-
 class _PersistOnce:
     """Persist the finalized transcript exactly once, wherever that fires first.
 
-    The TUI wires this into the ``finalized`` event — the moment the
-    authoritative transcript exists, while the app still sits on the "done"
-    screen — so a crash or force-quit before the user presses ``q`` no longer
-    loses the meeting. Every path also calls it after the meeting returns;
-    that second call is a no-op returning the already-written paths. A failure
-    at the event leaves ``paths`` unset, so the exit-path call retries and a
-    raise there surfaces as a normal CLI error. Calls are sequential (the
-    meeting thread is joined before the CLI tail runs), so no lock is needed.
+    A holdover of the retired TUI shape, kept because the contract is still
+    right: a first call that fails leaves ``paths`` unset, so a later call
+    retries and a raise there surfaces as a normal CLI error; a second call
+    after success is a no-op returning the already-written paths.
     """
 
     def __init__(self, write: Callable[[Transcript], list[Path]]) -> None:

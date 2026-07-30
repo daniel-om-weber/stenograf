@@ -362,8 +362,8 @@ def _shield_interrupt() -> Iterator[None]:
     Once capture has stopped, the finalize pass *is* the authoritative transcript
     and must not be lost to an impatient second Ctrl-C. Shielding SIGINT makes the
     finalize uninterruptible — it is bounded (seconds), and audio is already safe in
-    RAM. Only the main thread can install signal handlers; off it (the TUI runs the
-    meeting on a background thread, where Textual captures Ctrl-C anyway) this is a
+    RAM. Only the main thread can install signal handlers; off it (the Qt app runs the
+    meeting on a worker thread, where no terminal delivers Ctrl-C anyway) this is a
     harmless no-op.
     """
     try:

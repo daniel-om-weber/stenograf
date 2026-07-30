@@ -96,11 +96,9 @@ class MacOSCaptureProvider(CaptureProvider):
     :func:`find_helper`.
 
     ``on_log`` receives the helper's stderr, one decoded line at a time.
-    ``None`` (the plain CLI) inherits stderr so capture errors land on the
-    terminal as ever; the full-screen TUI installs a sink instead, because a
-    raw stderr write while Textual owns the terminal is painted straight over
-    the captions — the helper's format/started lines at launch and its
-    "stopped" at Ctrl-C looked like rendering bugs.
+    ``None`` (the CLI) inherits stderr so capture errors land on the terminal
+    as ever; the Qt meeting screen installs a sink instead (loaders.CaptureLog)
+    — a GUI process has no terminal for a raw stderr write to reach.
 
     Echo cancellation is *not* done here. The helper used to expose a ``--aec``
     flag backed by Voice Processing IO; measured on macOS 26 it emitted no mic
@@ -134,7 +132,7 @@ class MacOSCaptureProvider(CaptureProvider):
         self._stop_requested = False
         self._respawned = False
         # stop() is called from several threads (the capture loop on max_seconds,
-        # the meeting thread on close, and the TUI's quit binding), so serialize it.
+        # the meeting thread on close, and the GUI's stop button), so serialize it.
         self._stop_lock = threading.Lock()
 
     def start(self, channels: set[Channel]) -> None:

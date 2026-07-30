@@ -1,15 +1,14 @@
 """The five screens that are one library call each: setup, transcribe, notes, settings, doctor.
 
-Unlike :mod:`stenograf.ui`, which gives every screen its own module, these share
-one file — each is a thirty-line controller over :mod:`stenograf.flow`, and
-splitting them would cost more import plumbing than it buys in navigation. The
-meeting screen, which is not thirty lines, keeps its own module.
+Each is a thirty-line controller over :mod:`stenograf.flow`, so they share
+one file — splitting them would cost more import plumbing than it buys in
+navigation. The meeting screen, which is not thirty lines, keeps its own
+module.
 
 The pattern every one of them follows: ``opened()`` refreshes whatever the
 screen shows (these objects outlive their pages), a ``@Slot`` starts the work
 through :meth:`~stenograf.gui.app.Screen.work`, and the outcome lands on
-``state.status`` — the same plain-text mirror the Textual screens keep, which is
-also what the tests assert on.
+``state.status`` — the plain-text mirror the tests assert on.
 
 **The notes screen stays a dumb folder picker** — never a meeting list with
 titles, dates or summaries. That list would be the meeting browser the product
@@ -93,8 +92,8 @@ class SetupScreen(Screen):
         """Resolve the form into a request and hand it to the meeting screen.
 
         A form that cannot describe a meeting (both sources off, an unreadable
-        settings file) stays open with the reason shown — the same contract the
-        Textual form has, through the same library call."""
+        settings file) stays open with the reason shown, through the same
+        library call every front-end resolves with."""
         from stenograf.config import Language
         from stenograf.flow import MeetingRequestError, resolve_meeting_request
 

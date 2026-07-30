@@ -11,7 +11,7 @@ undefined without an echo path; this script tests the precondition instead.
 Point it at a short ``--aec-dump`` directory (60 s is plenty)::
 
     steno start --local 1 --remote 1 --max-seconds 60 --aec-dump /tmp/probe \\
-        --out /tmp/probe-meeting --plain
+        --out /tmp/probe-meeting
     # …with speech playing over the speakers…
     uv run python eval/aec_echo_present.py /tmp/probe
 

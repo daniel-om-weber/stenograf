@@ -10,7 +10,7 @@ nothing. Measured that way on Windows: 2.6 dB ERLE, and far-end speech
 transcribed as the local speaker.
 
     steno start --local 1 --remote 1 --max-seconds 80 --aec-dump probe \\
-        --out probe-meeting --plain    # ...speech over the speakers, with pauses...
+        --out probe-meeting        # ...speech over the speakers, with pauses...
     uv run python eval/aec_alignment.py probe
 
 It answers two questions and prints the constant to ship:

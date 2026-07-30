@@ -1,10 +1,10 @@
 """The live meeting screen: a :class:`~stenograf.view.LiveView` that is also a QObject.
 
-The Qt counterpart of :mod:`stenograf.ui.meeting`, and the only screen with real
-machinery. The meeting itself is :class:`stenograf.flow.MeetingRun` on a worker
-thread; this class is the sink for the events it emits, marshalling every one of
-them onto the GUI thread before it touches a property (Qt objects belong to one
-thread, and the live worker calls a view from its own).
+The only screen with real machinery. The meeting itself is
+:class:`stenograf.flow.MeetingRun` on a worker thread; this class is the sink
+for the events it emits, marshalling every one of them onto the GUI thread
+before it touches a property (Qt objects belong to one thread, and the live
+worker calls a view from its own).
 
 Being both is deliberate: the events map one-to-one onto display state, so an
 adapter object between the two would be pure indirection.
@@ -122,9 +122,9 @@ class MeetingScreen(Screen, LiveView):
     def opened(self) -> None:
         """The page is on screen: start the armed meeting (once).
 
-        Starting here rather than at :meth:`begin` is what the Textual screen's
-        ``on_ready`` hook does — the user watches the loading status in the
-        header instead of a frozen window while the models come up."""
+        Starting here rather than at :meth:`begin` keeps the user watching
+        the loading status in the header instead of a frozen window while the
+        models come up."""
         request, self._request = self._request, None
         if request is None:  # re-entered the page without a new Start
             return

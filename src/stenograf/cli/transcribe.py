@@ -405,8 +405,8 @@ def _transcribe_split_channels(
     transcription speed).
 
     ``view`` receives the finalize's per-channel status lines; ``None`` (the
-    CLI) echoes them to stdout. The launcher's TranscribeScreen passes its own
-    — a click echo would print into a raw-mode Textual terminal.
+    CLI) echoes them to stdout. The Qt TranscribeScreen passes its own — a
+    click echo has no terminal to land on in a GUI process.
     """
     from stenograf.audio import to_int16
     from stenograf.capture.base import AudioFrame, Channel
@@ -428,8 +428,8 @@ def _transcribe_split_channels(
         glossary=profile.glossary,
         attendee_names=profile.attendee_names,
         boost=asr_boost,
-        # An injected view means a Textual screen owns stdio — loader progress
-        # must follow the status lines, not click (loaders module docstring).
+        # An injected view means a GUI owns the run — loader progress must
+        # follow the status lines, not click (loaders module docstring).
         announce=None if view is None else view.status,
     )
     reid = _load_reid(

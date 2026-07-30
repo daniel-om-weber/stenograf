@@ -10,13 +10,13 @@ CLI-support code — it reports progress via click and raises
 drives live in the library (:func:`stenograf.diarization.build_diarizer`,
 the ASR registry).
 
-The launcher TUI reuses these factories from inside a running Textual app,
-where progress must NOT go through click: Textual redirects stdio to a
-proxy, and on Windows ``click.echo`` probes that proxy's fd against the
-real console (``msvcrt.get_osfhandle``) and dies with EBADF — the meeting
-fails before capture starts. Every announcing entry point therefore takes
-``announce``: ``None`` keeps today's click-echoed CLI behaviour, a callable
-routes the same lines to the caller's sink (the meeting screen's header).
+The Qt app reuses these factories from inside a running GUI
+(:mod:`stenograf.flow`), where progress must not go through click — the
+process may own no usable stdio at all (a Windows ``pythonw`` launch, or the
+retired Textual TUI whose stdio proxy click probed to death with EBADF).
+Every announcing entry point therefore takes ``announce``: ``None`` keeps
+today's click-echoed CLI behaviour, a callable routes the same lines to the
+caller's sink (the meeting screen's status line).
 """
 
 from __future__ import annotations
@@ -49,18 +49,18 @@ problem the user must see, vs. routine chatter (formats, started/stopped)."""
 
 
 class CaptureLog:
-    """Capture-transport diagnostics, kept off the terminal while a TUI owns it.
+    """Capture-transport diagnostics for a run whose owner is not the terminal.
 
     The native transports (stenocap, parec) normally inherit stderr, so their
-    status lines land on the terminal — which is right for the plain CLI but
-    stomps Textual's screen: the helper's device-format lines at launch and its
-    "stopped" at Ctrl-C were painted straight over the captions and looked like
-    rendering bugs. Passed as ``on_log`` to :func:`make_provider`, this sink
-    buffers every line instead. Lines that look like problems (permission
-    denied, a stream dying) are forwarded to the attached ``view``'s header the
-    moment they arrive, so a mid-meeting capture failure stays as visible as it
-    was on stderr; :meth:`replay` echoes them once more after the TUI has
-    released the terminal, so they survive on the scrollback too.
+    status lines land on the terminal — right for the CLI, but the Qt meeting
+    screen (:mod:`stenograf.flow`) has no terminal to show them on, and its
+    process may not even have a usable stderr. Passed as ``on_log`` to
+    :func:`make_provider`, this sink buffers every line instead. Lines that
+    look like problems (permission denied, a stream dying) are forwarded to
+    the attached ``view``'s status surface the moment they arrive, so a
+    mid-meeting capture failure stays as visible as it was on stderr;
+    :meth:`replay` echoes them once more to stderr for whatever log is
+    attached to the process.
 
     Called from the transports' relay threads; the list append is atomic and
     ``view.error`` marshals itself onto the UI loop, so no lock is needed.
@@ -85,7 +85,7 @@ class CaptureLog:
         return [line for line in self.lines if self._is_problem(line)]
 
     def replay(self) -> None:
-        """Echo the buffered problem lines, for after the TUI exits.
+        """Echo the buffered problem lines onto stderr once the run is over.
 
         Routine chatter (formats, started/stopped) stays buffered-only: it was
         never information the meeting flow needed, just transport logging.
@@ -234,8 +234,8 @@ def make_provider(
     even with ``--no-aec`` so the eval rig can record the uncancelled baseline.
 
     ``on_log`` is the capture transports' diagnostic sink (a :class:`CaptureLog`
-    for the TUIs). ``None`` keeps the transports' stderr on the terminal — right
-    for the plain CLI, screen-corrupting under Textual.
+    for the Qt meeting screen). ``None`` keeps the transports' stderr on the
+    terminal — right for the CLI, invisible in a GUI process.
     """
     from stenograf.capture.base import Channel
 

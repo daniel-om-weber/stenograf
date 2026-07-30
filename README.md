@@ -183,7 +183,6 @@ with the high-accuracy, speaker-labelled transcript the moment you stop
 Useful flags:
 
 ```sh
-steno start --plain                 # plain caption stream instead of the TUI
 steno start --no-live               # skip live captions; just finalize on stop
 steno start --title "Weekly sync"   # name the meeting (notes + export use it)
 steno start --flush-interval 60     # crash-checkpoint the captions every 60s

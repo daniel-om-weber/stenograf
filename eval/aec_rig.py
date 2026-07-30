@@ -85,7 +85,6 @@ def steno_command(
         "from stenograf.cli import main; main()",
         "start",
         "--live" if live else "--no-live",
-        "--plain",
         # No --no-archive: [archive] was renamed to [output] (settings.py) and
         # the flag went with it. --out already keeps the run out of the
         # meetings folder, which is all it was ever here for.
