@@ -1621,12 +1621,12 @@ def test_settings_edit_keeps_and_reports_a_bad_save(tmp_path, monkeypatch):
     assert "glossry_file" in path.read_text(encoding="utf-8")
 
 
-# -- bare invocation (Phase 7: the launcher entry) ---------------------------
+# -- bare invocation (Phase 8 step 7: the desktop-app entry) ------------------
 
 
 def test_bare_invocation_without_a_tty_prints_help():
-    # A pipe/script hitting bare `steno` wants usage text, not a Textual app
-    # (which needs a real TTY anyway). CliRunner streams are never TTYs.
+    # A pipe/script/cron hitting bare `steno` wants usage text, not a window —
+    # the strand-nobody guarantee. CliRunner streams are never TTYs.
     result = CliRunner().invoke(cli.main, [])
 
     assert result.exit_code == 0
@@ -1634,30 +1634,73 @@ def test_bare_invocation_without_a_tty_prints_help():
     assert "transcribe" in result.output  # the subcommands are listed
 
 
-def test_bare_invocation_on_a_tty_opens_the_launcher(monkeypatch):
-    import stenograf.ui
+def test_bare_invocation_in_an_interactive_terminal_opens_the_app(monkeypatch):
+    import stenograf.gui
 
     calls = []
     monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
-    monkeypatch.setattr(stenograf.ui, "run_launcher", lambda: calls.append(1))
+    monkeypatch.setattr(cli, "_display_available", lambda: True)
+    monkeypatch.setattr(stenograf.gui, "run_gui", lambda *, tray: calls.append(tray))
 
     result = CliRunner().invoke(cli.main, [])
 
     assert result.exit_code == 0
-    assert calls == [1]
+    assert calls == [False]
     assert "Usage:" not in result.output
 
 
-def test_gui_flag_opens_the_desktop_app_without_needing_a_tty(monkeypatch):
-    # --gui is how a Dock/desktop shortcut starts the tool: a window needs no
-    # TTY, so the terminal check that gates the Textual launcher must not gate
-    # this. CliRunner streams are never TTYs, which is exactly the case tested.
+def test_bare_invocation_without_a_display_prints_help(monkeypatch):
+    # SSH sessions and consoles without a display server: a Qt platform-plugin
+    # failure is an uncatchable C++ abort, so the dispatch must never get
+    # there — the display gate keeps those sessions on help text.
     import stenograf.gui
-    import stenograf.ui
+
+    monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
+    monkeypatch.setattr(cli, "_display_available", lambda: False)
+    monkeypatch.setattr(
+        stenograf.gui, "run_gui", lambda **kwargs: (_ for _ in ()).throw(AssertionError)
+    )
+
+    result = CliRunner().invoke(cli.main, [])
+
+    assert result.exit_code == 0
+    assert "Usage:" in result.output
+
+
+def test_display_gate_on_linux_wants_a_display_socket(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    for var in ("DISPLAY", "WAYLAND_DISPLAY"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert not cli._display_available()
+
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert cli._display_available()
+
+
+def test_display_gate_on_macos_and_windows_flags_ssh_sessions(monkeypatch):
+    # A local session always has a window server there; only a remote shell
+    # (marked by the SSH variables) cannot put a window on it.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    for var in ("SSH_CONNECTION", "SSH_TTY"):
+        monkeypatch.delenv(var, raising=False)
+
+    assert cli._display_available()
+
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")
+    assert not cli._display_available()
+
+
+def test_gui_flag_opens_the_desktop_app_without_needing_a_tty(monkeypatch):
+    # --gui is how the frozen Stenograf.app stub starts the tool: a window
+    # needs no TTY and no display heuristic, so neither gate that governs the
+    # bare invocation may gate this. CliRunner streams are never TTYs, which
+    # is exactly the case tested.
+    import stenograf.gui
 
     calls = []
     monkeypatch.setattr(stenograf.gui, "run_gui", lambda *, tray: calls.append(tray))
-    monkeypatch.setattr(stenograf.ui, "run_launcher", lambda: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(cli, "_display_available", lambda: False)
 
     result = CliRunner().invoke(cli.main, ["--gui"])
 
@@ -1699,9 +1742,10 @@ def test_gui_flag_with_a_subcommand_is_a_usage_error(monkeypatch):
     assert "no subcommand" in result.output
 
 
-def test_the_desktop_app_says_how_to_install_qt_when_it_is_missing(monkeypatch):
-    # PySide6 is the optional [gui] extra; a missing one must be an instruction,
-    # not an ImportError traceback.
+def test_the_desktop_app_says_how_to_repair_a_missing_qt(monkeypatch):
+    # PySide6 is a base dependency since the default flip, so missing Qt means
+    # a broken or pre-flip install — the message must be a repair instruction
+    # (not the old [gui] extra, which is empty now), not an ImportError.
     import importlib.util
 
     import click
@@ -1711,14 +1755,18 @@ def test_the_desktop_app_says_how_to_install_qt_when_it_is_missing(monkeypatch):
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
     with pytest.raises(click.ClickException) as excinfo:
         run_gui()
-    assert "stenograf[gui]" in excinfo.value.message
+    assert "uv tool install --force stenograf" in excinfo.value.message
+    assert "[gui]" not in excinfo.value.message
 
 
-def test_subcommands_never_open_the_launcher(monkeypatch):
-    import stenograf.ui
+def test_subcommands_never_open_the_app(monkeypatch):
+    import stenograf.gui
 
     monkeypatch.setattr(cli, "_interactive_terminal", lambda: True)
-    monkeypatch.setattr(stenograf.ui, "run_launcher", lambda: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(cli, "_display_available", lambda: True)
+    monkeypatch.setattr(
+        stenograf.gui, "run_gui", lambda **kwargs: (_ for _ in ()).throw(AssertionError)
+    )
 
     result = CliRunner().invoke(cli.main, ["profiles", "list"])
 

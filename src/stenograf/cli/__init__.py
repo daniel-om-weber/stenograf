@@ -9,6 +9,7 @@ library calls.
 
 from __future__ import annotations
 
+import os
 import sys
 
 import click
@@ -37,7 +38,7 @@ from stenograf.cli import (  # noqa: F401
     # `--gui` is compiled into it as the fallback argv (PLAN.md Phase 8 step 5).
     "--gui",
     is_flag=True,
-    help="Open the native desktop app instead of the terminal launcher (needs stenograf[gui]).",
+    help="Open the desktop app (what bare `steno` in a terminal does anyway).",
 )
 @click.option(
     "--tray",
@@ -49,8 +50,8 @@ from stenograf.cli import (  # noqa: F401
 def main(ctx: click.Context, gui: bool, tray: bool) -> None:
     """Accuracy-first local meeting transcription. Audio never touches disk.
 
-    Run without a subcommand in a terminal to open the interactive launcher,
-    or with --gui to open the desktop app.
+    Run without a subcommand in a terminal to open the desktop app, or use
+    the subcommands below for a line-oriented pipeline.
     """
     # Windows pipes/redirects default to the legacy code page (cp1252), and a
     # single ✓/← in our output would then crash click.echo with a
@@ -68,19 +69,23 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
     if tray and not gui:
         raise click.UsageError("--tray is a mode of the desktop app; pass --gui as well")
 
-    # Bare `steno` in a terminal opens the launcher (Phase 7); in a
-    # pipe or script it prints help instead — Textual needs a real TTY, and a
-    # script author hitting this by accident wants the usage text, not an app.
-    # `steno --gui` opens the desktop app (Phase 8) and needs no TTY at all: it
-    # is a window, and it is how a Dock/desktop shortcut will start the tool.
-    if gui:
+    # Bare `steno` in an interactive terminal with a display opens the desktop
+    # app (Phase 8 step 7); everywhere else it prints help. Both gates are
+    # load-bearing: the TTY gate keeps the cron / launchd / pipe / `make` / CI
+    # class of invocation on help text exactly as before the flip, and the
+    # display gate keeps SSH and consoles without a display server off a Qt
+    # launch that could not open a window. A Qt platform-plugin init failure is
+    # a C++ qFatal → abort() that no Python except can catch (measured
+    # 2026-07-30), so the residue — interactive terminal, display env present,
+    # display actually broken, e.g. a stale DISPLAY in tmux — aborts with Qt's
+    # own two-line stderr; a pre-flight probe would cost a subprocess PySide6
+    # import on every launch and is not worth that residue. `steno --gui`
+    # skips both gates: it is a window, and it is how the app icon starts the
+    # tool.
+    if gui or (_interactive_terminal() and _display_available()):
         from stenograf.gui import run_gui
 
         run_gui(tray=tray)
-    elif _interactive_terminal():
-        from stenograf.ui import run_launcher
-
-        run_launcher()
     else:
         click.echo(ctx.get_help())
 
@@ -88,6 +93,20 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
 def _interactive_terminal() -> bool:
     """Both ends of the session are a TTY (patchable seam, like `_stdout_is_tty`)."""
     return sys.stdout.isatty() and sys.stdin.isatty()
+
+
+def _display_available() -> bool:
+    """A display server is plausibly reachable (patchable seam).
+
+    Linux: a Wayland or X11 socket is advertised in the environment. macOS and
+    Windows always have a window server for a local session, so the question
+    inverts: is this a *remote* shell? SSH marks its sessions with
+    SSH_CONNECTION/SSH_TTY, and an SSH login on those platforms cannot open a
+    window on the sitting user's display.
+    """
+    if sys.platform.startswith("linux"):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"))
 
 
 main.add_command(start.start)

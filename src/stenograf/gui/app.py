@@ -377,7 +377,7 @@ def claim_single_instance(parent: QObject | None = None) -> QLocalServer | None:
 
     Returns the listening server if this process is the only Stenograf, and
     ``None`` if another one answered — that one has been asked to show its
-    window, and this process must exit 0 without printing anything.
+    window, and this process must exit 0 (the caller says so in one line).
 
     Closing the window only *hides* it (:mod:`stenograf.gui.tray`), which makes
     clicking the launcher again the natural way to ask for the window back — and
@@ -496,9 +496,13 @@ def run(*, tray: bool = False) -> int:
     app.setWindowIcon(QIcon(str(ASSETS / "icon.png")))
 
     # Before anything is built: the cheapest thing a second launch can do is
-    # hand its click over and leave.
+    # hand its click over and leave. Said out loud since bare `steno` became
+    # the default entry — a terminal user staring at a silent exit-0 while a
+    # window pops up elsewhere is a bug; an icon launch has no console and
+    # discards the line.
     instance = claim_single_instance(app)
     if instance is None:
+        print("stenograf is already running — brought its window to front")
         return 0
 
     _engine, gui = build(app)
@@ -527,8 +531,13 @@ def run(*, tray: bool = False) -> int:
         # above existed, and Qt does not re-emit it. Answered here rather than
         # earlier so the --tray hide cannot undo it.
         _relaunched(instance, gui)
-    code = app.exec()
-    gui.join_meetings()
+    # finally: since bare `steno` opens this window, Ctrl-C in the terminal is
+    # an ordinary exit gesture — and an exception out of exec() must not skip
+    # the one call that stops capture and awaits the finalize.
+    try:
+        code = app.exec()
+    finally:
+        gui.join_meetings()
     return code
 
 

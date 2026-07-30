@@ -43,8 +43,11 @@ jobs:
 
   build-pure:
     # pure py3-none-any wheel + the sdist — what every platform without a
-    # specific wheel below installs (musl, Linux arm64, …): no helpers, and
-    # estimated speaker counts fall back to sherpa there.
+    # specific wheel below installs: no helpers, and estimated speaker counts
+    # fall back to sherpa there. Since the GUI default flip this no longer
+    # buys musl or old-glibc Linux arm64 an install at all: PySide6-Essentials
+    # is a base dependency and ships no wheels for them (glibc floor 2.34
+    # x86_64 / 2.39 arm64, no musllinux).
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

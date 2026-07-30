@@ -82,9 +82,15 @@ dependencies = [
     # its AUTOCONVERTPCM init makes Windows resample server-side to 16 kHz
     # (parec-style, no Python resampler dep). See capture/windows.py.
     "soundcard>=0.4.4; sys_platform == 'win32'",
-    # Live-caption TUI (stenograf.tui). Imported lazily, only when the TUI runs —
-    # the plain stdout view (stenograf.view) stays textual-free.
-    "textual>=8.2.8",
+    # The desktop app (Phase 8) — the default UI since step 7's flip. PySide6 is
+    # LGPL-3.0 and stays a normal pip dependency — that satisfies the relinking
+    # obligation for this MIT project; a bundled build would not. -Essentials
+    # (not the full PySide6) is the QtQuick/QtQml/QtQuickControls2 set the app
+    # uses; Addons would add another ~100 MB of modules we never import. Its
+    # wheels set the install floor: macOS 13, glibc 2.34 (x86_64) / 2.39
+    # (arm64) — old-glibc Linux arm64 can no longer install stenograf at all
+    # (accepted in the step-7 flip, 2026-07-30).
+    "PySide6-Essentials>=6.8",
     "livekit>=1.1",
     # Bundled static ffmpeg (per-platform wheels), resolved via
     # imageio_ffmpeg.get_ffmpeg_exe(): `steno transcribe` decodes .mov/.m4a/…
@@ -98,15 +104,11 @@ dependencies = [
 # stdlib-only, so the extra stays empty — naming it now keeps
 # `stenograf[ollama]` a valid requirement before and after Stage D lands.
 ollama = []
-# The native desktop app (`steno --gui`, Phase 8). An extra rather than a base
-# dependency while the Textual launcher is still the default: ~110 MB of Qt is
-# not something a terminal user should download for a UI they never open. When
-# the GUI becomes the default (plan step 7) this moves into `dependencies`.
-# PySide6 is LGPL-3.0 and stays a normal pip dependency — that satisfies the
-# relinking obligation for this MIT project; a bundled build would not.
-# -Essentials (not the full PySide6) is the QtQuick/QtQml/QtQuickControls2 set
-# the app uses; Addons would add another ~100 MB of modules we never import.
-gui = ["PySide6-Essentials>=6.8"]
+# Historical (Phase 8 steps 4–6): the desktop app shipped as an opt-in extra
+# before the step-7 flip moved PySide6 into `dependencies`. Kept empty, like
+# `ollama`, so existing `uv tool install 'stenograf[gui]'` invocations keep
+# resolving.
+gui = []
 
 [project.urls]
 Repository = "https://github.com/daniel-om-weber/stenograf"
@@ -128,10 +130,6 @@ dev = [
     # chain is macOS-arm64-only, so declare it here or `pytest` fails to collect the
     # DER scorer test on Linux/CI (Phase 3→4 readiness audit).
     "scipy>=1.11",
-    # tests/test_gui.py drives the Qt app's controllers and compiles every .qml
-    # (headless, QT_QPA_PLATFORM=offscreen). Same requirement as the [gui] extra,
-    # declared here too so CI actually runs those tests instead of skipping them.
-    "PySide6-Essentials>=6.8",
 ]
 # Phase 0 model-evaluation harness (eval/) — not shipped with the package.
 eval = [
