@@ -28,14 +28,19 @@ class NotesBackendUnavailableError(NotesBackendError):
 
 
 class NotesGenerationError(NotesBackendError):
-    """The backend ran but produced no usable notes (bad JSON, non-zero exit)."""
+    """The backend ran but produced no usable notes (a refusal-shaped or
+    truncated response, a non-zero exit)."""
 
 
 @runtime_checkable
 class NotesBackend(Protocol):
     """One LLM provider. ``complete`` returns the model's raw text response;
-    schema-shaped JSON extraction/validation happens in :mod:`.generate`, shared
-    by all backends. ``model`` is a display/provenance hint (may be ``None``)."""
+    the markdown unwrap and template validation happen in :mod:`.generate`,
+    shared by all backends — the messages already carry the format instruction
+    (:mod:`.prompt` owns it, last in the prompt). A backend that can tell its
+    output was cut at a token cap (mlx ``finish_reason``, Ollama
+    ``done_reason``) raises :class:`NotesGenerationError` itself. ``model`` is
+    a display/provenance hint (may be ``None``)."""
 
     name: str
     model: str | None
@@ -47,7 +52,7 @@ class NotesBackend(Protocol):
 
     def is_available(self) -> bool: ...
 
-    def complete(self, messages: list[dict[str, str]], schema: dict) -> str: ...
+    def complete(self, messages: list[dict[str, str]]) -> str: ...
 
     @classmethod
     def settings_defaults(cls) -> dict[str, object]:

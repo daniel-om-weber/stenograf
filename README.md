@@ -223,7 +223,7 @@ it on Linux (`~/Dokumente/Meetings` on a German one):
 ```
 ~/Documents/Meetings/meeting-20260710-091500/
     transcript.md / .json / .txt        # the transcript (--format adds srt/vtt)
-    transcript.notes.md / .notes.json   # if you generated notes
+    transcript.notes.md                 # if you generated notes
     audio.wav                           # only with --record-audio
 ```
 
@@ -238,8 +238,8 @@ folder holds text alone.
 
 ## Meeting notes (LLM summaries)
 
-Turn any transcript into structured notes — summary, decisions, action items
-per owner, open questions — with the LLM of your choice:
+Turn any transcript into structured notes — summary, decisions, action items,
+open questions — with the LLM of your choice:
 
 ```sh
 steno notes --last                    # notes for the newest meeting
@@ -253,7 +253,7 @@ One meeting can use a different notes setup without touching settings.toml:
 (and `steno transcribe`) steer that run's notes step only, and `steno notes`
 takes the same per-run choices as `--backend`, `--model` and `--instructions`.
 
-Notes land as sibling `transcript.notes.md`/`.notes.json` files. On Apple
+Notes land as a sibling `transcript.notes.md` file. On Apple
 Silicon the default backend is `mlx` — a fully local in-process model, nothing
 to set up. To use a different backend, configure it once in
 `~/Library/Application Support/stenograf/settings.toml`:

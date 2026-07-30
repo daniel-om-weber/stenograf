@@ -79,9 +79,9 @@ def notes_command(
 
     PATH is a meeting folder (its transcript.json is used) or a transcript
     JSON file; --last picks the newest meeting folder in the output home
-    instead. Notes are written as sibling .notes.md/.notes.json files; the
-    meeting profile's glossary and attendees steer the prompt. Configure the
-    backend in settings.toml under [notes].
+    instead. Notes are written as a sibling .notes.md file; the meeting
+    profile's glossary and attendees steer the prompt. Configure the backend
+    in settings.toml under [notes].
     """
     import json as json_mod
 
@@ -120,7 +120,16 @@ def notes_command(
         # is a bug and must propagate as a traceback, not masquerade as one.
         raise click.ClickException(str(exc)) from exc
 
+    _echo_warnings(notes)
     click.echo(f"wrote {', '.join(str(p) for p in written)}")
+
+
+def _echo_warnings(notes) -> None:
+    """Validation warnings, yellow, one line each — they are also recorded in
+    the note's own provenance footer, so the screen is the courtesy copy."""
+    if notes.provenance is not None:
+        for warning in notes.provenance.warnings:
+            click.secho(f"notes warning: {warning}", fg="yellow")
 
 
 def _resolve_notes_target(meeting: Path | None, last: bool) -> Path:
@@ -169,9 +178,10 @@ def _generate_and_write_notes(
     notes_settings=None,
     on_progress: Callable[[str], None] | None = None,
 ):
-    """Generate notes and write ``<basename>.notes.md``/``.notes.json`` (plus the
-    combined-note export when a target dir is configured). Returns
-    ``(written_paths, notes)``; raises typed errors, writing nothing, on failure.
+    """Generate notes and write ``<basename>.notes.md`` (plus the combined-note
+    export when a target dir is configured). Returns ``(written_paths,
+    notes)``; raises typed errors, writing nothing, on failure. Validation
+    warnings ride on ``notes.provenance.warnings`` — the callers surface them.
 
     ``notes_settings`` is the ``[notes]`` table a command already loaded at its
     start (so a ``--notes`` run uses the values in force when the meeting began);
@@ -213,13 +223,15 @@ def _generate_and_write_notes(
         backend,
         instructions=instructions,
         on_progress=on_progress or (lambda message: click.echo(f"notes: {message}")),
+        fallback_title=f"{created_at:%Y-%m-%d}",
     )
 
     md_path = out_dir / f"{basename}.notes.md"
-    json_path = out_dir / f"{basename}.notes.json"
     atomic_write_text(md_path, notes.to_markdown())
-    atomic_write_text(json_path, notes.to_json())
-    written = [md_path, json_path]
+    # A regenerated meeting must not keep a stale JSON (the pre-markdown
+    # format) that disagrees with its markdown.
+    (out_dir / f"{basename}.notes.json").unlink(missing_ok=True)
+    written = [md_path]
 
     target = None if no_export else (export_dir or settings.export_dir)
     if target is not None:
@@ -243,7 +255,7 @@ def _notes_after_run(
     Non-fatal by contract: the transcript already stands, so
     any notes failure warns and returns — rerun later with ``steno notes``."""
     try:
-        written, _notes = _generate_and_write_notes(
+        written, notes = _generate_and_write_notes(
             transcript,
             out_dir,
             basename,
@@ -257,6 +269,7 @@ def _notes_after_run(
         click.secho(f"notes failed: {exc}", fg="yellow")
         click.secho(f"  the transcript is safe — retry with `steno notes {out_dir}`", fg="yellow")
         return
+    _echo_warnings(notes)
     click.echo(f"notes: wrote {', '.join(str(p) for p in written)}")
 
 
@@ -284,7 +297,7 @@ def _generate_notes(
     """
     view.status("generating notes…")
     try:
-        _generate_and_write_notes(
+        _written, notes = _generate_and_write_notes(
             transcript,
             out_dir,
             basename,
@@ -298,4 +311,8 @@ def _generate_notes(
     except Exception as exc:  # noqa: BLE001 — non-fatal by contract
         view.error(f"notes failed: {exc} — the transcript is safe; retry with `steno notes`")
         return False
+    if notes.provenance is not None and notes.provenance.warnings:
+        # A courtesy flash only — the durable copy is the note's own footer,
+        # because the done screen's next status line overwrites this one.
+        view.error(f"notes warning: {'; '.join(notes.provenance.warnings)}")
     return True

@@ -846,8 +846,10 @@ def test_start_tui_generates_notes_while_the_screen_is_still_up(tmp_path, monkey
             return transcript
 
     def fake_generate(transcript, out_dir, basename, **kwargs):
+        from stenograf.notes import MeetingNotes
+
         notes_calls.append(basename)
-        return [], None
+        return [], MeetingNotes(title="T", body="S")
 
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
     monkeypatch.setattr(cli.start, "_stdout_is_tty", lambda: True)

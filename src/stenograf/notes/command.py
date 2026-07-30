@@ -2,9 +2,10 @@
 
 The provider-agnostic escape hatch: configure an argv in
 ``settings.toml`` — ``["claude", "-p", …]``, ``["llm", "-m", "gpt-…"]``, a
-shell wrapper — and stenograf feeds it the rendered prompt (plus an explicit
-schema instruction) on stdin and expects one JSON object on stdout. Hosted
-models with a login-managed CLI thus need no API key handling here.
+shell wrapper — and stenograf feeds it the rendered prompt (the template
+instruction is already its tail, per :mod:`.prompt`) on stdin and expects the
+completed markdown on stdout. Hosted models with a login-managed CLI thus
+need no API key handling here.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
-from stenograf.notes.prompt import schema_instruction
 
 if TYPE_CHECKING:
     from stenograf.settings import NotesSettings
@@ -72,13 +72,14 @@ class CommandBackend:
     def is_available(self) -> bool:
         return shutil.which(self.argv[0]) is not None
 
-    def complete(self, messages: list[dict[str, str]], schema: dict) -> str:
+    def complete(self, messages: list[dict[str, str]]) -> str:
         """Run the command once; its stdout is the model's response.
 
-        Ollama enforces the schema server-side (``format=…``); a generic CLI
-        cannot, so the schema ride along as an explicit instruction and the
-        tolerant JSON extraction in :mod:`.generate` handles a chatty model."""
-        prompt = _render(messages, schema)
+        No completion signal exists here (a CLI's exit code says nothing about
+        a token cap), so unlike mlx/Ollama this backend cannot detect
+        truncation itself — the heading validation in :mod:`.generate` is its
+        only net. The markdown unwrap there handles a chatty model."""
+        prompt = _render(messages)
         try:
             proc = subprocess.run(
                 self.argv,
@@ -104,8 +105,10 @@ class CommandBackend:
         return proc.stdout
 
 
-def _render(messages: list[dict[str, str]], schema: dict) -> str:
-    """Flatten chat messages into one prompt text, schema instruction last."""
-    parts = [m["content"] for m in messages]
-    parts.append(schema_instruction(schema))
-    return "\n\n".join(parts)
+def _render(messages: list[dict[str, str]]) -> str:
+    """Flatten chat messages into one prompt text.
+
+    The format instruction (the template) is already the last message's tail —
+    :mod:`.prompt` owns that seat for every backend — so flattening preserves
+    its deliberate end-of-prompt position."""
+    return "\n\n".join(m["content"] for m in messages)

@@ -22,9 +22,9 @@ from stenograf.settings import NotesSettings
 
 MESSAGES = [
     {"role": "system", "content": "You take notes."},
-    {"role": "user", "content": "The transcript."},
+    {"role": "user", "content": "The transcript.\nFill in this markdown template."},
 ]
-SCHEMA = {"type": "object", "required": ["title"]}
+NOTE_MD = "# T\n\nSummary.\n\n## Decisions\n\n- d\n"
 
 
 # ---- registry ---------------------------------------------------------------
@@ -37,6 +37,23 @@ def test_builtin_backends_registered():
 def test_get_spec_unknown_name_lists_choices():
     with pytest.raises(ValueError, match="unknown notes backend.*ollama"):
         get_spec("gpt")
+
+
+def test_every_registered_backend_matches_the_protocol():
+    # The registry reaches classes via getattr → Any, pyright is basic and
+    # scoped to src, and runtime_checkable checks member *presence*, never
+    # signatures — so a backend left on an old complete() signature passes
+    # ruff AND pyright and dies at runtime. This is the check the type
+    # checker cannot make. Classes, not instances: create_backend("command")
+    # raises on an empty argv before the signature could be inspected.
+    import importlib
+    import inspect
+
+    for name in available_backends():
+        spec = get_spec(name)
+        cls = getattr(importlib.import_module(spec.module), spec.cls)
+        params = list(inspect.signature(cls.complete).parameters)
+        assert params == ["self", "messages"], f"{name}.complete has drifted: {params}"
 
 
 def test_default_backend_precedence(monkeypatch):
@@ -106,9 +123,10 @@ def test_register_backend_makes_it_creatable():
 class FakeOllamaServer:
     """Monkeypatched ``urlopen`` speaking the three endpoints the backend uses."""
 
-    def __init__(self, models=("qwen3:8b",), chat_content='{"title": "T"}'):
+    def __init__(self, models=("qwen3:8b",), chat_content=NOTE_MD, done_reason="stop"):
         self.models = models
         self.chat_content = chat_content
+        self.done_reason = done_reason
         self.chat_payloads = []
 
     def __call__(self, request, timeout=None):
@@ -119,7 +137,10 @@ class FakeOllamaServer:
             body = {"models": [{"name": m} for m in self.models]}
         elif url.endswith("/api/chat"):
             self.chat_payloads.append(json.loads(request.data.decode("utf-8")))
-            body = {"message": {"role": "assistant", "content": self.chat_content}}
+            body = {
+                "message": {"role": "assistant", "content": self.chat_content},
+                "done_reason": self.done_reason,
+            }
         else:
             raise AssertionError(f"unexpected endpoint {url}")
         return io.BytesIO(json.dumps(body).encode("utf-8"))
@@ -131,30 +152,41 @@ def _no_env_overrides(monkeypatch):
     monkeypatch.delenv("STENOGRAF_NOTES_MODEL", raising=False)
 
 
-def test_ollama_complete_sends_schema_and_returns_content(monkeypatch):
+def test_ollama_complete_sends_plain_messages_and_returns_content(monkeypatch):
     server = FakeOllamaServer()
     monkeypatch.setattr(urllib.request, "urlopen", server)
     backend = OllamaBackend()
     assert backend.is_available()
-    assert backend.complete(MESSAGES, SCHEMA) == '{"title": "T"}'
+    assert backend.complete(MESSAGES) == NOTE_MD
     payload = server.chat_payloads[0]
     assert payload["model"] == DEFAULT_MODEL
-    assert payload["format"] == SCHEMA
     assert payload["stream"] is False
     assert payload["messages"] == MESSAGES
+    # No decode-time grammar: the template rides inside the messages (last, per
+    # stenograf.notes.prompt), so the payload must not carry a format= key.
+    assert "format" not in payload
+
+
+def test_ollama_truncated_response_is_an_error_not_a_note(monkeypatch):
+    # done_reason == "length" is the server saying the response was cut at a
+    # token limit. The old schema path failed on the missing closing brace;
+    # markdown has no such tell, so the server's signal is the check.
+    monkeypatch.setattr(urllib.request, "urlopen", FakeOllamaServer(done_reason="length"))
+    with pytest.raises(NotesGenerationError, match="truncated"):
+        OllamaBackend().complete(MESSAGES)
 
 
 def test_ollama_model_not_pulled(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", FakeOllamaServer(models=("llama3:8b",)))
     backend = OllamaBackend(model="qwen3:8b")
     with pytest.raises(ModelNotFoundError, match="ollama pull qwen3:8b"):
-        backend.complete(MESSAGES, SCHEMA)
+        backend.complete(MESSAGES)
 
 
 def test_ollama_untagged_model_matches_tagged_install(monkeypatch):
     server = FakeOllamaServer(models=("qwen3:latest",))
     monkeypatch.setattr(urllib.request, "urlopen", server)
-    OllamaBackend(model="qwen3").complete(MESSAGES, SCHEMA)  # must not raise
+    OllamaBackend(model="qwen3").complete(MESSAGES)  # must not raise
 
 
 def test_ollama_down_is_unavailable(monkeypatch):
@@ -165,7 +197,7 @@ def test_ollama_down_is_unavailable(monkeypatch):
     backend = OllamaBackend()
     assert not backend.is_available()
     with pytest.raises(NotesBackendUnavailableError, match="ollama serve"):
-        backend.complete(MESSAGES, SCHEMA)
+        backend.complete(MESSAGES)
 
 
 def test_ollama_host_env_and_normalization(monkeypatch):
@@ -200,11 +232,18 @@ def test_input_budget_is_backend_dependent_and_overridable():
 # ---- mlx backend ---------------------------------------------------------------
 
 
-class FakeMlxLm:
-    """Stands in for the ``mlx_lm`` module: canned load()/generate()."""
+class FakeStreamResponse:
+    def __init__(self, text, finish_reason):
+        self.text = text
+        self.finish_reason = finish_reason
 
-    def __init__(self, response='{"title": "T"}'):
+
+class FakeMlxLm:
+    """Stands in for the ``mlx_lm`` module: canned load()/stream_generate()."""
+
+    def __init__(self, response=NOTE_MD, finish_reason="stop"):
         self.response = response
+        self.finish_reason = finish_reason
         self.loaded_repos = []
         self.generate_calls = []
         self.tokenizer = FakeTokenizer()
@@ -213,9 +252,11 @@ class FakeMlxLm:
         self.loaded_repos.append(repo)
         return ("fake-model", self.tokenizer)
 
-    def generate(self, model, tokenizer, prompt, max_tokens, sampler=None):
+    def stream_generate(self, model, tokenizer, prompt, max_tokens, sampler=None):
         self.generate_calls.append({"prompt": prompt, "max_tokens": max_tokens, "sampler": sampler})
-        return self.response
+        # Two chunks, finish_reason only on the last — the real stream's shape.
+        yield FakeStreamResponse(self.response[:3], None)
+        yield FakeStreamResponse(self.response[3:], self.finish_reason)
 
 
 class FakeSampleUtils:
@@ -247,15 +288,14 @@ def fake_mlx_lm(monkeypatch):
 
 def test_mlx_complete_thinks_by_default_with_qwen_sampling(fake_mlx_lm):
     fake, backend = fake_mlx_lm
-    assert backend.complete(MESSAGES, SCHEMA) == '{"title": "T"}'
+    assert backend.complete(MESSAGES) == NOTE_MD
     assert fake.loaded_repos == [backend.model]
     call = fake.tokenizer.template_calls[0]
     assert call["add_generation_prompt"] is True
     assert call["enable_thinking"] is True
-    # The schema instruction rides in the last message (no decode-time grammar)
-    # and the caller's message list is not mutated.
-    assert '"required": ["title"]' in call["messages"][-1]["content"]
-    assert MESSAGES[-1]["content"] == "The transcript."
+    # The messages reach the template untouched — the format instruction is
+    # already their tail (stenograf.notes.prompt owns it, for every backend).
+    assert call["messages"] == MESSAGES
     generated = fake.generate_calls[0]
     assert generated["prompt"] == [1, 2, 3]
     # Qwen3's card: greedy decoding in thinking mode loops — a sampler is
@@ -269,7 +309,7 @@ def test_mlx_thinking_off_is_greedy_and_lean(fake_mlx_lm, monkeypatch):
 
     fake, _ = fake_mlx_lm
     backend = MlxBackend(thinking=False)
-    backend.complete(MESSAGES, SCHEMA)
+    backend.complete(MESSAGES)
     assert fake.tokenizer.template_calls[0]["enable_thinking"] is False
     assert fake.generate_calls[0]["sampler"] is None
     assert fake.generate_calls[0]["max_tokens"] == 4096
@@ -277,16 +317,20 @@ def test_mlx_thinking_off_is_greedy_and_lean(fake_mlx_lm, monkeypatch):
     assert MlxBackend.from_settings(NotesSettings()).thinking is True
 
 
-def test_mlx_strips_a_stray_think_block(fake_mlx_lm):
+def test_mlx_hitting_the_output_cap_is_an_error_not_a_note(fake_mlx_lm):
+    # finish_reason == "length" is the runtime saying the output was cut at
+    # the token cap. The old schema path failed on the missing closing brace;
+    # markdown has no such tell, so the runtime's signal is the check.
     fake, backend = fake_mlx_lm
-    fake.response = '<think>\nhmm {not json}\n</think>\n{"title": "T"}'
-    assert backend.complete(MESSAGES, SCHEMA) == '\n{"title": "T"}'
+    fake.finish_reason = "length"
+    with pytest.raises(NotesGenerationError, match="truncated"):
+        backend.complete(MESSAGES)
 
 
 def test_mlx_model_stays_loaded_across_completions(fake_mlx_lm):
     fake, backend = fake_mlx_lm
-    backend.complete(MESSAGES, SCHEMA)
-    backend.complete(MESSAGES, SCHEMA)
+    backend.complete(MESSAGES)
+    backend.complete(MESSAGES)
     assert fake.loaded_repos == [backend.model]  # one load, two generates
     assert len(fake.generate_calls) == 2
 
@@ -295,12 +339,12 @@ def test_mlx_completions_are_bound_to_one_thread(fake_mlx_lm):
     import threading
 
     fake, backend = fake_mlx_lm
-    backend.complete(MESSAGES, SCHEMA)
+    backend.complete(MESSAGES)
     caught = []
 
     def other_thread():
         try:
-            backend.complete(MESSAGES, SCHEMA)
+            backend.complete(MESSAGES)
         except NotesGenerationError as exc:
             caught.append(str(exc))
 
@@ -317,7 +361,7 @@ def test_mlx_load_failure_is_unavailable_not_a_crash(monkeypatch):
     fake.load = lambda repo: (_ for _ in ()).throw(OSError("no space left on device"))
     monkeypatch.setitem(sys.modules, "mlx_lm", fake)
     with pytest.raises(NotesBackendUnavailableError, match="no space left"):
-        MlxBackend().complete(MESSAGES, SCHEMA)
+        MlxBackend().complete(MESSAGES)
 
 
 def test_mlx_from_settings_and_env(monkeypatch):
@@ -343,21 +387,21 @@ def python_argv(body: str) -> tuple[str, ...]:
     return (sys.executable, "-c", body)
 
 
-def test_command_canned_json():
-    backend = CommandBackend(python_argv('print(\'{"title": "T"}\')'))
+def test_command_canned_markdown():
+    backend = CommandBackend(python_argv("print('# T')"))
     assert backend.is_available()
-    out = backend.complete(MESSAGES, SCHEMA)
-    assert json.loads(out) == {"title": "T"}
+    assert backend.complete(MESSAGES).strip() == "# T"
 
 
-def test_command_receives_prompt_and_schema_on_stdin(tmp_path):
-    # The command echoes its stdin back; the prompt must carry both message
-    # contents and the schema instruction (a generic CLI can't be schema-forced).
+def test_command_receives_the_prompt_on_stdin_in_message_order():
+    # The command echoes its stdin back; the flattened prompt must carry every
+    # message's content in order — which keeps the format instruction (the
+    # tail of the last message, per stenograf.notes.prompt) last.
     backend = CommandBackend(python_argv("import sys; print(sys.stdin.read())"))
-    out = backend.complete(MESSAGES, SCHEMA)
+    out = backend.complete(MESSAGES)
     assert "You take notes." in out
-    assert "The transcript." in out
-    assert '"required": ["title"]' in out
+    assert out.index("You take notes.") < out.index("The transcript.")
+    assert out.rstrip().endswith("Fill in this markdown template.")
 
 
 def test_command_nonzero_exit_surfaces_stderr():
@@ -365,26 +409,26 @@ def test_command_nonzero_exit_surfaces_stderr():
         python_argv("import sys; sys.stderr.write('boom: no credits\\n'); sys.exit(3)")
     )
     with pytest.raises(NotesGenerationError, match="boom: no credits"):
-        backend.complete(MESSAGES, SCHEMA)
+        backend.complete(MESSAGES)
 
 
 def test_command_empty_output_is_an_error():
     backend = CommandBackend(python_argv("pass"))
     with pytest.raises(NotesGenerationError, match="no output"):
-        backend.complete(MESSAGES, SCHEMA)
+        backend.complete(MESSAGES)
 
 
 def test_command_timeout():
     backend = CommandBackend(python_argv("import time; time.sleep(30)"), timeout_s=0.2)
     with pytest.raises(NotesGenerationError, match="timed out"):
-        backend.complete(MESSAGES, SCHEMA)
+        backend.complete(MESSAGES)
 
 
 def test_command_missing_binary():
     backend = CommandBackend(("definitely-not-a-real-binary-xyz",))
     assert not backend.is_available()
     with pytest.raises(NotesBackendUnavailableError, match="PATH"):
-        backend.complete(MESSAGES, SCHEMA)
+        backend.complete(MESSAGES)
 
 
 def test_command_unconfigured_raises_with_settings_hint():
@@ -439,5 +483,6 @@ def test_command_backend_against_real_claude_cli():
     )
     notes = generate_notes(transcript, backend)
     assert notes.title
-    assert notes.summary
+    assert notes.body
+    assert "## Action items" in notes.body
     assert notes.provenance.backend == "command"

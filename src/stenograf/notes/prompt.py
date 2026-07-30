@@ -9,64 +9,36 @@ survive customization.
 
 from __future__ import annotations
 
-import json
-
 from stenograf.config import Language
 from stenograf.transcript import Transcript, TranscriptEntry, format_timestamp
 
-NOTES_SCHEMA: dict = {
-    "type": "object",
-    "properties": {
-        "title": {
-            "type": "string",
-            "description": "Short, specific meeting title derived from the content.",
-        },
-        "summary": {
-            "type": "string",
-            "description": "A few paragraphs covering what was discussed and concluded.",
-        },
-        "decisions": {"type": "array", "items": {"type": "string"}},
-        "action_items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "task": {"type": "string"},
-                    "owner": {"type": ["string", "null"]},
-                    "due": {"type": ["string", "null"]},
-                    "timestamp": {"type": ["number", "null"]},
-                },
-                "required": ["task"],
-            },
-        },
-        "highlights": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "speaker": {"type": "string"},
-                    "highlight": {"type": "string"},
-                },
-                "required": ["speaker", "highlight"],
-            },
-        },
-        "open_questions": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["title", "summary", "decisions", "action_items", "open_questions"],
-}
 
+def template_instruction(template: str) -> str:
+    """The format instruction that rides at the very END of the prompt.
 
-def schema_instruction(schema: dict) -> str:
-    """The instruction a backend *without* decode-time grammar appends.
-
-    Ollama enforces the schema server-side (``format=``) and must NOT use
-    this; mlx and command inline it and rely on the tolerant JSON extraction
-    in :mod:`.generate`. One wording, here, so the two grammarless backends
-    can never drift apart."""
+    Position is deliberate and load-bearing: the old schema instruction was
+    appended to the *last* message by both grammarless backends (recency —
+    the format spec must not sit in front of up to 400k chars of transcript),
+    and the template inherits that seat. One wording, here, so backends can
+    never drift apart. Headings are kept verbatim — the template's language
+    is its author's choice; the prose language is the system prompt's."""
     return (
-        "Respond with exactly one JSON object matching this JSON Schema — "
-        "no other text before or after it:\n" + json.dumps(schema, ensure_ascii=False)
+        "Fill in this markdown template for the meeting above. Keep its "
+        "headings exactly as written (do not translate them); replace the "
+        "angle-bracket placeholders with content, or leave a section empty "
+        "when the meeting had none. Respond with the completed markdown "
+        "only — no code fence, nothing before or after it:\n\n" + template
     )
+
+
+_PARTIAL_INSTRUCTION = (
+    'Return the notes for this portion as plain markdown bullets (lines starting with "- "), '
+    "covering what was discussed, decided, assigned, and left open — "
+    "no headings, no title, no other text."
+)
+"""The map step's format: neutral bullets. Shape and context belong to the
+reduce call alone — a portion must not fill the template, or N portions
+produce N conflicting layouts the reduce step has to un-merge."""
 
 
 _LANGUAGE_NAMES = {Language.GERMAN: "German", Language.ENGLISH: "English"}
@@ -84,15 +56,16 @@ You turn a meeting transcript into precise written notes.
 
 Rules — follow them exactly:
 - Report only what the transcript supports. Never invent decisions, action \
-items, owners, or due dates; when the transcript doesn't say, use null.
+items, owners, or due dates; leave out what the transcript does not say.
 - Attribute claims to the speaker labels as they appear in the transcript.
-- For each action item, set "timestamp" to the [h:mm:ss] second where it was \
-raised (as a number of seconds), or null if unclear.
+- For each action item, keep the [h:mm:ss] timestamp where it was raised, \
+when the transcript makes that clear.
 - Speaker labels like "Local-1"/"Remote-2" are automatic; if attendee names \
 are given below, map labels to names only when the transcript itself makes \
 the mapping obvious.
 - The title must be short and specific to this meeting's content.
-- Write the notes in {language}."""
+- Write the notes in {language}. Template headings are not prose — they stay \
+exactly as the template gives them."""
 
 
 def _system_prompt(
@@ -122,7 +95,8 @@ def system_overhead(transcript: Transcript, *, instructions: str | None) -> int:
     derived from it can never exceed what any actual call has left. Exists so
     :mod:`.generate` can charge the system prompt against
     ``max_input_chars`` instead of letting instructions and meeting context
-    ride for free."""
+    ride for free. The template is charged separately there — it rides in the
+    user message, not here."""
     return len(_system_prompt(transcript, instructions=instructions, partial=True))
 
 
@@ -132,15 +106,22 @@ def build_messages(
     instructions: str | None = None,
     entries: list[TranscriptEntry] | None = None,
     partial: bool = False,
+    template: str | None = None,
 ) -> list[dict[str, str]]:
     """Chat messages asking for notes over ``entries`` (default: the whole
-    transcript). ``partial=True`` marks a map-reduce chunk, whose notes are
-    later merged — the model is told not to pad missing context."""
+    transcript). ``partial=True`` marks a map-reduce chunk — neutral bullets,
+    no template (content in map, shape in reduce); a full request carries
+    ``template`` as the last thing in the prompt."""
     system = _system_prompt(transcript, instructions=instructions, partial=partial)
     body = _render_entries(entries if entries is not None else transcript.entries)
+    user = f"The meeting transcript:\n\n{body}"
+    if partial:
+        user += "\n" + _PARTIAL_INSTRUCTION
+    elif template is not None:
+        user += "\n" + template_instruction(template)
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"The meeting transcript:\n\n{body}"},
+        {"role": "user", "content": user},
     ]
 
 
@@ -149,23 +130,24 @@ def build_reduce_messages(
     partials: list[str],
     *,
     instructions: str | None = None,
+    template: str | None = None,
 ) -> list[dict[str, str]]:
-    """The reduce step: merge per-chunk notes JSON into one set of notes."""
+    """The reduce step: merge per-portion bullet notes into the one note."""
     system = _system_prompt(transcript, instructions=instructions)
     joined = "\n\n".join(
         f"Portion {i} notes:\n{partial}" for i, partial in enumerate(partials, start=1)
     )
+    user = (
+        "The meeting was summarized in consecutive portions. Merge these "
+        "portion notes into ONE set of notes for the whole meeting — "
+        "deduplicate, keep every distinct decision and action item, and "
+        "write one coherent summary:\n\n" + joined
+    )
+    if template is not None:
+        user += "\n\n" + template_instruction(template)
     return [
         {"role": "system", "content": system},
-        {
-            "role": "user",
-            "content": (
-                "The meeting was summarized in consecutive portions. Merge these "
-                "portion notes into ONE set of notes for the whole meeting — "
-                "deduplicate, keep every distinct decision and action item, and "
-                "write one coherent summary:\n\n" + joined
-            ),
-        },
+        {"role": "user", "content": user},
     ]
 
 

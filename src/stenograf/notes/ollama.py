@@ -78,7 +78,7 @@ class OllamaBackend:
         installed = self.installed_models()
         return self.model in set(installed) | {m.split(":", 1)[0] for m in installed}
 
-    def complete(self, messages: list[dict[str, str]], schema: dict) -> str:
+    def complete(self, messages: list[dict[str, str]]) -> str:
         if not self._model_verified:
             # One tags round-trip per backend instance, not per map-reduce chunk.
             self._verify_model()
@@ -86,10 +86,19 @@ class OllamaBackend:
         payload = {
             "model": self.model,
             "messages": messages,
-            "format": schema,
             "stream": False,
         }
         data = self._post("/api/chat", payload, timeout=_CHAT_TIMEOUT)
+        # The server reports why generation ended; "length" means the response
+        # was cut at a token limit — truncated, not a note. The old schema path
+        # failed loudly on the missing closing brace; markdown has no such
+        # tell, so the server's own signal is the check.
+        if data.get("done_reason") == "length":
+            raise NotesGenerationError(
+                f"Ollama cut the response at a token limit (model {self.model!r}) — "
+                "the notes are truncated; lower [notes] max_input_chars or use a "
+                "larger-context model"
+            )
         try:
             return data["message"]["content"]
         except (KeyError, TypeError) as exc:

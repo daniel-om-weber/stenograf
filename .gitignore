@@ -38,3 +38,5 @@ build/
 native/.build/
 native/spike/tap-spike
 native/helper/stenocap
+# Gate A working data: real meeting content — NEVER commit
+gate-a/

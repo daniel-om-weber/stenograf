@@ -10,7 +10,7 @@ override — holding plainly named files::
     meeting-20260710-091500/
         transcript.md / .json / .txt / …   # the finalize output (--format)
         transcript.partial.*               # crash checkpoint, removed on success
-        transcript.notes.md / .notes.json  # `steno notes` siblings
+        transcript.notes.md                # the `steno notes` sibling
         audio.wav                          # only with --record-audio
 
 The filesystem *is* the index: the folder name carries the date, the exported

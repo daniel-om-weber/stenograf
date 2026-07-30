@@ -213,12 +213,17 @@ class NotesScreen(Screen):
             lambda: generate_notes_for(
                 target, on_progress=lambda message: self.post(self.set, status=f"notes: {message}")
             ),
-            done=lambda written: self.set(
-                busy=False, status=f"wrote {', '.join(str(p) for p in written)}"
-            ),
+            done=self._wrote,
             failed=lambda message: self.set(busy=False, status=f"failed: {message}"),
             name="gui-notes",
         )
+
+    def _wrote(self, result: tuple) -> None:
+        written, warnings = result
+        status = f"wrote {', '.join(str(p) for p in written)}"
+        if warnings:  # also recorded in the note's own footer
+            status += f" — warning: {'; '.join(warnings)}"
+        self.set(busy=False, status=status)
 
 
 class SettingsScreen(Screen):

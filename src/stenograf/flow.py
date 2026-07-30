@@ -499,13 +499,17 @@ def notes_home() -> Path:
 
 def generate_notes_for(
     target: Path, *, on_progress: Callable[[str], None] | None = None
-) -> list[Path]:
-    """Notes for a meeting folder or a ``transcript.json``; returns what it wrote.
+) -> tuple[list[Path], tuple[str, ...]]:
+    """Notes for a meeting folder or a ``transcript.json``: ``(written paths,
+    validation warnings)``.
 
     The picker-shaped ``steno notes``: no ``--last`` (a UI resolves that itself,
     via :func:`~stenograf.output.latest_meeting_dir`) and no backend overrides.
     Generation goes through the shared entry point, which owns the MLX
     thread-affinity guard — a worker thread must never reimplement it.
+    Warnings are returned, not printed, because both notes screens render a
+    bare status line — dropping them there would silence exactly the evidence
+    the validation produced (they are also in the note's own footer).
 
     Blocking; meant for a worker thread. Every failure raises."""
     from stenograf.cli.notes import _generate_and_write_notes
@@ -522,10 +526,11 @@ def generate_notes_for(
     created_at = created_at_from_dir_name(out_dir.name) or datetime.fromtimestamp(
         path.stat().st_mtime
     )
-    written, _notes = _generate_and_write_notes(
+    written, notes = _generate_and_write_notes(
         transcript, out_dir, path.stem, created_at=created_at, on_progress=on_progress
     )
-    return written
+    warnings = notes.provenance.warnings if notes.provenance is not None else ()
+    return written, warnings
 
 
 __all__ = [

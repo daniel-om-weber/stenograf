@@ -5,6 +5,10 @@ folder, a note is markdown, and the ``> [!quote]-`` collapsible-transcript
 callout degrades to an ordinary blockquote elsewhere. Point ``[notes.export]
 dir`` at any directory and every summarized meeting lands there as
 ``YYYY-MM-DD – Title.md``.
+
+The note's body is the model's markdown verbatim — same body as the sibling
+``.notes.md``. Provenance goes into the frontmatter (the vault-idiomatic
+place, out of the reading view) rather than a footer.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from stenograf.notes.model import ActionItem, MeetingNotes, action_item_line, markdown_section
+from stenograf.notes.model import MeetingNotes
 from stenograf.output import atomic_write_text
 from stenograf.transcript import Transcript, format_timestamp
 
@@ -54,42 +58,16 @@ def render_note(transcript: Transcript, notes: MeetingNotes, *, created_at: date
         "source: stenograf",
         "type: meeting",
     ]
+    if notes.provenance is not None:
+        lines.append(f"notes_backend: {notes.provenance.backend}")
+        if notes.provenance.model:
+            lines.append(f'notes_model: "{notes.provenance.model}"')
     if transcript.language is not None:
         lines.append(f"language: {transcript.language.value}")
-    lines += ["tags: [meeting]", "---", "", f"# {notes.title}", "", notes.summary.rstrip()]
-    lines += markdown_section("Decisions", [f"- {d}" for d in notes.decisions])
-    lines += markdown_section("Action items", _action_items_by_owner(notes.action_items))
-    lines += markdown_section("Open questions", [f"- {q}" for q in notes.open_questions])
+    lines += ["tags: [meeting]", "---", "", f"# {notes.title}", "", notes.body.rstrip()]
     lines += ["", "> [!quote]- Transcript"]
     lines += _quoted_transcript(transcript)
     return "\n".join(lines) + "\n"
-
-
-def _action_items_by_owner(items: tuple[ActionItem, ...]) -> list[str]:
-    """Group action items under their owner so each participant sees theirs at
-    a glance; unassigned items close the section."""
-    by_owner: dict[str | None, list[ActionItem]] = {}
-    for item in items:
-        by_owner.setdefault(item.owner, []).append(item)
-    lines: list[str] = []
-    unassigned = by_owner.pop(None, [])
-    for owner, owned in by_owner.items():
-        lines.append(f"**{owner}**")
-        lines += [_item_line(i) for i in owned]
-        lines.append("")
-    if unassigned:
-        if by_owner:
-            lines.append("**Unassigned**")
-        lines += [_item_line(i) for i in unassigned]
-        lines.append("")
-    if lines and lines[-1] == "":
-        lines.pop()
-    return lines
-
-
-def _item_line(item: ActionItem) -> str:
-    # Owner shows as the group heading; timestamps stay out of the vault note.
-    return action_item_line(item, with_owner=False, with_timestamp=False)
 
 
 def _quoted_transcript(transcript: Transcript) -> list[str]:

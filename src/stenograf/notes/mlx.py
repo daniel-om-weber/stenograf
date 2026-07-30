@@ -21,12 +21,10 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import re
 import threading
 from typing import TYPE_CHECKING, Any
 
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
-from stenograf.notes.prompt import schema_instruction
 
 if TYPE_CHECKING:
     from stenograf.settings import NotesSettings
@@ -46,18 +44,16 @@ matter but a misattributed decision does. ``[notes] thinking = false`` in
 settings.toml trades that headroom for speed."""
 
 _MAX_OUTPUT_TOKENS = 4096
-"""Hard stop for one completion. Notes are 1-2k tokens of JSON; a model that
-runs past this is looping, and an unbounded generate would spin forever."""
+"""Hard stop for one completion. Notes are 1-2k tokens of markdown; a model
+that runs past this is looping, and an unbounded generate would spin forever."""
 
 _MAX_OUTPUT_TOKENS_THINKING = 12_288
-"""With reasoning on, the think block spends output tokens before the JSON
+"""With reasoning on, the think block spends output tokens before the note
 starts — give it room, still bounded against loops."""
 
 _THINKING_TEMP, _THINKING_TOP_P = 0.6, 0.95
 """Qwen3's model card is explicit: greedy decoding in thinking mode causes
 endless repetition. Non-thinking mode keeps mlx-lm's greedy default."""
-
-_THINK_BLOCK = re.compile(r"\A\s*<think>.*?</think>", re.DOTALL)
 
 
 class MlxBackend:
@@ -116,7 +112,7 @@ class MlxBackend:
             return False
         return True
 
-    def complete(self, messages: list[dict[str, str]], schema: dict) -> str:
+    def complete(self, messages: list[dict[str, str]]) -> str:
         if self._generation_thread is None:
             self._generation_thread = threading.get_ident()
         elif threading.get_ident() != self._generation_thread:
@@ -127,26 +123,34 @@ class MlxBackend:
                 "completion (mlx-lm 0.29 generation streams are per-thread); "
                 "run all completions for one backend instance on one thread"
             )
-        from mlx_lm import generate
+        from mlx_lm import stream_generate
 
         model, tokenizer = self._load()
-        prompt = self._render(tokenizer, messages, schema)
+        prompt = self._render(tokenizer, messages)
+        kwargs: dict[str, Any] = {"max_tokens": _MAX_OUTPUT_TOKENS}
         if self.thinking:
             from mlx_lm.sample_utils import make_sampler
 
-            text = generate(
-                model,
-                tokenizer,
-                prompt=prompt,
-                max_tokens=_MAX_OUTPUT_TOKENS_THINKING,
-                sampler=make_sampler(temp=_THINKING_TEMP, top_p=_THINKING_TOP_P),
+            kwargs = {
+                "max_tokens": _MAX_OUTPUT_TOKENS_THINKING,
+                "sampler": make_sampler(temp=_THINKING_TEMP, top_p=_THINKING_TOP_P),
+            }
+        # stream_generate rather than generate for its finish_reason: hitting
+        # the output-token cap used to surface only as JSON with no closing
+        # brace — markdown has no such tell, so the truncation check must be
+        # the runtime's own completion signal, not a text heuristic.
+        parts: list[str] = []
+        finish_reason = None
+        for response in stream_generate(model, tokenizer, prompt=prompt, **kwargs):
+            parts.append(response.text)
+            finish_reason = response.finish_reason
+        if finish_reason == "length":
+            raise NotesGenerationError(
+                f"the notes model hit its {kwargs['max_tokens']}-token output cap — "
+                "the response is truncated, not a note (a model that runs this "
+                "long is usually looping)"
             )
-        else:
-            text = generate(model, tokenizer, prompt=prompt, max_tokens=_MAX_OUTPUT_TOKENS)
-        # The think block precedes the JSON (and with thinking off a stray one
-        # still can); its prose may contain braces, so it must not reach the
-        # JSON extraction.
-        return _THINK_BLOCK.sub("", text)
+        return "".join(parts)
 
     def _load(self) -> tuple[Any, Any]:
         loaded = self._loaded
@@ -171,16 +175,11 @@ class MlxBackend:
             self._loaded = loaded
         return loaded
 
-    def _render(self, tokenizer, messages: list[dict[str, str]], schema: dict) -> list[int]:
-        """Token ids for the chat, schema instruction in the last message.
-
-        mlx-lm has no decode-time grammar (Ollama's ``format=``), so like the
-        command backend the schema rides along as an instruction and the
-        tolerant JSON extraction in :mod:`.generate` does the rest.
-        ``enable_thinking`` toggles Qwen3's reasoning mode; templates without
-        that variable simply ignore it."""
-        messages = [*messages[:-1], dict(messages[-1])]
-        messages[-1]["content"] += "\n\n" + schema_instruction(schema)
+    def _render(self, tokenizer, messages: list[dict[str, str]]) -> list[int]:
+        """Token ids for the chat. The format instruction (the template) is
+        already the tail of the last message — :mod:`.prompt` owns that, once,
+        for every backend. ``enable_thinking`` toggles Qwen3's reasoning mode;
+        templates without that variable simply ignore it."""
         try:
             return tokenizer.apply_chat_template(
                 messages, add_generation_prompt=True, enable_thinking=self.thinking

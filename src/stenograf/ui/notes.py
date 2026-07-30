@@ -154,13 +154,15 @@ class NotesScreen(Screen[None]):
         from stenograf.flow import generate_notes_for
 
         try:
-            written = generate_notes_for(
+            written, warnings = generate_notes_for(
                 target,
                 on_progress=lambda message: self._post(self._set_status, f"notes: {message}"),
             )
         except Exception as exc:  # noqa: BLE001 — every failure lands on the status line
             self._post(self._fail, str(exc))
             return
+        for warning in warnings:  # also in the note's own footer
+            self._post(self._warn, f"notes warning: {warning}")
         self._post(self._finish, f"wrote {', '.join(str(p) for p in written)}")
 
     def _post(self, fn: Callable[..., object], *args: object) -> None:
@@ -181,6 +183,9 @@ class NotesScreen(Screen[None]):
     def _fail(self, message: str) -> None:
         self._end_run(f"failed: {message}")
         self._notice(message, title="Notes failed", severity="error", timeout=10)
+
+    def _warn(self, message: str) -> None:
+        self._notice(message, title="Notes warning", severity="warning", timeout=10)
 
     def _end_run(self, message: str) -> None:
         self._busy = False

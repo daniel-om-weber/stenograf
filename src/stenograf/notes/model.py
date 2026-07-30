@@ -1,33 +1,15 @@
-"""Notes data model — the structured summary a notes backend produces.
+"""Notes data model — the note a notes backend produces.
 
-Kept apart from :class:`~stenograf.transcript.Transcript` on purpose: notes are
-derivative, regenerable output, written as sibling ``.notes.md``/``.notes.json``
-files so the transcript schema stays pure.
+Kept apart from :class:`~stenograf.transcript.Transcript` on purpose: notes
+are derivative, regenerable output, written as a sibling ``.notes.md`` file so
+the transcript schema stays pure. The body is markdown the model wrote against
+the template (:mod:`.template`) — there is no field-level structure to
+round-trip, so there is no JSON form.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass
-
-from stenograf.transcript import format_timestamp
-
-
-@dataclass(frozen=True)
-class ActionItem:
-    task: str
-    owner: str | None = None
-    """The attendee responsible, as named in the meeting; ``None`` if unassigned."""
-    due: str | None = None
-    """Free-form due date exactly as spoken ("Friday", "2026-07-20"); never inferred."""
-    timestamp: float | None = None
-    """Session-clock second where the item was raised, for click-to-jump."""
-
-
-@dataclass(frozen=True)
-class SpeakerHighlight:
-    speaker: str
-    highlight: str
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -41,6 +23,13 @@ class NotesProvenance:
     """``single-shot`` or ``map-reduce`` (long meetings summarized in chunks)."""
     language: str | None
     """Language the notes were requested in (the transcript's), or ``None``."""
+    warnings: tuple[str, ...] = ()
+    """Validation warnings (missing template headings, empty sections, a
+    fallback title). Recorded here so the evidence survives the screen — a
+    status line is overwritten by the next one; the note is not."""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "warnings", tuple(self.warnings))
 
 
 @dataclass(frozen=True)
@@ -48,103 +37,17 @@ class MeetingNotes:
     title: str
     """LLM-derived when the meeting had none — flows into the combined-note
     export filename."""
-    summary: str
-    decisions: tuple[str, ...] = ()
-    action_items: tuple[ActionItem, ...] = ()
-    highlights: tuple[SpeakerHighlight, ...] = ()
-    open_questions: tuple[str, ...] = ()
+    body: str
+    """The note as markdown, headings per the template, without the H1 (the
+    renderers emit exactly one H1 from :attr:`title`)."""
     provenance: NotesProvenance | None = None
 
-    def __post_init__(self) -> None:
-        # Normalize list-valued input (straight from parsed JSON) to tuples so
-        # notes compare by value and never alias a caller's list.
-        object.__setattr__(self, "decisions", tuple(self.decisions))
-        object.__setattr__(self, "action_items", tuple(self.action_items))
-        object.__setattr__(self, "highlights", tuple(self.highlights))
-        object.__setattr__(self, "open_questions", tuple(self.open_questions))
-
-    def to_json(self) -> str:
-        return json.dumps(
-            {
-                "title": self.title,
-                "summary": self.summary,
-                "decisions": list(self.decisions),
-                "action_items": [asdict(a) for a in self.action_items],
-                "highlights": [asdict(h) for h in self.highlights],
-                "open_questions": list(self.open_questions),
-                "provenance": asdict(self.provenance) if self.provenance else None,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-
-    @classmethod
-    def from_json(cls, data: str) -> MeetingNotes:
-        obj = json.loads(data)
-        prov = obj.get("provenance")
-        return cls(
-            title=obj["title"],
-            summary=obj["summary"],
-            decisions=tuple(obj.get("decisions", ())),
-            action_items=tuple(
-                ActionItem(
-                    task=a["task"],
-                    owner=a.get("owner"),
-                    due=a.get("due"),
-                    timestamp=a.get("timestamp"),
-                )
-                for a in obj.get("action_items", ())
-            ),
-            highlights=tuple(
-                SpeakerHighlight(speaker=h["speaker"], highlight=h["highlight"])
-                for h in obj.get("highlights", ())
-            ),
-            open_questions=tuple(obj.get("open_questions", ())),
-            provenance=NotesProvenance(
-                backend=prov["backend"],
-                model=prov.get("model"),
-                strategy=prov.get("strategy", ""),
-                language=prov.get("language"),
-            )
-            if prov
-            else None,
-        )
-
     def to_markdown(self) -> str:
-        lines = [f"# {self.title}", "", self.summary.rstrip()]
-        lines += markdown_section("Decisions", [f"- {d}" for d in self.decisions])
-        lines += markdown_section("Action items", [action_item_line(a) for a in self.action_items])
-        lines += markdown_section(
-            "Highlights", [f"- **{h.speaker}**: {h.highlight}" for h in self.highlights]
-        )
-        lines += markdown_section("Open questions", [f"- {q}" for q in self.open_questions])
+        lines = [f"# {self.title}", "", self.body.rstrip()]
         if self.provenance is not None:
             p = self.provenance
             model = f" ({p.model})" if p.model else ""
             lines += ["", f"*Generated by stenograf notes — {p.backend}{model}, {p.strategy}.*"]
+            if p.warnings:
+                lines.append(f"*Warnings: {'; '.join(p.warnings)}.*")
         return "\n".join(lines) + "\n"
-
-
-def markdown_section(title: str, bullets: list[str]) -> list[str]:
-    """A ``## title`` section for a bullet list; empty content emits nothing.
-
-    The one skeleton both notes renderers (this sibling ``.notes.md`` and the
-    combined-note export) build their sections from."""
-    return ["", f"## {title}", "", *bullets] if bullets else []
-
-
-def action_item_line(
-    item: ActionItem, *, with_owner: bool = True, with_timestamp: bool = True
-) -> str:
-    """One ``- [ ]`` checkbox line for an action item.
-
-    The export groups items under owner headings and hides timestamps, so it
-    turns those parts off; the sibling ``.notes.md`` renders them inline."""
-    parts = [f"- [ ] {item.task}"]
-    if with_owner and item.owner:
-        parts.append(f"— **{item.owner}**")
-    if item.due:
-        parts.append(f"(due {item.due})")
-    if with_timestamp and item.timestamp is not None:
-        parts.append(f"[{format_timestamp(item.timestamp)}]")
-    return " ".join(parts)
