@@ -88,6 +88,7 @@ def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
     Values are TOML-flavored so a line can be pasted into the file; defaults
     that aren't literal values (an unset optional, a per-backend choice) read
     as a parenthesized description instead."""
+    from stenograf.asr.biasing import DEFAULT_ALPHA
     from stenograf.asr.registry import default_backend_name as asr_default
     from stenograf.glossary import DEFAULT_THRESHOLD as GLOSSARY_THRESHOLD
     from stenograf.notes.backend import default_backend_name as notes_default
@@ -121,6 +122,7 @@ def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
         ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
         ("asr", "backend", settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"),
         ("asr", "provider", settings.asr.provider, "cpu", "STENOGRAF_ASR_PROVIDER"),
+        ("asr", "boost", settings.asr.boost, DEFAULT_ALPHA, None),
         ("notes", "auto", settings.notes.auto, False, None),
         ("notes", "backend", settings.notes.backend, notes_backend, "STENOGRAF_NOTES_BACKEND"),
         (

@@ -1572,6 +1572,7 @@ def test_settings_show_reports_values_and_sources(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli.main, ["settings", "show"])
     assert "backend  = parakeet  ($STENOGRAF_ASR_BACKEND)" in result.output
     assert "provider = cpu  (default)" in result.output
+    assert "boost    = 1  (default)" in result.output
 
 
 def test_settings_show_names_a_missing_file(tmp_path):
