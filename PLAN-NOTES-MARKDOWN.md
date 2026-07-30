@@ -5,14 +5,17 @@ reviewers; findings baked in). **BUILT 2026-07-30** — the code below is
 implemented and the CI triple passes; what remains is the gates:
 
 - **Gate 0 (Ollama probe): not run** — needs the CachyOS notebook.
-- **Gate A: before-case captured, read pending.** JSON-path outputs live in
-  `gate-a/before/` (gitignored, real meeting content): `small-claude` and
-  `mid-claude` succeeded; the **mlx before-run is still owed** (first attempt
-  failed with "missing a usable 'title'" — a live specimen of the JSON path's
-  failure mode — and the retry waits for a machine not running a big LLM; a
-  worktree pinned at the pre-change commit `4fe5c76` is ready in the session
-  scratchpad, or recreate one). Then generate the after-case on the same
-  transcripts and Daniel reads both.
+- **Gate A: both cases captured, Daniel's read pending.** Outputs live in
+  `gate-a/` (gitignored, real meeting content), before/after pairs on the
+  same transcripts: `small-claude` and `mid-claude` succeeded on both paths
+  (after-case: all headings matched, zero warnings). **mlx has no before-note
+  to read: the JSON path failed 2 of 2 attempts** on the small meeting
+  ("missing a usable 'title'", temp 0.6, both from the pinned `4fe5c76`
+  worktree; mechanism not investigated — the path is deleted), while the
+  markdown path succeeded on the same transcript+model first try with zero
+  warnings (`gate-a/after/small-mlx`). n=2 vs n=1, but the direction is the
+  point: the shipped macOS default could not produce notes for this real
+  meeting on the old path and can on the new one.
 - **Gate B: not run** — needs CachyOS/Windows. `format=` is now deleted, so
   the with-grammar baseline run must check out `4fe5c76` (the last commit
   with the JSON path) on that box first.
