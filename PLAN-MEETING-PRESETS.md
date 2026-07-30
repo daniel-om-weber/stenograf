@@ -28,35 +28,28 @@ new `[meetings.*]` table are release-notes material, not design constraints.
 
 ---
 
-## Step 0 — the baseline, ship now (~30 lines)
+## Step 0 — the baseline. **SHIPPED 2026-07-30 (`4fe5c76`).**
 
-Per-run flags on `steno start`: `--instructions FILE` and
-`--notes-backend`/`--notes-model`. **Measured:** `_notes_options`
-(`run.py:259-278`) gives `steno start` only `--notes/--no-notes` and `--print`
-today — there is no way to choose a notes backend for a live meeting at all;
-only `steno notes --backend` exists after the fact. `[notes] instructions`
-already appends to the system prompt (`prompt.py:113`), so the flag is plumbing,
-not features. This is the thing to actually use in real meetings while the
-step-7 gate runs; what it cannot do (persistence, per-kind vocab, a GUI picker)
-is the evidence base for whether the preset layer below is worth building.
+Per-run flags: `--notes-backend`, `--notes-model` and `--instructions FILE` on
+`steno start` *and* `steno transcribe` (threading through `_finish_run` and
+the in-TUI notes step), plus `--instructions` on `steno notes`. A per-run
+instructions file *replaces* the standing one rather than appending. Before
+this there was no way to choose a notes backend for a live meeting at all.
+This is the thing to actually use in real meetings while the step-7 gate
+runs; what it cannot do (persistence, per-kind vocab, a GUI picker) is the
+evidence base for whether the preset layer below is worth building.
 
-## Independent fixes surfaced by review — land any time, preset layer or not
+## Independent fixes surfaced by review — **both SHIPPED 2026-07-30**
 
-- **Closing the GUI during a long notes run blocks quit for the full
-  `timeout_s`.** `MeetingScreen.shutdown()` (`gui/meeting.py:191-204`) stops
-  capture only in phase `rec`, then calls `self.join()` unconditionally — with
-  an agentic backend (`timeout_s = 1800`) that is a hang on exit, not merely
-  "reads as done-and-hung". And `stop()` in phase `done` calls `app.back()`
-  (`gui/meeting.py:222-223`) instead of cancelling. The fix lives in the
-  library, not the screen: a cancel token on the notes step in
-  `flow.MeetingRun.run` (`flow.py:285-292`), surfaced through `LiveView`
-  (`flow.py:22-25`) so both front-ends get it — the drift rule applied.
-  (The "emit a progress line before the notes call" idea from the first draft
-  is already implemented: `view.status("generating notes…")`,
-  `cli/notes.py:257`, both paths.)
-- **`steno settings show` already fails to display a shipped key:** `[asr]
-  boost` is absent from `_settings_rows` (`settings_cmd.py:107-158`). Any
-  future preset-aware renderer inherits the gap; fix it now.
+- **GUI quit no longer waits out a notes run** (`5a6b902`): `MeetingRun` grew
+  `abandon_notes` + `notes_running` in `flow.py`; `shutdown()` joins only
+  capture teardown and finalize, skips a notes step not yet started, and
+  abandons one in flight (transcript persisted at `finalized`; `steno notes
+  --last` regenerates). The TUI's deliberate join-with-notice is unchanged —
+  nothing sets the event there. A *cancel button* for an in-flight notes call
+  remains unbuilt: interrupting a blocking `subprocess.run`/mlx generate
+  needs the Popen restructure recorded in the deferred price list.
+- **`steno settings show` displays `[asr] boost`** (`ac8f738`).
 
 ## The preset layer — deferred design, corrected by review
 
