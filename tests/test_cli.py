@@ -1514,6 +1514,44 @@ def test_settings_show_reports_values_and_sources(tmp_path, monkeypatch):
     assert "boost    = 1  (default)" in result.output
 
 
+def test_settings_show_reports_record_audio(tmp_path):
+    # The one key that decides whether raw audio reaches disk: a run announces
+    # it, but until then the report that promises the effective configuration
+    # left it out entirely.
+    _write_settings(tmp_path, "[output]\nrecord_audio = true\n")
+
+    result = CliRunner().invoke(cli.main, ["settings", "show"])
+
+    assert result.exit_code == 0, result.output
+    assert "record_audio = true  (settings.toml)" in result.output
+
+
+def test_settings_show_covers_every_settings_key():
+    """No key may ship without a row — twice now (``[asr] boost``, ``[output]
+    record_audio``) a setting loaded and steered the run while the one screen
+    that claims to print the effective configuration stayed silent about it."""
+    import dataclasses
+
+    from stenograf.cli.settings_cmd import _settings_rows
+    from stenograf.settings import Settings
+
+    settings = Settings()
+    shown = {(table, key) for table, rows in _settings_rows(settings) for key, _, _ in rows}
+    # `meetings` is user-named preset sections, listed by `steno presets`, not
+    # a fixed key set; `notes.export_dir` is flattened onto its own table.
+    renamed = {("notes", "export_dir"): ("notes.export", "dir")}
+
+    missing = []
+    for table in dataclasses.fields(settings):
+        if table.name == "meetings":
+            continue
+        for key in dataclasses.fields(getattr(settings, table.name)):
+            row = renamed.get((table.name, key.name), (table.name, key.name))
+            if row not in shown:
+                missing.append(f"[{row[0]}] {row[1]}")
+    assert not missing, f"settings show has no row for: {', '.join(missing)}"
+
+
 def test_settings_show_names_a_missing_file(tmp_path):
     result = CliRunner().invoke(cli.main, ["settings", "show"])
     assert result.exit_code == 0, result.output

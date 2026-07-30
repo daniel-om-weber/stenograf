@@ -157,6 +157,7 @@ def _settings_rows(settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
             None,
         ),
         ("output", "dir", settings.output.dir, default_output_home(), None),
+        ("output", "record_audio", settings.output.record_audio, False, None),
         ("speakers", "diarization", settings.speakers.diarization, False, None),
         ("speakers", "reid_threshold", settings.speakers.reid_threshold, REID_THRESHOLD, None),
         ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
