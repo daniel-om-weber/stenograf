@@ -625,3 +625,41 @@ def test_command_backend_is_positioned_in_the_meeting_dir(tmp_path, monkeypatch)
 
     assert result.exit_code == 0, result.output
     assert positions == [(meeting_dir, meeting_dir.parent)]
+
+
+# ---- Ctrl-C during the notes tail ------------------------------------------------
+
+
+def test_one_interrupt_lets_notes_finish_and_a_second_skips_them(tmp_path, monkeypatch, capsys):
+    # The retired TUI joined the notes tail on quit, so a stray Ctrl-C never
+    # killed a half-done notes run; the plain CLI runs the tail on the main
+    # thread, where the default handler would. The middle path: the first
+    # Ctrl-C announces and lets generation finish, the second skips it —
+    # non-fatally, because the transcript is already on disk.
+    import signal
+    from datetime import datetime
+
+    from stenograf.cli import notes as notes_mod
+
+    transcript = write_transcript_json(tmp_path / "transcript.json")
+    before = signal.getsignal(signal.SIGINT)
+    survived = []
+
+    def interrupted_generation(*args, **kwargs):
+        signal.raise_signal(signal.SIGINT)  # first: warned, generation goes on
+        survived.append(True)
+        signal.raise_signal(signal.SIGINT)  # second: skip
+        raise AssertionError("unreachable — the second interrupt must raise")
+
+    monkeypatch.setattr(notes_mod, "_generate_and_write_notes", interrupted_generation)
+
+    notes_mod._notes_after_run(
+        transcript, tmp_path, "transcript", created_at=datetime.now(), notes_settings=None
+    )
+
+    err = capsys.readouterr().err
+    assert survived == [True]
+    assert "Ctrl-C again to skip" in err
+    assert "notes skipped" in err
+    assert f"steno notes {tmp_path}" in err  # the regeneration pointer
+    assert signal.getsignal(signal.SIGINT) is before  # the handler is restored

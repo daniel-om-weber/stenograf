@@ -355,6 +355,70 @@ class TestMeetingScreen:
         pump(lambda: meeting.state["phase"] == "failed")
         assert "no capture device" in meeting.state["status"]
 
+    def test_stop_before_capture_cancels_the_run(self, gui, tmp_path, monkeypatch):
+        # The gap between Start and set_stop has nothing installed to stop —
+        # and provider construction is exactly where a wedged coreaudiod hangs
+        # (the capture-conflict failure mode). Stop/Escape there cancels the
+        # run: models never load, the provider is released, and the screen
+        # pops back home with nothing written.
+        import conftest
+
+        from stenograf import loaders, output
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+        mic = tmp_path / "mic.wav"
+        conftest.write_wav(mic)
+
+        in_construction = threading.Event()
+        release = threading.Event()
+        released = []
+
+        class TrackedProvider(FileCaptureProvider):
+            def stop(self):
+                released.append(True)
+                super().stop()
+
+        def slow_make_provider(replay, plans, **kwargs):
+            in_construction.set()
+            assert release.wait(10), "the test must release the construction"
+            return TrackedProvider({Channel.MIC: mic})
+
+        def no_models(**kwargs):
+            raise AssertionError("a cancelled run must never load models")
+
+        monkeypatch.setattr(loaders, "make_provider", slow_make_provider)
+        monkeypatch.setattr(loaders, "load_backends", no_models)
+
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        moves = []
+        shell.navigation.connect(lambda page, how: moves.append(how))
+        shell.screen("Setup").start(
+            {
+                "mic": True,
+                "system": False,
+                "diarize": False,
+                "local": -1,
+                "remote": -1,
+                "language": "auto",
+                "title": "",
+                "recordAudio": False,
+                "notes": False,
+            }
+        )
+        pump(lambda: in_construction.is_set())
+
+        meeting.stop()  # what Escape and the footer button call in that gap
+        assert meeting.state["status"] == "cancelling…"
+        release.set()
+        pump(lambda: "pop" in moves)  # the cancel lands back on Home
+        meeting.join()
+        assert released == [True]  # the half-built capture was released
+        assert not (tmp_path / "meetings").exists()  # nothing was recorded
+
     def test_captions_become_lines_and_a_tail(self, gui):
         from stenograf.asr.base import Word
         from stenograf.capture.base import Channel
@@ -500,8 +564,8 @@ class TestMeetingScreen:
         )
 
         class AbandonedRun(flow_mod.MeetingRun):
-            def __init__(self, request):
-                super().__init__(request)
+            def __init__(self, request, **kwargs):
+                super().__init__(request, **kwargs)
                 self.abandon_notes.set()  # the quit arrived before the run
 
         monkeypatch.setattr(flow_mod, "MeetingRun", AbandonedRun)
@@ -959,3 +1023,43 @@ class TestQuitting:
         # Would otherwise block forever on the meeting thread.
         shell.join_meetings()
         never_ends.set()
+
+
+class TestSignals:
+    def test_a_sigterm_quits_the_event_loop_cleanly(self, qt_app):
+        # Logout is a SIGTERM (the Linux session manager's; the app-bundle
+        # stub forwards one on macOS), and the default disposition would kill
+        # the process around run()'s finally — the call that stops capture
+        # and lands the finalize. This drives the whole chain: signal →
+        # wakeup byte → QSocketNotifier → quit, observed via the test's own
+        # loop through the `quit` seam.
+        import signal
+
+        from PySide6.QtCore import QTimer
+
+        from stenograf.gui.app import _hand_signals_to_qt
+
+        before = {
+            num: signal.getsignal(num) for num in (signal.SIGINT, signal.SIGTERM)
+        }
+        loop = QEventLoop()
+        outcomes = []
+
+        def quit_from_signal():
+            outcomes.append("signal quit")
+            loop.quit()
+
+        restore = _hand_signals_to_qt(qt_app, quit=quit_from_signal)
+        try:
+            assert signal.getsignal(signal.SIGTERM) is not before[signal.SIGTERM]
+            QTimer.singleShot(0, lambda: signal.raise_signal(signal.SIGTERM))
+            QTimer.singleShot(5000, lambda: (outcomes.append("timed out"), loop.quit()))
+            loop.exec()
+        finally:
+            restore()
+
+        assert outcomes[0] == "signal quit"
+        # join_meetings advertises "Ctrl-C abandons it" after exec(): the
+        # dispositions must be back to what they were.
+        for num, handler in before.items():
+            assert signal.getsignal(num) is handler

@@ -41,12 +41,22 @@ aborts the process on ``qFatal``.
 from __future__ import annotations
 
 import getpass
+import signal
+import socket
 import sys
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from PySide6.QtCore import Property, QCoreApplication, QObject, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    Property,
+    QCoreApplication,
+    QObject,
+    QSocketNotifier,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtQml import QQmlApplicationEngine
@@ -466,6 +476,53 @@ def _relaunched(server: QLocalServer, gui: StenografGui) -> None:
     gui.show_window()
 
 
+def _hand_signals_to_qt(
+    app: QApplication, quit: Callable[[], None] | None = None
+) -> Callable[[], None]:
+    """Make SIGTERM — and Ctrl-C — end the app through the normal quit path.
+
+    A logout is a SIGTERM (the session manager's on Linux; the app-bundle stub
+    forwards one on macOS), and the default disposition kills the process
+    around the ``finally`` that stops capture and lands the finalize. A Python
+    signal handler cannot run while Qt's C++ loop blocks, so the handler
+    itself does nothing: the interpreter's wakeup byte goes down a socketpair,
+    the QSocketNotifier wakes the loop, and the quit funnels through
+    ``join_meetings()`` like every other exit.
+
+    Returns a restore callable for after ``exec()``: ``join_meetings`` says
+    "Ctrl-C abandons it", which needs the default dispositions back. A no-op
+    off the main thread, where handlers cannot be installed. ``quit`` is a
+    seam for tests; it defaults to ``app.quit``.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    receiver, sender = socket.socketpair()
+    sender.setblocking(False)  # the interpreter writes from the signal path
+    previous_fd = signal.set_wakeup_fd(sender.fileno())
+    notifier = QSocketNotifier(receiver.fileno(), QSocketNotifier.Type.Read, app)
+    quit_call = quit or app.quit
+
+    def wake(_socket: object) -> None:
+        receiver.recv(64)  # drain, or the notifier fires forever
+        quit_call()
+
+    notifier.activated.connect(wake)
+    previous = {
+        num: signal.signal(num, lambda *_: None)  # the byte IS the handling
+        for num in (signal.SIGINT, signal.SIGTERM)
+    }
+
+    def restore() -> None:
+        signal.set_wakeup_fd(previous_fd)
+        for num, handler in previous.items():
+            signal.signal(num, handler)
+        notifier.setEnabled(False)
+        receiver.close()
+        sender.close()
+
+    return restore
+
+
 def run(*, tray: bool = False) -> int:
     """Open the app and run it until it quits; returns the exit code.
 
@@ -533,10 +590,14 @@ def run(*, tray: bool = False) -> int:
         _relaunched(instance, gui)
     # finally: since bare `steno` opens this window, Ctrl-C in the terminal is
     # an ordinary exit gesture — and an exception out of exec() must not skip
-    # the one call that stops capture and awaits the finalize.
+    # the one call that stops capture and awaits the finalize. Signals are
+    # restored before that call: its "Ctrl-C abandons it" escape hatch needs
+    # the default SIGINT back.
+    restore_signals = _hand_signals_to_qt(app)
     try:
         code = app.exec()
     finally:
+        restore_signals()
         gui.join_meetings()
     return code
 

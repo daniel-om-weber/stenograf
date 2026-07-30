@@ -126,6 +126,66 @@ attendees = ["Preset Name"]
         assert "[asr]" in lines
 
 
+class TestMeetingRunAbort:
+    """The pre-capture cancel: between Start and ``set_stop`` nothing is
+    installed to stop, so the run itself checks the abort flag around provider
+    construction (gui/meeting.py routes Stop/Escape/quit here)."""
+
+    def test_a_cancelled_run_never_builds_capture(self, tmp_path, monkeypatch):
+        import threading
+
+        from stenograf import loaders, output
+        from stenograf.flow import MeetingRun
+        from stenograf.view import LiveView
+
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+
+        def no_provider(*args, **kwargs):
+            raise AssertionError("a cancelled run must not open capture devices")
+
+        monkeypatch.setattr(loaders, "make_provider", no_provider)
+        abort = threading.Event()
+        abort.set()  # the cancel landed before the worker got here
+        request = resolve_meeting_request(mic=True, system=False, diarize=False)
+        run = MeetingRun(request, abort=abort)
+
+        assert run.run(LiveView()) is None
+        assert not (tmp_path / "meetings").exists()  # nothing was ever written
+
+    def test_a_cancel_during_construction_releases_the_provider(self, tmp_path, monkeypatch):
+        import threading
+
+        from stenograf import loaders, output
+        from stenograf.flow import MeetingRun
+        from stenograf.view import LiveView
+
+        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+        abort = threading.Event()
+        stopped = []
+
+        class HalfBuiltProvider:
+            def stop(self):
+                stopped.append(True)
+
+        def make_provider_then_cancel(*args, **kwargs):
+            abort.set()  # the user pressed Cancel while this was running
+            return HalfBuiltProvider()
+
+        monkeypatch.setattr(loaders, "make_provider", make_provider_then_cancel)
+        monkeypatch.setattr(
+            loaders,
+            "load_backends",
+            lambda **kwargs: (_ for _ in ()).throw(AssertionError("models must not load")),
+        )
+        request = resolve_meeting_request(mic=True, system=False, diarize=False)
+        run = MeetingRun(request, abort=abort)
+
+        assert run.run(LiveView()) is None
+        assert stopped == [True]  # the devices were released on the way out
+
+
 class TestCaptionStream:
     """When a caption line continues, breaks, flushes — and what stays in flight."""
 

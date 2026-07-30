@@ -1616,9 +1616,11 @@ def test_display_gate_on_linux_wants_a_display_socket(monkeypatch):
 
 
 def test_display_gate_on_macos_and_windows_flags_ssh_sessions(monkeypatch):
-    # A local session always has a window server there; only a remote shell
-    # (marked by the SSH variables) cannot put a window on it.
+    # The env fallback (Windows always; macOS when the window-server probe
+    # cannot run): a local session always has a window server, so only a
+    # remote shell — marked by the SSH variables — is barred.
     monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(cli, "_macos_aqua_session", lambda: None)
     for var in ("SSH_CONNECTION", "SSH_TTY"):
         monkeypatch.delenv(var, raising=False)
 
@@ -1626,6 +1628,62 @@ def test_display_gate_on_macos_and_windows_flags_ssh_sessions(monkeypatch):
 
     monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")
     assert not cli._display_available()
+
+
+def test_display_gate_on_macos_believes_the_window_server_over_the_env(monkeypatch):
+    # tmux servers and sudo both lose SSH_CONNECTION/SSH_TTY (measured
+    # 2026-07-30), so the env heuristic false-positives exactly where a Qt
+    # launch would be an uncatchable abort. The probe's answer wins in both
+    # directions.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    for var in ("SSH_CONNECTION", "SSH_TTY"):
+        monkeypatch.delenv(var, raising=False)
+
+    # An SSH login whose environment looks local (the tmux/sudo shape).
+    monkeypatch.setattr(cli, "_macos_aqua_session", lambda: False)
+    assert not cli._display_available()
+
+    # And the mirror image: a window-server session with stale SSH residue.
+    monkeypatch.setattr(cli, "_macos_aqua_session", lambda: True)
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")
+    assert cli._display_available()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the probe is a macOS API")
+def test_the_aqua_probe_gives_an_answer_on_macos():
+    # True in a desktop session, False over SSH — either way the probe must
+    # resolve on real macOS rather than fall back to the env heuristic.
+    assert cli._macos_aqua_session() in (True, False)
+
+
+def test_the_cli_installs_a_sigterm_handler(monkeypatch):
+    # A Linux session-manager logout IS a SIGTERM (and the app-bundle stub
+    # forwards one on macOS); the default disposition would kill a run around
+    # its finalize. The group callback routes it into the Ctrl-C machinery.
+    import signal
+
+    previous = signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    try:
+        CliRunner().invoke(cli.main, [])
+        assert signal.getsignal(signal.SIGTERM) is cli._sigterm_becomes_interrupt
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_sigterm_raises_keyboard_interrupt_but_honors_the_finalize_shield():
+    import signal
+
+    # Normally SIGTERM is Ctrl-C: capture ends gracefully, finalize runs.
+    with pytest.raises(KeyboardInterrupt):
+        cli._sigterm_becomes_interrupt(signal.SIGTERM, None)
+
+    # While session._shield_interrupt has SIGINT ignored, the finalize is the
+    # authoritative transcript — SIGTERM must not break in either.
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        cli._sigterm_becomes_interrupt(signal.SIGTERM, None)  # returns quietly
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def test_gui_flag_opens_the_desktop_app_without_needing_a_tty(monkeypatch):

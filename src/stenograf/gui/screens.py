@@ -13,6 +13,11 @@ through :meth:`~stenograf.gui.app.Screen.work`, and the outcome lands on
 **The notes screen stays a dumb folder picker** — never a meeting list with
 titles, dates or summaries. That list would be the meeting browser the product
 philosophy forbids; keeping the picker dumb enforces the lock structurally.
+Folder, deliberately not file: the retired TUI's tree also accepted a bare
+transcript JSON, and :func:`stenograf.flow.generate_notes_for` still handles
+one, but that exotic shape is CLI territory (``steno notes PATH``) — a second
+file dialog here would grow the picker for a case the folder covers in
+practice.
 """
 
 from __future__ import annotations

@@ -89,6 +89,11 @@ class MeetingScreen(Screen, LiveView):
         self._stop_capture: Callable[[], None] | None = None
         self._thread: threading.Thread | None = None
         self._run: MeetingRun | None = None
+        self._abort = threading.Event()
+        """Cancels a run whose capture is still being built (`MeetingRun.abort`).
+
+        Owned here rather than by the run so it exists before the worker
+        thread does — Stop can land in the first milliseconds."""
         self._started = 0.0
         self._reset()
 
@@ -132,6 +137,7 @@ class MeetingScreen(Screen, LiveView):
             return
         self.cleared.emit()
         self._captions.clear()
+        self._abort.clear()
         self._started = time.monotonic()
         self._clock.start()
         # Announced rather than derived: `phase` reads "rec" before anything has
@@ -149,7 +155,7 @@ class MeetingScreen(Screen, LiveView):
         """The meeting, on the worker thread."""
         from stenograf.flow import MeetingRun
 
-        run = MeetingRun(request)
+        run = MeetingRun(request, abort=self._abort)
         # The transcript reaches disk at the ``finalized`` event, before the user
         # can close the window on the done screen.
         self._persist = run.persist
@@ -161,6 +167,12 @@ class MeetingScreen(Screen, LiveView):
         """The meeting thread returned (capture stopped, finalize and notes done)."""
         self._clock.stop()
         self.set(active=False)
+        if self._abort.is_set() and transcript is None:
+            # The user cancelled before capture existed: nothing happened, so
+            # there is nothing to show — back to the menu, like the Back button.
+            self._reset()
+            self.app.back()
+            return
         if isinstance(transcript, Transcript):
             if self._state.get("phase") != "done":  # a run that never emitted the event
                 self._show(transcript)
@@ -207,10 +219,25 @@ class MeetingScreen(Screen, LiveView):
         backend legitimately runs for many minutes — joining it would block the
         quit for up to ``[notes] timeout_s`` with the window already gone. So a
         notes step that has not started is skipped (``abandon_notes``), and one
-        already in flight is left to die with the process."""
+        already in flight is left to die with the process.
+
+        A run whose capture never came up is cancelled outright (``abort``):
+        no audio exists to protect, so the quit waits only a bounded moment
+        for the worker to notice instead of joining a construction that may be
+        wedged inside CoreAudio."""
         run = self._run
         if run is not None:
             run.abandon_notes.set()  # a notes step not yet started is skipped
+        if self._stop_capture is None and self._state.get("phase") == "rec":
+            # Capture never came up: no audio exists, so there is nothing the
+            # wait below could save. Cancel the construction and give the
+            # worker a moment — a provider build wedged inside CoreAudio may
+            # never return, and joining it would hang the quit for nothing.
+            self._abort.set()
+            thread = self._thread
+            if thread is not None:
+                thread.join(5.0)
+            return
         if self._stop_capture is not None and self._state.get("phase") == "rec":
             with contextlib.suppress(Exception):  # a stop error must not block the exit
                 self._stop_capture()
@@ -236,11 +263,21 @@ class MeetingScreen(Screen, LiveView):
 
     @Slot()
     def stop(self) -> None:
-        """Stop & finalize while capturing; leave once there is nothing to stop."""
+        """Stop & finalize while capturing; cancel while starting; leave when done."""
         phase = self._state.get("phase")
         if phase == "rec" and self._stop_capture is not None:
             self.set(phase="finalizing", phaseLabel=_PHASE_LABEL["finalizing"], canStop=False)
             threading.Thread(target=self._invoke_stop, name="gui-stop", daemon=True).start()
+        elif phase == "rec" and self.running:
+            # Capture is not up yet (the provider is still being built — exactly
+            # where a wedged CoreAudio hangs, and when a user reaches for
+            # Escape). Nothing is installed to stop, so cancel the run instead:
+            # the worker checks the flag around construction and goes home, and
+            # nothing is lost because no audio has been captured. A stop
+            # callback landing concurrently is benign — the flag is ignored
+            # once capture started, and the next press takes the branch above.
+            self._abort.set()
+            self.set(status="cancelling…")
         elif phase in ("done", "failed"):
             self.app.back()
 

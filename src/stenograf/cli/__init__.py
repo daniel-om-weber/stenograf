@@ -9,7 +9,9 @@ library calls.
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import sys
 
 import click
@@ -62,6 +64,16 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
         if sys.platform == "win32" and hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
 
+    # SIGTERM must end a run the way Ctrl-C does — finalize, then leave — not
+    # by killing the process around the finalize: a Linux session-manager
+    # logout IS a SIGTERM, and the app-bundle stub forwards one at macOS
+    # logout. Installed for every subcommand; the Qt path below replaces it
+    # with its own event-loop-aware handler. Left alone when something that
+    # embeds us already set a handler.
+    if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:
+        with contextlib.suppress(ValueError, OSError):  # not on the main thread
+            signal.signal(signal.SIGTERM, _sigterm_becomes_interrupt)
+
     if ctx.invoked_subcommand is not None:
         if gui or tray:  # both are about the entry, not about any one command
             raise click.UsageError("--gui opens the desktop app; it takes no subcommand")
@@ -90,6 +102,20 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
         click.echo(ctx.get_help())
 
 
+def _sigterm_becomes_interrupt(signum: int, frame: object) -> None:
+    """SIGTERM raises KeyboardInterrupt, so every Ctrl-C path handles it too.
+
+    The session's interrupt story then covers both signals: capture ends
+    gracefully, the finalize runs, notes are skipped with their notice. While
+    the finalize shield is up (:func:`stenograf.session._shield_interrupt`
+    sets SIGINT to SIG_IGN), SIGTERM is honored the same way — raising there
+    would break the one stretch that must not be interrupted, and the shield
+    is bounded (seconds)."""
+    if signal.getsignal(signal.SIGINT) is signal.SIG_IGN:
+        return
+    raise KeyboardInterrupt
+
+
 def _interactive_terminal() -> bool:
     """Both ends of the session are a TTY (patchable seam)."""
     return sys.stdout.isatty() and sys.stdin.isatty()
@@ -98,15 +124,56 @@ def _interactive_terminal() -> bool:
 def _display_available() -> bool:
     """A display server is plausibly reachable (patchable seam).
 
-    Linux: a Wayland or X11 socket is advertised in the environment. macOS and
-    Windows always have a window server for a local session, so the question
-    inverts: is this a *remote* shell? SSH marks its sessions with
-    SSH_CONNECTION/SSH_TTY, and an SSH login on those platforms cannot open a
-    window on the sitting user's display.
+    Linux: a Wayland or X11 socket is advertised in the environment. macOS:
+    ask the window server itself (:func:`_macos_aqua_session`) — the SSH env
+    heuristic below false-positives wherever the ``SSH_*`` variables are lost,
+    and both losses are ordinary: a tmux server started locally does not carry
+    an attaching SSH client's variables into new windows, and ``sudo`` scrubs
+    them (both measured 2026-07-30). Windows (and the macOS fallback when the
+    probe cannot run): a local session always has a window server, so the
+    question inverts — is this a *remote* shell? SSH marks its sessions with
+    SSH_CONNECTION/SSH_TTY, and an SSH login cannot open a window on the
+    sitting user's display.
     """
     if sys.platform.startswith("linux"):
         return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if sys.platform == "darwin":
+        aqua = _macos_aqua_session()
+        if aqua is not None:
+            return aqua
     return not (os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"))
+
+
+def _macos_aqua_session() -> bool | None:
+    """Whether this process belongs to a window-server session (patchable seam).
+
+    ``CGSessionCopyCurrentDictionary()`` returns NULL exactly when the calling
+    process has no Aqua session — an SSH login, however its environment was
+    laundered on the way here. This is the authoritative answer the env
+    heuristic approximates, and it matters because a Qt launch without a
+    window server is an uncatchable C++ abort. One in-process ctypes call: no
+    subprocess, no Qt import. ``None`` when the probe itself is unavailable,
+    and the caller falls back to the SSH_* heuristic.
+    """
+    try:
+        import ctypes
+        import ctypes.util
+
+        path = ctypes.util.find_library("CoreGraphics")
+        if path is None:
+            return None
+        coregraphics = ctypes.CDLL(path)
+        coregraphics.CGSessionCopyCurrentDictionary.restype = ctypes.c_void_p
+        coregraphics.CGSessionCopyCurrentDictionary.argtypes = []
+        session = coregraphics.CGSessionCopyCurrentDictionary()
+        if not session:
+            return False
+        corefoundation = ctypes.CDLL(ctypes.util.find_library("CoreFoundation"))
+        corefoundation.CFRelease.argtypes = [ctypes.c_void_p]
+        corefoundation.CFRelease(session)
+        return True
+    except Exception:  # noqa: BLE001 — a probe failure must not decide dispatch
+        return None
 
 
 main.add_command(start.start)

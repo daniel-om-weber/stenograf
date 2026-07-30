@@ -3,7 +3,9 @@ commands share."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import contextlib
+import signal
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -294,22 +296,64 @@ def _notes_after_run(
     Non-fatal by contract: the transcript already stands, so
     any notes failure warns and returns — rerun later with ``steno notes``."""
     try:
-        written, notes = _generate_and_write_notes(
-            transcript,
-            out_dir,
-            basename,
-            created_at=created_at,
-            notes_settings=notes_settings,
-            backend_name=backend_name,
-            model=model,
-            instructions_file=instructions_file,
+        with _second_interrupt_skips():
+            written, notes = _generate_and_write_notes(
+                transcript,
+                out_dir,
+                basename,
+                created_at=created_at,
+                notes_settings=notes_settings,
+                backend_name=backend_name,
+                model=model,
+                instructions_file=instructions_file,
+            )
+    except KeyboardInterrupt:
+        click.secho(
+            f"notes skipped — the transcript is safe; `steno notes {out_dir}` "
+            "regenerates them",
+            fg="yellow",
+            err=True,
         )
+        return
     except Exception as exc:
         click.secho(f"notes failed: {exc}", fg="yellow")
         click.secho(f"  the transcript is safe — retry with `steno notes {out_dir}`", fg="yellow")
         return
     _echo_warnings(notes)
     click.echo(f"notes: wrote {', '.join(str(p) for p in written)}")
+
+
+@contextlib.contextmanager
+def _second_interrupt_skips() -> Iterator[None]:
+    """First Ctrl-C during the notes tail warns and keeps going; the second skips.
+
+    The retired TUI joined the notes tail on quit, so a stray Ctrl-C never
+    killed a half-written notes run; the plain CLI runs it on the main thread,
+    where the default handler would. But an unconditional shield would trap
+    the user behind an agentic ``[notes] command`` backend for up to its
+    ``timeout_s`` — the same reason the Qt app quits *around* a notes run. So:
+    announce once, and let a second press raise into the caller's
+    KeyboardInterrupt arm. A no-op off the main thread, where handlers cannot
+    be installed.
+    """
+    interrupted = False
+
+    def handler(signum: int, frame: object) -> None:
+        nonlocal interrupted
+        if interrupted:
+            raise KeyboardInterrupt
+        interrupted = True
+        click.secho("finishing notes — Ctrl-C again to skip them", fg="yellow", err=True)
+
+    try:
+        previous = signal.signal(signal.SIGINT, handler)
+    except (ValueError, OSError):  # not on the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def _generate_notes(

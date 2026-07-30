@@ -293,9 +293,12 @@ Item {
             }
 
             Btn {
-                text: page.phase === "rec" ? "Stop & finalize" : page.phase === "finalizing" ? "Finalizing…" : "Back to menu"
+                // Before capture is up (canStop false) the button cancels the
+                // starting run instead of stopping a live one — screen.stop()
+                // routes both, so it is enabled through the whole "rec" phase.
+                text: page.phase === "rec" ? (page.screen.state.canStop ? "Stop & finalize" : "Cancel") : page.phase === "finalizing" ? "Finalizing…" : "Back to menu"
                 primary: page.phase === "rec"
-                enabled: page.phase === "finalizing" ? false : page.phase !== "rec" || page.screen.state.canStop
+                enabled: page.phase !== "finalizing"
                 implicitWidth: 150
                 onClicked: page.screen.stop()
             }

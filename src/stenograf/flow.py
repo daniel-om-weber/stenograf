@@ -32,6 +32,7 @@ Ordering matters twice in :meth:`MeetingRun.run`:
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -179,7 +180,7 @@ class MeetingRun:
     names. :meth:`run` then does the slow work on whatever thread the UI gives
     it."""
 
-    def __init__(self, request: MeetingRequest) -> None:
+    def __init__(self, request: MeetingRequest, *, abort: threading.Event | None = None) -> None:
         from stenograf.cli.start import _PersistOnce
         from stenograf.output import (
             TRANSCRIPT_STEM,
@@ -221,6 +222,17 @@ class MeetingRun:
         departing front-end may abandon instead of joining (see
         :attr:`abandon_notes`; capture teardown and finalize must be waited on,
         or the meeting itself is lost)."""
+        self.abort = abort or threading.Event()
+        """Set while capture is still being *built* to cancel the run outright.
+
+        Between the Start gesture and ``view.set_stop`` there is nothing
+        installed to stop — and provider construction is exactly where a wedged
+        CoreAudio can hang. A front-end passes its own event in (so the flag
+        exists before the worker thread does) and sets it from Stop/Escape/quit;
+        :meth:`run` checks it around construction and returns ``None`` instead
+        of starting the meeting. Nothing is lost: no audio has been captured
+        yet. Once capture is up the stop callback is the way to end a run, and
+        a stale flag is ignored."""
 
     def run(self, view: LiveView) -> Transcript | None:
         """Capture, finalize, and (if asked) write notes, reporting through ``view``.
@@ -236,6 +248,8 @@ class MeetingRun:
         settings, profile = self.request.settings, self.request.profile
         plans = plan_channels(profile)
 
+        if self.abort.is_set():
+            return None
         view.status("starting capture…")
         # announce=view.status everywhere below: loader progress must go to the
         # view, never through click — a TUI owns stdio, a GUI has no stdio at
@@ -250,6 +264,13 @@ class MeetingRun:
             announce=view.status,
             on_log=loaders.CaptureLog(view=view),
         )
+        if self.abort.is_set():
+            # The cancel arrived while the provider was being built. Release
+            # the devices and walk away — no audio exists, so there is nothing
+            # to finalize (and a teardown error must not outrank the cancel).
+            with contextlib.suppress(Exception):
+                provider.stop()
+            return None
         view.set_stop(provider.stop)  # Stop/Ctrl-C crosses to capture from here on
         # Capture starts NOW, before the models load: the provider's frame queue
         # is unbounded, so the meeting's first seconds buffer through a slow

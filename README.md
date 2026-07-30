@@ -53,6 +53,9 @@ distro), and Windows 10/11 (capture is WASAPI, mic plus loopback of whatever is
 playing). Off Apple Silicon, ASR runs ONNX on CPU; on Windows any DX12 GPU can
 be opted into with `[asr] provider = "dml"`.
 
+On Linux the desktop app (Qt) sets the install floor: glibc 2.34 on x86_64,
+2.39 on arm64, and no musl (Alpine) builds — Qt ships no wheels for those.
+
 ### Manual install
 
 With [uv](https://docs.astral.sh/uv/) already installed:
