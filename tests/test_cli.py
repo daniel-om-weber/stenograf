@@ -1170,11 +1170,8 @@ def _helper_wrapper(tmp_path, *forced_args):
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
 def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
-    from stenograf import shortcut
-
     monkeypatch.setenv("HOME", str(tmp_path))  # the launcher lands in $HOME/Applications
     monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
-    monkeypatch.setattr(shortcut, "gui_installed", lambda: True)
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
@@ -1187,20 +1184,6 @@ def test_setup_grants_permissions_then_prefetches(tmp_path, monkeypatch):
     # client and asks once more. Saying so is the whole point of the line.
     assert "asks for microphone access once" in result.output
     assert "setup complete" in result.output
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
-def test_setup_without_the_gui_extra_falls_back_to_the_command_file(tmp_path, monkeypatch):
-    from stenograf import shortcut
-
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("STENOGRAF_CAPTURE_HELPER", str(_helper_wrapper(tmp_path)))
-    monkeypatch.setattr(shortcut, "gui_installed", lambda: False)
-    monkeypatch.setattr(loaders, "prefetch_models", lambda: None)
-    result = CliRunner().invoke(cli.main, ["setup"])
-    assert result.exit_code == 0, result.output
-    assert (tmp_path / "Desktop" / "Stenograf.command").exists()
-    assert "stenograf[gui]" in result.output  # how to get the app instead
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="steno setup is macOS-only")
@@ -1226,7 +1209,6 @@ def test_setup_windows_checks_the_privacy_toggle_then_prefetches(tmp_path, monke
     # Both shell folders, or setup writes into the developer's own Start menu.
     monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
     monkeypatch.setattr(shortcut, "_windows_programs", lambda: tmp_path / "Programs")
-    monkeypatch.setattr(shortcut, "gui_installed", lambda: True)  # the extra is in the dev group
     fetched = []
     monkeypatch.setattr(loaders, "prefetch_models", lambda: fetched.append(True))
     result = CliRunner().invoke(cli.main, ["setup"])
@@ -1234,11 +1216,10 @@ def test_setup_windows_checks_the_privacy_toggle_then_prefetches(tmp_path, monke
     assert "microphone access is allowed" in result.output
     assert "shows no permission prompt" in result.output  # no prompt is ever coming
     assert "launcher installed" in result.output
-    # With the extra: a Start-menu entry to pin, plus the Desktop copy.
+    # A Start-menu entry to pin, plus the Desktop copy.
     assert (tmp_path / "Programs" / "Stenograf.lnk").exists()
     assert (tmp_path / "Desktop" / "Stenograf.lnk").exists()
     assert "Start menu" in result.output
-    assert "stenograf[gui]" not in result.output  # already installed: nothing to offer
     assert fetched
 
 

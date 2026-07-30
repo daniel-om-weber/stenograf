@@ -43,8 +43,7 @@ def setup(models_only: bool) -> None:
     launched from, so re-run this from each terminal app (or IDE) you will
     run meetings from. Windows: no prompt exists, so the microphone privacy
     toggle is checked and named instead. Then installs a double-clickable
-    launcher — the desktop app where the `gui` extra is installed, the
-    terminal launcher otherwise — and downloads every model the first meeting
+    launcher for the desktop app and downloads every model the first meeting
     would otherwise stop to fetch; the models are cached machine-wide.
     """
     if not models_only:
@@ -57,11 +56,11 @@ def setup(models_only: bool) -> None:
     # models fetch on first use anyway), the shortcut shouldn't be lost to that.
     # --models-only skips it — headless machines and CI have no desktop.
     if not models_only:
-        from stenograf.shortcut import gui_installed, install_shortcut
+        from stenograf.shortcut import install_shortcut
 
         if (launcher := install_shortcut()) is not None:
             click.echo(click.style("✓", fg="green") + f" launcher installed: {launcher}")
-            if launcher.suffix == ".app":  # macOS with the gui extra: the real app
+            if launcher.suffix == ".app":  # macOS: the real app
                 click.echo("  Open it from Spotlight or the Dock — no terminal needed.")
                 # The grant taken above belongs to this terminal. The app is its
                 # own TCC client (that is the point of the bundle), so it asks
@@ -70,22 +69,15 @@ def setup(models_only: bool) -> None:
                     "  The app asks for microphone access once, the first time you start a "
                     "meeting from it."
                 )
-            elif launcher.suffix == ".lnk":  # Windows with the gui extra: two shell links
+            elif launcher.suffix == ".lnk":  # Windows: two shell links
                 click.echo(
                     '  Look for "Stenograf" in the Start menu — pin it there or to the '
                     "taskbar — or double-click the copy on your Desktop."
                 )
-            elif sys.platform.startswith("linux"):  # menu entry; the others land on the Desktop
+            elif sys.platform.startswith("linux"):  # menu entry
                 click.echo('  Look for "Stenograf" in your application menu.')
-            else:
+            else:  # the Windows COM-refusal batch fallback lands on the Desktop
                 click.echo("  Double-click it to start stenograf — no terminal needed.")
-            # Every platform's launcher follows the extra, so the offer to
-            # upgrade a terminal launcher into the app is not macOS-specific.
-            if not gui_installed():
-                click.echo(
-                    "  For the desktop app instead of a terminal window, install the extra "
-                    "— uv tool install --force 'stenograf[gui]' — and re-run `steno setup`."
-                )
 
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.
