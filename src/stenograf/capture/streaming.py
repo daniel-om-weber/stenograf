@@ -188,10 +188,10 @@ class QueueStreamingProvider[TransportT](CaptureProvider):
     def _log(self, message: str) -> None:
         """One transport diagnostic: the installed sink, or stderr for the plain CLI.
 
-        ``on_log`` exists because the full-screen TUI owns the terminal — a raw
-        stderr write while it runs is painted straight over the captions and
-        reads as a rendering bug, so TUI callers install a sink that routes
-        the line somewhere visible instead.
+        ``on_log`` exists because the Qt meeting screen has no terminal to show
+        a raw stderr write on (its process may not even have a usable stderr),
+        so GUI callers install a sink that routes the line somewhere visible
+        instead (:class:`stenograf.loaders.CaptureLog`).
         """
         if self._on_log is not None:
             self._on_log(message)

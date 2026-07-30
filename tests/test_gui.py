@@ -24,7 +24,8 @@ import time
 
 import pytest
 
-pytest.importorskip("PySide6", reason="the desktop app is the optional [gui] extra")
+# PySide6 is a base dependency since the default flip — a broken Qt install
+# must FAIL this suite, not skip it, so there is deliberately no importorskip.
 
 # Must precede the first QGuiApplication: no display exists in CI, and none is
 # needed — nothing here shows a window.
@@ -290,7 +291,7 @@ class TestMeetingScreen:
         shell, _engine = gui
         meeting = shell.screen("Meeting")
         lines = []
-        meeting.committed.connect(lambda who, line: lines.append(f"{who}  {line}"))
+        meeting.committed.connect(lambda _channel, who, line: lines.append(f"{who}  {line}"))
         restored = []
         meeting.restored.connect(restored.extend)
 
@@ -361,7 +362,7 @@ class TestMeetingScreen:
         shell, _engine = gui
         meeting = shell.screen("Meeting")
         lines = []
-        meeting.committed.connect(lambda who, line: lines.append((who, line)))
+        meeting.committed.connect(lambda channel, who, line: lines.append((channel, who, line)))
 
         meeting._commit(Channel.MIC, [Word("guten", 0.0, 0.4), Word("Morgen", 0.4, 0.8)])
         meeting._interim(Channel.MIC, "zusa")
@@ -369,11 +370,11 @@ class TestMeetingScreen:
         # in the tail, bright, with the provisional text behind it.
         assert lines == []
         assert meeting.state["tails"] == [
-            {"speaker": "You", "open": "guten Morgen", "tail": "zusa"}
+            {"channel": "mic", "speaker": "You", "open": "guten Morgen", "tail": "zusa"}
         ]
         # A different channel breaks the line and flushes it.
         meeting._commit(Channel.SYSTEM, [Word("hallo", 2.0, 2.4)])
-        assert lines == [("You", "guten Morgen")]
+        assert lines == [("mic", "You", "guten Morgen")]
 
     def test_stop_ends_capture_off_the_gui_thread(self, gui):
         shell, _engine = gui

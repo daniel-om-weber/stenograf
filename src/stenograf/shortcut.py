@@ -451,7 +451,7 @@ def _retire_command_file() -> None:
     legacy = _command_file_path()
     try:
         content = legacy.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError):
         return
     if content.startswith("#!/bin/sh") and "-m stenograf" in content:
         legacy.unlink(missing_ok=True)

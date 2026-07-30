@@ -91,7 +91,7 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
 
 
 def _interactive_terminal() -> bool:
-    """Both ends of the session are a TTY (patchable seam, like `_stdout_is_tty`)."""
+    """Both ends of the session are a TTY (patchable seam)."""
     return sys.stdout.isatty() and sys.stdin.isatty()
 
 

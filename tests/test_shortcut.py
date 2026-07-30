@@ -192,6 +192,19 @@ def test_a_foreign_command_file_is_left_alone(tmp_path, monkeypatch):
     assert (desktop / "Stenograf.command").exists()  # it is the user's Desktop
 
 
+def test_a_non_utf8_command_file_does_not_crash_setup(tmp_path, monkeypatch):
+    # read_text raises UnicodeDecodeError (a ValueError, not an OSError) on
+    # arbitrary bytes; a foreign binary-ish file must be skipped, not fatal.
+    _macos(monkeypatch, tmp_path)
+    desktop = tmp_path / "Desktop"
+    desktop.mkdir()
+    (desktop / "Stenograf.command").write_bytes(b"#!/bin/sh\n\xff\xfe not text\n")
+
+    shortcut.install_shortcut()
+
+    assert (desktop / "Stenograf.command").exists()  # left alone, like any foreign file
+
+
 @pytest.mark.skipif(not MACOS, reason="codesign only exists on macOS")
 def test_the_installed_copy_still_satisfies_its_signature(tmp_path, monkeypatch):
     # The whole distribution model: the seal travels with the files, so a bundle
@@ -206,7 +219,7 @@ def test_the_installed_copy_still_satisfies_its_signature(tmp_path, monkeypatch)
 # -- the app launchers off macOS ---------------------------------------------
 
 
-def test_linux_entry_opens_the_app_when_qt_is_installed(tmp_path, monkeypatch):
+def test_linux_entry_opens_the_app(tmp_path, monkeypatch):
     _linux(monkeypatch, tmp_path)
 
     target = shortcut.install_shortcut()

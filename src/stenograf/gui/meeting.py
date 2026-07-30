@@ -16,10 +16,9 @@ What the screen shows, and where it comes from:
   re-evaluate every binding on the screen for each new line;
 - **the interim area** — the open (bright) line plus the grey provisional tail,
   per channel, exactly as :class:`~stenograf.captions.CaptionStream` decides;
-  the TUI renders the same rows with markup instead of QML;
 - **the header** — phase, elapsed, language, profile; the 1 Hz clock that
   advances it is the app's only periodic timer, and it also flushes an idle
-  caption line (the whole redraw budget, from ``ui.meeting``);
+  caption line — together the screen's whole redraw budget;
 - **the footer** — the transient status line (model loading, notes progress)
   and, once allocated, the meeting folder. They are separate fields on purpose:
   the notes step overwrites the status, and the folder must survive that.
@@ -66,8 +65,11 @@ _PHASE_LABEL = {
 class MeetingScreen(Screen, LiveView):
     """One meeting, from the Start button to the finalized transcript on screen."""
 
-    committed = Signal(str, str)
-    """``(speaker, text)`` — one finished caption line, appended to the log."""
+    committed = Signal(str, str, str)
+    """``(channel, speaker, text)`` — one finished caption line, appended to the
+    log. ``channel`` is the :class:`~stenograf.capture.base.Channel` value
+    (``"mic"``/``"system"``, empty for diarized entries) so QML colours rows by
+    identity, not by comparing against the display label."""
 
     restored = Signal(list)
     """The finalize swap: the whole diarized transcript replaces the live captions."""
@@ -293,12 +295,17 @@ class MeetingScreen(Screen, LiveView):
 
     def _emit_line(self, channel: Channel, text: str) -> None:
         """A line the caption stream finished — append it to the log."""
-        self.committed.emit(LIVE_LABEL[channel], text)
+        self.committed.emit(channel.value, LIVE_LABEL[channel], text)
 
     def _render_tails(self) -> None:
         self.set(
             tails=[
-                {"speaker": LIVE_LABEL[channel], "open": open_text, "tail": tail}
+                {
+                    "channel": channel.value,
+                    "speaker": LIVE_LABEL[channel],
+                    "open": open_text,
+                    "tail": tail,
+                }
                 for channel, open_text, tail in self._captions.tails()
             ]
         )

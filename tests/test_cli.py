@@ -746,8 +746,7 @@ def test_persist_once_retries_after_a_failed_write():
 def test_capture_log_buffers_chatter_and_surfaces_problems(capsys):
     # The GUI's stderr sink (flow.py wires it into the Qt meeting run): routine
     # transport chatter (formats, stopped) is buffered and never reaches the
-    # terminal. Problem lines flash in the view live and replay() echoes them
-    # once more to stderr afterwards.
+    # terminal; problem lines flash in the view the moment they arrive.
     class RecordingView(LiveView):
         def __init__(self):
             self.errors = []
@@ -762,11 +761,7 @@ def test_capture_log_buffers_chatter_and_surfaces_problems(capsys):
     log("stenocap: stopped")
     assert log.view.errors == ["stenocap: WARNING channel 0 drifted 40 ms from wall clock"]
     assert capsys.readouterr().err == ""  # nothing touches the terminal while buffering
-
-    log.replay()
-    err = capsys.readouterr().err
-    assert "drifted" in err  # the problem survives onto the scrollback
-    assert "mic format" not in err and "stopped" not in err  # routine stays buffered
+    assert len(log.lines) == 3  # the full chatter stays available for debugging
 
 
 def test_plain_flag_stays_an_accepted_no_op(tmp_path, monkeypatch):
@@ -1684,21 +1679,24 @@ def test_gui_flag_with_a_subcommand_is_a_usage_error(monkeypatch):
     assert "no subcommand" in result.output
 
 
-def test_the_desktop_app_says_how_to_repair_a_missing_qt(monkeypatch):
-    # PySide6 is a base dependency since the default flip, so missing Qt means
-    # a broken or pre-flip install — the message must be a repair instruction
-    # (not the old [gui] extra, which is empty now), not an ImportError.
-    import importlib.util
+def test_the_desktop_app_says_how_to_repair_a_broken_qt(monkeypatch):
+    # PySide6 is a base dependency since the default flip, so an ImportError
+    # means a broken or pre-flip install. The likelier shape is Qt *present*
+    # but unloadable (missing libEGL, arch-mismatched wheel) — the guard must
+    # catch the real import, and the message must be a repair instruction (not
+    # the old [gui] extra, which is empty now) carrying the original error.
+    import sys
 
     import click
 
     from stenograf.gui import run_gui
 
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setitem(sys.modules, "stenograf.gui.app", None)  # import → ImportError
     with pytest.raises(click.ClickException) as excinfo:
         run_gui()
     assert "uv tool install --force stenograf" in excinfo.value.message
     assert "[gui]" not in excinfo.value.message
+    assert "stenograf.gui.app" in excinfo.value.message  # the original error is kept
 
 
 def test_subcommands_never_open_the_app(monkeypatch):

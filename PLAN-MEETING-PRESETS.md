@@ -5,9 +5,12 @@ Designed 2026-07-29; second adversarial review + Daniel's decisions 2026-07-30.
 
 1. **Baseline first, presets later.** The plan's own admission stood up under
    review: the real justification for a preset *layer* is the GUI picker, which
-   sits behind the Phase 8 step-7 / Textual-retire decision. So the ~30-line
-   per-run baseline ships now, and the preset layer waits until that decision
-   settles — its UI half must not be written for a front-end that may retire.
+   sat behind the Phase 8 step-7 / Textual-retire decision. So the ~30-line
+   per-run baseline shipped first, and the preset layer waited on that
+   decision. **The decision settled 2026-07-30: the Qt app is the default and
+   Textual is retired — the picker's target front-end is known and this
+   blocker is cleared.** What still gates the preset layer is the evidence
+   question below, not the front-end.
 2. **History (old Decision 4) is deleted, not deferred.** "Past protocols as
    context" never meant meetings captured by stenograf — it means arbitrary
    files anywhere on Daniel's machine, including protocols a colleague wrote by
@@ -35,8 +38,8 @@ Per-run flags: `--notes-backend`, `--notes-model` and `--instructions FILE` on
 the in-TUI notes step), plus `--instructions` on `steno notes`. A per-run
 instructions file *replaces* the standing one rather than appending. Before
 this there was no way to choose a notes backend for a live meeting at all.
-This is the thing to actually use in real meetings while the step-7 gate
-runs; what it cannot do (persistence, per-kind vocab, a GUI picker) is the
+This is the thing to actually use in real meetings; what it cannot do
+(persistence, per-kind vocab, a GUI picker) is the
 evidence base for whether the preset layer below is worth building.
 
 ## Independent fixes surfaced by review — **both SHIPPED 2026-07-30**
@@ -77,12 +80,13 @@ Two implementation decisions that deviate from the review draft, with reasons:
   `resolve_meeting_request`'s docstring — the env var is a developer escape
   hatch, not worth plumbing an override channel through `MeetingRequest`.
 
-**Still open (unchanged blockers):** the UI half — a preset picker in the
-setup forms and `settings_report(preset=…)`/`steno settings show --preset` —
-stays behind the Phase 8 step-7 / Textual decision, so it is not written for
-a front-end that may retire. Until then presets are CLI-first;
-`resolve_meeting_request(preset=…)` is already the library seam a picker
-will call.
+**Still open:** the UI half — a preset picker in the Qt setup form and
+`settings_report(preset=…)`/`steno settings show --preset`. Its former
+blocker (which front-end survives step 7) settled 2026-07-30: the Qt app is
+the default, so the picker targets `gui/screens.py` + `Setup.qml`. It waits
+now only on the evidence question at the bottom of this plan; presets stay
+CLI-first until then, and `resolve_meeting_request(preset=…)` is already the
+library seam the picker will call.
 
 ### Design record (as built, corrections baked in)
 
@@ -216,7 +220,7 @@ never seen.
   on this machine it resolves via `~/.local/bin`, which is on the widened
   PATH; the invisible case is nvm/fnm/volta-managed node
   (`~/.nvm/versions/node/*/bin`). Same preset, two outcomes, and the failing
-  one is the one step 7 makes default. `steno doctor` must resolve each
+  one is the default since step 7 shipped. `steno doctor` must resolve each
   preset's `argv[0]` under the effective PATH and say whether this is an app
   launch (`STENOGRAF_APP_BUNDLE` is set for this purpose).
 - The first draft's context-runner price list (stdin/DEVNULL, locale
@@ -258,8 +262,8 @@ deleted feature.
 2. Per-preset `template` + `instructions` (needs `PLAN-NOTES-MARKDOWN.md`).
 3. `cwd` + env on the command backend, the doctor checks, the instruction/
    backend mismatch warning.
-4. UI picker + form prefill — after the Textual-retire decision, prefill logic
-   in `flow.py` regardless.
+4. UI picker + form prefill — in the Qt setup form (the step-7 decision
+   settled on it 2026-07-30); prefill logic in `flow.py` regardless.
 
 ## The baseline this must beat (unchanged, now sharpened by Daniel's call)
 

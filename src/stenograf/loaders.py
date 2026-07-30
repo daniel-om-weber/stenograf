@@ -58,9 +58,8 @@ class CaptureLog:
     :func:`make_provider`, this sink buffers every line instead. Lines that
     look like problems (permission denied, a stream dying) are forwarded to
     the attached ``view``'s status surface the moment they arrive, so a
-    mid-meeting capture failure stays as visible as it was on stderr;
-    :meth:`replay` echoes them once more to stderr for whatever log is
-    attached to the process.
+    mid-meeting capture failure stays as visible as it was on stderr; the
+    ``lines`` buffer keeps the full transport chatter for debugging.
 
     Called from the transports' relay threads; the list append is atomic and
     ``view.error`` marshals itself onto the UI loop, so no lock is needed.
@@ -69,7 +68,7 @@ class CaptureLog:
     def __init__(self, view=None) -> None:
         self.lines: list[str] = []
         self.view = view
-        """A LiveView (or None until the CLI builds one); gets problem lines."""
+        """A LiveView (or None until one is attached); gets problem lines."""
 
     def __call__(self, line: str) -> None:
         self.lines.append(line)
@@ -80,18 +79,6 @@ class CaptureLog:
     def _is_problem(line: str) -> bool:
         lowered = line.lower()
         return any(marker in lowered for marker in _PROBLEM_MARKERS)
-
-    def problems(self) -> list[str]:
-        return [line for line in self.lines if self._is_problem(line)]
-
-    def replay(self) -> None:
-        """Echo the buffered problem lines onto stderr once the run is over.
-
-        Routine chatter (formats, started/stopped) stays buffered-only: it was
-        never information the meeting flow needed, just transport logging.
-        """
-        for line in self.problems():
-            click.secho(line, fg="yellow", err=True)
 
 
 def download_progress(announce: Announce | None):

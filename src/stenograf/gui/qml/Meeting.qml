@@ -37,8 +37,9 @@ Item {
     Connections {
         target: page.screen
 
-        function onCommitted(who, line) {
+        function onCommitted(channel, who, line) {
             captionModel.append({
+                "channel": channel,
                 "who": who,
                 "stamp": "",
                 "line": line,
@@ -57,6 +58,7 @@ Item {
             captionModel.clear();
             for (var i = 0; i < entries.length; ++i) {
                 captionModel.append({
+                    "channel": "",
                     "who": entries[i].speaker,
                     "stamp": entries[i].time,
                     "line": entries[i].text,
@@ -145,6 +147,7 @@ Item {
         delegate: RowLayout {
             id: row
 
+            required property string channel
             required property string who
             required property string stamp
             required property string line
@@ -155,7 +158,7 @@ Item {
 
             Text {
                 text: row.who
-                color: row.who === "You" ? Theme.mic : row.who === "Remote" ? Theme.remote : Theme.text
+                color: row.channel === "mic" ? Theme.mic : row.channel === "system" ? Theme.remote : Theme.text
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignRight
@@ -211,7 +214,7 @@ Item {
 
                 Text {
                     text: tail.modelData.speaker
-                    color: tail.modelData.speaker === "You" ? Theme.mic : Theme.remote
+                    color: tail.modelData.channel === "mic" ? Theme.mic : Theme.remote
                     opacity: 0.5
                     font.pixelSize: 13
                     font.weight: Font.DemiBold

@@ -18,24 +18,26 @@ def run_gui(*, tray: bool = False) -> None:
 
     With ``tray`` it starts in the menu bar with no window (Phase 8 step 6).
 
-    PySide6 is a base dependency since the default flip, so missing Qt means a
-    broken or pre-flip install — still a plain instruction rather than an
-    ImportError traceback, because the frozen ``Stenograf.app`` stub can reach
-    this path on such an install."""
-    import importlib.util
-
+    PySide6 is a base dependency since the default flip, so an ImportError here
+    means a broken or pre-flip install — that includes Qt *present* but not
+    loadable (a missing libEGL on a minimal Linux box, an arch-mismatched
+    wheel), which is why this guards the real import rather than a
+    ``find_spec`` presence check. Still a plain instruction rather than a
+    traceback, because the frozen ``Stenograf.app`` stub can reach this path
+    on such an install."""
     import click
 
-    if importlib.util.find_spec("PySide6") is None:
+    try:
+        from stenograf.gui.app import run
+    except ImportError as exc:
         raise click.ClickException(
-            "the desktop app needs Qt (PySide6), which is missing from this "
-            "install. Reinstall stenograf to get it:\n"
+            "the desktop app needs Qt (PySide6), which this install cannot "
+            "load. Reinstall stenograf:\n"
             "  uv tool install --force stenograf\n"
             "(or `pip install --upgrade --force-reinstall stenograf`). The "
             "CLI subcommands — `steno start`, `steno transcribe`, … — work "
-            "without it."
-        )
-    from stenograf.gui.app import run
+            f"without it.\nThe import failed with: {exc}"
+        ) from exc
 
     code = run(tray=tray)
     if code:

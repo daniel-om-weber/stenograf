@@ -150,12 +150,11 @@ Spec:
   failed" renders — but **not via `view.error()`** for partial success
   (`flow.py:380` prefixes "warning:", `cli/notes.py:268` uses it for hard
   failure; a warn-styled status line keeps success and failure
-  distinguishable). **And `flow.generate_notes_for` (`flow.py:483`) returns
-  `(paths, warnings)`** — round two: its two consumers, the Qt notes screen
-  (`gui/screens.py:216-218`) and the Textual notes screen
-  (`ui/notes.py:157-165`), render a bare status string and would silently drop
-  warnings; both lambdas update. This is the two-front-end drift rule applied
-  to this plan's own feature.
+  distinguishable). **And `flow.generate_notes_for` returns
+  `(paths, warnings)`** — round two: its consumer, the Qt notes screen
+  (`gui/screens.py`), renders a bare status string and would silently drop
+  warnings; the lambda updates. (The Textual notes screen was the second
+  consumer until the front-end retired 2026-07-30.)
 - **Warnings also land in the provenance block** (below), so the evidence
   survives the screen.
 
