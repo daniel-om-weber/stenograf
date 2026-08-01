@@ -39,9 +39,15 @@ fn main() -> ExitCode {
     let want_system = args.iter().any(|a| a == "--system");
     let want_devices = args.iter().any(|a| a == "--devices");
 
-    if args.iter().any(|a| a == "-h" || a == "--help") || (!want_mic && !want_system && !want_devices)
-    {
+    // --help succeeds and a bare invocation does not: the second is a caller
+    // that forgot to name a channel, and `stenocap --help` is what a smoke test
+    // runs to prove the binary in a wheel actually starts on the machine.
+    if args.iter().any(|a| a == "-h" || a == "--help") {
         log("usage: stenocap [--mic] [--system] | --devices");
+        return ExitCode::SUCCESS;
+    }
+    if !want_mic && !want_system && !want_devices {
+        log("usage: stenocap [--mic] [--system] | --devices  (at least one channel)");
         return ExitCode::from(2);
     }
     run(want_mic, want_system, want_devices)

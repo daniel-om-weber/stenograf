@@ -1,18 +1,18 @@
 """Wheel build hook: bundle the compiled native helpers into platform wheels.
 
 The helpers are gitignored build artifacts (native/stenocap-macos/stenocap,
-native/stenodiar/stenodiar), so a plain wheel would ship without them. Three
-wheels carry one or both and are tagged for their platform; every other
-platform still gets the pure `py3-none-any` wheel, and pip prefers the
-specific tag wherever one exists:
+native/stenocap/stenocap.exe, native/stenodiar/stenodiar), so a plain wheel
+would ship without them. Three wheels carry one or both and are tagged for their
+platform; every other platform still gets the pure `py3-none-any` wheel, and pip
+prefers the specific tag wherever one exists:
 
     macosx_14_0_arm64      stenocap (required) + stenodiar
+    win_amd64              stenocap (required) + stenodiar
     manylinux_2_39_x86_64  stenodiar
-    win_amd64              stenodiar
 
 macOS builds its helpers on any wheel build — stenocap is mandatory there and
 compiled per machine anyway. Off macOS the bundling happens **only** when
-STENOGRAF_BUNDLE_STENODIAR=1 (release.yml sets it): a `pip install` from the
+STENOGRAF_BUNDLE_HELPERS=1 (release.yml sets it): a `pip install` from the
 sdist must not start shelling out to cargo, and a wheel tagged
 manylinux_2_28 that was actually linked against the local glibc would be a
 lie. So off-mac the flag means "this is the release build" — and there a
@@ -20,13 +20,20 @@ missing toolchain is a hard error, because the artifact it would otherwise
 produce is a platform-tagged wheel with nothing platform-specific in it.
 
 The two helpers fail differently by design. Without stenocap `steno start`
-fails on every machine but a repo checkout, so its build failing must fail the
-wheel. stenodiar only upgrades *estimated* speaker counts (stenograf falls
-back to sherpa without it), and building it needs a Rust toolchain — so on
-macOS a machine without cargo gets a loud warning and a stenodiar-less wheel,
-while the release workflow refuses to publish one (release.yml verifies every
-wheel's payload), keeping PyPI wheels complete without making every source
-install require Rust.
+cannot capture at all, so its build failing must fail the wheel — on every
+platform that has one. stenodiar only upgrades *estimated* speaker counts
+(stenograf falls back to sherpa without it), and building it needs a Rust
+toolchain — so on macOS a machine without cargo gets a loud warning and a
+stenodiar-less wheel, while the release workflow refuses to publish one
+(release.yml verifies every wheel's payload), keeping PyPI wheels complete
+without making every source install require Rust.
+
+**A developer's checkout is not covered by any of this**, and does not need to
+be: `uv sync` installs the project editable, which this hook skips outright.
+Both capture helpers are found next to their sources by the provider's dev
+fallback, so a checkout needs `native/stenocap/build.ps1` (or its macOS twin)
+run once — and a checkout without cargo simply has no live capture on Windows,
+the way it already has no diarization helper.
 """
 
 from __future__ import annotations
@@ -51,8 +58,14 @@ MACOS_TAG = "py3-none-macosx_14_0_arm64"
 # binary's own symbol floor against it.
 LINUX_TAG = "py3-none-manylinux_2_39_x86_64"
 WINDOWS_TAG = "py3-none-win_amd64"
+# There is deliberately no win_arm64 tag. Moving capture into a native helper
+# looked like it would strip capture from Windows-on-ARM, which installs the
+# pure wheel — but that machine cannot install stenograf at all, and not
+# because of us: sherpa-onnx, onnxruntime-directml, livekit and imageio-ffmpeg
+# publish no win_arm64 wheels (checked 2026-08-02). A tagged wheel there would
+# advertise support that resolves to nothing.
 
-BUNDLE_ENV = "STENOGRAF_BUNDLE_STENODIAR"
+BUNDLE_ENV = "STENOGRAF_BUNDLE_HELPERS"
 
 
 def _macos_arm64() -> bool:
@@ -65,19 +78,19 @@ def _cargo_available() -> bool:
     )
 
 
-def _stenodiar_wheel_tag() -> str | None:
-    """The platform tag for an off-mac stenodiar wheel, if one was asked for."""
+def _off_macos_wheel_tag() -> str | None:
+    """The platform tag for an off-mac helper wheel, if one was asked for."""
     if os.environ.get(BUNDLE_ENV) != "1":
         return None
-    x86_64 = platform.machine().lower() in {"x86_64", "amd64"}
-    if sys.platform.startswith("linux") and x86_64:
+    machine = platform.machine().lower()
+    if sys.platform.startswith("linux") and machine in {"x86_64", "amd64"}:
         return LINUX_TAG
-    if sys.platform == "win32" and x86_64:
+    if sys.platform == "win32" and machine in {"x86_64", "amd64"}:
         return WINDOWS_TAG
     raise RuntimeError(
-        f"{BUNDLE_ENV} is set, but there is no stenodiar wheel target for "
+        f"{BUNDLE_ENV} is set, but there is no wheel target for "
         f"{sys.platform}/{platform.machine()} — only linux-x86_64 and win-amd64 "
-        "(macOS bundles it into its own wheel unconditionally)."
+        "(macOS bundles its helpers into its own wheel unconditionally)."
     )
 
 
@@ -90,18 +103,27 @@ class CustomBuildHook(BuildHookInterface):
             self._bundle_macos(build_data)
             return
 
-        tag = _stenodiar_wheel_tag()
+        tag = _off_macos_wheel_tag()
         if tag is None:
             return  # pure py3-none-any wheel — source installs need no Rust
-        binary = self._stenodiar_path()
-        self._build(
-            binary,
-            hint=f"install a Rust toolchain (rustup); {BUNDLE_ENV} asks for a wheel "
-            "that bundles the diarization helper",
-        )
-        build_data["force_include"][str(binary)] = f"stenograf/bin/{binary.name}"
+
+        hint = f"install a Rust toolchain (rustup); {BUNDLE_ENV} asks for a wheel "
+        for binary in self._off_macos_binaries():
+            self._build(binary, hint=hint + "that bundles the native helpers")
+            build_data["force_include"][str(binary)] = f"stenograf/bin/{binary.name}"
         build_data["pure_python"] = False
         build_data["tag"] = tag
+
+    def _off_macos_binaries(self) -> list[Path]:
+        """Every helper this platform's release wheel must carry.
+
+        The capture helper is Windows-only for now — Linux still captures
+        through `parec` and joins at step 5 of PLAN-CAPTURE-HELPER.md.
+        """
+        binaries = [self._stenodiar_path()]
+        if sys.platform == "win32":
+            binaries.insert(0, Path(self.root) / "native" / "stenocap" / "stenocap.exe")
+        return binaries
 
     def _bundle_macos(self, build_data: dict) -> None:
         helper = Path(self.root) / "native" / "stenocap-macos" / "stenocap"

@@ -142,7 +142,15 @@ matrix load-bearing, and these currently-working platforms would lose capture:
 - **Linux x86_64 with glibc 2.28–2.38** — Ubuntu 22.04 LTS (2.35), Debian 12
   (2.36), RHEL 9 (2.34). The largest group and the reason this section exists.
 - **Linux aarch64** — no tagged wheel today.
-- **Windows ARM64** — no tagged wheel today.
+- ~~**Windows ARM64**~~ — **struck 2026-08-02, measured rather than assumed.**
+  That machine cannot install stenograf at all, and not because of capture:
+  `sherpa-onnx`, `sherpa-onnx-core`, `onnxruntime-directml`, `livekit` and
+  `imageio-ffmpeg` publish no `win_arm64` wheels, and the first and last of
+  those are load-bearing (VAD/diarization, ffmpeg). A `win_arm64` wheel would
+  therefore advertise support that resolves to nothing, so the Windows helper
+  shipped without one. Supporting that platform is its own project — ORT CPU
+  instead of DirectML, and an answer for AEC without livekit — not a packaging
+  line item.
 
 (macOS x86_64 is already in this bucket and the loss is already accepted, which is
 the precedent — but Intel Macs are a far smaller population than Debian 12.)

@@ -55,7 +55,7 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
       - run: uv build
       - name: Verify the pure wheel carries no helpers
-        # No STENOGRAF_BUNDLE_STENODIAR here, so the hook must stay a no-op.
+        # No STENOGRAF_BUNDLE_HELPERS here, so the hook must stay a no-op.
         run: |
           ls dist/*py3-none-any.whl dist/*.tar.gz
           if unzip -l dist/*.whl | grep -qE 'stenocap|stenodiar'; then
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      STENOGRAF_BUNDLE_STENODIAR: "1"
+      STENOGRAF_BUNDLE_HELPERS: "1"
     steps:
       - uses: actions/checkout@v7
       # Both named rather than assumed from the runner image, because both
@@ -134,11 +134,12 @@ jobs:
           path: dist/
 
   build-windows:
-    # win_amd64 wheel bundling stenodiar (build.ps1: ORT CPU, MSVC).
+    # win_amd64 wheel bundling both helpers: stenocap (WASAPI capture) and
+    # stenodiar (ORT CPU). Both are cargo + MSVC.
     runs-on: windows-latest
     timeout-minutes: 60
     env:
-      STENOGRAF_BUNDLE_STENODIAR: "1"
+      STENOGRAF_BUNDLE_HELPERS: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.3.2
@@ -146,11 +147,15 @@ jobs:
       # changes rather than inside the build hook.
       - run: cargo --version
       - run: uv build --wheel
-      - name: Verify the wheel bundles the stenodiar diarization helper
+      - name: Verify the wheel bundles both helpers
+        # stenocap is the load-bearing one: without it the wheel installs and
+        # cannot record a meeting, which is exactly the failure a platform tag
+        # is supposed to rule out.
         shell: bash
         run: |
           ls dist/*win_amd64.whl
-          unzip -o dist/*.whl 'stenograf/bin/stenodiar.exe' -d /tmp/whl
+          unzip -o dist/*.whl 'stenograf/bin/*' -d /tmp/whl
+          /tmp/whl/stenograf/bin/stenocap.exe --help
           /tmp/whl/stenograf/bin/stenodiar.exe --help
       - uses: actions/upload-artifact@v7
         with:
@@ -257,8 +262,17 @@ jobs:
           cat doctor.txt
           grep -q "ASR backend" doctor.txt
           grep -q "ffmpeg" doctor.txt
-          # The installed wheel's own helper, not a stray build in the checkout.
+          # The installed wheel's own helpers, not a stray build in the checkout.
           grep -qi "stenodiar.exe" doctor.txt
+          # The capture check cannot *pass* on a runner — there is no audio
+          # endpoint — but it must fail for that reason and not because the
+          # wheel shipped without a capture helper, which is the regression a
+          # platform-tagged wheel exists to prevent. When the binary is there,
+          # the complaint comes from the helper itself instead.
+          if grep -qi "not found" doctor.txt; then
+            echo "the installed wheel has no capture helper" >&2
+            exit 1
+          fi
       - name: Pipeline smoke on a synthetic WAV
         # Live WASAPI capture needs hardware no runner has; --replay drives the
         # same pipeline from a file.
