@@ -65,7 +65,16 @@ if TYPE_CHECKING:
 
     from stenograf.gui.app import StenografGui
     from stenograf.gui.meeting import MeetingScreen
-    from stenograf.gui.wintray import WindowsStatusIcon
+
+    if sys.platform == "win32":
+        from stenograf.gui.wintray import WindowsStatusIcon
+
+        StatusIcon = QSystemTrayIcon | WindowsStatusIcon
+    else:
+        # wintray refuses to import off Windows and narrows itself away with it,
+        # so naming its class here would be an unknown symbol on any other
+        # platform's type check — off Windows there is only ever Qt's icon.
+        StatusIcon = QSystemTrayIcon
 
 MARK = ASSETS / "tray.svg"
 """The icon's two commas without their tile — a status item is artwork on nothing."""
@@ -104,7 +113,7 @@ def _icon(tint: str | None, *, mask: bool = False) -> QIcon:
     return icon
 
 
-def _status_icon(parent: QObject) -> QSystemTrayIcon | WindowsStatusIcon:
+def _status_icon(parent: QObject) -> StatusIcon:
     """The notification-area icon for this platform.
 
     Gated on the *platform plugin*, not on ``sys.platform`` alone, for the same
@@ -241,7 +250,7 @@ class Tray(QObject):
             if application is not None:
                 application.installEventFilter(self)
 
-    def _show_icon(self, icon: QSystemTrayIcon | WindowsStatusIcon) -> None:
+    def _show_icon(self, icon: StatusIcon) -> None:
         """Wire ``icon`` to the menu and the meeting, and put it on screen.
 
         A native icon the shell refuses is retried as Qt's, once. That refusal is
