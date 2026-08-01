@@ -1,0 +1,28 @@
+[package]
+name = "stenocap"
+version = "0.1.0"
+edition = "2021"
+description = "Capture helper: mic + system audio on one device clock, framed PCM on stdout"
+license = "MIT"
+publish = false
+
+# The Windows backend is the only one built today; the Linux one (PipeWire /
+# PulseAudio) joins this crate at step 5 of PLAN-CAPTURE-HELPER.md. macOS keeps
+# its Swift helper in ../stenocap-macos — process taps have no Rust binding and
+# the binary's signature is load-bearing there.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Performance",
+    "Win32_System_Variant",
+    # IPropertyStore, i.e. IMMDevice::OpenPropertyStore — the device's friendly
+    # name, which is the whole of `--devices`.
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+[profile.release]
+lto = true
+strip = true

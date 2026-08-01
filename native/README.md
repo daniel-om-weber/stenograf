@@ -1,9 +1,12 @@
 # Native helpers
 
-Two optional binaries live here — stenocap is macOS-only, stenodiar is built
-for every platform stenograf ships a wheel for — both speaking simple pipes to
-the Python core and both honoring the same rule: **meeting audio never touches
-disk** — plus
+Two helpers live here — **stenocap**, which captures, and **stenodiar**, which
+diarizes — both speaking simple pipes to the Python core and both honoring the
+same rule: **meeting audio never touches disk**. stenocap has two
+implementations, `stenocap-macos/` (Swift) and `stenocap/` (Rust, Windows
+today and Linux at step 5 of PLAN-CAPTURE-HELPER.md), speaking one wire
+protocol; stenodiar is one crate built for every platform stenograf ships a
+wheel for. Plus
 `appbundle/`, which is not a helper at all but the sources for the macOS
 desktop launcher `Stenograf.app`. It breaks this directory's convention on
 purpose: its product is *committed* (`src/stenograf/assets/Stenograf.app`)
@@ -87,6 +90,34 @@ Echo is cancelled on the Python side instead, using the system channel as the
 far-end reference — which is also Chrome's default (`kSystemLoopbackAsAecReference`
 enabled, `kEnforceSystemEchoCancellation` disabled) despite shipping both.
 
+`stenocap/` holds the **Rust implementation**, which captures on Windows through
+WASAPI: the mic from the default capture endpoint, system audio from *loopback*
+on the default render endpoint. It needs no signing — Windows gates the
+microphone through the per-user privacy consent store rather than per binary —
+and no resampler: `AUTOCONVERTPCM | SRC_DEFAULT_QUALITY` has the audio engine
+deliver mono 16 kHz server-side, the way `parec` does on Linux. `--devices`
+prints what each channel would record from, as JSON, for the CLI's preflight.
+
+It exists because of where its timestamps come from, and that is the whole
+story: `IAudioCaptureClient::GetBuffer` reports `pu64QPCPosition` for every
+packet — the machine-wide performance counter, in 100-ns units, for the packet's
+first sample. Three traps, all measured (`eval/wasapi_timestamps.py` re-runs the
+evidence in twelve seconds) and all silent if got wrong:
+
+- **`pu64DevicePosition` is not a sample index.** It counts *device* frames,
+  upstream of the resampler `AUTOCONVERTPCM` inserts, so it advances at 47,999/s
+  against a stream that asked for 16,000. Only the QPC stamp is used.
+- **The two taps' stamps mean different things, and that is correct.** The mic's
+  marks capture and trails receipt (+11.1 ms); the loopback tap's is render-side
+  and *leads* it (−9.6 ms), marking when the audio reached the endpoint — when
+  the echo was born, which is the instant the canceller wants. Both are on one
+  counter, so neither needs correcting.
+- **Loopback delivers nothing at all while nothing renders** — no silent
+  packets, just silence in the literal sense. The helper synthesizes that
+  silence on a timer, stamped from the same counter, which is what lets a
+  meeting where the far end never speaks still have a reference to cancel
+  against.
+
 ## Wire protocol
 
 stdout carries frames only (status and errors go to stderr), little-endian:
@@ -95,29 +126,47 @@ stdout carries frames only (status and errors go to stderr), little-endian:
 
 `channel` is 0 for mic, 1 for system; `timestamp` is seconds since capture start
 on a clock **shared by both channels**; `samples` is mono 16 kHz int16 PCM.
-Channels are selected with argv flags (`--mic`, `--system`); stopping is a
-SIGINT/SIGTERM, on which the helper flushes and exits 0. The consumer is
-`stenograf.capture.macos`.
+Channels are selected with argv flags (`--mic`, `--system`). Both
+implementations speak exactly this; the consumer of both is
+`stenograf.capture.helper`.
 
-The shared clock matters. The mic and the tap are separate devices that start
-hundreds of milliseconds apart (the tap is already running while AVAudioEngine
-opens the mic). Each channel is therefore anchored to the Mach host time of its
-first buffer, not to its own sample count — otherwise both would claim `t=0` for
-audio captured far apart, and the echo canceller would align the far-end
-reference against the wrong instant.
+**Stopping differs, and only because the platforms do.** The Swift helper takes
+SIGINT/SIGTERM, flushes and exits 0. The Rust helper stops when **stdin reaches
+EOF**: Windows has no signal a parent can aim at one child (`CTRL_C_EVENT` goes
+to a whole process group), while closing a pipe needs no console, no process
+group and no handler, and cannot arrive before the helper is ready to see it.
+
+The shared clock matters, and it is the reason this protocol exists at all. The
+mic and the system tap are separate devices with separate transports: on macOS
+they start hundreds of milliseconds apart (the tap is already running while
+AVAudioEngine opens the mic), and on Windows the loopback tap is a longer path
+than the microphone. Stamping frames when they *arrive* therefore gives each
+channel its own hidden offset, and the echo canceller — which pairs the two by
+timestamp — is handed a reference that does not line up with the echo it must
+remove. Measured on Windows, that was the difference between 2.6 dB and 13.7 dB
+ERLE. So each implementation stamps from the OS's own clock for both taps: Mach
+host time on macOS, `pu64QPCPosition` on Windows.
 
 ## Build
 
-    sh stenocap-macos/build.sh
+    sh stenocap-macos/build.sh          # macOS
+    powershell -File stenocap/build.ps1 # Windows (rustup + VS Build Tools)
 
-Compiles + ad-hoc signs `stenocap-macos/stenocap` (swiftc; no Apple Developer
-account needed — PLAN.md "Deployment & distribution"). The binary is a build
-artifact (gitignored). The Python side finds it via
-`native/stenocap-macos/stenocap` in the source tree, a packaged
-`stenograf/bin/stenocap` in a wheel, or the `STENOGRAF_CAPTURE_HELPER`
-environment override. TCC usage strings are embedded from
-`stenocap-macos/Info.plist`; on first run the terminal is granted mic +
-system-audio permission once.
+Either way the binary is a build artifact (gitignored), and the Python side
+finds it the same three ways: next to its sources in the checkout, a packaged
+`stenograf/bin/stenocap[.exe]` in a wheel, or the `STENOGRAF_CAPTURE_HELPER`
+environment override.
+
+The macOS build compiles + ad-hoc signs `stenocap-macos/stenocap` (swiftc; no
+Apple Developer account needed — PLAN.md "Deployment & distribution"). TCC usage
+strings are embedded from `stenocap-macos/Info.plist`; on first run the terminal
+is granted mic + system-audio permission once. The Windows build is plain
+`cargo build --release --locked`, and signs nothing.
+
+Both are **mandatory** where they apply, which is why `hatch_build.py` fails the
+wheel if either fails to build: without one there is no live capture on that
+platform at all. That is the opposite of stenodiar, whose absence only downgrades
+speaker-count estimation.
 
 Reference implementations this was built from:
 
