@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 
 from stenograf.capture.base import CaptureHelperError, Channel
-from stenograf.capture.macos import (
+from stenograf.capture.helper import (
     HelperNotFoundError,
-    MacOSCaptureProvider,
     find_helper,
     read_frame,
 )
+from stenograf.capture.macos import MacOSCaptureProvider
 
 FAKE = [sys.executable, str(Path(__file__).parent / "fake_stenocap.py")]
 _HEADER = struct.Struct("<BdI")
@@ -214,14 +214,14 @@ class TestFindHelper:
     def test_packaged_binary_regains_executable_bit(self, monkeypatch, tmp_path):
         # A wheel-installed binary that lost its executable bit (some install
         # paths drop it) must come back executable, not fail later with EACCES.
-        import stenograf.capture.macos as macos
+        import stenograf.capture.helper as helper
 
         monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)
-        packaged = tmp_path / "bin" / "stenocap"
+        packaged = tmp_path / "bin" / helper.HELPER_NAME
         packaged.parent.mkdir()
         packaged.write_bytes(b"\x00")
         packaged.chmod(0o644)
-        monkeypatch.setattr(macos.resources, "files", lambda package: tmp_path)
+        monkeypatch.setattr(helper.resources, "files", lambda package: tmp_path)
         found = find_helper()
         assert found == packaged
         assert os.access(found, os.X_OK)
@@ -231,8 +231,8 @@ class TestFindHelper:
         # Point the package-resource and dev-tree lookups at nothing by faking
         # __file__ location is overkill; instead assert the error type when the
         # binary is genuinely missing is exercised via a fresh temp env.
-        import stenograf.capture.macos as macos
+        import stenograf.capture.helper as helper
 
-        monkeypatch.setattr(macos, "HELPER_NAME", "stenocap-does-not-exist")
+        monkeypatch.setattr(helper, "HELPER_NAME", "stenocap-does-not-exist")
         with pytest.raises(HelperNotFoundError):
             find_helper()

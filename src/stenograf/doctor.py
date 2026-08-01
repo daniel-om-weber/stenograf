@@ -98,7 +98,7 @@ def installed(module: str) -> bool:
 
 
 def _capture_helper_check() -> Check:
-    from stenograf.capture.macos import HelperNotFoundError, find_helper
+    from stenograf.capture.helper import HelperNotFoundError, find_helper
 
     try:
         path = find_helper()
@@ -149,11 +149,12 @@ def _linux_capture_check() -> Check:
 
 
 def _windows_capture_check() -> Check:
-    """Whether `steno start` can capture here: soundcard importable, defaults set.
+    """Whether `steno start` can capture here: helper present, defaults set.
 
-    Uses the same resolution the provider uses at meeting start, so an OK here
-    means a meeting would actually record — and names the devices it would
-    record from (the loopback-of-default-output choice is invisible otherwise).
+    Uses the same resolution the provider uses at meeting start — the helper's
+    own ``--devices`` — so an OK here means a meeting would actually record, and
+    names the devices it would record from (the loopback-of-default-output
+    choice is invisible otherwise).
     """
     from stenograf.capture.base import Channel
     from stenograf.capture.windows import (
@@ -163,12 +164,12 @@ def _windows_capture_check() -> Check:
     )
 
     try:
-        WindowsCaptureProvider()  # fails fast when soundcard is missing
+        WindowsCaptureProvider()  # fails fast when the helper binary is missing
         devices = default_devices({Channel.MIC, Channel.SYSTEM})
     except CaptureUnavailableError as exc:
         return Check(name="Capture", ok=False, detail=str(exc))
     listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))
-    return Check(name="Capture", ok=True, detail=f"WASAPI via soundcard ({listing})")
+    return Check(name="Capture", ok=True, detail=f"WASAPI via stenocap ({listing})")
 
 
 def _diarizer_helper_check() -> Check:

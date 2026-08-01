@@ -89,7 +89,8 @@ fn run(want_mic: bool, want_system: bool, want_devices: bool) -> ExitCode {
 
     // The shared origin, fixed before either channel can stamp a frame.
     let t0 = wasapi::now_units();
-    let sink = Arc::new(FrameSink::new(t0, Box::new(std::io::stdout())));
+    let (out, writer) = frame::queued_stdout();
+    let sink = Arc::new(FrameSink::new(t0, out));
     let stop = Arc::new(AtomicBool::new(false));
 
     let mut pumps = Vec::new();
@@ -158,6 +159,11 @@ fn run(want_mic: bool, want_system: bool, want_devices: bool) -> ExitCode {
     for framer in &framers {
         let _ = framer.lock().expect("framer poisoned").flush(&sink);
     }
+    // Then let the writer drain what is queued. Every other reference to the
+    // sink died with the threads above, so dropping this one closes the channel
+    // and the writer finishes on its own.
+    drop(sink);
+    let _ = writer.join();
     log("stopped");
     ExitCode::SUCCESS
 }

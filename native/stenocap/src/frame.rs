@@ -28,7 +28,9 @@
 //! arithmetic accumulates rounding error over a meeting.
 
 use std::io::{self, Write};
+use std::sync::mpsc;
 use std::sync::Mutex;
+use std::thread::JoinHandle;
 
 pub const SAMPLE_RATE: u32 = 16_000;
 
@@ -83,6 +85,62 @@ impl FrameSink {
         let mut out = self.out.lock().expect("frame sink poisoned");
         out.write_all(&record)?;
         out.flush()
+    }
+}
+
+/// stdout behind a queue, plus the thread that drains it.
+///
+/// **A capture pump may never block on the consumer.** It cost a real bug to
+/// re-learn: writing frames inline meant that when the reader stalled — the
+/// first meeting on a machine stalls it for seconds while the ASR model loads —
+/// the pipe filled, the pump blocked mid-write holding its channel's lock, and
+/// WASAPI went on buffering. The packets that came back afterwards carried
+/// honest timestamps from *nine seconds earlier*, by which time the silence
+/// filler had moved the timeline past them. Frames now go into an unbounded
+/// queue and one thread owns the pipe.
+///
+/// Unbounded is deliberate, and the same trade the consumer makes on its side:
+/// a stalled reader costs ~64 KB/s of memory in a process that streams meeting
+/// audio, while dropping frames would lose the meeting to a stall the reader
+/// recovers from. A reader that is *gone* rather than slow breaks the pipe,
+/// which ends the writer rather than growing forever.
+pub fn queued_stdout() -> (Box<dyn Write + Send>, JoinHandle<()>) {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let writer = std::thread::spawn(move || {
+        let mut out = io::stdout();
+        for record in rx {
+            if out.write_all(&record).and_then(|()| out.flush()).is_err() {
+                eprintln!("stenocap: the frame stream's reader is gone");
+                return;
+            }
+        }
+    });
+    (Box::new(Queued { tx, pending: Vec::new() }), writer)
+}
+
+/// Accumulates one record and hands it to the writer thread on flush.
+///
+/// [`FrameSink::write`] writes a whole record and then flushes exactly once, so
+/// "flush" is the record boundary rather than a guess.
+struct Queued {
+    tx: mpsc::Sender<Vec<u8>>,
+    pending: Vec<u8>,
+}
+
+impl Write for Queued {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let record = std::mem::take(&mut self.pending);
+        self.tx
+            .send(record)
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "frame writer stopped"))
     }
 }
 
@@ -243,6 +301,21 @@ mod tests {
             records.push(Record { channel, timestamp, samples });
         }
         records
+    }
+
+    #[test]
+    fn the_writer_queue_carries_one_message_per_record() {
+        // The record boundary is the flush, so a partial write must not be
+        // handed on: half a frame desyncs the consumer permanently.
+        let (tx, rx) = mpsc::channel();
+        let mut queued = Queued { tx, pending: Vec::new() };
+        queued.write_all(b"head").unwrap();
+        queued.write_all(b"body").unwrap();
+        assert!(rx.try_recv().is_err(), "nothing may leave before the flush");
+        queued.flush().unwrap();
+        assert_eq!(rx.try_recv().unwrap(), b"headbody");
+        queued.flush().unwrap(); // an empty flush is not an empty record
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

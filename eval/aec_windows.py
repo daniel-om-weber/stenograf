@@ -63,11 +63,12 @@ GAPS = (2.0, 3.0, 2.0, 6.0)
 """Silence between sentences, cycled. Two constraints meet here.
 ``aec_echo_present.py`` refuses to score a dump whose far end never rests
 (``playing.all()`` is INCONCLUSIVE), so gaps are what make the probe
-*possible*; and the 6 s member is the case the long run exists to test, since
-``soundcard`` synthesizes zeros from wall-clock time while nothing renders and
-the session clock re-anchors forward past ``_REANCHOR_TOLERANCE_S = 0.5``
-(``capture/windows.py:65``) -- which moves far-end alignment underneath the
-150 ms of headroom ``FAR_END_LAG_S`` declares."""
+*possible*; and the 6 s member is the case the long run exists to test, because
+WASAPI's loopback tap delivers nothing at all while nothing renders. That gap
+used to be filled by ``soundcard`` from wall-clock time, which let the far end
+drift out from under the alignment; the capture helper fills it from the same
+device clock it stamps audio with, so the 6 s member is now checking that the
+seam is *invisible* rather than merely survivable."""
 
 
 def _powershell(script: str) -> str:

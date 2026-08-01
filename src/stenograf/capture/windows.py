@@ -1,145 +1,116 @@
-"""Windows capture provider — WASAPI shared-mode streams via ``soundcard``.
+"""Windows capture provider — spawns the Rust helper and reads its frames.
 
-Windows exposes system audio as WASAPI *loopback* capture on a render device,
-so no native helper is needed: the ``soundcard`` package opens shared-mode
-capture streams for both channels —
+The helper (``stenocap.exe``, `native/stenocap`) opens WASAPI shared-mode
+streams for both channels — mic from the default capture endpoint, system audio
+from *loopback* on the default render endpoint — and streams them as framed PCM
+on its stdout. The transport is shared with macOS in
+:mod:`stenograf.capture.helper`; what lives here is the two things Windows has
+that no other platform does.
 
-- mic    → the default input device
-- system → loopback capture on the default output device
+**Why a helper at all, when WASAPI is reachable from Python.** It was in-process
+through ``soundcard`` until 2026-08, and the reason it moved is timestamps.
+Frames stamped when they *arrive* carry their channel's transport latency as a
+hidden offset, and the loopback tap is the longer path — so the echo canceller,
+which pairs the two channels by timestamp, was handed a reference labelled
+~60 ms *after* its own echo, which AEC3 cannot use at any delay hint. That
+measured 2.6 dB ERLE with far-end speech attributed to the local speaker. A
+declared constant (``FAR_END_LAG_S``) held the line at 13.7 dB while it lasted,
+but the offset is re-rolled at every meeting start, so no declared value could
+ever be right. WASAPI reports a device-side timestamp on every packet
+(``pu64QPCPosition``) and the helper puts both taps on it — see
+`native/README.md` and `PLAN-CAPTURE-HELPER.md`.
 
-**Decision D resolved to ``soundcard``** over
-``pyaudiowpatch``, spiked on real hardware (Windows 11 notebook, 2026-07-11):
-one API covers mic and loopback, and it initializes WASAPI with
-``AUTOCONVERTPCM | SRC_DEFAULT_QUALITY``, so Windows resamples server-side to
-our wire rate like parec does on Linux — no Python resampler dependency.
-Measured: recorder open 15–80 ms, first frame < 300 ms, exact frame-sized
-delivery cadence, a 440 Hz test tone recovered bit-clean through loopback
-(the ~1 s startup gap SoundCard showed under PipeWire is a Pulse-backend
-artifact; it does not occur on the native Windows backend).
+**Windows never prompts for the microphone.** There is no TCC equivalent: a
+denied privacy toggle silently makes the stream deliver zeros, so the consent
+store is read up front instead (:func:`mic_access_blocked`), before capture and
+models start.
 
-Three WASAPI behaviours the design leans on:
-
-- **The loopback tap is a longer path than the microphone**, so the two
-  channels' arrival-stamped timelines disagree by a constant — measured ~60 ms
-  here, with the tap's labels the late ones. It does not show in a transcript
-  and it broke echo cancellation completely until it was compensated
-  (:data:`FAR_END_LAG_S`).
-
-- **Loopback delivers no packets while nothing renders.** ``soundcard``
-  papers over this by synthesizing zeros from the measured idle time, so the
-  stream stays continuous — but the fill is wall-clock *estimated*, so
-  sample-count-derived timestamps can drift from session time across long
-  silences. The session clock re-anchors whenever a channel's derived clock
-  falls behind the arrival-derived one by more than
-  ``_REANCHOR_TOLERANCE_S`` (forward only: per-channel timestamps must stay
-  monotonic, and ``SessionStore`` pads the skipped span with silence).
-- **COM apartments are per-thread**, so each channel's device is resolved and
-  its recorder opened *inside* its own pump thread (spike-verified working).
-
-Queue/pump/clock machinery is shared with the Linux provider
-(:mod:`stenograf.capture.streaming`). Both devices pin to the defaults at
-meeting start; a mid-meeting default switch is not followed (unlike
-``@DEFAULT_MONITOR@`` on Linux — WASAPI has no equivalent alias). No code
-path writes audio to disk.
+Both devices pin to the defaults at meeting start; a mid-meeting default switch
+is not followed (unlike ``@DEFAULT_MONITOR@`` on Linux — WASAPI has no
+equivalent alias). No code path writes audio to disk.
 """
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
-import threading
-import time
-import warnings
-from collections.abc import Callable
 
-import numpy as np
-
-from stenograf.audio import to_int16
 from stenograf.capture.base import (
-    DEFAULT_FRAME_MS,
-    SAMPLE_RATE,
     CaptureUnavailableError,
     Channel,
 )
-from stenograf.capture.streaming import QueueStreamingProvider
+from stenograf.capture.helper import HelperCaptureProvider, find_helper
 
-_REANCHOR_TOLERANCE_S = 0.5
-"""How far a channel's sample-derived clock may fall behind its
-arrival-derived clock before the session clock re-anchors. Generous enough
-that delivery jitter (one frame + WASAPI buffering, ~0.25 s worst measured)
-never trips it; tight enough that a mis-estimated silence gap cannot skew the
-AEC's far-end alignment or the transcript for the rest of the meeting."""
+_CHANNEL_FLAG = {Channel.MIC: "--mic", Channel.SYSTEM: "--system"}
+_CHANNEL_KEY = {"mic": Channel.MIC, "system": Channel.SYSTEM}
 
 
-FAR_END_LAG_S = 0.15
-"""How late the loopback tap's timestamps run against the mic's — see
-:attr:`~stenograf.capture.base.CaptureProvider.far_end_lag_s`.
+class WindowsCaptureProvider(HelperCaptureProvider):
+    """Streams frames from the ``stenocap.exe`` subprocess.
 
-Both channels are stamped on arrival, and the loopback path is longer than the
-mic path: render buffer → endpoint mix → loopback capture → WASAPI's own
-resampler (``AUTOCONVERTPCM``) → us. So the mic's echo *leads* the reference that
-caused it, which is physically impossible and can therefore only be labelling.
+    Stopping closes the helper's stdin rather than signalling it: Windows has no
+    signal a parent can aim at one child (``CTRL_C_EVENT`` reaches a whole
+    process group), while an EOF on the pipe needs no console, no process group
+    and no handler — see :attr:`HelperCaptureProvider._stop_signal`.
+    """
 
-**The offset is fixed within a meeting and re-rolled at every start**, because
-each channel anchors on its own first frame and the two pump threads open their
-recorders independently (:class:`~stenograf.capture.streaming.SessionClock`). Two
-80-second runs on the same Realtek endpoint, minutes apart (2026-07-26), measured
-**60 ms** and **10–25 ms**. There is therefore no per-machine value to look up,
-which is the whole argument for the paragraph below.
-
-**Set to 2.5× the larger measurement on purpose.** The error AEC3 cannot survive
-is one-sided (see the module docstring in :mod:`stenograf.aec`): a reference that
-arrives after its own echo is unusable, while one that arrives early is what its
-delay estimator is built to search. The first dump scored 4.7 dB ERLE
-uncorrected, 15.1 dB at 60 ms, and 14.5 dB still at 250 ms — so overshooting
-costs a fraction of a decibel, undershooting costs the whole canceller, and a
-value fitted to one run would have been 25 ms and dead on the next meeting. The
-cost of the headroom is that much extra mic buffering before a tick can be
-cancelled, which ``_MAX_HOLD_S`` accounts for and the caption cadence does not
-notice. ``eval/aec_alignment.py`` measures all of this from one ``--aec-dump``.
-"""
-
-
-_SILENT_MIC_WARN_S = 5.0
-"""Seconds of *exact-zero* mic PCM before the pump warns once. Real
-microphones have a noise floor well above one int16 step, so a run of digital
-zeros this long means the stream is dead (hardware mute, a privacy toggle the
-consent-store check missed, a broken device) — never a quiet room."""
-
-
-def _import_soundcard():
-    try:
-        import soundcard  # pyright: ignore[reportMissingImports] — Windows-only dependency
-    except Exception as exc:  # ImportError, or COM/cffi init failures
-        raise CaptureUnavailableError(
-            f"the soundcard package is unavailable ({exc}) — reinstall stenograf, "
-            "or `pip install soundcard`, to capture on Windows"
-        ) from exc
-    # Loopback silence gaps set WASAPI's discontinuity flag when audio
-    # resumes; that is expected and handled (zero-fill + re-anchor), so the
-    # per-gap warning would only spam the terminal/TUI.
-    if (category := getattr(soundcard, "SoundcardRuntimeWarning", None)) is not None:
-        warnings.filterwarnings("ignore", category=category)
-    return soundcard
+    _stop_signal = None
 
 
 def default_devices(channels: set[Channel]) -> dict[Channel, str]:
     """What each channel would record from right now.
 
-    Resolves the default devices the same way the pumps will at start, so a
-    missing package, an absent default device, or a denied microphone privacy
-    toggle fails *before* capture (and models) start, and so the CLI can name
-    what the meeting will record — the loopback-of-default-output choice is
-    invisible otherwise.
+    Asks the helper, which resolves the defaults exactly as its pumps will at
+    start — so a missing binary, an absent default device, or a denied
+    microphone privacy toggle fails *before* capture (and models) start, and so
+    the CLI can name what the meeting will record. The
+    loopback-of-default-output choice is invisible otherwise.
     """
-    soundcard = _import_soundcard()
-    devices = {}
     for channel in sorted(channels):
         if channel is Channel.MIC and (blocked := mic_access_blocked()):
             raise CaptureUnavailableError(blocked)
-        device = _default_device(soundcard, channel)
+
+    argv = [str(find_helper()), "--devices"]
+    argv += [_CHANNEL_FLAG[ch] for ch in sorted(channels)]
+    try:
+        result = subprocess.run(argv, capture_output=True, timeout=15, check=False)
+    except OSError as exc:
+        raise CaptureUnavailableError(f"the capture helper could not be run ({exc})") from exc
+    if result.returncode != 0:
+        raise CaptureUnavailableError(_helper_complaint(result.stderr))
+    try:
+        named = json.loads(result.stdout.decode("utf-8", errors="replace"))
+    except ValueError as exc:
+        raise CaptureUnavailableError(
+            f"the capture helper did not report its devices ({exc})"
+        ) from exc
+
+    devices = {}
+    for key, name in named.items():
+        channel = _CHANNEL_KEY.get(key)
+        if channel is None or channel not in channels:
+            continue
         suffix = " (loopback)" if channel is Channel.SYSTEM else ""
-        devices[channel] = f"{device.name}{suffix}"
+        devices[channel] = f"{name}{suffix}"
     return devices
+
+
+def _helper_complaint(stderr: bytes) -> str:
+    """The helper's own reason, or a fallback when it died without giving one.
+
+    Its diagnostics are ``stenocap: FATAL: <reason>`` lines; the prefixes are
+    noise in a message the user reads, so everything up to and including the
+    marker comes off.
+    """
+    lines = [ln.strip() for ln in stderr.decode("utf-8", errors="replace").splitlines()]
+    fatal = next((ln for ln in reversed(lines) if "FATAL" in ln), None)
+    if fatal is None:
+        return (
+            "the capture helper could not resolve the default devices "
+            "— check Windows sound settings"
+        )
+    return fatal.split("FATAL", 1)[1].lstrip(": ").strip()
 
 
 _CONSENT_STORE = (
@@ -188,118 +159,3 @@ def _consent_value(subkey: str, *, machine: bool) -> str | None:
     except OSError:
         return None
     return value.lower() if isinstance(value, str) else None
-
-
-def _default_device(soundcard, channel: Channel):
-    """The soundcard device a channel records from (mic, or output loopback)."""
-    if channel is Channel.MIC:
-        try:
-            return soundcard.default_microphone()
-        except Exception as exc:
-            raise CaptureUnavailableError(
-                f"no default microphone ({exc}) — check Windows sound settings"
-            ) from exc
-    try:
-        speaker = soundcard.default_speaker()
-        return soundcard.get_microphone(speaker.id, include_loopback=True)
-    except Exception as exc:
-        raise CaptureUnavailableError(
-            f"no default output device to loopback-capture ({exc}) — check Windows sound settings"
-        ) from exc
-
-
-class WindowsCaptureProvider(QueueStreamingProvider[None]):
-    """Streams frames from one WASAPI capture stream per captured channel.
-
-    ``backend`` overrides the soundcard module (a fake in tests); production
-    imports the real one and fails at construction when it is missing,
-    mirroring ``find_helper`` on macOS and the parec check on Linux. ``clock``
-    overrides the session clock (tests drive the re-anchor logic with it).
-
-    Each channel gets one pump thread that owns its device end to end (COM
-    objects are apartment-bound): it opens the recorder, downmixes the
-    device's float32 channels to mono int16, and stamps ~200 ms frames onto
-    the shared session clock; ``frames()`` drains their queue.
-    """
-
-    _thread_prefix = "wasapi"
-
-    def __init__(
-        self,
-        *,
-        backend=None,
-        frame_ms: int = DEFAULT_FRAME_MS,
-        clock: Callable[[], float] = time.monotonic,
-        on_log: Callable[[str], None] | None = None,
-    ):
-        super().__init__(
-            frame_ms=frame_ms,
-            clock=clock,
-            reanchor_tolerance_s=_REANCHOR_TOLERANCE_S,
-            on_log=on_log,
-        )
-        self._soundcard = backend if backend is not None else _import_soundcard()
-
-    @property
-    def far_end_lag_s(self) -> float:
-        return FAR_END_LAG_S
-
-    def _open_channel(self, channel: Channel) -> None:
-        return None  # COM: the device must be resolved inside the pump thread
-
-    def _pump(self, channel: Channel, transport: None) -> None:
-        """Own one channel end to end: device, recorder, framing, timestamps.
-
-        Runs until the stop event is set or the stream dies; the session
-        clock stamps each frame (with the forward re-anchor after an
-        under-filled loopback silence — module docstring).
-        """
-        zero_run = 0
-        warned_silent = False
-        try:
-            device = _default_device(self._soundcard, channel)
-            with device.recorder(samplerate=SAMPLE_RATE) as recorder:
-                while not self._stop_event.is_set():
-                    block = recorder.record(self._frame_samples)
-                    samples = _to_mono_int16(block)
-                    if not len(samples):
-                        continue
-                    # Silent-mic watchdog (mic only: a quiet *system* channel is
-                    # normal). Exact zeros this long are a dead stream, not a
-                    # quiet room — see _SILENT_MIC_WARN_S.
-                    if channel is Channel.MIC:
-                        zero_run = zero_run + len(samples) if not samples.any() else 0
-                        if not warned_silent and zero_run >= _SILENT_MIC_WARN_S * SAMPLE_RATE:
-                            warned_silent = True
-                            self._log(
-                                f"stenograf: the microphone has delivered only silence for "
-                                f"{_SILENT_MIC_WARN_S:.0f}s — check the input volume and "
-                                "Windows privacy settings "
-                                "(Settings > Privacy & security > Microphone)"
-                            )
-                    self._emit(channel, samples)
-        except Exception as exc:
-            # The other providers route their subprocess's stderr through
-            # _log's sink-or-stderr choice; this is the in-process equivalent
-            # so the user sees why a stream died.
-            self._log(f"stenograf: {channel.value} capture stream died: {exc}")
-
-    def _stop_transport(self) -> None:
-        # Pumps notice the stop event within one frame read (~frame_ms +
-        # WASAPI's silence threshold) and release their devices on the way
-        # out. Skip the current thread: stop() also runs *from* a pump on an
-        # unexpected stream death. Skip threads that have not started either:
-        # a pump dying this early can land inside start()'s register-then-start
-        # window, and joining an unstarted thread raises. Nothing is lost by
-        # skipping — the stop event is already set, so a pump that starts after
-        # this exits on its first loop check.
-        current = threading.current_thread()
-        for thread in self._threads.values():
-            if thread is not current and thread.ident is not None:
-                thread.join(timeout=5)
-
-
-def _to_mono_int16(block: np.ndarray) -> np.ndarray:
-    """Downmix a float32 frames×channels block to the wire format."""
-    mono = block.mean(axis=1) if block.ndim == 2 else block
-    return to_int16(mono)

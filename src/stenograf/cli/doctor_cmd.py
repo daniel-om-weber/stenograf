@@ -118,7 +118,8 @@ def _grant_capture_permissions() -> None:
             "the permission prompts are macOS-only — use `steno setup --models-only` here"
         )
     from stenograf.capture.base import Channel
-    from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
+    from stenograf.capture.helper import HelperNotFoundError
+    from stenograf.capture.macos import MacOSCaptureProvider
 
     try:
         provider = MacOSCaptureProvider()

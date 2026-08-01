@@ -16,12 +16,12 @@ def test_run_checks_includes_python_and_asr():
 
 
 def test_capture_helper_check_reports_found(monkeypatch, tmp_path):
-    from stenograf.capture import macos
+    from stenograf.capture import helper as capture_helper
 
     helper = tmp_path / "stenocap"
     helper.write_bytes(b"\x00")
     helper.chmod(0o755)
-    monkeypatch.setattr(macos, "find_helper", lambda: helper)
+    monkeypatch.setattr(capture_helper, "find_helper", lambda: helper)
     monkeypatch.setattr(doctor, "_codesign_valid", lambda path: (True, ""))
     check = doctor._capture_helper_check()
     assert check.ok
@@ -31,24 +31,24 @@ def test_capture_helper_check_reports_found(monkeypatch, tmp_path):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no executable bit")
 def test_capture_helper_check_rejects_non_executable(monkeypatch, tmp_path):
-    from stenograf.capture import macos
+    from stenograf.capture import helper as capture_helper
 
     helper = tmp_path / "stenocap"
     helper.write_bytes(b"\x00")
     helper.chmod(0o644)
-    monkeypatch.setattr(macos, "find_helper", lambda: helper)
+    monkeypatch.setattr(capture_helper, "find_helper", lambda: helper)
     check = doctor._capture_helper_check()
     assert not check.ok
     assert "executable" in check.detail
 
 
 def test_capture_helper_check_rejects_bad_signature(monkeypatch, tmp_path):
-    from stenograf.capture import macos
+    from stenograf.capture import helper as capture_helper
 
     helper = tmp_path / "stenocap"
     helper.write_bytes(b"\x00")
     helper.chmod(0o755)
-    monkeypatch.setattr(macos, "find_helper", lambda: helper)
+    monkeypatch.setattr(capture_helper, "find_helper", lambda: helper)
     monkeypatch.setattr(doctor, "_codesign_valid", lambda path: (False, "code has no signature"))
     check = doctor._capture_helper_check()
     assert not check.ok
@@ -66,12 +66,12 @@ def test_codesign_valid_against_real_codesign(tmp_path):
 
 
 def test_capture_helper_check_reports_missing(monkeypatch):
-    from stenograf.capture import macos
+    from stenograf.capture import helper as capture_helper
 
     def boom():
-        raise macos.HelperNotFoundError("helper not found: build it")
+        raise capture_helper.HelperNotFoundError("helper not found: build it")
 
-    monkeypatch.setattr(macos, "find_helper", boom)
+    monkeypatch.setattr(capture_helper, "find_helper", boom)
     check = doctor._capture_helper_check()
     assert not check.ok
     assert "build it" in check.detail
@@ -129,7 +129,7 @@ def test_windows_capture_check_names_the_devices(monkeypatch):
     from stenograf.capture import windows
     from stenograf.capture.base import Channel
 
-    monkeypatch.setattr(windows, "_import_soundcard", lambda: object())
+    monkeypatch.setattr(windows, "find_helper", lambda: "stenocap.exe")
     monkeypatch.setattr(
         windows,
         "default_devices",
@@ -143,12 +143,17 @@ def test_windows_capture_check_names_the_devices(monkeypatch):
     assert "system ← Speakers (loopback)" in check.detail
 
 
-def test_windows_capture_check_fails_without_soundcard(monkeypatch):
-    monkeypatch.setitem(sys.modules, "soundcard", None)
+def test_windows_capture_check_fails_without_the_helper(monkeypatch):
+    from stenograf.capture import helper as capture_helper
+
+    def boom():
+        raise capture_helper.HelperNotFoundError("capture helper 'stenocap.exe' not found")
+
+    monkeypatch.setattr(capture_helper, "find_helper", boom)
     monkeypatch.setattr(doctor.sys, "platform", "win32")
     check = doctor._windows_capture_check()
     assert not check.ok
-    assert "soundcard" in check.detail
+    assert "stenocap.exe" in check.detail
 
 
 def test_macos_version_check_parses_and_compares(monkeypatch):

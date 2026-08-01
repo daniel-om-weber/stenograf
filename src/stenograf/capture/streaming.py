@@ -1,25 +1,25 @@
-"""Shared machinery for the queue-streaming capture providers (Linux, Windows).
+"""Shared machinery for the queue-streaming capture providers (Linux).
 
-Both providers have the same shape — one pump thread per captured channel
-feeding a single queue that ``frames()`` drains — and the same lifecycle:
+Such a provider has one pump thread per captured channel feeding a single queue
+that ``frames()`` drains, and this lifecycle:
 ``start()`` anchors a shared session clock, each channel pins itself to it at
 its first delivered frame, and a pump ending unexpectedly tears down its
 siblings so the meeting ends visibly and finalizes rather than silently
 continuing half-captured. Subclasses contribute only their transport: opening
 a channel's stream, the blocking read loop, and how a stop reaches the
-streams. macOS stays separate — its helper is a single subprocess owning both
-channels, read synchronously by ``frames()`` itself.
+streams. The helper platforms stay separate (:mod:`stenograf.capture.helper`):
+there, one subprocess owns both channels and stamps them itself.
 
 The load-bearing timestamp invariant lives in :class:`SessionClock`: a
 frame's timestamp derives from the channel's cumulative delivered sample
 count, never from arrival jitter, so gaps in *delivery* never shift audio in
-session time. The one sanctioned exception is the forward re-anchor for
-transports whose sample stream can under-run session time (WASAPI loopback
-wall-clock-estimates silence gaps); ``reanchor_tolerance_s`` is ``inf``
-everywhere else.
+session time. It is still an *arrival*-anchored clock, which is why it survives
+here and nowhere else — each channel carries its own transport latency as a
+hidden offset, and only a helper stamping both taps from one device clock
+removes that. Linux is the last transport on it (PLAN-CAPTURE-HELPER.md step 5).
 
-Also home to the pipe readers shared by the subprocess transports (parec on
-Linux, the stenocap helper on macOS).
+Also home to the pipe readers shared by every subprocess transport (parec here,
+the stenocap helpers next door).
 """
 
 from __future__ import annotations

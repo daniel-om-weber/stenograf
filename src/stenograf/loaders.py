@@ -256,7 +256,8 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=N
         )
 
     if sys.platform == "darwin":
-        from stenograf.capture.macos import HelperNotFoundError, MacOSCaptureProvider
+        from stenograf.capture.helper import HelperNotFoundError
+        from stenograf.capture.macos import MacOSCaptureProvider
 
         try:
             return MacOSCaptureProvider(on_log=on_log)
@@ -280,12 +281,13 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=N
 
 
 def _native_provider(provider_cls, default_devices, plans, announce=None, on_log=None):
-    """Construct a queue-streaming native provider and announce its devices.
+    """Construct a provider for a platform that offers a device *choice*.
 
     Resolves the default devices up front so a broken audio stack fails before
     capture (and models) start, and says what will be recorded — the
     monitor-of-default-sink (Linux) / loopback-of-default-output (Windows)
-    choice is invisible otherwise.
+    choice is invisible otherwise. macOS has no equivalent: its helper owns
+    device selection.
     """
     from stenograf.capture.base import CaptureUnavailableError
 

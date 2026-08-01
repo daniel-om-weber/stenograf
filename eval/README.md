@@ -289,6 +289,12 @@ echo, and AEC3 searches its far-end history backwards only. With
 `capture.windows.FAR_END_LAG_S` compensating it: **13.7 dB ERLE, −42.1 dBFS,
 0 leaked lines** on a re-run of the same script.
 
+**Both numbers are now historical.** The constant they measured was deleted in
+2026-08 along with the in-process WASAPI capture that needed it: the Rust
+capture helper stamps both taps from `pu64QPCPosition`, one device clock, so
+there is nothing left to declare. Re-measuring on the helper is the open gate —
+these two rows are what it has to beat.
+
 `eval/aec_alignment.py` is that whole diagnosis in one command — it measures the
 lag, replays the dump through the **real** `EchoCanceller` at a sweep of
 corrections, and prints the `far_end_lag_s` to ship:
@@ -300,9 +306,10 @@ uv run python eval/aec_alignment.py probe --no-sweep # measure only
 
 It compares what it measures against what the capturing provider already
 declares, so a fixed machine reads PASS. **Run it on Linux** — `parec` is one
-subprocess per channel with the same arrival stamping, so the same silent failure
-is possible there and every AEC number on record is from macOS, which is exempt
-by construction (its helper anchors both channels to one clock).
+subprocess per channel with the same arrival stamping, and it is now the *only*
+transport still exposed to this: macOS and Windows both run a helper that
+anchors both channels to one device clock. Every AEC number on record is from
+macOS, which was exempt by construction all along.
 
 Two notes for whoever measures this next:
 

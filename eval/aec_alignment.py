@@ -153,18 +153,20 @@ def erle_db(mic: np.ndarray, enh: np.ndarray, playing: np.ndarray) -> tuple[floa
 
 
 def declared_lag_s() -> float:
-    """What this platform's capture provider already compensates, if anything.
+    """What the capturing provider already compensates, if anything.
 
     A dump records frames as the provider stamped them, *before* the canceller
-    corrects its own copy -- so a machine whose bug is already fixed still shows
-    the raw misalignment here. Without this the tool would fail every Windows
-    dump forever.
-    """
-    if sys.platform != "win32":
-        return 0.0
-    from stenograf.capture.windows import FAR_END_LAG_S
+    corrects its own copy -- so on a provider that declares a correction, the
+    raw misalignment still shows up here and has to be accounted for.
 
-    return FAR_END_LAG_S
+    **Every shipped provider now declares zero**, because every one of them
+    stamps both channels from a single device clock. Windows was the last
+    holdout: it declared 0.15 s while its two WASAPI streams were arrival-
+    stamped in-process, and the constant went away with the capture helper that
+    replaced them (PLAN-CAPTURE-HELPER.md). Pass ``--declared`` to score a dump
+    taken by an older build.
+    """
+    return 0.0
 
 
 def main() -> int:

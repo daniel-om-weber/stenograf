@@ -80,11 +80,11 @@ dependencies = [
     # build. The floor makes the resolver downgrade numpy instead, and the
     # effective numpy cap tracks numba's own metadata as it advances.
     "numba>=0.60; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    # Windows live capture (Phase 6): WASAPI mic + loopback streams. Decision D
-    # resolved to soundcard over pyaudiowpatch — one API for both channels, and
-    # its AUTOCONVERTPCM init makes Windows resample server-side to 16 kHz
-    # (parec-style, no Python resampler dep). See capture/windows.py.
-    "soundcard>=0.4.4; sys_platform == 'win32'",
+    # Windows live capture has no Python dependency: it goes through the native
+    # stenocap helper the wheel carries, the same as macOS. `soundcard` used to
+    # be here and was dropped 2026-08 — it discards the device timestamps WASAPI
+    # reports (passing NULL for pu64QPCPosition), which is what made echo
+    # cancellation unfixable in-process. See capture/windows.py.
     # The desktop app (Phase 8) — the default UI since step 7's flip. PySide6 is
     # LGPL-3.0 and stays a normal pip dependency — that satisfies the relinking
     # obligation for this MIT project; a bundled build would not. -Essentials

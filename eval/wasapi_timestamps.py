@@ -21,7 +21,12 @@ helper that never involves soundcard at all. The patch is confined here.
 
 Usage (Windows, plain ``uv run`` -- ``--group eval`` cannot resolve here):
 
-    uv run python eval/wasapi_timestamps.py [--seconds 30]
+    uv run --with soundcard python eval/wasapi_timestamps.py [--seconds 30]
+
+``--with soundcard`` because the package this instrument patches is no longer a
+dependency of stenograf: the helper it argued for replaced it. Keeping the
+measurement runnable is worth one flag, since re-checking a different driver or
+a new machine is exactly what this file is for.
 
 It needs something rendering so the loopback tap has packets, and synthesizes a
 far-end clip if ``eval/audio/far-en.wav`` is missing. Output volume is left

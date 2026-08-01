@@ -5,9 +5,10 @@ A capture provider delivers two independent mono PCM streams — microphone
 Providers are platform-specific:
 
 - macOS: a signed Swift helper subprocess (Core Audio process tap + mic),
-  speaking a framed protocol over a Unix socket / stdio.
+  speaking a framed protocol over stdio.
+- Windows: a Rust helper subprocess speaking the same protocol (WASAPI mic +
+  loopback).
 - Linux: one ``parec`` subprocess per channel (PipeWire/PulseAudio sources).
-- Windows: in-process via WASAPI (mic + loopback, the soundcard package).
 
 The core never learns where the audio came from; it only consumes
 ``AudioFrame`` objects. No provider may ever write audio to disk.
@@ -46,8 +47,9 @@ would silently misalign everything after it (see SessionStore / WavTee)."""
 
 
 class CaptureUnavailableError(RuntimeError):
-    """Live capture cannot run here — missing capture stack (parec/pactl, the
-    soundcard package), no default device, or OS privacy settings deny access.
+    """Live capture cannot run here — missing capture stack (the native
+    stenocap helper, parec/pactl), no default device, or OS privacy settings
+    deny access.
 
     One class for every platform backend, so callers (CLI channel preview,
     doctor) can catch it without knowing which provider raised it."""
@@ -176,7 +178,13 @@ class CaptureProvider(ABC):
         subtracts it when it files the reference.
 
         Zero for every provider whose two channels come from one transport with
-        one clock (macOS's helper, file replay) — measure before overriding, and
-        see :data:`stenograf.capture.windows.FAR_END_LAG_S` for how.
+        one clock — which today is every provider but Linux's, since the native
+        helpers stamp both taps from the OS's own clock. **Linux is the one
+        arrival-stamped transport left** (one ``parec`` per channel), and it
+        declares zero for want of a measurement rather than because one was
+        taken; closing that is step 5 of PLAN-CAPTURE-HELPER.md.
+
+        Measure before overriding: ``eval/aec_alignment.py`` reads the lag off
+        an ``--aec-dump`` and prints what a provider would have to declare.
         """
         return 0.0
