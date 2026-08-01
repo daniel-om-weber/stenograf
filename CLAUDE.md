@@ -24,18 +24,24 @@ shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
 `PLAN-CLEANUP.md`).
-**`PLAN-CAPTURE-HELPER.md` is the one live side-plan and the live design work**
-(2026-07-26, evidenced, not built): arrival-stamped audio is the root cause
-behind both the Windows far-end lag and the unmeasured Linux one, and the fix is
-a native Rust capture helper per platform emitting the frame format
+**`PLAN-CAPTURE-HELPER.md` is the one live side-plan; its Windows half is built
+(2026-08-02) and Linux is what remains.** Arrival-stamped audio was the root
+cause behind both the Windows far-end lag and the unmeasured Linux one, and the
+fix is a native Rust capture helper per platform emitting the frame format
 `capture/macos.py:9-16` already defines — one clock for both taps, as `stenocap`
-has always done. It deletes `far_end_lag_s` rather than tuning it, drops
-`soundcard` and `parec`, and expands the wheel matrix (capture becomes
-mandatory, so today's untagged platforms would otherwise lose it). Vendoring or
-monkeypatching soundcard, and PortAudio, are rejected there with reasons; the
-livekit question is deferred with a trigger. `eval/wasapi_timestamps.py` is its
-evidence and re-runs in twelve seconds. **Read it before touching capture,
-`aec.py`, or `hatch_build.py` on any platform.**
+has always done. Shipped for Windows: `native/stenocap/` (WASAPI,
+`pu64QPCPosition`), `capture/helper.py` holding the transport macOS and Windows
+share, `soundcard` + `FAR_END_LAG_S` + `SessionClock`'s re-anchor all deleted,
+`stenocap.exe` a mandatory win_amd64 wheel payload. **Linux is now the only
+arrival-stamped transport left.** Vendoring or monkeypatching soundcard, and
+PortAudio, are rejected there with reasons; the livekit question is deferred
+with a trigger; win_arm64 was struck on measurement (five base dependencies ship
+no wheel for it, so that machine cannot install stenograf at all). What is still
+owed is the AEC-quality run that scores the helper against the 13.7 dB the
+deleted constant achieved — it needs speakers in an empty room, and it is in
+PLAN.md. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
+twelve seconds. **Read that plan before touching capture, `aec.py`, or
+`hatch_build.py` on any platform.**
 
 **Five side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
@@ -44,11 +50,13 @@ and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 AppUserModelID, the app on a real session, the TUI in Windows Terminal, DirectML
 on the AMD tier — plus the AEC bug it found (the loopback tap's arrival stamps
 run ~60 ms behind the mic's, AEC3 only searches backwards, so
-`CaptureProvider.far_end_lag_s` now corrects it: 2.6 → 13.7 dB ERLE, two leaked
-lines → none). Its last section is the observation recipe for a real Windows
-desktop session (screenshot DPI, SAPI voice selection, German-locale traps,
-driving the TUI without a pty) — read it before observing anything there. Its
-one leftover, an optional AEC-quality run, is in PLAN.md and gates nothing.
+`CaptureProvider.far_end_lag_s` corrected it: 2.6 → 13.7 dB ERLE, two leaked
+lines → none; that constant is gone since the capture helper, and 13.7 dB is now
+the number the helper must beat). Its last section is the observation recipe for
+a real Windows desktop session (screenshot DPI, SAPI voice selection,
+German-locale traps, driving the TUI without a pty) — read it before observing
+anything there. Its one leftover, the AEC-quality run, is in PLAN.md and now
+gates the helper rather than nothing.
 `PLAN-ASR-CHALLENGER.md` (2026-07-27): the recurring "leaderboard has a new
 leader" question is **declined**, not gated — see PLAN.md's declined list before
 evaluating any ASR model. `PLAN-NOTES-MARKDOWN.md` and

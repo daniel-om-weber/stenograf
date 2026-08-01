@@ -25,7 +25,6 @@ the stenocap helpers next door).
 from __future__ import annotations
 
 import contextlib
-import math
 import sys
 import threading
 import time
@@ -98,24 +97,20 @@ class SessionClock:
     over the preceding frame-length — and every later stamp is
     ``anchor + delivered / SAMPLE_RATE``.
 
-    A channel's sample-derived stamp may fall behind its arrival-derived one
-    when the transport under-fills a silence gap (WASAPI loopback). When that
-    lag exceeds ``reanchor_tolerance_s`` the channel re-anchors forward —
-    forward only: per-channel timestamps must stay monotonic, and
-    ``SessionStore`` pads the skipped span with silence.
+    It once had a forward re-anchor for transports whose sample stream can
+    under-run session time, which existed for exactly one caller: WASAPI
+    loopback wall-clock-estimated its silence gaps, so its derived clock drifted
+    behind. Windows capture moved to a helper that fills silence against the
+    same device clock it stamps audio with, and the heuristic left with it
+    (2026-08). Nothing has re-anchored since; a transport that needs it again
+    should be handing over real timestamps instead.
 
     Each channel is stamped from its own pump thread; per-channel state is
     disjoint, so no lock is needed.
     """
 
-    def __init__(
-        self,
-        *,
-        clock: Callable[[], float] = time.monotonic,
-        reanchor_tolerance_s: float = math.inf,
-    ) -> None:
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
-        self._tolerance = reanchor_tolerance_s
         self._t0: float | None = None
         self._anchors: dict[Channel, float] = {}
         self._delivered: dict[Channel, int] = {}
@@ -133,12 +128,8 @@ class SessionClock:
         assert self._t0 is not None, "stamp() before start()"
         elapsed = self._clock() - self._t0
         started_at = max(0.0, elapsed - nsamples / SAMPLE_RATE)
-        anchor = self._anchors.get(channel, started_at)
+        anchor = self._anchors.setdefault(channel, started_at)
         timestamp = anchor + self._delivered.get(channel, 0) / SAMPLE_RATE
-        if started_at - timestamp > self._tolerance:
-            anchor += started_at - timestamp
-            timestamp = started_at
-        self._anchors[channel] = anchor
         self._delivered[channel] = self._delivered.get(channel, 0) + nsamples
         return timestamp
 
@@ -174,11 +165,10 @@ class QueueStreamingProvider[TransportT](CaptureProvider):
         *,
         frame_ms: int = DEFAULT_FRAME_MS,
         clock: Callable[[], float] = time.monotonic,
-        reanchor_tolerance_s: float = math.inf,
         on_log: Callable[[str], None] | None = None,
     ) -> None:
         self._frame_samples = frame_samples(frame_ms)
-        self._clock = SessionClock(clock=clock, reanchor_tolerance_s=reanchor_tolerance_s)
+        self._clock = SessionClock(clock=clock)
         self._queue: SimpleQueue[AudioFrame | Channel] = SimpleQueue()
         self._threads: dict[Channel, threading.Thread] = {}
         self._stop_event = threading.Event()

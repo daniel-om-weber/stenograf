@@ -9,8 +9,6 @@ contract — the end-of-channel sentinel that terminates ``frames()``.
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from stenograf.capture.base import SAMPLE_RATE, Channel
@@ -67,36 +65,17 @@ class TestSessionClock:
         assert session.stamp(Channel.MIC, FRAME) == pytest.approx(0.2)
         assert session.stamp(Channel.SYSTEM, FRAME) == pytest.approx(0.5)
 
-    def test_reanchors_forward_past_tolerance(self):
-        # An under-filled silence gap (WASAPI loopback): the second frame
-        # arrives 1.5 s after the first but carries only 0.2 s of audio.
+    def test_a_late_frame_never_moves_the_channels_anchor(self):
+        # The forward re-anchor lived here for WASAPI loopback, whose silence
+        # gaps were wall-clock estimates; that transport is gone and the
+        # sample count is now the only authority, however late a frame is.
         clock = ScriptedClock()
-        session = SessionClock(clock=clock, reanchor_tolerance_s=0.5)
+        session = SessionClock(clock=clock)
         session.start()
         clock.t = 0.2
         assert session.stamp(Channel.SYSTEM, FRAME) == pytest.approx(0.0)
-        clock.t = 1.7
-        assert session.stamp(Channel.SYSTEM, FRAME) == pytest.approx(1.5)
-        clock.t = 1.9  # and the derived clock continues from the new anchor
-        assert session.stamp(Channel.SYSTEM, FRAME) == pytest.approx(1.7)
-
-    def test_lag_within_tolerance_keeps_the_derived_clock(self):
-        clock = ScriptedClock()
-        session = SessionClock(clock=clock, reanchor_tolerance_s=0.5)
-        session.start()
-        clock.t = 0.2
-        session.stamp(Channel.MIC, FRAME)
-        clock.t = 0.85  # 0.45 s behind — jitter, not a silence gap
-        assert session.stamp(Channel.MIC, FRAME) == pytest.approx(0.2)
-
-    def test_infinite_tolerance_never_reanchors(self):
-        clock = ScriptedClock()
-        session = SessionClock(clock=clock, reanchor_tolerance_s=math.inf)
-        session.start()
-        clock.t = 0.2
-        session.stamp(Channel.MIC, FRAME)
-        clock.t = 60.0  # an hour of lag would still derive from samples
-        assert session.stamp(Channel.MIC, FRAME) == pytest.approx(0.2)
+        clock.t = 60.0  # a minute of delivery lag
+        assert session.stamp(Channel.SYSTEM, FRAME) == pytest.approx(0.2)
 
     def test_start_resets_channel_state(self):
         clock = ScriptedClock()

@@ -1,14 +1,25 @@
 # One capture helper, two backends — retiring arrival-stamped audio
 
-**Status: designed and evidenced, not built.** Decided 2026-07-26 after the
-Windows AEC work exposed the root cause and one measurement overturned the cost
-estimate that had deferred the fix. That work lived in `PLAN-WINDOWS.md`, which
-closed and was deleted on 2026-07-27 — where this file cites it below, read
-`git log --follow -p PLAN-WINDOWS.md`.
+**Status: the Windows half is BUILT (2026-08-02); Linux is what remains.**
+Designed 2026-07-26 after the Windows AEC work exposed the root cause and one
+measurement overturned the cost estimate that had deferred the fix. That work
+lived in `PLAN-WINDOWS.md`, which closed and was deleted on 2026-07-27 — where
+this file cites it below, read `git log --follow -p PLAN-WINDOWS.md`.
+
+Steps 1–4 shipped: `native/stenocap/` (Rust, WASAPI, QPC-stamped),
+`capture/helper.py` carrying the transport both helper platforms share,
+`soundcard` and `FAR_END_LAG_S` and the `SessionClock` re-anchor all deleted,
+and the win_amd64 wheel carrying `stenocap.exe` as a mandatory payload. **What
+is open is step 5 (the Linux backend), step 6 (re-ask the livekit question),
+and the AEC gate that scores the Windows helper against the 13.7 dB the deleted
+constant achieved** — that one needs speakers at volume in an empty room and is
+tracked in PLAN.md. The packaging section's win_arm64 line was measured and
+struck; read it before planning that platform.
 
 Read the problem first, then the evidence, then what is decided and what is not.
 The evidence section is the part not to re-derive: `eval/wasapi_timestamps.py`
-re-runs it in twelve seconds on any Windows machine.
+re-runs it in twelve seconds on any Windows machine (with `--with soundcard`,
+since the package it patches is no longer a dependency).
 
 ---
 
@@ -188,9 +199,11 @@ Two build-system facts to honour, both already written down there:
   spiked and rejected on real hardware (2026-07-11). Both abstract timing into a
   per-stream PortAudio clock rather than handing over the device's, which
   reintroduces at a higher level the exact question the spike answered at the API.
-- **The far-end lag stays until the helper replaces it.** `FAR_END_LAG_S = 0.15` is
-  working (13.7 dB ERLE, zero leaked lines) and must not be removed in advance of
-  its replacement.
+- ~~**The far-end lag stays until the helper replaces it.**~~ It did, and the
+  helper replaced it on 2026-08-02. Kept here for the reasoning: a declared
+  constant was right only while frames were arrival-stamped, and applying one
+  on top of device stamps would re-introduce the error it was invented to
+  cancel. The 13.7 dB ERLE it achieved is the number the helper has to beat.
 - **Linux keeps a declared constant in the interim**, in the same field, the way
   macOS returns 0.0 today — honestly marked rather than quietly broken. Windows
   does not wait for Linux.
@@ -239,18 +252,28 @@ soundcard trade.
 
 Each step ships working; the constant stays until its replacement is proven.
 
-1. **Windows helper**, mic + loopback, QPC-anchored, emitting the existing frame
-   format. Validate against `eval/aec_alignment.py` (must report no correction
-   needed with `far_end_lag_s = 0`) and `eval/aec_rig.py far-only` (ERLE at or
-   above today's, zero leaked lines).
-2. **Shared frame reader** — lift `read_frame`/`_HEADER` out of `capture/macos.py`;
-   `capture/windows.py` becomes a helper client and `soundcard` leaves `pyproject`.
-3. **Wheel matrix** — the low-floor capture wheel, `smoke-windows` asserting the
-   helper the way it asserts `stenodiar.exe` today.
-4. **Delete `far_end_lag_s`** and, if step 1 shows the silence case is handled,
-   `_REANCHOR_TOLERANCE_S` with it.
+1. ~~**Windows helper**~~ **— built.** `native/stenocap/`. The AEC validation it
+   names (`aec_alignment.py` reporting no correction needed at zero,
+   `aec_rig.py far-only` at or above 13.7 dB with zero leaked lines) is **still
+   owed**: this desk is on headphones, so there is no echo path to score, and
+   `aec_alignment.py` correctly says so. Tracked in PLAN.md.
+2. ~~**Shared frame reader**~~ **— built**, and it turned out to be the whole
+   transport rather than two functions: `capture/helper.py` holds the drain
+   thread, the stderr relay, the startup-crash retry and the stop gesture, and
+   both platforms subclass it. `soundcard` has left `pyproject`.
+3. ~~**Wheel matrix**~~ **— built for Windows.** `stenocap.exe` is a mandatory
+   win_amd64 payload and `smoke-windows` asserts it. The low-floor *Linux*
+   capture wheel is not built and belongs with step 5, which is what makes it
+   necessary; win_arm64 was struck on evidence (see the packaging section).
+4. ~~**Delete `far_end_lag_s`**~~ **— done, with `_REANCHOR_TOLERANCE_S` and
+   `SessionClock`'s re-anchor.** Note the ordering differs from the plan: the
+   constant went with the transport that needed it, in the same commit, because
+   a 0.15 s correction applied to device-stamped frames is not conservative but
+   simply wrong. The re-anchor went too — it had exactly one caller, which was
+   that transport.
 5. **Linux backend**, same helper, PipeWire/PulseAudio. This is the step that closes
-   the never-measured Linux echo-cancellation risk.
+   the never-measured Linux echo-cancellation risk. **Now the only arrival-stamped
+   transport left**, which is written into `SessionClock`'s docstring.
 6. **Re-ask the livekit question** with the helper in place.
 
 The ≥30-minute Windows AEC run (W4, in PLAN.md's platform section) is **not** a

@@ -444,7 +444,15 @@ for an old meeting takes `--preset` explicitly).
 
 ## Platform work still open
 
-**Windows — closed 2026-07-26 except for one optional AEC-quality run.**
+**Windows — the capture helper shipped 2026-08-02; one AEC-quality run is what
+is left.** `native/stenocap/` (Rust, WASAPI, device-stamped) replaced the
+in-process `soundcard` streams, and `FAR_END_LAG_S` went with them — see
+`PLAN-CAPTURE-HELPER.md`, whose Windows half is now built. A status icon the
+shell files under Stenograf rather than under `pythonw.exe` landed 2026-08-01
+(`gui/wintray.py`; the design notes are in CLAUDE.md, the GUID is permanent).
+The rest of this section is the history that produced both.
+
+**The pre-helper state — closed 2026-07-26 except for one optional AEC run.**
 `PLAN-WINDOWS.md` was deleted on 2026-07-27 with five of its six items green;
 `git log --follow -p PLAN-WINDOWS.md` holds the evidence. Shipped: a real `.lnk`
 launcher (Start Menu + Desktop) with a multi-size `.ico`, written through
@@ -471,16 +479,18 @@ correction (`capture.windows.FAR_END_LAG_S = 0.15`, 2.5× measured, because the
 error is one-sided): **13.7 dB ERLE, 0 leaked lines** on a re-run of the same
 script.
 
-**What is left of W4 no longer gates anything.** Its alignment half — "does the
-constant hold for half an hour" — is superseded by the capture helper below,
-which deletes the constant rather than tuning it; `eval/wasapi_timestamps.py`
-already showed the dangerous ~60 ms is per-meeting anchor skew that no declared
-value can track. What remains is the **AEC-quality** half, which device
-timestamps do not touch: double-talk, which nothing on this machine has covered,
-and the residual gap to macOS (13.7 dB against 37.6 dB — chassis, driver
-processing, or a constant that could be tighter). Better spent validating the
-helper than adjudicating the constant it replaces, so it is optional and
-unscheduled. If it is run, it is one command —
+**W4's remainder is now the capture helper's acceptance test, and it is the one
+Windows thing still open.** Its alignment half was superseded and then settled:
+the helper shipped 2026-08-02 and deleted the constant rather than tuning it.
+But **nothing has yet scored the helper against what it replaced** — 13.7 dB
+ERLE with zero leaked lines, `eval/README.md` — because this desk is on
+headphones, so there is no echo path and `eval/aec_alignment.py` correctly
+refuses to grade one. So the run below stopped being optional: it is what turns
+"the timeline is right" (measured, and end-to-end meetings work) into "the
+canceller is at least as good as before". It also still carries the two
+questions device timestamps never touched: double-talk, which nothing on this
+machine has covered, and the residual gap to macOS (13.7 dB against 37.6 dB —
+chassis, driver processing, or headroom). It is one command —
 `uv run python eval/aec_rig.py far-only --seconds 1800 --volume 90`, **plain
 `uv run`, never `--group eval`** (that group cannot resolve on Windows: `mlx`
 has no `win_amd64` wheel) — plus `eval/aec_alignment.py` on the dump. It is half
@@ -494,18 +504,19 @@ there exactly as WASAPI's did — silently, since it costs nothing but echo
 cancellation. The AEC numbers in `eval/README.md` are all macOS, where one helper
 stamps both channels.
 
-**Both of those are one root cause, and it now has its own plan:
-`PLAN-CAPTURE-HELPER.md` (designed 2026-07-26, not built).** Arrival-stamped
-audio is the disease and `far_end_lag_s` is the symptom cream. The fix is a
-native capture helper per platform emitting the frame format
+**Both of those are one root cause, and it has its own plan:
+`PLAN-CAPTURE-HELPER.md` — Windows built 2026-08-02, Linux still open.**
+Arrival-stamped audio is the disease and `far_end_lag_s` was the symptom cream.
+The fix is a native capture helper per platform emitting the frame format
 `capture/macos.py:9-16` already defines — one clock for both taps, the way
 `stenocap` has worked all along. What overturned the earlier deferral was
 reading the dependency instead of the plan: soundcard already asks
 `IAudioCaptureClient::GetBuffer` for `pu64QPCPosition` and passes NULL
 (`mediafoundation.py:699`), so no COM rewrite was ever needed to find out.
 `eval/wasapi_timestamps.py` measures it in twelve seconds — **both taps
-populated, monotonic, stable to ±0.1 ms over 30 s**. Read that plan before
-touching capture, `aec.py`, or the wheel matrix on any platform.
+populated, monotonic, stable to ±0.1 ms over 30 s**. **Linux is now the only
+arrival-stamped transport left**, and closing it is that plan's step 5. Read it
+before touching capture, `aec.py`, or the wheel matrix on any platform.
 
 **The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
 ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live
