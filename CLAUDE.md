@@ -117,6 +117,19 @@ both dispatch gates by design.
   (DX12-GPU-only on the EOL DirectML EP; coexistence with our
   onnxruntime-directml would actually have been fine — it depends on the
   same flavor).
+- **Windows status icon** (built 2026-08-01, `gui/wintray.py`): the notification
+  area is Windows' menu bar, and Qt's `QSystemTrayIcon` cannot reach the one
+  field that makes it work — `NOTIFYICONDATA.guidItem`. Without it the shell
+  files the icon under the *interpreter's* path, so the user's show/hide choice
+  belongs to `pythonw.exe` and dies on the next Python bump. `gui/tray.py`
+  therefore picks a hand-rolled `Shell_NotifyIcon` implementation on a real
+  Windows session and Qt's everywhere else (offscreen included, so the tests
+  never register a real icon). Windows 11 also hides every *new* tray icon and
+  offers no API to promote one; `IsPromoted` under
+  `HKCU\Control Panel\NotifyIconSettings` is honoured live, and is written once
+  and only when absent. **Read the module docstring before touching it** — the
+  GUID is permanent, and the path-binding caveat, the async key creation and
+  the shared-WNDPROC rule are all measured, not guessed.
 - **MLX on background threads**: materialize weights on the load thread or
   inference dies with "no Stream(gpu, 0)"; verify MLX-threading changes
   against the real backend, not mocks.

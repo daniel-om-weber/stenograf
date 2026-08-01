@@ -739,6 +739,39 @@ class TestTray:
             assert not icon.isNull()
             assert not icon.pixmap(22, 22).toImage().allGray(), "the mark rendered blank"
 
+    def test_the_status_icon_is_qt_s_wherever_there_is_no_real_shell(self, qt_app):
+        # `_status_icon` gates on the platform *plugin*, not on sys.platform:
+        # under offscreen (this suite, CI) the native Windows path would create
+        # a real window and register a real tray icon for the test runner.
+        # Windows CI runs this too, which is the point of the assertion.
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        from stenograf.gui.tray import _status_icon
+
+        assert QGuiApplication.platformName() == "offscreen"
+        assert type(_status_icon(qt_app)) is QSystemTrayIcon
+
+    def test_a_status_icon_the_shell_refuses_falls_back_to_qt_s(self, gui, monkeypatch, capsys):
+        # Only the Windows icon can report this: NIM_ADD is refused while
+        # Explorer is still starting, which is precisely when a login item runs.
+        # Ignoring it would leave `install` returning a Tray, `run` no longer
+        # quitting on the last window, and close turning into hide — so in
+        # --tray mode the user would have neither a window nor an icon.
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        from stenograf.gui import tray as tray_module
+
+        class Refused(QSystemTrayIcon):
+            def show(self) -> bool:
+                return False
+
+        shell, _engine = gui
+        monkeypatch.setattr(tray_module, "_status_icon", Refused)
+        tray = tray_module.Tray(shell)
+        assert type(tray.icon) is QSystemTrayIcon, "the refusal was ignored"
+        assert not tray.icon.icon().isNull(), "the replacement icon has no artwork"
+        assert "falling back" in capsys.readouterr().err
+
     def test_the_icon_follows_the_meeting_but_not_its_clock(self, tray, gui):
         shell, _engine = gui
         meeting = shell.screen("Meeting")
@@ -1039,9 +1072,7 @@ class TestSignals:
 
         from stenograf.gui.app import _hand_signals_to_qt
 
-        before = {
-            num: signal.getsignal(num) for num in (signal.SIGINT, signal.SIGTERM)
-        }
+        before = {num: signal.getsignal(num) for num in (signal.SIGINT, signal.SIGTERM)}
         loop = QEventLoop()
         outcomes = []
 

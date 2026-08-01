@@ -24,6 +24,14 @@ Where no tray host exists — stock GNOME without the AppIndicator extension is
 the case that matters — :func:`install` returns ``None`` and none of that
 happens: the window is the app, and closing it quits, exactly as before.
 
+On Windows the icon itself comes from :mod:`stenograf.gui.wintray` rather than
+from ``QSystemTrayIcon`` (:func:`_status_icon` picks). Qt's implementation works,
+but it files the icon under the *interpreter's* path, and Windows 11 then hides
+it in the overflow with the user's show/hide choice attached to ``pythonw.exe``
+— lost on the next Python upgrade. The replacement registers a stable GUID and
+promotes itself once. Everything below is written against the small surface both
+share, so this module has one status-item story, not two.
+
 Two landmines paid for here:
 
 - **QSystemTrayIcon needs a QApplication, not a QGuiApplication.** It is a
@@ -57,6 +65,7 @@ if TYPE_CHECKING:
 
     from stenograf.gui.app import StenografGui
     from stenograf.gui.meeting import MeetingScreen
+    from stenograf.gui.wintray import WindowsStatusIcon
 
 MARK = ASSETS / "tray.svg"
 """The icon's two commas without their tile — a status item is artwork on nothing."""
@@ -93,6 +102,30 @@ def _icon(tint: str | None, *, mask: bool = False) -> QIcon:
         icon.addPixmap(pixmap)
     icon.setIsMask(mask)
     return icon
+
+
+def _status_icon(parent: QObject) -> QSystemTrayIcon | WindowsStatusIcon:
+    """The notification-area icon for this platform.
+
+    Gated on the *platform plugin*, not on ``sys.platform`` alone, for the same
+    reason :func:`set_dock_icon` is: under the offscreen plugin (the tests, CI)
+    there is no shell to register with, and the native path would create a real
+    window and a real icon for the test runner. A failure to build it is not
+    fatal either — Qt's own icon loses the stable identity but still puts
+    something in the menu bar, which is the part the user needs.
+    """
+    if sys.platform == "win32" and QGuiApplication.platformName() == "windows":
+        try:
+            from stenograf.gui.wintray import WindowsStatusIcon
+
+            return WindowsStatusIcon(parent)
+        except (OSError, ImportError) as exc:
+            print(
+                f"could not create the Stenograf status icon ({exc}) — falling back to "
+                "Qt's, which Windows may keep hidden in the overflow",
+                file=sys.stderr,
+            )
+    return QSystemTrayIcon(parent)
 
 
 def set_dock_icon(visible: bool) -> bool:
@@ -187,9 +220,6 @@ class Tray(QObject):
         self.menu.addSeparator()
         self.quit = self._item("Quit Stenograf", shell.quit_app)
 
-        self.icon = QSystemTrayIcon(self)
-        self.icon.setContextMenu(self.menu)
-        self.icon.activated.connect(self._clicked)
         # Labelling happens when the menu opens, never while it is closed: the
         # meeting state changes several times a second under live captions.
         self.menu.aboutToShow.connect(self._relabel)
@@ -197,8 +227,7 @@ class Tray(QObject):
         meeting = self._meeting()
         meeting.changed.connect(self._refresh)
         shell.quitting.connect(self._refresh)
-        self._refresh()
-        self.icon.show()
+        self._show_icon(_status_icon(self))
 
         # From here on the window is closeable without ending the app — which
         # is the whole point, since a meeting outlives it.
@@ -211,6 +240,34 @@ class Tray(QObject):
             application = QApplication.instance()
             if application is not None:
                 application.installEventFilter(self)
+
+    def _show_icon(self, icon: QSystemTrayIcon | WindowsStatusIcon) -> None:
+        """Wire ``icon`` to the menu and the meeting, and put it on screen.
+
+        A native icon the shell refuses is retried as Qt's, once. That refusal is
+        real and reachable: ``NIM_ADD`` fails while Explorer is still starting,
+        which is exactly when a login item runs. Ignoring it would be the worst
+        outcome available, because everything downstream still believes there is
+        a status item — :func:`install` returns a ``Tray``, ``run`` stops quitting
+        on the last window, and :meth:`eventFilter` turns a close into a hide. In
+        ``--tray`` mode, where no window is shown at all, the user would be left
+        with an app that has neither a window nor an icon.
+        """
+        self.icon = icon
+        icon.setContextMenu(self.menu)
+        icon.activated.connect(self._clicked)
+        self._state = ""  # a fresh icon carries no artwork yet
+        self._refresh()
+        # Only the native icon reports; QSystemTrayIcon.show() returns None, so
+        # the fallback cannot recurse into itself.
+        if icon.show() is False:
+            print(
+                "the Windows shell refused the Stenograf status icon — falling back to "
+                "Qt's, which it may keep hidden in the overflow",
+                file=sys.stderr,
+            )
+            icon.deleteLater()
+            self._show_icon(QSystemTrayIcon(self))
 
     def _item(self, text: str, handler: Callable[[], object]) -> QAction:
         action = self.menu.addAction(text)
