@@ -116,7 +116,7 @@ def _capture_helper_check() -> Check:
             name="Capture helper",
             ok=False,
             detail=f"{path} has no valid code signature ({why}) — macOS refuses audio "
-            "permissions to unsigned binaries; rebuild with native/helper/build.sh",
+            "permissions to unsigned binaries; rebuild with native/stenocap-macos/build.sh",
         )
     return Check(
         name="Capture helper",

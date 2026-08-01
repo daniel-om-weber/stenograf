@@ -37,6 +37,6 @@ build/
 # Native helper build artifacts
 native/.build/
 native/spike/tap-spike
-native/helper/stenocap
+native/stenocap-macos/stenocap
 # Gate A working data: real meeting content — NEVER commit
 gate-a/

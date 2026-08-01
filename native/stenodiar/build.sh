@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the stenodiar diarization helper and drop the binary next to this
-# script, where stenograf's dev fallback looks for it (mirrors helper/stenocap).
+# script, where stenograf's dev fallback looks for it (mirrors stenocap-macos).
 # Needs a Rust toolchain (brew install rust / rustup). No signing: stenodiar touches no
 # TCC-guarded resource, so an unsigned binary is fine.
 #

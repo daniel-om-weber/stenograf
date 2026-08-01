@@ -3,7 +3,7 @@
 # this changes the bundle's cdhash, and the cdhash *is* everyone's microphone
 # grant. It exists to be auditable, not to be run.
 #
-# Unlike native/helper/build.sh, the product is committed (under
+# Unlike native/stenocap-macos/build.sh, the product is committed (under
 # src/stenograf/assets/) rather than gitignored: the bundle every user gets has
 # to be the same bytes, so it is built once, here, and never on their machine.
 set -e

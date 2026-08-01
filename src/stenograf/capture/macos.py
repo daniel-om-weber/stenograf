@@ -77,14 +77,14 @@ def find_helper() -> Path:
             path.chmod(path.stat().st_mode | 0o755)
         return path
 
-    # Dev fallback: native/helper/stenocap in the source tree.
-    dev = Path(__file__).resolve().parents[3] / "native" / "helper" / HELPER_NAME
+    # Dev fallback: native/stenocap-macos/stenocap in the source tree.
+    dev = Path(__file__).resolve().parents[3] / "native" / "stenocap-macos" / HELPER_NAME
     if dev.is_file():
         return dev
 
     raise HelperNotFoundError(
         f"capture helper '{HELPER_NAME}' not found. Build it with "
-        f"native/helper/build.sh, or set {_ENV_OVERRIDE} to its path."
+        f"native/stenocap-macos/build.sh, or set {_ENV_OVERRIDE} to its path."
     )
 
 

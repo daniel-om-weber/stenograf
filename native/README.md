@@ -53,8 +53,8 @@ built on. Two things fix its floor, and only one of them is our choice.
 `release.yml` asserts all of it on the built wheel — highest glibc symbol,
 libstdc++ against the runner's own, and no `libssl` in `ldd`.
 
-`helper/` holds **stenocap**, the ad-hoc-signed Swift binary that feeds live
-audio to the Python core. It captures
+`stenocap-macos/` holds **stenocap**, the ad-hoc-signed Swift binary that feeds
+live audio to the Python core. It captures
 
 - **system audio** via a Core Audio process tap (`AudioHardwareCreateProcessTap`,
   macOS 14.4+) — the remote participants in a call, and
@@ -63,8 +63,8 @@ audio to the Python core. It captures
 resamples both to mono 16 kHz int16 (AVAudioConverter), and streams them as
 framed PCM on **stdout**. Audio is never written to disk — the helper only
 streams it. `spike/` is the original throwaway proof that the tap + mic APIs
-work; `helper/` is the production version that adds resampling, framing, and a
-clean lifecycle.
+work; `stenocap-macos/` is the production version that adds resampling, framing,
+and a clean lifecycle.
 
 Echo cancellation is **not** done here. The helper once had a `--aec` flag
 backed by Voice Processing IO (`setVoiceProcessingEnabled` on the input node).
@@ -108,15 +108,16 @@ reference against the wrong instant.
 
 ## Build
 
-    sh helper/build.sh
+    sh stenocap-macos/build.sh
 
-Compiles + ad-hoc signs `helper/stenocap` (swiftc; no Apple Developer account
-needed — PLAN.md "Deployment & distribution"). The binary is a build artifact
-(gitignored). The Python side finds it via `native/helper/stenocap` in the
-source tree, a packaged `stenograf/bin/stenocap` in a wheel, or the
-`STENOGRAF_CAPTURE_HELPER` environment override. TCC usage strings are embedded
-from `helper/Info.plist`; on first run the terminal is granted mic + system-audio
-permission once.
+Compiles + ad-hoc signs `stenocap-macos/stenocap` (swiftc; no Apple Developer
+account needed — PLAN.md "Deployment & distribution"). The binary is a build
+artifact (gitignored). The Python side finds it via
+`native/stenocap-macos/stenocap` in the source tree, a packaged
+`stenograf/bin/stenocap` in a wheel, or the `STENOGRAF_CAPTURE_HELPER`
+environment override. TCC usage strings are embedded from
+`stenocap-macos/Info.plist`; on first run the terminal is granted mic +
+system-audio permission once.
 
 Reference implementations this was built from:
 

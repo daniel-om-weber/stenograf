@@ -88,7 +88,7 @@ def _fake_build(tmp_path):
         assert check
         script = Path(cmd[-1])
         assert script.stem == "build"  # build.sh, or build.ps1 on Windows
-        name = "stenocap" if script.parent.name == "helper" else "stenodiar"
+        name = "stenocap" if script.parent.name == "stenocap-macos" else "stenodiar"
         if name == "stenodiar" and sys.platform == "win32":
             name += ".exe"  # cargo's suffix, mirroring _stenodiar_path
         binary = script.parent / name
@@ -109,7 +109,7 @@ def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch)
 
     assert data["pure_python"] is False
     assert data["tag"] == hook_module.MACOS_TAG
-    helper = tmp_path / "native" / "helper" / "stenocap"
+    helper = tmp_path / "native" / "stenocap-macos" / "stenocap"
     stenodiar = _stenodiar(tmp_path)
     assert data["force_include"][str(helper)] == "stenograf/bin/stenocap"
     assert data["force_include"][str(stenodiar)] == f"stenograf/bin/{stenodiar.name}"

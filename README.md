@@ -98,7 +98,7 @@ works without it (`steno doctor` reports it as an optional check).
 git clone https://github.com/daniel-om-weber/stenograf
 cd stenograf
 uv sync
-sh native/helper/build.sh     # builds + ad-hoc signs native/helper/stenocap
+sh native/stenocap-macos/build.sh   # builds + ad-hoc signs the capture helper
 uv run steno doctor
 uv run steno setup
 ```

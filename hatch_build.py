@@ -1,6 +1,6 @@
 """Wheel build hook: bundle the compiled native helpers into platform wheels.
 
-The helpers are gitignored build artifacts (native/helper/stenocap,
+The helpers are gitignored build artifacts (native/stenocap-macos/stenocap,
 native/stenodiar/stenodiar), so a plain wheel would ship without them. Three
 wheels carry one or both and are tagged for their platform; every other
 platform still gets the pure `py3-none-any` wheel, and pip prefers the
@@ -104,7 +104,7 @@ class CustomBuildHook(BuildHookInterface):
         build_data["tag"] = tag
 
     def _bundle_macos(self, build_data: dict) -> None:
-        helper = Path(self.root) / "native" / "helper" / "stenocap"
+        helper = Path(self.root) / "native" / "stenocap-macos" / "stenocap"
         self._build(helper, hint="install the Xcode Command Line Tools (xcode-select --install)")
         build_data["force_include"][str(helper)] = "stenograf/bin/stenocap"
 
