@@ -434,7 +434,7 @@ def test_the_windows_batch_fallback_starts_the_app(tmp_path, monkeypatch):
     assert target == tmp_path / "Desktop" / "Stenograf.cmd"
     content = target.read_text()
     assert content.startswith("@echo off")
-    assert '-m stenograf --gui' in content
+    assert "-m stenograf --gui" in content
     assert content.count("start ") == 1  # hand over and exit, no lingering console
 
 

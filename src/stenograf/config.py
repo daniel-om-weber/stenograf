@@ -63,8 +63,8 @@ class ResolvedParameters:
     reader (or a re-run) can tell a user-set value from a detected one — the plan's
     "Detected: German, 2 remote speakers" editability made durable. ``speakers`` is
     keyed by channel (``mic``/``system`` for a meeting, ``audio`` for a file
-    transcribe); meeting-mode provenance is deferred with mode auto-detection
-."""
+    transcribe); meeting-mode provenance is deferred with mode auto-detection.
+    """
 
     language: ResolvedValue
     speakers: dict[str, ResolvedValue] = field(default_factory=dict)

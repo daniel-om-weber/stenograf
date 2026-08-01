@@ -172,8 +172,7 @@ def _checked_partial(raw: str, *, portion: int) -> str:
     text = strip_reasoning(raw).strip()
     if not any(line.lstrip().startswith(("- ", "* ")) for line in text.splitlines()):
         raise NotesGenerationError(
-            f"portion {portion} produced no bullet notes; "
-            f"response started: {text[:200]!r}"
+            f"portion {portion} produced no bullet notes; response started: {text[:200]!r}"
         )
     return text
 

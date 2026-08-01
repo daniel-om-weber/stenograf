@@ -309,8 +309,7 @@ def _notes_after_run(
             )
     except KeyboardInterrupt:
         click.secho(
-            f"notes skipped — the transcript is safe; `steno notes {out_dir}` "
-            "regenerates them",
+            f"notes skipped — the transcript is safe; `steno notes {out_dir}` regenerates them",
             fg="yellow",
             err=True,
         )

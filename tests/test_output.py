@@ -31,7 +31,7 @@ def test_documents_is_the_folder_the_desktop_names(tmp_path, monkeypatch):
     _linux_home(
         monkeypatch,
         tmp_path,
-        '# written by xdg-user-dirs-update\n'
+        "# written by xdg-user-dirs-update\n"
         'XDG_DESKTOP_DIR="$HOME/Desktop"\n'
         'XDG_DOCUMENTS_DIR="$HOME/Dokumente"\n'
         'XDG_MUSIC_DIR="$HOME/Musik"\n',

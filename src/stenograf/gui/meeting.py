@@ -246,9 +246,7 @@ class MeetingScreen(Screen, LiveView):
         # into True during the wait.
         thread = self._thread
         while (
-            thread is not None
-            and thread.is_alive()
-            and not (run is not None and run.notes_running)
+            thread is not None and thread.is_alive() and not (run is not None and run.notes_running)
         ):
             thread.join(0.2)
 
