@@ -34,7 +34,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 from common import OUT_DIR, load_manifest  # noqa: E402
 
-from stenograf import models  # noqa: E402
+from stenograf import assets  # noqa: E402
 from stenograf.asr import create_backend  # noqa: E402
 from stenograf.audio import SAMPLE_RATE, sample_index, to_float32  # noqa: E402
 from stenograf.pipeline import _clip_context, _shift  # noqa: E402
@@ -117,7 +117,7 @@ def main() -> int:
     t0 = time.perf_counter()
     asr = create_backend("parakeet")
     asr.load()
-    vad = SileroVAD(models.fetch(models.SILERO_VAD))
+    vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
     load_s = time.perf_counter() - t0
     print(f"loaded parakeet ({asr.model_id}) + VAD in {load_s:.1f}s")
 

@@ -203,11 +203,11 @@ def test_ffmpeg_check_reports_the_bundled_binary(monkeypatch):
 
 
 def test_models_check_reflects_cache(monkeypatch):
-    from stenograf import models
+    from stenograf import assets
 
-    monkeypatch.setattr(models, "cached_path", lambda asset: Path("/cached"))
+    monkeypatch.setattr(assets, "cached_path", lambda asset: Path("/cached"))
     assert doctor._models_check().ok
-    monkeypatch.setattr(models, "cached_path", lambda asset: None)
+    monkeypatch.setattr(assets, "cached_path", lambda asset: None)
     missing = doctor._models_check()
     assert not missing.ok
     assert "pending" in missing.detail

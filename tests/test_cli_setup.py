@@ -109,14 +109,14 @@ def test_setup_models_only_skips_the_permission_step(monkeypatch):
 
 
 def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):
-    from stenograf import models
+    from stenograf import assets
     from stenograf.asr.base import ASRBackend
 
     monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
     # One asset pre-cached, the rest missing: only the missing ones are fetched.
-    (tmp_path / models.SILERO_VAD.name).write_bytes(b"\x00")
+    (tmp_path / assets.SILERO_VAD.name).write_bytes(b"\x00")
     fetched = []
-    monkeypatch.setattr(models, "fetch", lambda asset, progress=None: fetched.append(asset.name))
+    monkeypatch.setattr(assets, "fetch", lambda asset, progress=None: fetched.append(asset.name))
 
     class PrefetchASR(ASRBackend):
         name = "fake"
@@ -138,15 +138,15 @@ def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor, "installed", lambda module: True)  # deps "present" (any OS)
     monkeypatch.setattr(asr, "create_backend", lambda name=None, **kw: PrefetchASR())
     loaders.prefetch_models()
-    assert set(fetched) == {models.PYANNOTE_SEGMENTATION.name, models.SPEAKER_EMBEDDING.name}
+    assert set(fetched) == {assets.PYANNOTE_SEGMENTATION.name, assets.SPEAKER_EMBEDDING.name}
     assert PrefetchASR.calls == ["load", "unload"]  # weights pulled and released
 
 
 def test_prefetch_models_skips_asr_when_backend_deps_absent(monkeypatch, tmp_path, capsys):
-    from stenograf import doctor, models
+    from stenograf import assets, doctor
 
     monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
-    monkeypatch.setattr(models, "fetch", lambda asset, progress=None: None)
+    monkeypatch.setattr(assets, "fetch", lambda asset, progress=None: None)
     monkeypatch.setattr(doctor, "installed", lambda module: False)  # the Linux shape
     import stenograf.asr as asr
 

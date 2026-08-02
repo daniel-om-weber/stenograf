@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from stenograf.profiles import (
+from stenograf.voiceprints import (
     DEFAULT_THRESHOLD,
     ProfileStore,
     SpeakerProfile,

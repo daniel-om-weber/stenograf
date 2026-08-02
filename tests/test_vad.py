@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stenograf import models
+from stenograf import assets
 from stenograf.audio import SAMPLE_RATE
 from stenograf.vad import (
     DECODE_CONTEXT_S,
@@ -111,7 +111,7 @@ class TestDecodeSlice:
 
 
 @pytest.mark.skipif(
-    models.cached_path(models.SILERO_VAD) is None or not _EVAL_WAV.exists(),
+    assets.cached_path(assets.SILERO_VAD) is None or not _EVAL_WAV.exists(),
     reason="needs the cached silero model and the eval audio",
 )
 def test_stream_matches_batch_scan_on_real_speech():
@@ -123,7 +123,7 @@ def test_stream_matches_batch_scan_on_real_speech():
             raw = raw[::2]
     audio = raw[: 30 * SAMPLE_RATE].astype(np.float32) / 32768.0
 
-    vad = SileroVAD(models.cached_path(models.SILERO_VAD))
+    vad = SileroVAD(assets.cached_path(assets.SILERO_VAD))
     batch = vad.speech_segments(audio)
     assert batch, "the eval clip should contain speech"
 

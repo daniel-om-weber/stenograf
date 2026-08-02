@@ -1,5 +1,5 @@
 """Speaker diarization via sherpa-onnx (pyannote segmentation-3.0 + ERes2Net
-embeddings, ONNX/CPU; see models.SPEAKER_EMBEDDING for why not CAM++).
+embeddings, ONNX/CPU; see assets.SPEAKER_EMBEDDING for why not CAM++).
 
 This is the cross-platform baseline diarizer. The accuracy target is
 the pyannote community-1 pipeline; the macOS-native port of that (speakrs /
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from stenograf import models
+from stenograf import assets
 from stenograf.audio import SAMPLE_RATE, l2_normalize, to_float32
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 
@@ -42,7 +42,7 @@ class SherpaOnnxDiarizer(Diarizer):
         embedding_model: Path | None = None,
         *,
         clustering_threshold: float = 0.5,
-        progress: models.ProgressHook | None = None,
+        progress: assets.ProgressHook | None = None,
     ) -> None:
         self._segmentation_model = segmentation_model
         self._embedding_model = embedding_model
@@ -55,10 +55,10 @@ class SherpaOnnxDiarizer(Diarizer):
     def _build(self, num_clusters: int) -> None:
         import sherpa_onnx
 
-        segmentation = self._segmentation_model or models.fetch(
-            models.PYANNOTE_SEGMENTATION, self._progress
+        segmentation = self._segmentation_model or assets.fetch(
+            assets.PYANNOTE_SEGMENTATION, self._progress
         )
-        embedding = self._embedding_model or models.fetch(models.SPEAKER_EMBEDDING, self._progress)
+        embedding = self._embedding_model or assets.fetch(assets.SPEAKER_EMBEDDING, self._progress)
         config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
             segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
                 pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
@@ -100,7 +100,7 @@ class SherpaOnnxDiarizer(Diarizer):
 
         sherpa's ``OfflineSpeakerDiarization`` result carries no embeddings
         (verified against the installed package), so a separate
-        ``SpeakerEmbeddingExtractor`` — the same ``models.SPEAKER_EMBEDDING`` file
+        ``SpeakerEmbeddingExtractor`` — the same ``assets.SPEAKER_EMBEDDING`` file
         the clustering uses — embeds each cluster's turn slices via
         :func:`cluster_embeddings`."""
         turns = self.diarize(samples, num_speakers)
@@ -125,8 +125,8 @@ class SherpaOnnxDiarizer(Diarizer):
         if self._extractor is None:
             import sherpa_onnx
 
-            embedding = self._embedding_model or models.fetch(
-                models.SPEAKER_EMBEDDING, self._progress
+            embedding = self._embedding_model or assets.fetch(
+                assets.SPEAKER_EMBEDDING, self._progress
             )
             self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
                 sherpa_onnx.SpeakerEmbeddingExtractorConfig(

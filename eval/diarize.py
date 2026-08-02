@@ -33,7 +33,7 @@ import sys
 from common import OUT_DIR, REFS_DIR, load_manifest, read_pcm16
 from rttm import Turn, write_rttm
 
-from stenograf import models
+from stenograf import assets
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.config import Language
 from stenograf.diarization.sherpa import SherpaOnnxDiarizer
@@ -112,7 +112,7 @@ def main() -> int:
     if not args.bootstrap:  # the transcript (word attribution) is only needed for hypotheses
         asr = ParakeetMLXBackend()
         asr.load()
-        vad = SileroVAD(models.fetch(models.SILERO_VAD))
+        vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
     out_dir = OUT_DIR / "diar"
     out_dir.mkdir(parents=True, exist_ok=True)
 

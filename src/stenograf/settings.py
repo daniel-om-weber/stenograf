@@ -634,9 +634,9 @@ def settings_rows(settings: Settings) -> list[tuple[str, list[tuple[str, str, st
     from stenograf.notes.backend import settings_defaults as notes_defaults
     from stenograf.notes.ollama import DEFAULT_URL
     from stenograf.output import default_output_home
-    from stenograf.profiles import DEFAULT_THRESHOLD as REID_THRESHOLD
-    from stenograf.profiles import default_store_path
     from stenograf.transcript import DEFAULT_FORMATS
+    from stenograf.voiceprints import DEFAULT_THRESHOLD as REID_THRESHOLD
+    from stenograf.voiceprints import default_store_path
 
     # Per-backend notes defaults resolve against the *effective* backend, so the
     # display matches what a notes run would actually use; keys the backend has

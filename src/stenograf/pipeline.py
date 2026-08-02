@@ -50,7 +50,7 @@ re-ID profile name) is already final and passes through untouched."""
 class SpeakerResolver(Protocol):
     """Maps a run's per-cluster voice embeddings to persistent speaker names.
 
-    Structurally satisfied by :class:`stenograf.profiles.SpeakerReID`; kept as a
+    Structurally satisfied by :class:`stenograf.voiceprints.SpeakerReID`; kept as a
     Protocol so the accuracy core need not depend on the profile store.
     """
 

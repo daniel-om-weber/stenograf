@@ -27,8 +27,8 @@ def profiles() -> None:
 @profiles.command("list")
 def profiles_list() -> None:
     """List enrolled speaker profiles."""
-    from stenograf import models
-    from stenograf.profiles import ProfileStore, default_store_path
+    from stenograf import assets
+    from stenograf.voiceprints import ProfileStore, default_store_path
 
     store = ProfileStore.load()
     all_profiles = store.profiles()
@@ -36,7 +36,7 @@ def profiles_list() -> None:
         click.echo(f"no speaker profiles yet ({default_store_path()})")
         click.echo("enroll one with: steno profiles enroll NAME sample.wav")
         return
-    active_model = models.SPEAKER_EMBEDDING.name
+    active_model = assets.SPEAKER_EMBEDDING.name
     click.echo(f"speaker profiles ({default_store_path()}):")
     for p in sorted(all_profiles, key=lambda p: (p.embedding_model, p.name.lower())):
         noun = "sample" if p.samples == 1 else "samples"
@@ -81,9 +81,9 @@ def profiles_enroll(
     voiceprint is computed exactly the way meetings embed their clusters, so
     future meetings relabel this speaker automatically.
     """
-    from stenograf import models
+    from stenograf import assets
     from stenograf.audio import load_audio
-    from stenograf.profiles import ProfileStore
+    from stenograf.voiceprints import ProfileStore
 
     samples = load_audio(audio_file)
     diarizer = loaders.load_diarizer()
@@ -94,7 +94,7 @@ def profiles_enroll(
         )
     embedding = _choose_cluster(result.embeddings, result.turns, cluster)
 
-    model = models.SPEAKER_EMBEDDING.name
+    model = assets.SPEAKER_EMBEDDING.name
     store = ProfileStore.load()
     existing = store.get(name, model)
     if reinforce:
@@ -143,11 +143,11 @@ def _choose_cluster(
 @click.argument("new")
 def profiles_rename(old: str, new: str) -> None:
     """Rename speaker profile OLD to NEW."""
-    from stenograf import models
-    from stenograf.profiles import ProfileStore
+    from stenograf import assets
+    from stenograf.voiceprints import ProfileStore
 
     store = ProfileStore.load()
-    profile = store.get(old, models.SPEAKER_EMBEDDING.name)
+    profile = store.get(old, assets.SPEAKER_EMBEDDING.name)
     if profile is None:
         raise click.ClickException(f"no profile named {old!r}")
     try:
@@ -163,11 +163,11 @@ def profiles_rename(old: str, new: str) -> None:
 @click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
 def profiles_remove(name: str, yes: bool) -> None:
     """Delete speaker profile NAME."""
-    from stenograf import models
-    from stenograf.profiles import ProfileStore
+    from stenograf import assets
+    from stenograf.voiceprints import ProfileStore
 
     store = ProfileStore.load()
-    profile = store.get(name, models.SPEAKER_EMBEDDING.name)
+    profile = store.get(name, assets.SPEAKER_EMBEDDING.name)
     if profile is None:
         raise click.ClickException(f"no profile named {name!r}")
     if not yes:

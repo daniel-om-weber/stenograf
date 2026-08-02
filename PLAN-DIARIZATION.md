@@ -99,7 +99,7 @@ word intersection explicitly last and not touched).
    on short turns (3.28 % @ 2 s). Short clusters keep their local S-label
    (and are candidates for the step-1.3 merge instead).
 6. **Docstring fix** (immediate, no gate): `diarization/sherpa.py` says
-   "CAM++ embeddings"; `models.py` ships ERes2Net and records why CAM++ was
+   "CAM++ embeddings"; `assets.py` ships ERes2Net and records why CAM++ was
    rejected. Say what ships.
 
 ## Step 2 — profile store v2 + the enrollment loop
@@ -148,14 +148,14 @@ ModelScope; fixes exactly the short-turn cliff our shipped ERes2Net-base has:
 1.48 % vs 3.28 % @ 2 s) and **WeSpeaker ResNet34-LM** (CC-BY-4.0, 6.6 M,
 ONNX shipped by sherpa; the known-good pairing with segmentation-3.0 —
 literally pyannote's own embedding). CAM++ stays rejected (measured in-repo
-2026-07: cluster identity flips between segmentation windows — `models.py`).
+2026-07: cluster identity flips between segmentation windows — `assets.py`).
 ReDimNet/ReDimNet2 is watch-only (best checkpoints CC-BY-NC-SA, official
 ONNX export broken; trigger: a CC-BY vox2 checkpoint with working export
 beating ERes2NetV2 on the harness).
 
 Gate: harness DER (clustering quality) *and* DIR@FAR (naming) both
 non-regressing, short-turn naming improved. Profiles are model-bound by
-design (`profiles.py`), so the swap starts a fresh profile set — ship
+design (`voiceprints.py`), so the swap starts a fresh profile set — ship
 together with step 2's rename-once loop so re-enrollment is one correction
 per colleague, not a manual chore. Loser is declined with numbers; one model
 ships (one path).

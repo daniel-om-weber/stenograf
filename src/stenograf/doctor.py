@@ -287,14 +287,14 @@ def _ffmpeg_check() -> Check:
 
 
 def _models_check() -> Check:
-    from stenograf import models
+    from stenograf import assets
     from stenograf.paths import cache_dir
 
-    assets = (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING)
-    missing = [asset.name for asset in assets if models.cached_path(asset) is None]
+    wanted = (assets.SILERO_VAD, assets.PYANNOTE_SEGMENTATION, assets.SPEAKER_EMBEDDING)
+    missing = [asset.name for asset in wanted if assets.cached_path(asset) is None]
     if missing:
         detail = (
-            f"{len(missing)}/{len(assets)} pending — `steno setup` downloads them "
+            f"{len(missing)}/{len(wanted)} pending — `steno setup` downloads them "
             "(or they download on first use): " + ", ".join(missing)
         )
     else:

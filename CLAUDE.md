@@ -55,7 +55,7 @@ twelve seconds.
 **`PLAN-DIARIZATION.md` is the one live side-plan (opened 2026-08-02):** the
 diarization + speaker re-ID accuracy program, with its research record in
 `eval/diarization-sota-2026.md`. Read both before touching `diarization/`,
-`profiles.py`, `eval/der.py`, or evaluating any diarization or
+`voiceprints.py`, `eval/der.py`, or evaluating any diarization or
 speaker-embedding model — the declined list there (Sortformer, joint SA-ASR,
 TS-VAD, AS-Norm-by-default, pyannote.audio-as-dependency) carries measured
 reasons and re-open triggers.

@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from stenograf import models
+from stenograf import assets
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE, sample_index
 from stenograf.live import WindowedLiveDecoder
@@ -305,7 +305,7 @@ class SliceRecorder(ASRBackend):
 
 
 @pytest.mark.skipif(
-    models.cached_path(models.SILERO_VAD) is None or not _EVAL_WAV.exists(),
+    assets.cached_path(assets.SILERO_VAD) is None or not _EVAL_WAV.exists(),
     reason="needs the cached silero model and the eval audio",
 )
 def test_windowed_slices_are_byte_identical_to_the_batch_pass():
@@ -319,7 +319,7 @@ def test_windowed_slices_are_byte_identical_to_the_batch_pass():
             raw = raw[::2]
     audio = raw[: 160 * SAMPLE_RATE].astype(np.float32) / 32768.0
 
-    vad = SileroVAD(models.cached_path(models.SILERO_VAD))
+    vad = SileroVAD(assets.cached_path(assets.SILERO_VAD))
     batch = pack_windows(vad.speech_segments(audio), len(audio) / SAMPLE_RATE)
     # Short windows decode from their context start — the batch slice the live
     # pass must reproduce byte for byte (pipeline._decode does the same).

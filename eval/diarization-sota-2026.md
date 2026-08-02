@@ -14,7 +14,7 @@ VoxCeleb embeddings + agglomerative clustering at threshold 0.5
 (`diarization/sherpa.py`) — and the pyannote **community-1** pipeline via
 CoreML (vendored speakrs) on macOS. Cross-meeting re-ID: one duration-weighted
 mean embedding per cluster, cosine-matched against a local named-profile store
-at a flat 0.5 threshold (`profiles.py`).
+at a flat 0.5 threshold (`voiceprints.py`).
 
 ---
 
@@ -203,7 +203,7 @@ checkpoint.
 |---|---|---|---|---|---|
 | ERes2Net-base (**shipped today**) | 6.6 M | 0.84 | **3.28** | Apache-2.0 | collapses on short turns — worse at 2 s than ECAPA (1.95) and ResNet34 (2.12); arXiv:2406.02167 |
 | **ERes2NetV2** | 17.8 M | 0.61 | **1.48** | Apache-2.0 | successor, fixes the short-turn cliff; 12.6 GMACs |
-| CAM++ | 7.2 M | 0.65 | — | Apache-2.0 | cheapest (RTF 0.013 1-thread) — but **rejected empirically in-repo 2026-07**: the VoxCeleb export flips cluster identity between segmentation windows (`models.py`) |
+| CAM++ | 7.2 M | 0.65 | — | Apache-2.0 | cheapest (RTF 0.013 1-thread) — but **rejected empirically in-repo 2026-07**: the VoxCeleb export flips cluster identity between segmentation windows (`assets.py`) |
 | WeSpeaker ResNet34-LM | 6.6 M | 0.66–0.87 | 2.12 | CC-BY-4.0 | the embedding pyannote 3.1/community-1 actually use — known-good pairing with segmentation-3.0 |
 | WeSpeaker ResNet293-LM | 28.6 M | 0.425 | — | CC-BY-4.0 | accuracy/size ceiling of the shippable set |
 | NeMo TitaNet-Large | ~23 M | 0.66 | — | CC-BY-4.0 | |
@@ -312,7 +312,7 @@ Nothing recovers more than ~half the far-field gap.
 | 3D-Speaker ERes2NetV2 zh | 0.360 | ~0.36 |
 | NeMo TitaNet | 0.7 (rescaled (cos+1)/2) | 0.40 |
 | sherpa-onnx identification | 0.6 | 0.6 |
-| **stenograf `profiles.py`** | **0.5** | **0.5** |
+| **stenograf `voiceprints.py`** | **0.5** | **0.5** |
 
 Traps: (1) NeMo and the WeSpeaker CLI operate on `(cos+1)/2`; (2) pyannote's
 number is a distance; (3) **no toolkit applies AS-Norm in its inference API**
@@ -325,7 +325,7 @@ operating point must be measured locally (which the harness makes possible).
 
 Thresholds are model × training-data × domain specific (ERes2NetV2 zh vs en
 defaults differ by 0.004; CAM++ zh vs en by 0.19). A threshold is only
-meaningful relative to the embedding model — which `profiles.py` already
+meaningful relative to the embedding model — which `voiceprints.py` already
 encodes by binding profiles to the model id.
 
 ## 4. Enrollment

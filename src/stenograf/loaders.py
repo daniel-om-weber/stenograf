@@ -33,13 +33,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from stenograf.asr.base import ASRBackend
+    from stenograf.assets import ProgressHook
     from stenograf.capture.base import CaptureProvider, Channel
     from stenograf.diarization.base import Diarizer
-    from stenograf.models import ProgressHook
-    from stenograf.profiles import SpeakerReID
     from stenograf.session import ChannelPlan
     from stenograf.vad import SileroVAD
     from stenograf.view import LiveView
+    from stenograf.voiceprints import SpeakerReID
 
     Announce = Callable[[str], None]
 
@@ -129,7 +129,7 @@ def load_backends(
     the decoder can nearly hear, post-correction catches the ones it heard as some
     other word entirely.
     """
-    from stenograf import models
+    from stenograf import assets
     from stenograf.asr import create_backend
     from stenograf.asr.providers import default_provider_name, validate_provider_name
     from stenograf.asr.registry import default_backend_name, get_spec
@@ -168,7 +168,7 @@ def load_backends(
         _say(announce, f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
     _say(announce, f"asr: loading {asr.model_id or asr.name}")
     asr.load()  # an explicit accelerator that can't deliver raises here, loudly
-    vad = SileroVAD(models.fetch(models.SILERO_VAD, download_progress(announce)))
+    vad = SileroVAD(assets.fetch(assets.SILERO_VAD, download_progress(announce)))
     diarizer = load_diarizer(announce=announce) if need_diarizer else None
     return asr, vad, diarizer
 
@@ -197,11 +197,11 @@ def load_reid(
     """
     if not enabled:
         return None
-    from stenograf import models
-    from stenograf.profiles import ProfileStore, SpeakerReID
+    from stenograf import assets
+    from stenograf.voiceprints import ProfileStore, SpeakerReID
 
     store = ProfileStore.load(store_path)
-    model = models.SPEAKER_EMBEDDING.name
+    model = assets.SPEAKER_EMBEDDING.name
     if not store.for_model(model):
         return None
     return SpeakerReID(store, model, threshold=threshold)
@@ -320,15 +320,15 @@ def _native_provider(
 
 def prefetch_models() -> None:
     """Download the VAD/diarization assets and the ASR weights now, not mid-meeting."""
-    from stenograf import models
+    from stenograf import assets
     from stenograf.asr import backend_model_id, create_backend, get_spec
     from stenograf.doctor import installed
 
-    for asset in (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING):
-        if models.cached_path(asset) is not None:
+    for asset in (assets.SILERO_VAD, assets.PYANNOTE_SEGMENTATION, assets.SPEAKER_EMBEDDING):
+        if assets.cached_path(asset) is not None:
             click.echo(f"model: {asset.name} already cached")
         else:
-            models.fetch(asset, model_progress)
+            assets.fetch(asset, model_progress)
 
     # Gate on the backend's runtime deps the way doctor does: the backend
     # *module* imports fine everywhere (its heavy imports live inside load()),

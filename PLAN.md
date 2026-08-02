@@ -11,7 +11,7 @@ defaults is in `eval/README.md` and in the code's own docstrings.
 **One side-plan is live: `PLAN-DIARIZATION.md`** (opened 2026-08-02) — the
 diarization + speaker re-ID accuracy program; its research record is
 `eval/diarization-sota-2026.md`, and both are to be read before touching
-`diarization/`, `profiles.py`, or evaluating any diarization or
+`diarization/`, `voiceprints.py`, or evaluating any diarization or
 speaker-embedding model. **The rest are closed.** `PLAN-CAPTURE-HELPER.md` (2026-08-02, built
 — both halves shipped and the arrival-stamped transports are gone),
 `PLAN-LINUX.md` (2026-07-26), `PLAN-WINDOWS.md` and `PLAN-ASR-CHALLENGER.md`

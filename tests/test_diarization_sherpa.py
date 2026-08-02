@@ -24,7 +24,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from stenograf import models
+from stenograf import assets
 from stenograf.diarization.base import SpeakerTurn
 
 CLIP = Path(__file__).resolve().parents[1] / "eval" / "audio" / "de-1.wav"
@@ -41,8 +41,8 @@ def _sherpa_available() -> bool:
 
 def _models_cached() -> bool:
     return (
-        models.cached_path(models.PYANNOTE_SEGMENTATION) is not None
-        and models.cached_path(models.SPEAKER_EMBEDDING) is not None
+        assets.cached_path(assets.PYANNOTE_SEGMENTATION) is not None
+        and assets.cached_path(assets.SPEAKER_EMBEDDING) is not None
     )
 
 
@@ -154,10 +154,10 @@ def test_reid_round_trips_real_cluster_embeddings(diarized):
     # then the resolver must re-identify each cluster as itself. A self-match is
     # cosine 1.0 — the maximum — so with the one-to-one constraint every cluster
     # maps back to its own name.
-    from stenograf.profiles import ProfileStore, SpeakerReID
+    from stenograf.voiceprints import ProfileStore, SpeakerReID
 
     embeddings = diarized.embedded.embeddings
-    model = models.SPEAKER_EMBEDDING.name
+    model = assets.SPEAKER_EMBEDDING.name
     store = ProfileStore(profiles=[])
     for cluster, vector in embeddings.items():
         store.enroll(f"person-{cluster}", vector, model)

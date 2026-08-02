@@ -11,7 +11,7 @@ whose accuracy with an explicit count was never the problem.
 Audio is piped to the helper as raw PCM (meeting audio never touches disk) and
 turns come back as JSON. Re-ID voiceprints keep coming from sherpa's
 ``SpeakerEmbeddingExtractor`` no matter which backend diarized: saved speaker
-profiles are cosine-matched against ``models.SPEAKER_EMBEDDING`` vectors, so a
+profiles are cosine-matched against ``assets.SPEAKER_EMBEDDING`` vectors, so a
 second embedding model would silently break every enrolled profile.
 """
 

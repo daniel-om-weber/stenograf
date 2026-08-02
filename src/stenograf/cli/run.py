@@ -26,9 +26,9 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from stenograf.diarization.base import Diarizer
-    from stenograf.profiles import SpeakerReID
     from stenograf.settings import MeetingPreset, Settings
     from stenograf.view import LiveView
+    from stenograf.voiceprints import SpeakerReID
 
 def _library_errors[T](func: Callable[..., T]) -> Callable[..., T]:
     """The command boundary: the library's typed failures become clean CLI errors.

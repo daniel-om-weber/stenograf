@@ -32,7 +32,7 @@ import jiwer
 from common import AUDIO_DIR
 from score import normalize
 
-from stenograf import models
+from stenograf import assets
 from stenograf.asr.base import Word
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.audio import SAMPLE_RATE, load_audio
@@ -164,7 +164,7 @@ def main() -> int:
 
     asr = ParakeetMLXBackend()
     asr.load()
-    vad = SileroVAD(models.fetch(models.SILERO_VAD))
+    vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
 
     summary = [evaluate(s, args.start, args.dur, args.feed_chunk, asr, vad) for s in sources]
 

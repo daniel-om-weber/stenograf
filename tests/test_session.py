@@ -19,7 +19,6 @@ from stenograf.audio import to_float32
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 from stenograf.config import Language, MeetingProfile, Provenance, ResolvedValue
 from stenograf.diarization.base import SpeakerTurn
-from stenograf.profiles import ProfileStore, SpeakerProfile, SpeakerReID
 from stenograf.session import (
     ChannelPlan,
     CheckpointConfig,
@@ -32,6 +31,7 @@ from stenograf.session import (
     resolve_parameters,
 )
 from stenograf.transcript import TranscriptEntry
+from stenograf.voiceprints import ProfileStore, SpeakerProfile, SpeakerReID
 
 
 def frame(channel: Channel, timestamp: float, samples: np.ndarray) -> AudioFrame:
