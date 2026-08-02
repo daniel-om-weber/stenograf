@@ -51,6 +51,14 @@ class NotesBackend(Protocol):
 
     def is_available(self) -> bool: ...
 
+    def health(self) -> tuple[bool, str]:
+        """(ok, detail) for ``steno doctor``: can this backend run right now?
+
+        The detail is user-facing text — the model/endpoint on success, the
+        remedy on failure. Each backend owns its own diagnosis, so adding a
+        backend never requires a doctor edit."""
+        ...
+
     def complete(self, messages: list[dict[str, str]]) -> str: ...
 
     @classmethod

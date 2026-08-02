@@ -94,6 +94,17 @@ class CommandBackend:
     def is_available(self) -> bool:
         return shutil.which(self.argv[0]) is not None
 
+    def health(self) -> tuple[bool, str]:
+        argv0 = self.argv[0]
+        if not self.is_available():
+            # The full PATH matters: from the app bundle no shell rc ran, so a
+            # binary visible in a terminal may not exist here.
+            return (
+                False,
+                f"notes command {argv0!r} not found on PATH={os.environ.get('PATH', '')!r}",
+            )
+        return True, f"command backend: {argv0} → {shutil.which(argv0)}"
+
     def complete(self, messages: list[dict[str, str]]) -> str:
         """Run the command once; its stdout is the model's response.
 

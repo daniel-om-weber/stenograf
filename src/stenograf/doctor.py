@@ -307,14 +307,12 @@ def _preset_checks() -> list[Check]:
 
     ``_notes_check`` greens the *standing* backend — a preset selecting another
     one (say ``command`` while settings.toml runs mlx) would otherwise get a
-    green doctor and a failed notes run after a real meeting. For a command
-    backend the check resolves ``argv[0]`` under the *effective* PATH, which
-    matters most from the app bundle: launchd's PATH is widened but no shell rc
-    runs, so a binary (or an exported credential) visible in a terminal may
-    not exist there — ``STENOGRAF_APP_BUNDLE`` marks that context."""
-    import os
-    import shutil
-
+    green doctor and a failed notes run after a real meeting. Each backend's
+    ``health()`` owns the diagnosis (a command backend resolves ``argv[0]``
+    under the *effective* PATH); the app-launch hint matters most from the app
+    bundle: launchd's PATH is widened but no shell rc runs, so a binary (or an
+    exported credential) visible in a terminal may not exist there —
+    ``STENOGRAF_APP_BUNDLE`` marks that context."""
     from stenograf.notes import NotesBackendError, create_backend
     from stenograf.settings import SettingsError, apply_meeting_preset, load_settings
 
@@ -334,25 +332,10 @@ def _preset_checks() -> list[Check]:
         except (SettingsError, NotesBackendError, ValueError) as exc:
             checks.append(Check(name=check_name, ok=False, detail=str(exc), optional=True))
             continue
-        if not backend.is_available():
-            argv0 = getattr(backend, "argv", (backend.model or backend.name,))[0]
-            app = " (app launch: shell PATH/env not sourced)" if _app_launch() else ""
-            checks.append(
-                Check(
-                    name=check_name,
-                    ok=False,
-                    detail=f"backend {backend.name!r}: {argv0!r} not available on "
-                    f"PATH={os.environ.get('PATH', '')!r}{app}",
-                    optional=True,
-                )
-            )
-            continue
-        argv = getattr(backend, "argv", None)
-        if argv:
-            detail = f"{backend.name}: {argv[0]} → {shutil.which(argv[0])}"
-        else:
-            detail = f"{backend.name}, model {backend.model}"
-        checks.append(Check(name=check_name, ok=True, detail=detail))
+        ok, detail = backend.health()
+        if not ok and _app_launch():
+            detail += " (app launch: shell PATH/env not sourced)"
+        checks.append(Check(name=check_name, ok=ok, detail=detail, optional=True))
     return checks
 
 
@@ -378,53 +361,8 @@ def _notes_check() -> Check:
         backend = create_backend(None, settings)
     except (SettingsError, NotesBackendError, ValueError) as exc:
         return Check(name=name, ok=False, detail=str(exc), optional=True)
-
-    from stenograf.notes.mlx import MlxBackend
-    from stenograf.notes.ollama import OllamaBackend
-
-    if isinstance(backend, MlxBackend):
-        if not backend.is_available():
-            return Check(
-                name=name,
-                ok=False,
-                detail="mlx-lm is not installed here — reinstall stenograf, or configure "
-                "another backend under [notes] in settings.toml",
-                optional=True,
-            )
-        hint = "cached" if backend.weights_cached() else "downloads on first notes run"
-        return Check(name=name, ok=True, detail=f"MLX in-process, model {backend.model} ({hint})")
-    if isinstance(backend, OllamaBackend):
-        if not backend.is_available():
-            return Check(
-                name=name,
-                ok=False,
-                detail=f"Ollama not reachable at {backend.url} — start `ollama serve`, or "
-                "configure another backend under [notes] in settings.toml",
-                optional=True,
-            )
-        try:
-            pulled = backend.has_model()
-        except NotesBackendError as exc:
-            return Check(name=name, ok=False, detail=str(exc), optional=True)
-        if not pulled:
-            return Check(
-                name=name,
-                ok=False,
-                detail=f"Ollama up, but model {backend.model!r} is not pulled "
-                f"(`ollama pull {backend.model}`)",
-                optional=True,
-            )
-        return Check(name=name, ok=True, detail=f"Ollama at {backend.url}, model {backend.model}")
-    if not backend.is_available():
-        argv0 = getattr(backend, "argv", ("?",))[0]
-        return Check(
-            name=name,
-            ok=False,
-            detail=f"notes command {argv0!r} is not on PATH",
-            optional=True,
-        )
-    label = " ".join(getattr(backend, "argv", (backend.name,)))
-    return Check(name=name, ok=True, detail=f"command backend: {label}")
+    ok, detail = backend.health()
+    return Check(name=name, ok=ok, detail=detail, optional=True)
 
 
 def _macos_version_check() -> Check:

@@ -13,7 +13,11 @@ import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
 
-from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
+from stenograf.notes.backend import (
+    NotesBackendError,
+    NotesBackendUnavailableError,
+    NotesGenerationError,
+)
 
 if TYPE_CHECKING:
     from stenograf.settings import NotesSettings
@@ -67,6 +71,25 @@ class OllamaBackend:
         except NotesBackendUnavailableError:
             return False
         return True
+
+    def health(self) -> tuple[bool, str]:
+        if not self.is_available():
+            return (
+                False,
+                f"Ollama not reachable at {self.url} — start `ollama serve`, or "
+                "configure another backend under [notes] in settings.toml",
+            )
+        try:
+            pulled = self.has_model()
+        except NotesBackendError as exc:
+            return False, str(exc)
+        if not pulled:
+            return (
+                False,
+                f"Ollama up, but model {self.model!r} is not pulled "
+                f"(`ollama pull {self.model}`)",
+            )
+        return True, f"Ollama at {self.url}, model {self.model}"
 
     def installed_models(self) -> list[str]:
         data = self._get("/api/tags")

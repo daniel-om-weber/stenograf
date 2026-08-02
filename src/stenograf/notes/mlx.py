@@ -99,6 +99,16 @@ class MlxBackend:
 
         return installed("mlx_lm")
 
+    def health(self) -> tuple[bool, str]:
+        if not self.is_available():
+            return (
+                False,
+                "mlx-lm is not installed here — reinstall stenograf, or configure "
+                "another backend under [notes] in settings.toml",
+            )
+        hint = "cached" if self.weights_cached() else "downloads on first notes run"
+        return True, f"MLX in-process, model {self.model} ({hint})"
+
     def weights_cached(self) -> bool:
         """Whether the model is already in the local HF cache (doctor's hint
         that the first ``--notes`` run will download several GB)."""
