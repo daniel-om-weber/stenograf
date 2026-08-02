@@ -71,6 +71,21 @@ def test_release_flag_selects_the_platform_tag(
     assert hook_module._off_macos_wheel_tag() == getattr(hook_module, tag_attr)
 
 
+def test_capture_flag_selects_the_low_floor_linux_tag(hook_module, monkeypatch):
+    monkeypatch.setenv(hook_module.BUNDLE_ENV, "capture")
+    monkeypatch.setattr(hook_module.sys, "platform", "linux")
+    monkeypatch.setattr(hook_module.platform, "machine", lambda: "x86_64")
+    assert hook_module._off_macos_wheel_tag() == hook_module.LINUX_CAPTURE_TAG
+
+
+def test_capture_flag_off_linux_raises(hook_module, monkeypatch):
+    monkeypatch.setenv(hook_module.BUNDLE_ENV, "capture")
+    monkeypatch.setattr(hook_module.sys, "platform", "win32")
+    monkeypatch.setattr(hook_module.platform, "machine", lambda: "AMD64")
+    with pytest.raises(RuntimeError, match="low-floor Linux capture wheel"):
+        hook_module._off_macos_wheel_tag()
+
+
 def test_release_flag_on_an_unsupported_platform_raises(hook_module, monkeypatch):
     # Better a failed build than a wheel tagged manylinux_2_28_x86_64 with an
     # aarch64 binary in it — or with nothing in it at all.
@@ -88,15 +103,17 @@ def _fake_build(tmp_path):
         assert check
         script = Path(cmd[-1])
         assert script.stem == "build"  # build.sh, or build.ps1 on Windows
-        name = {"stenocap-macos": "stenocap", "stenocap": "stenocap.exe"}.get(
-            script.parent.name, "stenodiar"
-        )
-        if name == "stenodiar" and sys.platform == "win32":
-            name += ".exe"  # cargo's suffix, mirroring _stenodiar_path
-        binary = script.parent / name
-        binary.parent.mkdir(parents=True, exist_ok=True)
-        binary.write_bytes(b"\x00")
-        binary.chmod(0o644)  # compilers emit 0o755; prove the hook re-asserts it
+        names = {
+            "stenocap-macos": ["stenocap"],
+            # One crate, two platforms: produce both products so the same fake
+            # serves the Linux wheels and the Windows one.
+            "stenocap": ["stenocap", "stenocap.exe"],
+        }.get(script.parent.name, ["stenodiar.exe" if sys.platform == "win32" else "stenodiar"])
+        for name in names:
+            binary = script.parent / name
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(b"\x00")
+            binary.chmod(0o644)  # compilers emit 0o755; prove the hook re-asserts it
         return subprocess.CompletedProcess(cmd, 0)
 
     return fake
@@ -120,9 +137,7 @@ def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch)
             assert binary.stat().st_mode & 0o111 == 0o111
 
 
-def test_bundles_only_stenodiar_on_linux(hook_module, tmp_path, monkeypatch):
-    # Linux still captures through parec, so its release wheel carries the
-    # diarization helper and nothing else.
+def test_linux_release_wheel_carries_both_helpers(hook_module, tmp_path, monkeypatch):
     monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
     monkeypatch.setattr(hook_module.sys, "platform", "linux")
     monkeypatch.setattr(hook_module, "_off_macos_wheel_tag", lambda: hook_module.LINUX_TAG)
@@ -132,8 +147,27 @@ def test_bundles_only_stenodiar_on_linux(hook_module, tmp_path, monkeypatch):
 
     assert data["pure_python"] is False
     assert data["tag"] == hook_module.LINUX_TAG
-    stenodiar = _stenodiar(tmp_path)
-    assert data["force_include"] == {str(stenodiar): f"stenograf/bin/{stenodiar.name}"}
+    assert sorted(data["force_include"].values()) == [
+        "stenograf/bin/stenocap",
+        "stenograf/bin/stenodiar",
+    ]
+
+
+def test_linux_capture_wheel_carries_only_stenocap(hook_module, tmp_path, monkeypatch):
+    # The low-floor wheel exists to carry capture onto machines stenodiar's
+    # glibc floor shuts out; stenodiar in it would drag the floor back up.
+    monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
+    monkeypatch.setattr(hook_module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        hook_module, "_off_macos_wheel_tag", lambda: hook_module.LINUX_CAPTURE_TAG
+    )
+    monkeypatch.setattr(hook_module.subprocess, "run", _fake_build(tmp_path))
+    data = build_data()
+    make_hook(hook_module, tmp_path).initialize("standard", data)
+
+    assert data["pure_python"] is False
+    assert data["tag"] == hook_module.LINUX_CAPTURE_TAG
+    assert list(data["force_include"].values()) == ["stenograf/bin/stenocap"]
 
 
 def test_windows_release_wheel_carries_the_capture_helper(hook_module, tmp_path, monkeypatch):

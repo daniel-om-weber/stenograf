@@ -1,19 +1,29 @@
 # One capture helper, two backends — retiring arrival-stamped audio
 
-**Status: the Windows half is BUILT (2026-08-02); Linux is what remains.**
+**Status: BUILT IN FULL and CLOSED 2026-08-02 — the Windows half in the
+morning, the Linux half the same day. No arrival-stamped transport exists on
+any platform any more.** This file is deleted with this closure; what stayed
+open moved to PLAN.md: the AEC gate that scores the Windows helper against
+the deleted constant's 13.7 dB, and step 6's livekit re-ask, whose trigger
+(the helper holding both channels everywhere) has now fired.
+
 Designed 2026-07-26 after the Windows AEC work exposed the root cause and one
 measurement overturned the cost estimate that had deferred the fix. That work
 lived in `PLAN-WINDOWS.md`, which closed and was deleted on 2026-07-27 — where
 this file cites it below, read `git log --follow -p PLAN-WINDOWS.md`.
 
-Steps 1–4 shipped: `native/stenocap/` (Rust, WASAPI, QPC-stamped),
-`capture/helper.py` carrying the transport both helper platforms share,
-`soundcard` and `FAR_END_LAG_S` and the `SessionClock` re-anchor all deleted,
-and the win_amd64 wheel carrying `stenocap.exe` as a mandatory payload. **What
-is open is step 5 (the Linux backend), step 6 (re-ask the livekit question),
-and the AEC gate that scores the Windows helper against the 13.7 dB the deleted
-constant achieved** — that one needs speakers at volume in an empty room and is
-tracked in PLAN.md. The packaging section's win_arm64 line was measured and
+All of steps 1–5 shipped: `native/stenocap/` (Rust; WASAPI QPC-stamped on
+Windows, PulseAudio-protocol `CLOCK_MONOTONIC − server latency` on Linux),
+`capture/helper.py` carrying the transport all three platforms share,
+`soundcard` + `parec` + `FAR_END_LAG_S` + `SessionClock` + `far_end_lag_s`
+itself all deleted, the win_amd64 and manylinux_2_39 wheels carrying the
+helper as a mandatory payload, and the low-floor manylinux_2_28 capture wheel
+this plan's packaging section demanded. Linux evidence from the day it
+shipped: stamp error against a sample-count line holds a bounded ±10 ms band
+over 35 s on PipeWire 1.6 (`pulse.rs` docstrings carry the numbers), a played
+tone lands at its wall-clock instant, a real live meeting through the helper
+transcribed word-perfectly, and ci.yml's `capture-linux` job exercises genuine
+PulseAudio end-to-end. The packaging section's win_arm64 line was measured and
 struck; read it before planning that platform.
 
 Read the problem first, then the evidence, then what is decided and what is not.
@@ -204,9 +214,10 @@ Two build-system facts to honour, both already written down there:
   constant was right only while frames were arrival-stamped, and applying one
   on top of device stamps would re-introduce the error it was invented to
   cancel. The 13.7 dB ERLE it achieved is the number the helper has to beat.
-- **Linux keeps a declared constant in the interim**, in the same field, the way
-  macOS returns 0.0 today — honestly marked rather than quietly broken. Windows
-  does not wait for Linux.
+- ~~**Linux keeps a declared constant in the interim**~~ — the interim never
+  happened: Linux went straight from arrival-stamped `parec` to the helper,
+  and the field itself (`far_end_lag_s`) is deleted, with `EchoCanceller`'s
+  parameter surviving only as `eval/aec_alignment.py`'s verification knob.
 
 ## Deferred, with a trigger — livekit
 
@@ -261,20 +272,30 @@ Each step ships working; the constant stays until its replacement is proven.
    transport rather than two functions: `capture/helper.py` holds the drain
    thread, the stderr relay, the startup-crash retry and the stop gesture, and
    both platforms subclass it. `soundcard` has left `pyproject`.
-3. ~~**Wheel matrix**~~ **— built for Windows.** `stenocap.exe` is a mandatory
-   win_amd64 payload and `smoke-windows` asserts it. The low-floor *Linux*
-   capture wheel is not built and belongs with step 5, which is what makes it
-   necessary; win_arm64 was struck on evidence (see the packaging section).
+3. ~~**Wheel matrix**~~ **— built in full.** `stenocap.exe` is a mandatory
+   win_amd64 payload and `smoke-windows` asserts it; the manylinux_2_39 wheel
+   now carries stenocap too, and the low-floor manylinux_2_28 capture wheel
+   shipped with step 5 (built in the manylinux_2_28 container, smoked on a
+   glibc-2.35 Ubuntu 22.04 container — `release.yml`). win_arm64 was struck
+   on evidence (see the packaging section).
 4. ~~**Delete `far_end_lag_s`**~~ **— done, with `_REANCHOR_TOLERANCE_S` and
    `SessionClock`'s re-anchor.** Note the ordering differs from the plan: the
    constant went with the transport that needed it, in the same commit, because
    a 0.15 s correction applied to device-stamped frames is not conservative but
    simply wrong. The re-anchor went too — it had exactly one caller, which was
    that transport.
-5. **Linux backend**, same helper, PipeWire/PulseAudio. This is the step that closes
-   the never-measured Linux echo-cancellation risk. **Now the only arrival-stamped
-   transport left**, which is written into `SessionClock`'s docstring.
-6. **Re-ask the livekit question** with the helper in place.
+5. ~~**Linux backend**~~ **— built 2026-08-02.** Same helper, libpulse (one
+   client protocol for both sound servers — PipeWire serves it through
+   pipewire-pulse, and its timing answers come from `pw_time`). Stamps are
+   `CLOCK_MONOTONIC − pa_stream_get_latency`, refreshed explicitly every
+   second because the interpolation left on its own wanders ~±25 ms between
+   auto updates. The measured `@DEFAULT_MONITOR@` / `@DEFAULT_SOURCE@`
+   behaviours carry over with the names themselves. `parec` left the
+   dependency set, `SessionClock` and the whole queue-streaming provider base
+   left with it, and this step closed the never-measured Linux
+   echo-cancellation risk by construction.
+6. **Re-ask the livekit question** with the helper in place — now in PLAN.md's
+   deferred list, trigger fired.
 
 The ≥30-minute Windows AEC run (W4, in PLAN.md's platform section) is **not** a
 prerequisite and its framing changed: its alignment half is superseded by step 1,

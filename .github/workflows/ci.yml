@@ -40,6 +40,28 @@ jobs:
         if: runner.os == 'macOS'
       - run: uv run pytest -q
 
+  # Build and unit-test the capture helper on both platforms it serves. The
+  # framing arithmetic tests run everywhere; the pulse/wasapi backends only
+  # compile on their own OS, which is exactly what this matrix pins down.
+  stenocap:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: native/stenocap
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y libpulse-dev
+        if: runner.os == 'Linux'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/stenocap
+      - run: cargo test --locked
+
   # Type-check the stenodiar helper (vendored speakrs) in the default CPU
   # config plus each platform's acceleration feature — coreml is macOS-only,
   # cuda is the Linux/Windows GPU opt-in. cargo check only: building or
@@ -68,10 +90,11 @@ jobs:
       - run: cargo check --locked
       - run: cargo check --locked --features ${{ matrix.features }}
 
-  # Functional live capture on the stable-distro reference (Phase 5
-  # dev-environment plan): a real PulseAudio server, a null sink as the
+  # Functional live capture on the stable-distro reference: a real PulseAudio
+  # server (not pipewire-pulse — this is the one place the genuine article is
+  # exercised, development machines all run PipeWire), a null sink as the
   # default output, TTS speech played into it, `steno start` capturing the
-  # monitor through LinuxCaptureProvider, and the transcript asserted on
+  # monitor through the stenocap helper, and the transcript asserted on
   # sentinel words. CachyOS (rolling) is covered by development itself;
   # this brackets the old end of the version range users actually run.
   capture-linux:
@@ -85,8 +108,15 @@ jobs:
       - name: Start a sound server
         run: |
           sudo apt-get update
-          sudo apt-get install -y pulseaudio pulseaudio-utils
+          sudo apt-get install -y pulseaudio pulseaudio-utils libpulse-dev
           pulseaudio --start --exit-idle-time=-1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/stenocap
+      - name: Build the capture helper
+        # The dev-fallback location (next to its sources) is where the
+        # provider looks in a checkout.
+        run: sh native/stenocap/build.sh
       - uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface

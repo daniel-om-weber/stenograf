@@ -1,18 +1,28 @@
 """Wheel build hook: bundle the compiled native helpers into platform wheels.
 
 The helpers are gitignored build artifacts (native/stenocap-macos/stenocap,
-native/stenocap/stenocap.exe, native/stenodiar/stenodiar), so a plain wheel
-would ship without them. Three wheels carry one or both and are tagged for their
-platform; every other platform still gets the pure `py3-none-any` wheel, and pip
-prefers the specific tag wherever one exists:
+native/stenocap/stenocap{,.exe}, native/stenodiar/stenodiar), so a plain wheel
+would ship without them. Four wheels carry one or both and are tagged for their
+platform; every other platform still gets the pure `py3-none-any` wheel, and
+pip prefers the most specific compatible tag wherever one exists:
 
     macosx_14_0_arm64      stenocap (required) + stenodiar
     win_amd64              stenocap (required) + stenodiar
-    manylinux_2_39_x86_64  stenodiar
+    manylinux_2_39_x86_64  stenocap (required) + stenodiar
+    manylinux_2_28_x86_64  stenocap (required) only — the low-floor capture wheel
+
+The two Linux wheels exist because their floors have different owners: 2.39 is
+*stenodiar's* (the onnxruntime static lib needs glibc 2.38 symbols to link),
+while stenocap links only libpulse and builds on the oldest maintained
+manylinux image. A machine with glibc ≥ 2.39 resolves the full wheel (pip
+ranks newer manylinux tags first); Ubuntu 22.04 / Debian 12 / RHEL 9 land on
+the capture wheel and keep live capture, falling back to sherpa-only
+diarization — instead of silently losing capture to the pure wheel.
 
 macOS builds its helpers on any wheel build — stenocap is mandatory there and
 compiled per machine anyway. Off macOS the bundling happens **only** when
-STENOGRAF_BUNDLE_HELPERS=1 (release.yml sets it): a `pip install` from the
+STENOGRAF_BUNDLE_HELPERS is set (release.yml sets it: `1` for a platform's
+full wheel, `capture` for the low-floor Linux wheel): a `pip install` from the
 sdist must not start shelling out to cargo, and a wheel tagged
 manylinux_2_28 that was actually linked against the local glibc would be a
 lie. So off-mac the flag means "this is the release build" — and there a
@@ -57,6 +67,11 @@ MACOS_TAG = "py3-none-macosx_14_0_arm64"
 # about the binary inside, so release.yml pins that runner and asserts the
 # binary's own symbol floor against it.
 LINUX_TAG = "py3-none-manylinux_2_39_x86_64"
+# The low-floor capture wheel: stenocap links no ONNX, so it builds in the
+# oldest manylinux image still maintained (AlmaLinux 8, glibc 2.28), which
+# covers every distro stenodiar's floor shuts out. release.yml builds it in
+# that container and asserts the symbol floor the tag promises.
+LINUX_CAPTURE_TAG = "py3-none-manylinux_2_28_x86_64"
 WINDOWS_TAG = "py3-none-win_amd64"
 # There is deliberately no win_arm64 tag. Moving capture into a native helper
 # looked like it would strip capture from Windows-on-ARM, which installs the
@@ -80,10 +95,19 @@ def _cargo_available() -> bool:
 
 def _off_macos_wheel_tag() -> str | None:
     """The platform tag for an off-mac helper wheel, if one was asked for."""
-    if os.environ.get(BUNDLE_ENV) != "1":
+    mode = os.environ.get(BUNDLE_ENV)
+    if not mode:
         return None
     machine = platform.machine().lower()
-    if sys.platform.startswith("linux") and machine in {"x86_64", "amd64"}:
+    linux_x86_64 = sys.platform.startswith("linux") and machine in {"x86_64", "amd64"}
+    if mode == "capture":
+        if linux_x86_64:
+            return LINUX_CAPTURE_TAG
+        raise RuntimeError(
+            f"{BUNDLE_ENV}=capture builds the low-floor Linux capture wheel and "
+            f"exists only for linux-x86_64, not {sys.platform}/{platform.machine()}."
+        )
+    if linux_x86_64:
         return LINUX_TAG
     if sys.platform == "win32" and machine in {"x86_64", "amd64"}:
         return WINDOWS_TAG
@@ -108,22 +132,27 @@ class CustomBuildHook(BuildHookInterface):
             return  # pure py3-none-any wheel — source installs need no Rust
 
         hint = f"install a Rust toolchain (rustup); {BUNDLE_ENV} asks for a wheel "
-        for binary in self._off_macos_binaries():
+        for binary in self._helpers_for(tag):
             self._build(binary, hint=hint + "that bundles the native helpers")
             build_data["force_include"][str(binary)] = f"stenograf/bin/{binary.name}"
         build_data["pure_python"] = False
         build_data["tag"] = tag
 
-    def _off_macos_binaries(self) -> list[Path]:
-        """Every helper this platform's release wheel must carry.
+    def _helpers_for(self, tag: str) -> list[Path]:
+        """Every helper the wheel with this tag must carry, stenocap first.
 
-        The capture helper is Windows-only for now — Linux still captures
-        through `parec` and joins at step 5 of PLAN-CAPTURE-HELPER.md.
+        Keyed off the tag rather than the host platform because the tag *is*
+        the promise: the low-floor Linux wheel exists to carry capture onto
+        machines stenodiar's glibc floor shuts out, so bundling stenodiar into
+        it would drag the floor right back up.
         """
-        binaries = [self._stenodiar_path()]
-        if sys.platform == "win32":
-            binaries.insert(0, Path(self.root) / "native" / "stenocap" / "stenocap.exe")
-        return binaries
+        native = Path(self.root) / "native"
+        if tag == WINDOWS_TAG:
+            return [native / "stenocap" / "stenocap.exe", native / "stenodiar" / "stenodiar.exe"]
+        if tag == LINUX_CAPTURE_TAG:
+            return [native / "stenocap" / "stenocap"]
+        assert tag == LINUX_TAG, f"no helper list for wheel tag {tag}"
+        return [native / "stenocap" / "stenocap", native / "stenodiar" / "stenodiar"]
 
     def _bundle_macos(self, build_data: dict) -> None:
         helper = Path(self.root) / "native" / "stenocap-macos" / "stenocap"
