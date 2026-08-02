@@ -31,6 +31,15 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
 
+    from stenograf.asr.base import ASRBackend
+    from stenograf.capture.base import CaptureProvider, Channel
+    from stenograf.diarization.base import Diarizer
+    from stenograf.models import ProgressHook
+    from stenograf.profiles import SpeakerReID
+    from stenograf.session import ChannelPlan
+    from stenograf.vad import SileroVAD
+    from stenograf.view import LiveView
+
     Announce = Callable[[str], None]
 
 
@@ -72,7 +81,7 @@ class CaptureLog:
     ``view.error`` marshals itself onto the UI loop, so no lock is needed.
     """
 
-    def __init__(self, view=None) -> None:
+    def __init__(self, view: LiveView | None = None) -> None:
         self.lines: list[str] = []
         self.view = view
         """A LiveView (or None until one is attached); gets problem lines."""
@@ -88,7 +97,7 @@ class CaptureLog:
         return any(marker in lowered for marker in _PROBLEM_MARKERS)
 
 
-def download_progress(announce: Announce | None):
+def download_progress(announce: Announce | None) -> ProgressHook:
     """ProgressHook that announces a model download once, at its start."""
 
     def hook(name: str, done: int, total: int) -> None:
@@ -112,7 +121,7 @@ def load_backends(
     attendee_names: Sequence[str] = (),
     boost: float | None = None,
     announce: Announce | None = None,
-):
+) -> tuple[ASRBackend, SileroVAD, Diarizer | None]:
     """Load the finalize backends (ASR, VAD, and optionally the diarizer).
 
     Shared by ``start`` and ``transcribe`` so both use the same committed
@@ -179,7 +188,7 @@ def load_backends(
     return asr, vad, diarizer
 
 
-def load_diarizer(*, announce: Announce | None = None):
+def load_diarizer(*, announce: Announce | None = None) -> Diarizer:
     """The committed diarization stack with download progress attached.
 
     A seam of its own (over calling :func:`~stenograf.diarization.build_diarizer`
@@ -189,7 +198,9 @@ def load_diarizer(*, announce: Announce | None = None):
     return build_diarizer(progress=download_progress(announce))
 
 
-def load_reid(*, enabled: bool, threshold: float | None, store_path: Path | None = None):
+def load_reid(
+    *, enabled: bool, threshold: float | None, store_path: Path | None = None
+) -> SpeakerReID | None:
     """Build the cross-meeting re-ID resolver from the saved profile store, or ``None``.
 
     Returns ``None`` when re-ID is turned off or the store holds no profiles for
@@ -213,14 +224,14 @@ def load_reid(*, enabled: bool, threshold: float | None, store_path: Path | None
 
 def make_provider(
     replay: str | None,
-    plans,
+    plans: Sequence[ChannelPlan],
     *,
     paced: bool = False,
     aec: bool = True,
     aec_dump: Path | None = None,
     announce: Announce | None = None,
     on_log: Announce | None = None,
-):
+) -> CaptureProvider:
     """Build the capture provider: file replay if given, else the native helper.
 
     When both channels are captured, the mic is echo-cancelled against the system
@@ -243,7 +254,14 @@ def make_provider(
     return provider
 
 
-def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=None, on_log=None):
+def _base_provider(
+    replay: str | None,
+    plans: Sequence[ChannelPlan],
+    *,
+    paced: bool = False,
+    announce: Announce | None = None,
+    on_log: Announce | None = None,
+) -> CaptureProvider:
     from stenograf.capture.base import Channel
 
     if replay is not None:
@@ -287,7 +305,13 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=N
     )
 
 
-def _native_provider(provider_cls, default_devices, plans, announce=None, on_log=None):
+def _native_provider(
+    provider_cls: Callable[..., CaptureProvider],
+    default_devices: Callable[[set[Channel]], dict[Channel, str]],
+    plans: Sequence[ChannelPlan],
+    announce: Announce | None = None,
+    on_log: Announce | None = None,
+) -> CaptureProvider:
     """Construct a provider for a platform that offers a device *choice*.
 
     Resolves the default devices up front so a broken audio stack fails before

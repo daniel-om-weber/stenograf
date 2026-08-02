@@ -1,9 +1,16 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from stenograf.diarization.base import Diarizer, SpeakerTurn
+
+if TYPE_CHECKING:
+    from stenograf.models import ProgressHook
 
 __all__ = ["Diarizer", "SpeakerTurn", "build_diarizer"]
 
 
-def build_diarizer(progress=None) -> Diarizer:
+def build_diarizer(progress: ProgressHook | None = None) -> Diarizer:
     """Build the committed diarization stack — the selection seam.
 
     When the stenodiar helper is present, unknown speaker counts go through

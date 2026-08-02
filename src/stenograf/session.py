@@ -1226,7 +1226,7 @@ class MeetingRecorder:
 
     def _finalize_channel_safe(
         self,
-        samples,
+        samples: np.ndarray,
         diarizer: Diarizer | None,
         plan: ChannelPlan,
         view: LiveView,

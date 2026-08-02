@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import numpy as np
 
@@ -60,7 +62,7 @@ def _cached_snapshot(model_id: str) -> str | None:
     return str(Path(config).parent)
 
 
-def _biased_decode_greedy(model, tree: BoostingTree, alpha: float, mx):
+def _biased_decode_greedy(model: Any, tree: BoostingTree, alpha: float, mx: ModuleType):
     """parakeet-mlx's greedy TDT loop, with phrase boosting.
 
     A line-for-line mirror of ``parakeet_mlx.parakeet.ParakeetTDT.decode_greedy``
@@ -84,7 +86,16 @@ def _biased_decode_greedy(model, tree: BoostingTree, alpha: float, mx):
             vectors[state] = cached
         return cached
 
-    def decode_greedy(features, lengths=None, last_token=None, hidden_state=None, *, config):
+    # Any-typed like upstream: the mirrored signature is parakeet-mlx's own,
+    # and that package ships no annotations for it.
+    def decode_greedy(
+        features: Any,
+        lengths: Any = None,
+        last_token: Any = None,
+        hidden_state: Any = None,
+        *,
+        config: Any,
+    ):
         B, S, *_ = features.shape
         if hidden_state is None:
             hidden_state = list([None] * B)

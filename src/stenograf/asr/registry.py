@@ -99,7 +99,7 @@ def get_spec(name: str | None = None) -> BackendSpec:
         ) from None
 
 
-def create_backend(name: str | None = None, **kwargs) -> ASRBackend:
+def create_backend(name: str | None = None, **kwargs: object) -> ASRBackend:
     """Instantiate an ASR backend by name, importing only that backend's module."""
     spec = get_spec(name)
     module = importlib.import_module(spec.module)

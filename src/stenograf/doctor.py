@@ -8,6 +8,12 @@ import platform
 import subprocess
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from stenograf.asr.registry import BackendSpec
 
 MACOS_MIN_VERSION = (14, 4)  # Core Audio process taps
 
@@ -194,7 +200,7 @@ def _diarizer_helper_check() -> Check:
     )
 
 
-def _codesign_valid(path) -> tuple[bool, str]:
+def _codesign_valid(path: Path) -> tuple[bool, str]:
     """Whether ``codesign --verify`` accepts the binary (ad-hoc signatures pass)."""
     try:
         proc = subprocess.run(
@@ -229,7 +235,7 @@ def _asr_check() -> Check:
     )
 
 
-def _asr_provider_note(spec) -> str:
+def _asr_provider_note(spec: BackendSpec) -> str:
     """Provider status for the ORT-backed backend: what's configured, or what
     acceleration the installed onnxruntime flavor offers but isn't being used.
     A broken settings file is _settings_check's finding, not this one's."""

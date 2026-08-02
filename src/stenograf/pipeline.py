@@ -37,6 +37,9 @@ STAGE_ASR = "asr"
 STAGE_DIARIZATION = "diarization"
 """The two ``on_progress`` stage names (``on_progress(stage, done, total)``)."""
 
+ProgressCallback = Callable[[str, int, int], None]
+"""``on_progress(stage, done, total)`` — ``stage`` is one of the two above."""
+
 _RAW_CLUSTER = re.compile(r"S\d+")
 """Raw diarization cluster label (``S0``, ``S1``…), as emitted by
 :class:`~stenograf.diarization.base.SpeakerTurn` and :func:`merge_words_turns`.
@@ -55,7 +58,7 @@ class SpeakerResolver(Protocol):
 
 
 def finalize_channel(
-    samples,
+    samples: np.ndarray,
     *,
     asr: ASRBackend,
     language: Language | None,
@@ -63,7 +66,7 @@ def finalize_channel(
     diarizer: Diarizer | None = None,
     num_speakers: int | None = None,
     reid: SpeakerResolver | None = None,
-    on_progress=None,
+    on_progress: ProgressCallback | None = None,
     precomputed_words: tuple[Word, ...] | None = None,
 ) -> list[TranscriptEntry]:
     """Transcribe one channel; returns entries with raw ``S<n>`` speaker labels.
@@ -110,12 +113,12 @@ def finalize_channel(
 
 
 def _decode(
-    samples,
+    samples: np.ndarray,
     *,
     asr: ASRBackend,
     language: Language | None,
     vad: SileroVAD | None,
-    on_progress,
+    on_progress: ProgressCallback | None,
 ) -> list[Segment]:
     """VAD-window the channel and batch-decode each window into segments."""
     duration = len(samples) / SAMPLE_RATE
@@ -167,14 +170,14 @@ def _clip_context(seg: Segment, keep_from: float) -> Segment | None:
 
 
 def _attribute(
-    samples,
+    samples: np.ndarray,
     words: list[Word],
     segments: list[Segment],
     *,
     diarizer: Diarizer,
     num_speakers: int | None,
     reid: SpeakerResolver | None,
-    on_progress,
+    on_progress: ProgressCallback | None,
 ) -> list[TranscriptEntry]:
     """Diarize the channel and merge the decoded words with the speaker turns."""
     if not words and segments:
@@ -209,7 +212,7 @@ def _attribute(
 
 
 def finalize_file(
-    samples,
+    samples: np.ndarray,
     *,
     profile: MeetingProfile,
     asr: ASRBackend,
@@ -218,7 +221,7 @@ def finalize_file(
     num_speakers: int | None = None,
     reid: SpeakerResolver | None = None,
     glossary_threshold: float | None = None,
-    on_progress=None,
+    on_progress: ProgressCallback | None = None,
 ) -> Transcript:
     """One mixed audio stream → a finished transcript (``steno transcribe``).
 

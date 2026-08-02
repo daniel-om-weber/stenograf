@@ -11,12 +11,17 @@ import signal
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from stenograf.cli.run import _library_errors
 from stenograf.notes import run as notes_run
 from stenograf.transcript import Transcript
+
+if TYPE_CHECKING:
+    from stenograf.notes import MeetingNotes
+    from stenograf.settings import NotesSettings
 
 
 def _echo_progress(message: str) -> None:
@@ -156,7 +161,7 @@ def notes_command(
     click.echo(f"wrote {', '.join(str(p) for p in written)}")
 
 
-def _echo_warnings(notes) -> None:
+def _echo_warnings(notes: MeetingNotes) -> None:
     """Validation warnings, yellow, one line each — they are also recorded in
     the note's own provenance footer, so the screen is the courtesy copy."""
     if notes.provenance is not None:
@@ -201,7 +206,7 @@ def _notes_after_run(
     basename: str,
     *,
     created_at: datetime,
-    notes_settings=None,
+    notes_settings: NotesSettings | None = None,
     backend_name: str | None = None,
     model: str | None = None,
     instructions_file: Path | None = None,

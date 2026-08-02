@@ -11,9 +11,10 @@ from the very token ids the decoder emits.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 
 from stenograf.asr.base import Word
 
@@ -81,7 +82,7 @@ def load_encoder() -> Callable[[str], list[list[int]]]:
     return encode
 
 
-def _compound_tail(sp, text: str) -> list[int] | None:
+def _compound_tail(sp: Any, text: str) -> list[int] | None:
     """``text`` tokenized as it appears *inside* a word, with no ``▁`` marker.
 
     SentencePiece has no "encode as a continuation" mode, so we ask it for a word
@@ -114,7 +115,7 @@ def _weakest(left: float | None, right: float | None) -> float | None:
     return min(left, right)
 
 
-def merge_tokens(tokens) -> list[Word]:
+def merge_tokens(tokens: Iterable[Any]) -> list[Word]:
     """Merge subword tokens into words, carrying each word's confidence with it.
 
     Tokens are SentencePiece pieces with the word-boundary marker rendered as

@@ -22,6 +22,7 @@ a diarization turn boundary farther than the model's real durations could.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -113,7 +114,7 @@ class ParakeetOnnxBackend(ASRBackend):
         self._bias(model)
         return model
 
-    def _bias(self, model) -> None:
+    def _bias(self, model: Any) -> None:
         """Swap in the boosting decode loop when there is a glossary to boost.
 
         ``with_timestamps()`` returns an adapter holding the model as ``.asr``;
@@ -146,7 +147,7 @@ class ParakeetOnnxBackend(ASRBackend):
         self._model = None
 
 
-def _biased_decoding(asr, tree: BoostingTree, alpha: float):
+def _biased_decoding(asr: Any, tree: BoostingTree, alpha: float):
     """onnx-asr's greedy transducer loop, with phrase boosting.
 
     A line-for-line mirror of ``onnx_asr.asr._AsrWithTransducerDecoding._decoding``

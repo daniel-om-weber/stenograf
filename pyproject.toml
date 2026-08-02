@@ -198,6 +198,10 @@ path = "hatch_build.py"
 # package only; eval/ and tests/ are out of scope for now (PLAN-CLEANUP.md T1).
 include = ["src"]
 typeCheckingMode = "basic"
+# Basic mode lets un-annotated parameters pass silently — and the gaps
+# concentrate on exactly the seams both front-ends share. Every parameter is
+# annotated (defaults may still infer their own type).
+reportMissingParameterType = "error"
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"

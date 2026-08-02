@@ -175,7 +175,7 @@ class MlxBackend:
             self._loaded = loaded
         return loaded
 
-    def _render(self, tokenizer, messages: list[dict[str, str]]) -> list[int]:
+    def _render(self, tokenizer: Any, messages: list[dict[str, str]]) -> list[int]:
         """Token ids for the chat. The format instruction (the template) is
         already the tail of the last message — :mod:`.prompt` owns that, once,
         for every backend. ``enable_thinking`` toggles Qwen3's reasoning mode;

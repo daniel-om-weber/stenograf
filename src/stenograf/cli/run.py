@@ -25,6 +25,8 @@ from stenograf.vocab import collect_terms
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from stenograf.diarization.base import Diarizer
+    from stenograf.profiles import SpeakerReID
     from stenograf.settings import MeetingPreset, Settings
 
 def _library_errors[T](func: Callable[..., T]) -> Callable[..., T]:
@@ -56,7 +58,7 @@ def _library_errors[T](func: Callable[..., T]) -> Callable[..., T]:
     return wrapper
 
 
-def _resolve_formats(spec: str | None, settings) -> list[str]:
+def _resolve_formats(spec: str | None, settings: Settings) -> list[str]:
     """``--format`` > ``[transcript] formats`` > the built-in default."""
     if spec is not None:
         return _parse_formats(spec)
@@ -133,7 +135,7 @@ def _resolve_run_config(
     )
 
 
-def _notes_enabled(notes_flag: bool | None, settings) -> bool:
+def _notes_enabled(notes_flag: bool | None, settings: Settings) -> bool:
     """Whether this run generates notes: ``--notes`` asked for them, or — with
     no flag either way — ``[notes] auto`` is on; ``--no-notes`` skips them even
     then. One seam, so ``start``'s in-TUI notes and :func:`_finish_run` can
@@ -147,7 +149,7 @@ def _finish_run(
     basename: str,
     *,
     created_at: datetime,
-    settings,
+    settings: Settings,
     notes_flag: bool | None,
     print_markdown: bool,
     notes_backend: str | None = None,
@@ -361,7 +363,9 @@ def _notes_options(func: Callable) -> Callable:
     return func
 
 
-def _load_reid(diarizer, *, enabled: bool, threshold: float | None, store: Path | None):
+def _load_reid(
+    diarizer: Diarizer | None, *, enabled: bool, threshold: float | None, store: Path | None
+) -> SpeakerReID | None:
     """Load the re-ID matcher when diarization runs, echoing its profile count."""
     from stenograf import loaders
 

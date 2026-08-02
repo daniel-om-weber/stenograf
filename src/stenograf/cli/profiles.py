@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from stenograf import loaders
+
+if TYPE_CHECKING:
+    import numpy as np
+
+    from stenograf.diarization.base import SpeakerTurn
 
 
 @click.group()
@@ -110,7 +116,9 @@ def profiles_enroll(
     click.echo(f"enrolled {name!r} from {audio_file.name}")
 
 
-def _choose_cluster(embeddings, turns, cluster: str | None):
+def _choose_cluster(
+    embeddings: dict[str, np.ndarray], turns: list[SpeakerTurn], cluster: str | None
+) -> np.ndarray:
     """Pick one cluster's embedding, or raise a helpful error when it is ambiguous."""
     if cluster is not None:
         if cluster not in embeddings:

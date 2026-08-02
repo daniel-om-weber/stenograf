@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import sherpa_onnx
 
 from stenograf.audio import SAMPLE_RATE
 
@@ -21,7 +25,9 @@ class SpeechSegment:
     end: float
 
 
-def _drain_vad(vad, origin: float = 0.0) -> list[SpeechSegment]:
+def _drain_vad(
+    vad: sherpa_onnx.VoiceActivityDetector, origin: float = 0.0
+) -> list[SpeechSegment]:
     """Pop sherpa's completed speech runs, converted to seconds on ``origin``'s clock.
 
     The one place sample counts become segment times — the batch scan and the
@@ -107,7 +113,7 @@ class SileroVADStream:
     sherpa's ``current_segment``, so each call costs only the new audio.
     """
 
-    def __init__(self, config, origin: float) -> None:
+    def __init__(self, config: sherpa_onnx.VadModelConfig, origin: float) -> None:
         import sherpa_onnx
 
         self._vad = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=120)

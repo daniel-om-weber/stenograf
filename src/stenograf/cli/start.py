@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING
 import click
 
 if TYPE_CHECKING:
-    from stenograf.session import MeetingRecorder, MeetingResult
+    from collections.abc import Callable
+
+    from stenograf.capture.base import AudioFrame, CaptureProvider
+    from stenograf.recording import WavTee
+    from stenograf.session import ChannelPlan, MeetingRecorder, MeetingResult
 
 from stenograf import loaders
 from stenograf.cli.format import _MEETING_MAX_SPEAKERS, _report_speaker_counts
@@ -438,10 +442,10 @@ def start(
 
 def _run_meeting(
     recorder: MeetingRecorder,
-    provider,
+    provider: CaptureProvider,
     *,
     live: bool,
-    on_frame,
+    on_frame: Callable[[AudioFrame], None] | None,
     out_dir: Path,
     basename: str,
     flush_interval: float,
@@ -506,7 +510,9 @@ def _run_meeting(
     )
 
 
-def _make_tee(record_audio: str | None, default_path: Path, plans):
+def _make_tee(
+    record_audio: str | None, default_path: Path, plans: list[ChannelPlan]
+) -> WavTee | None:
     """Create the audio tee if --record-audio was given, with a loud banner.
 
     ``default_path`` is where a bare ``--record-audio`` (no value) writes — the

@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import click
+
+if TYPE_CHECKING:
+    from stenograf.capture.base import Channel
+    from stenograf.session import SpeakerCount
 
 # Settable speaker-count ranges, kept in sync with the --local/--remote and
 # --speakers IntRange bounds. The unconstrained diarizer can *detect* more (or, on
@@ -12,14 +18,14 @@ _MEETING_MAX_SPEAKERS = 8
 _FILE_MAX_SPEAKERS = 16
 
 
-def _describe_channel(channel) -> tuple[str, str]:
+def _describe_channel(channel: Channel) -> tuple[str, str]:
     """The human name and CLI flag for a channel's speaker count."""
     from stenograf.capture.base import Channel
 
     return ("local", "--local") if channel is Channel.MIC else ("remote", "--remote")
 
 
-def _report_speaker_counts(counts) -> None:
+def _report_speaker_counts(counts: list[SpeakerCount]) -> None:
     """Print per-channel speaker counts, flagging estimated ones as editable.
 
     Explicit counts are echoed as given; an auto-detected count shows what the
@@ -62,17 +68,6 @@ def _lock_hint(detected: int, max_settable: int) -> tuple[int, bool] | None:
     if detected > max_settable:
         return max_settable, True
     return detected, False
-
-
-def _fmt_setting(value) -> str:
-    """One effective value, TOML-flavored (bools lowercase, arrays bracketed)."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, tuple):
-        return "[" + ", ".join(f'"{item}"' for item in value) + "]"
-    if isinstance(value, float):
-        return f"{value:g}"
-    return str(value)
 
 
 def _fmt_duration(seconds: float) -> str:
