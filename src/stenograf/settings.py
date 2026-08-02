@@ -3,86 +3,10 @@
 Machine-specific configuration and standing preferences that must NOT live in a
 :class:`MeetingProfile` (profiles serialize into every transcript; a local
 command line or vault path would leak into shared files). Every key is
-optional; a missing file is simply all defaults. The full schema::
-
-    [transcript]
-    formats = ["md", "json", "txt"]     # default --format list
-
-    [vocab]                             # standing vocabulary for every run
-    glossary_file = "~/steno/glossary.txt"  # one term per line, # comments
-    attendees = ["Ada Lovelace"]        # names corrected like glossary terms
-    glossary_threshold = 0.95           # similarity 0-1 to correct a term
-
-    [output]
-    dir = "~/Documents/Meetings"        # the output home: every run writes its
-                                        # own meeting-YYYYMMDD-HHMMSS/ folder
-                                        # here (--out bypasses it for one run).
-                                        # Default: Meetings/ in the documents
-                                        # folder the desktop names — localised
-                                        # on Linux (~/Dokumente/Meetings)
-    record_audio = false                # keep the raw captured audio as the
-                                        # meeting folder's audio.wav, exactly as a
-                                        # bare --record-audio would. Off by
-                                        # default: audio otherwise never touches
-                                        # disk. --record-audio PATH still redirects
-                                        # a single run to another file.
-
-    [speakers]
-    diarization = true                  # separate speakers within each channel.
-                                        # Off by default: each channel is one
-                                        # speaker and the diarizer model is
-                                        # never loaded (it can take minutes on
-                                        # some machines). A per-run
-                                        # --diarization flag or an explicit
-                                        # speaker count above 1 also turns it
-                                        # on.
-    reid_threshold = 0.5                # cosine similarity 0-1 to match a
-                                        # saved speaker profile
-    profile_store = "~/steno/profiles.json"  # re-ID store location override
-
-    [asr]
-    backend = "parakeet"                # ASR backend for finalize + live
-    provider = "cpu"                    # ONNX Runtime execution provider for the
-                                        # parakeet-onnx backend: cpu (default) |
-                                        # dml (any DX12 GPU, Windows) | cuda |
-                                        # auto; falls back to cpu with a warning
-                                        # if the provider can't run the model
-
-    [notes]
-    auto = true                         # generate notes after every meeting.
-                                        # Off by default: notes are opt-in per run
-                                        # (--notes on the CLI, the setup form's
-                                        # switch in the launcher). On, both entries
-                                        # default to generating them; --no-notes
-                                        # (or the switch) still skips one run.
-    backend = "command"                 # "mlx" (default on Apple Silicon),
-                                        # "ollama" (default elsewhere), "command"
-    model = "claude-opus-4-8"           # HF repo id (mlx) / Ollama tag /
-                                        # provenance label (command)
-    command = ["claude", "-p", "Summarize the meeting transcript on stdin."]
-    timeout_s = 600
-    instructions = "~/notes-style.md"   # appended to the built-in system prompt
-    thinking = false                    # mlx backend: skip the model's reasoning
-                                        # pass — faster, less careful (default true)
-    ollama_url = "http://localhost:11434"  # ollama backend: server base URL
-                                           # (default from OLLAMA_HOST, else local)
-
-    [notes.export]
-    dir = "~/Obsidian/Meetings"         # combined-note export target (unset = off)
-
-    [meetings.controlling]              # a meeting preset ("Besprechungsart"):
-    title    = "Controlling-Runde"      # everything a *kind* of meeting sets,
-    language = "de"                     # selected per run with --preset NAME.
-    template = "~/steno/controlling.md" # protocol layout (markdown headings)
-    instructions = "~/steno/stil.md"    # style file for this kind of meeting
-
-    [meetings.controlling.notes]        # sparse [notes] overlay: unset keys
-    backend = "command"                 # fall through to [notes] above
-    command = ["claude", "-p"]
-    timeout_s = 1800
-
-    [meetings.controlling.vocab]        # merges with the standing [vocab]
-    attendees = ["Anja Müller"]
+optional; a missing file is simply all defaults. The schema lives in ONE
+place: :data:`SETTINGS_TEMPLATE`, the commented starter file whose commented
+values *are* the defaults — ``steno settings edit`` writes it and
+``steno settings show`` prints the effective values with their sources.
 
 Preset overlay rules: a key the preset sets wins over ``[notes]``; unset keys
 fall through. ``[meetings.*.vocab]`` *merges* (a preset adds vocabulary, it
