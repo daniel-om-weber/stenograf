@@ -320,3 +320,16 @@ title = "No notes overlay"
     assert check.optional  # notes are opt-in; a broken preset must not fail doctor
     assert "definitely-not-a-real-binary-xyz" in check.detail
     assert "PATH" in check.detail
+
+
+def test_doctor_command_runs_and_prints_checks():
+    from click.testing import CliRunner
+
+    from stenograf import cli
+
+    result = CliRunner().invoke(cli.main, ["doctor"])
+    # Exit code is environment-dependent (0 all-ok, 1 if e.g. models uncached);
+    # what matters is it ran and printed the check table without crashing.
+    assert result.exit_code in (0, 1)
+    assert "Python" in result.output
+    assert "ASR backend" in result.output
