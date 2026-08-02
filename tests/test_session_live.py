@@ -10,6 +10,7 @@ These exercise the threaded plumbing, not the LiveDecoder's caption quality
 """
 
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -313,7 +314,58 @@ class CrashingProvider(CaptureProvider):
         self.stopped = True
 
 
+class EndlessProvider(CaptureProvider):
+    """Streams one-second mic frames until stop() — a meeting with no natural end."""
+
+    def __init__(self) -> None:
+        self.stopped = False
+        self.yielded = 0
+
+    def start(self, channels: set[Channel]) -> None:
+        pass
+
+    def frames(self):
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        t = 0
+        while not self.stopped:
+            self.yielded += 1
+            yield AudioFrame(Channel.MIC, float(t), pcm)
+            t += 1
+            time.sleep(0.005)  # capture pace ≫ test pace; bounds the buffered audio
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
 class TestMeetingRecorderLive:
+    def test_ctrl_c_during_the_live_run_still_finalizes(self, monkeypatch):
+        # The path every real user hits to end a meeting: Ctrl-C lands while the
+        # main thread waits on the capture join. The run must stop the provider,
+        # announce the interruption, and still produce the finalized transcript
+        # from everything captured — not die with a traceback and no output.
+        from stenograf import session as session_mod
+
+        provider = EndlessProvider()
+
+        def interrupted_join(thread, poll=0.1):
+            deadline = time.monotonic() + 10
+            while provider.yielded < 2:  # ≥1 full second is stored by then
+                assert time.monotonic() < deadline
+                time.sleep(0.005)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(session_mod, "_join_until_done", interrupted_join)
+        statuses: list[str] = []
+        transcript = (
+            _recorder()
+            .run(provider, live=True, view=CallbackView(on_status=statuses.append))
+            .transcript
+        )
+
+        assert provider.stopped  # the device was released
+        assert any("interrupted" in s for s in statuses)
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]
+
     def test_live_run_streams_commits_and_still_finalizes(self):
         provider = ListProvider(_one_second_frames(4))
         updates: list[tuple[Channel, StreamingUpdate]] = []

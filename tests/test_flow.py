@@ -238,6 +238,74 @@ class TestBiasingReachesTheDecoder:
         self._assert_biased(seen)
 
 
+class TestTranscribeRecording:
+    """``flow.transcribe_recording``: a file in, a written transcript out —
+    both the mixed-stream and the split-channel branch, offline. This is the
+    button UIs' whole transcribe path, so it gets end-to-end coverage here,
+    not just through a screen."""
+
+    def test_a_mono_file_lands_in_a_fresh_folder_with_progress(self, tmp_path, monkeypatch):
+        from conftest import fake_load_backends, write_wav
+
+        from stenograf import loaders
+        from stenograf.flow import transcribe_recording
+
+        monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
+        wav = tmp_path / "meeting.wav"
+        write_wav(wav, seconds=2.0)  # mono → the mixed-stream branch
+        statuses: list[str] = []
+        windows: list[tuple[int, int]] = []
+
+        result = transcribe_recording(
+            wav,
+            on_status=statuses.append,
+            on_windows=lambda done, total: windows.append((done, total)),
+        )
+
+        # A fresh dated folder under the (isolated) output home, default formats.
+        assert result.out_dir.parent == tmp_path / "meetings-home"
+        names = {p.name for p in result.paths}
+        assert names == {"transcript.md", "transcript.json", "transcript.txt"}
+        assert all(p.exists() for p in result.paths)
+        assert result.duration == 2.0
+        assert "wirklich eine gute" in (result.out_dir / "transcript.md").read_text(
+            encoding="utf-8"
+        )
+        # Loader progress went to the callback (a worker thread has no stdio)...
+        assert "loading models…" in statuses
+        # ...and the ASR pass announced every window (done is 0-indexed, called
+        # as each window starts) — the progress bar's whole data source.
+        assert windows
+        total = windows[-1][1]
+        assert [done for done, _ in windows] == list(range(total))
+
+    def test_a_split_recording_transcribes_per_channel(self, tmp_path, monkeypatch):
+        import json
+
+        from conftest import fake_channel_backends, voice_channel_pcms, write_stereo_wav
+
+        from stenograf import loaders
+        from stenograf.flow import transcribe_recording
+
+        monkeypatch.setattr(loaders, "load_backends", fake_channel_backends)
+        wav = tmp_path / "meeting.wav"
+        write_stereo_wav(wav, *voice_channel_pcms())
+        statuses: list[str] = []
+
+        result = transcribe_recording(wav, on_status=statuses.append)
+
+        assert any("2 voice channels" in s for s in statuses)
+        entries = json.loads(
+            (result.out_dir / "transcript.json").read_text(encoding="utf-8")
+        )["entries"]
+        # Diarization stays off (nothing enabled it): one speaker per channel,
+        # and no cross-channel bleed — each channel decoded its own audio only.
+        assert {e["speaker"] for e in entries} == {"Local-1", "Remote-1"}
+        for entry in entries:
+            stem = "foxtrot" if entry["speaker"] == "Local-1" else "quebec"
+            assert stem in entry["text"]
+
+
 class TestCaptionStream:
     """When a caption line continues, breaks, flushes — and what stays in flight."""
 

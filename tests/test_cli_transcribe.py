@@ -4,16 +4,17 @@ resolution, glossary, and the split-channel paths."""
 import json
 import wave
 
-import conftest
 import numpy as np
 from click.testing import CliRunner
 from conftest import (
+    fake_channel_backends,
+    voice_channel_pcms,
     write_settings,
+    write_stereo_wav,
     write_wav,
 )
 
 from stenograf import cli, loaders
-from stenograf.asr.base import Segment, Word
 
 
 def test_transcribe_writes_outputs_and_detects_language(tmp_path, stub_backends):
@@ -211,57 +212,10 @@ def test_transcribe_glossary_corrects_the_transcript(tmp_path, stub_backends):
     assert "gute Idee für" in md
 
 
-class ChannelASR(conftest.FakeASR):
-    """Decodes each buffer's peak amplitude into a channel-specific word stem.
-
-    A split run's mic (amplitude 1000) decodes to ``foxtrot…`` and its system
-    channel (amplitude 3000) to ``quebec…`` — letter-disjoint stems, so the
-    tests can see exactly which channel every transcript line came from (and
-    the echo backstop can never mistake one channel's text for the other's).
-    """
-
-    name = "channel"
-    model_id = "fake/channel"
-
-    def transcribe(self, samples, language) -> list[Segment]:
-        pcm = np.asarray(samples)
-        if pcm.dtype == np.int16:
-            pcm = pcm.astype(np.float32) / 32768.0
-        peak = float(np.abs(pcm).max()) * 32768
-        if peak == 0:
-            return []
-        stem = "foxtrot" if peak < 2000 else "quebec"
-        words = tuple(Word(f"{stem}{i}", 0.4 * i + 0.1, 0.4 * i + 0.4) for i in range(4))
-        return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
-
-
-def fake_channel_backends(
-    *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-):
-    return ChannelASR(), None, None
-
-
-def write_stereo_wav(path, left: np.ndarray, right: np.ndarray) -> None:
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(16_000)
-        w.writeframes(np.column_stack([left, right]).ravel().astype(np.int16).tobytes())
-
-
-def _voice_channel_pcms(seconds: int = 4) -> tuple[np.ndarray, np.ndarray]:
-    """Turn-taking voice channels: local speaks the first half, remote the second."""
-    left = np.zeros(seconds * 16_000, dtype=np.int16)
-    right = np.zeros(seconds * 16_000, dtype=np.int16)
-    left[: seconds * 8_000] = 1000
-    right[seconds * 8_000 :] = 3000
-    return left, right
-
-
 def test_transcribe_auto_splits_independent_voice_channels(tmp_path, monkeypatch):
     monkeypatch.setattr(loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
-    write_stereo_wav(audio, *_voice_channel_pcms())
+    write_stereo_wav(audio, *voice_channel_pcms())
 
     result = CliRunner().invoke(
         cli.main, ["transcribe", str(audio), "--out", str(tmp_path), "--diarization"]
@@ -283,7 +237,7 @@ def test_transcribe_auto_splits_independent_voice_channels(tmp_path, monkeypatch
 def test_transcribe_channels_mix_forces_the_downmix(tmp_path, monkeypatch):
     monkeypatch.setattr(loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
-    write_stereo_wav(audio, *_voice_channel_pcms())
+    write_stereo_wav(audio, *voice_channel_pcms())
 
     result = CliRunner().invoke(
         cli.main, ["transcribe", str(audio), "--channels", "mix", "--out", str(tmp_path)]
@@ -299,7 +253,7 @@ def test_transcribe_auto_downmixes_a_stereo_image(tmp_path, monkeypatch):
     # The same programme on both channels (panned): every voice would be
     # transcribed twice if split, so auto must keep the classic downmix.
     monkeypatch.setattr(loaders, "load_backends", fake_channel_backends)
-    left, _ = _voice_channel_pcms()
+    left, _ = voice_channel_pcms()
     audio = tmp_path / "meeting.wav"
     write_stereo_wav(audio, left, (left * 0.5).astype(np.int16))
 
@@ -328,7 +282,7 @@ def test_transcribe_split_needs_two_channels(tmp_path, monkeypatch):
 def test_transcribe_split_conflicts_with_speakers(tmp_path, monkeypatch):
     monkeypatch.setattr(loaders, "load_backends", fake_channel_backends)
     audio = tmp_path / "meeting.wav"
-    write_stereo_wav(audio, *_voice_channel_pcms())
+    write_stereo_wav(audio, *voice_channel_pcms())
 
     result = CliRunner().invoke(
         cli.main, ["transcribe", str(audio), "--speakers", "3", "--out", str(tmp_path)]
@@ -357,7 +311,7 @@ def test_transcribe_split_matches_start_replay(tmp_path, monkeypatch):
     # channels through `steno start` (batch mode; --no-aec because a recording
     # is past capture-time cancellation).
     monkeypatch.setattr(loaders, "load_backends", fake_channel_backends)
-    left, right = _voice_channel_pcms()
+    left, right = voice_channel_pcms()
     stereo = tmp_path / "stereo.wav"
     write_stereo_wav(stereo, left, right)
     mic, system = tmp_path / "mic.wav", tmp_path / "system.wav"

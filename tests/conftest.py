@@ -232,9 +232,56 @@ class ListProvider(CaptureProvider):
         self.stopped = True
 
 
+class ChannelASR(FakeASR):
+    """Decodes each buffer's peak amplitude into a channel-specific word stem.
+
+    A split run's mic (amplitude 1000) decodes to ``foxtrot…`` and its system
+    channel (amplitude 3000) to ``quebec…`` — letter-disjoint stems, so the
+    tests can see exactly which channel every transcript line came from (and
+    the echo backstop can never mistake one channel's text for the other's).
+    """
+
+    name = "channel"
+    model_id = "fake/channel"
+
+    def transcribe(self, samples, language) -> list[Segment]:
+        pcm = np.asarray(samples)
+        if pcm.dtype == np.int16:
+            pcm = pcm.astype(np.float32) / 32768.0
+        peak = float(np.abs(pcm).max()) * 32768
+        if peak == 0:
+            return []
+        stem = "foxtrot" if peak < 2000 else "quebec"
+        words = tuple(Word(f"{stem}{i}", 0.4 * i + 0.1, 0.4 * i + 0.4) for i in range(4))
+        return [Segment(" ".join(w.text for w in words), words[0].start, words[-1].end, words)]
+
+
+def write_stereo_wav(path, left: np.ndarray, right: np.ndarray) -> None:
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(np.column_stack([left, right]).ravel().astype(np.int16).tobytes())
+
+
+def voice_channel_pcms(seconds: int = 4) -> tuple[np.ndarray, np.ndarray]:
+    """Turn-taking voice channels: local speaks the first half, remote the second."""
+    left = np.zeros(seconds * SAMPLE_RATE, dtype=np.int16)
+    right = np.zeros(seconds * SAMPLE_RATE, dtype=np.int16)
+    left[: seconds * (SAMPLE_RATE // 2)] = 1000
+    right[seconds * (SAMPLE_RATE // 2) :] = 3000
+    return left, right
+
+
 def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
     """The loaders seam, offline: no VAD (whole buffer is one window), no diarizer."""
     return CliASR(), None, None
+
+
+def fake_channel_backends(
+    *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
+):
+    return ChannelASR(), None, None
 
 
 @pytest.fixture
