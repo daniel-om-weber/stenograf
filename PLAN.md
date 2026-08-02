@@ -515,6 +515,12 @@ loads and transcribes, and a forced failure (`STENOGRAF_ASR_PROVIDER=cuda`
 against the DirectML build) exits with the clean error naming
 `[asr] provider = "cpu"`.
 
+**`.lnk`-only launcher (2026-08-02) — verify on the real Windows box before the
+next release.** `steno setup` now writes only the two `Stenograf.lnk` shell
+links (Start Menu + Desktop); the batch-file fallback is deleted, and a COM
+refusal is a clear setup error instead. To confirm on the GPD notebook:
+`steno setup` still lands both links and they launch the app.
+
 **Linux — the same root cause, closed by construction 2026-08-02.** The
 never-measured Linux echo-cancellation risk (`parec`, one subprocess per
 channel, both arrival-stamped by `SessionClock`) ended the way the
