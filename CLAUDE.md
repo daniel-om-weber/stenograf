@@ -31,9 +31,11 @@ Windows far-end lag and the never-measured Linux one; the fix is one Rust
 helper (`native/stenocap/` — WASAPI/`pu64QPCPosition` on Windows,
 PulseAudio-protocol/`CLOCK_MONOTONIC − server latency` on Linux, serving
 PipeWire through pipewire-pulse) speaking the frame format
-`capture/macos.py:9-16` defines — one clock for both taps, as the macOS
+`capture/helper.py` defines — one clock for both taps, as the macOS
 `stenocap` has always done. `capture/helper.py` holds the transport all three
-platforms share; `soundcard`, `parec`, `FAR_END_LAG_S`, `SessionClock` and
+platforms share (the per-platform provider modules folded into it 2026-08-02;
+only `capture/windows.py` remains, for the consent store and the loopback
+suffix); `soundcard`, `parec`, `FAR_END_LAG_S`, `SessionClock` and
 `far_end_lag_s` itself are all deleted. The wheel matrix carries it: win_amd64
 and manylinux_2_39 bundle both helpers, and a low-floor **manylinux_2_28 wheel
 carries stenocap alone** so Ubuntu 22.04 / Debian 12 / RHEL 9 keep live

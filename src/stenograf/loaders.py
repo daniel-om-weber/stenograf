@@ -270,15 +270,19 @@ def _base_provider(
     from stenograf.capture.base import CaptureUnavailableError
 
     if sys.platform == "darwin":
-        from stenograf.capture.macos import MacOSCaptureProvider
+        from stenograf.capture.helper import HelperCaptureProvider
 
         # A missing helper raises HelperNotFoundError, a CaptureUnavailableError.
-        return MacOSCaptureProvider(on_log=on_log)
+        # No device preflight: the macOS helper owns device selection.
+        return HelperCaptureProvider(on_log=on_log)
 
     if sys.platform.startswith("linux"):
-        from stenograf.capture.linux import LinuxCaptureProvider, default_devices
+        from stenograf.capture.helper import HelperCaptureProvider, query_devices
 
-        return _native_provider(LinuxCaptureProvider, default_devices, plans, announce, on_log)
+        # The undecorated preflight: a monitor's name already says what it is
+        # (``….monitor``), so nothing is appended the way Windows adds
+        # "(loopback)".
+        return _native_provider(HelperCaptureProvider, query_devices, plans, announce, on_log)
 
     if sys.platform == "win32":
         from stenograf.capture.windows import WindowsCaptureProvider, default_devices

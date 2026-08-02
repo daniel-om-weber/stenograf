@@ -535,6 +535,17 @@ no speaker echo path either); the alignment premise it would confirm is the
 one now guaranteed by construction, so it rides along as a nice-to-have with
 the Windows gate above, not as its own gate.
 
+**Capture fold stage (b) — macOS-gated (queued 2026-08-02).** Stage (a) folded
+`capture/macos.py` and `capture/linux.py` into `capture/helper.py`; the one
+platform difference left is the stop gesture (`_stop_signal`: SIGINT for the
+Swift helper, stdin-EOF for the Rust one). Stage (b): teach the Swift helper to
+exit on stdin EOF (mirroring the Rust helper's stdin watcher in
+`native/stenocap/src/main.rs`), then delete `_stop_signal` and
+`_request_exit`'s signal arm — one stop gesture everywhere. Legal (the helper
+binary is not under the frozen app bundle), but it recompiles and re-signs a
+signed binary, so it waits for a real macOS session and a live-capture check
+afterwards.
+
 **The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
 ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live
 meeting captured through PipeWire from the GUI; seven problems were found and

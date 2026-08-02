@@ -2,44 +2,66 @@
 
 One :class:`HelperCaptureProvider` serves all three platforms; the only
 per-platform variation is the stop gesture — SIGINT for the Swift helper,
-stdin-EOF for the Rust one. Every transport test runs against both gestures,
-so the transport stays covered on Windows too (where the SIGINT flavor cannot
-run: Windows has no signal a parent can aim at one child). The platform test
-files keep only what is genuinely per-platform: the device preflight, the
-privacy consent store, and the stop-gesture wiring of each subclass.
+stdin-EOF for the Rust one, picked by ``sys.platform``. Every transport test
+runs against both gestures via explicit flavors, so the transport stays
+covered on Windows too (where the SIGINT flavor cannot run: Windows has no
+signal a parent can aim at one child). test_capture_windows.py keeps only
+what is genuinely per-platform: the privacy consent store and the
+"(loopback)" device suffix.
 """
 
 import io
 import os
+import signal
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from stenograf.capture.base import CaptureHelperError, Channel
+from stenograf.capture.base import CaptureHelperError, CaptureUnavailableError, Channel
 from stenograf.capture.helper import (
+    HelperCaptureProvider,
     HelperNotFoundError,
     find_helper,
+    query_devices,
     read_frame,
 )
-from stenograf.capture.macos import MacOSCaptureProvider
-from stenograf.capture.windows import WindowsCaptureProvider
 
 FAKE = [sys.executable, str(Path(__file__).parent / "fake_stenocap.py")]
 _HEADER = struct.Struct("<BdI")
 
+
+class SigintTransport(HelperCaptureProvider):
+    """The Swift helper's stop gesture (the macOS default)."""
+
+    _stop_signal = signal.SIGINT
+
+
+class StdinEofTransport(HelperCaptureProvider):
+    """The Rust helper's stop gesture (the Linux/Windows default)."""
+
+    _stop_signal = None
+
+
+def test_stop_gesture_matches_the_platform_helper():
+    # The Swift helper takes SIGINT; the Rust one stops on stdin EOF.
+    expected = signal.SIGINT if sys.platform == "darwin" else None
+    assert HelperCaptureProvider._stop_signal == expected
+
+
 GESTURES = [
     pytest.param(
-        MacOSCaptureProvider,
+        SigintTransport,
         id="sigint",
         marks=pytest.mark.skipif(
             sys.platform == "win32",
             reason="the SIGINT stop gesture does not exist on Windows",
         ),
     ),
-    pytest.param(WindowsCaptureProvider, id="stdin-eof"),
+    pytest.param(StdinEofTransport, id="stdin-eof"),
 ]
 
 
@@ -268,3 +290,50 @@ class TestFindHelper:
         monkeypatch.setattr(helper, "HELPER_NAME", "stenocap-does-not-exist")
         with pytest.raises(HelperNotFoundError):
             find_helper()
+
+
+class TestQueryDevices:
+    """The shared, undecorated device preflight (the Linux path uses it as-is)."""
+
+    def _helper(self, monkeypatch, *extra):
+        import stenograf.capture.helper as helper
+
+        argv = [*FAKE, *extra]
+        monkeypatch.setattr(helper, "find_helper", lambda: argv[0])
+        # find_helper returns one path; the fake needs its script argument too,
+        # so the run itself is what gets patched for these tests.
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            helper.subprocess,
+            "run",
+            lambda command, **kw: real_run([*argv, *command[1:]], **kw),
+        )
+
+    def test_names_pass_through_undecorated(self, monkeypatch):
+        self._helper(monkeypatch)
+        devices = query_devices({Channel.MIC, Channel.SYSTEM})
+        assert devices == {
+            Channel.MIC: "Fake mic device",
+            Channel.SYSTEM: "Fake system device",  # no "(loopback)" here
+        }
+
+    def test_mic_only_never_asks_for_a_sink(self, monkeypatch):
+        # In-room mode: a box with no output device at all must still pass.
+        self._helper(monkeypatch)
+        assert query_devices({Channel.MIC}) == {Channel.MIC: "Fake mic device"}
+
+    def test_a_hung_helper_is_a_capture_error(self, monkeypatch):
+        # A sound server that accepts the connection and never answers leaves
+        # the helper blocked in its connect loop; the query's own timeout must
+        # surface as a capture error (the CLI preflight and doctor catch those),
+        # not a TimeoutExpired traceback.
+        import stenograf.capture.helper as helper
+
+        monkeypatch.setattr(helper, "find_helper", lambda: "stenocap")
+
+        def hang(command, **kwargs):
+            raise subprocess.TimeoutExpired(command, 15)
+
+        monkeypatch.setattr(helper.subprocess, "run", hang)
+        with pytest.raises(CaptureUnavailableError, match="timed out"):
+            query_devices({Channel.MIC})

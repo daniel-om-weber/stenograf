@@ -17,15 +17,33 @@ start on a **clock shared by both channels**, so equal timestamps mean
 simultaneous capture; ``samples`` is mono 16 kHz int16 PCM. There is no control
 channel back to the helper — selecting channels is done with argv flags.
 
-**That shared clock is the reason this transport exists**, and why the Windows
-and Linux providers are here rather than reading audio in-process. Stamping
+**That shared clock is the reason this transport exists**, and why no platform
+reads audio in-process. Stamping
 frames when they arrive gives each channel its own transport latency as a
 hidden offset, and the echo canceller pairs the two channels *by timestamp*;
 the helper stamps both taps from one OS clock so the question cannot arise.
 See `native/README.md`, and `PLAN-CAPTURE-HELPER.md` for what it replaced.
 
 Stopping differs, and only because the platforms do — see :attr:`
-HelperCaptureProvider._stop_signal`.
+HelperCaptureProvider._stop_signal`. What else is genuinely per-platform:
+
+- **macOS** (Swift helper): system audio via a Core Audio process tap, the mic
+  via AVAudioEngine; no device preflight — the helper owns device selection.
+  Echo cancellation is *not* the helper's job: its old ``--aec`` flag (Voice
+  Processing IO) emitted no mic frames at all and attenuated the system
+  channel by ~36 dB, measured on macOS 26, so it was removed
+  (`native/README.md`). Echo is cancelled downstream (:mod:`stenograf.aec`).
+- **Linux** (Rust helper): one PulseAudio-protocol record stream per channel —
+  the mic from ``@DEFAULT_SOURCE@``, system audio from ``@DEFAULT_MONITOR@``;
+  PipeWire serves both via ``pipewire-pulse``. Measured device-name
+  behaviours: ``@DEFAULT_MONITOR@`` follows a default-sink change mid-capture
+  (the user plugs in a headset and the capture moves with the meeting app's
+  playback); ``@DEFAULT_SOURCE@`` pins to the mic that was default at start —
+  an acceptable asymmetry, the remote channel is the one that must survive an
+  output-device switch. A muted sink's monitor still delivers.
+- **Windows** (same Rust helper): WASAPI shared-mode streams plus the two
+  things only Windows has — the privacy consent store and the "(loopback)"
+  device suffix — in :mod:`stenograf.capture.windows`.
 """
 
 from __future__ import annotations
@@ -186,17 +204,20 @@ class HelperCaptureProvider(CaptureProvider):
     — a GUI process has no terminal for a raw stderr write to reach.
     """
 
-    _stop_signal: int | None = signal.SIGINT
-    """How :meth:`stop` asks the helper to finish, and the one thing the two
+    _stop_signal: int | None = signal.SIGINT if sys.platform == "darwin" else None
+    """How :meth:`stop` asks the helper to finish, and the one thing the
     platforms do not share.
 
-    The Swift helper takes SIGINT, flushes and exits 0. ``None`` means the
-    helper stops when its **stdin reaches EOF** instead, which is what the
-    Windows one does: there is no signal a parent can aim at a single child
-    there (``CTRL_C_EVENT`` goes to a whole process group), while closing a pipe
-    needs no console, no process group and no handler. The attribute drives both
-    halves — a helper stopped this way is also the only one spawned with a stdin
-    pipe to close.
+    The Swift helper (macOS) takes SIGINT, flushes and exits 0. ``None`` means
+    the helper stops when its **stdin reaches EOF** instead — the Rust
+    helper's one gesture on both its platforms, because it exists for Windows:
+    there is no signal a parent can aim at a single child there
+    (``CTRL_C_EVENT`` goes to a whole process group), while closing a pipe
+    needs no console, no process group and no handler. The helper ignores
+    SIGINT for exactly this reason on Linux too — a terminal's Ctrl+C hits the
+    whole process group, and the parent must drain the pipe before the helper
+    lets go. The attribute drives both halves — a helper stopped this way is
+    also the only one spawned with a stdin pipe to close.
     """
 
     def __init__(

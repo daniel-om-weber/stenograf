@@ -140,11 +140,11 @@ def _linux_capture_check() -> Check:
     is invisible otherwise).
     """
     from stenograf.capture.base import CaptureUnavailableError, Channel
-    from stenograf.capture.linux import LinuxCaptureProvider, default_devices
+    from stenograf.capture.helper import HelperCaptureProvider, query_devices
 
     try:
-        LinuxCaptureProvider()  # fails fast when the helper binary is missing
-        devices = default_devices({Channel.MIC, Channel.SYSTEM})
+        HelperCaptureProvider()  # fails fast when the helper binary is missing
+        devices = query_devices({Channel.MIC, Channel.SYSTEM})
     except CaptureUnavailableError as exc:
         return Check(name="Capture", ok=False, detail=str(exc))
     listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))

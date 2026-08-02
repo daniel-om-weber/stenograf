@@ -122,11 +122,10 @@ def _grant_capture_permissions() -> None:
             "the permission prompts are macOS-only — use `steno setup --models-only` here"
         )
     from stenograf.capture.base import Channel
-    from stenograf.capture.helper import HelperNotFoundError
-    from stenograf.capture.macos import MacOSCaptureProvider
+    from stenograf.capture.helper import HelperCaptureProvider, HelperNotFoundError
 
     try:
-        provider = MacOSCaptureProvider()
+        provider = HelperCaptureProvider()
     except HelperNotFoundError as exc:
         raise click.ClickException(str(exc)) from exc
 

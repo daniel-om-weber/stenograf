@@ -141,9 +141,9 @@ class GapPaddedBuffer(ABC):
 class CaptureProvider(ABC):
     """Delivers live audio frames for the requested channels.
 
-    Platform modules where the OS offers a device *choice* (linux, windows)
-    additionally expose a module-level ``default_devices(channels)`` preflight
-    that names what a meeting would record. Deliberately not part of this ABC:
+    Platforms where the OS offers a device *choice* run a preflight that names
+    what a meeting would record (``helper.query_devices`` on Linux, decorated
+    by ``windows.default_devices`` there). Deliberately not part of this ABC:
     it must run before construction (a missing capture stack fails there, and
     the CLI reports it before models load), and macOS/file have no equivalent
     (the signed helper owns device selection; file replay has no devices).
