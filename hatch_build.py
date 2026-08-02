@@ -159,7 +159,7 @@ class CustomBuildHook(BuildHookInterface):
         self._build(helper, hint="install the Xcode Command Line Tools (xcode-select --install)")
         build_data["force_include"][str(helper)] = "stenograf/bin/stenocap"
 
-        stenodiar = self._stenodiar_path()
+        stenodiar = Path(self.root) / "native" / "stenodiar" / "stenodiar"
         if _cargo_available():
             self._build(
                 stenodiar,
@@ -176,10 +176,6 @@ class CustomBuildHook(BuildHookInterface):
 
         build_data["pure_python"] = False
         build_data["tag"] = MACOS_TAG
-
-    def _stenodiar_path(self) -> Path:
-        name = "stenodiar.exe" if sys.platform == "win32" else "stenodiar"
-        return Path(self.root) / "native" / "stenodiar" / name
 
     def _build(self, binary: Path, *, hint: str) -> None:
         # Windows has no shell to run build.sh; its twin is a PowerShell script.

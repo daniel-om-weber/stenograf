@@ -15,25 +15,21 @@ from stenograf.config import (
 def test_online_mode():
     profile = MeetingProfile(local_speakers=1, remote_speakers=3)
     assert profile.mode is MeetingMode.ONLINE
-    assert profile.needs_system_audio
 
 
 def test_hybrid_mode():
     profile = MeetingProfile(local_speakers=3, remote_speakers=2)
     assert profile.mode is MeetingMode.HYBRID
-    assert profile.needs_system_audio
 
 
-def test_in_room_mode_skips_system_audio():
+def test_in_room_mode():
     profile = MeetingProfile(local_speakers=4, remote_speakers=0)
     assert profile.mode is MeetingMode.IN_ROOM
-    assert not profile.needs_system_audio
 
 
 def test_unknown_counts_mean_auto():
     profile = MeetingProfile(language=Language.GERMAN)
     assert profile.mode is None
-    assert profile.needs_system_audio  # tap stays available until mode is known
 
 
 def test_in_room_known_without_local_count():

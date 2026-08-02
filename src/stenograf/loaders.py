@@ -102,7 +102,7 @@ def download_progress(announce: Announce | None) -> ProgressHook:
 
 
 def model_progress(name: str, done: int, total: int) -> None:
-    """The CLI-flavored ProgressHook (kept for the non-TUI call sites)."""
+    """A ProgressHook that announces each download start on stdout."""
     download_progress(None)(name, done, total)
 
 

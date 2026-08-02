@@ -123,8 +123,3 @@ class MeetingProfile:
         if self.local_speakers <= 1:
             return MeetingMode.ONLINE
         return MeetingMode.HYBRID
-
-    @property
-    def needs_system_audio(self) -> bool:
-        """The system-audio tap is only started when remote audio can exist."""
-        return self.mode is not MeetingMode.IN_ROOM

@@ -13,7 +13,7 @@ import dataclasses
 import importlib.util
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from stenograf.settings import NotesSettings
@@ -32,7 +32,6 @@ class NotesGenerationError(NotesBackendError):
     truncated response, a non-zero exit)."""
 
 
-@runtime_checkable
 class NotesBackend(Protocol):
     """One LLM provider. ``complete`` returns the model's raw text response;
     the markdown unwrap and template validation happen in :mod:`.generate`,

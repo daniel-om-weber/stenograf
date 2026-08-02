@@ -79,12 +79,6 @@ def h1(text: str) -> str | None:
     return None
 
 
-def heading_text(line: str) -> str | None:
-    """The heading text of one line, or ``None`` when it is not a heading."""
-    match = _HEADING.match(line)
-    return match.group(2) if match else None
-
-
 def sections(body: str) -> dict[str, list[str]]:
     """Map of ``##``-heading text → the raw lines under it, fence-aware.
 
@@ -129,4 +123,4 @@ def content_lines(body: str, template: str) -> list[str]:
     return kept
 
 
-__all__ = ["DEFAULT_TEMPLATE", "content_lines", "h1", "heading_text", "headings", "sections"]
+__all__ = ["DEFAULT_TEMPLATE", "content_lines", "h1", "headings", "sections"]

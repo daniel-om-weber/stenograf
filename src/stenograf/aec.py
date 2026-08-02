@@ -71,7 +71,7 @@ if TYPE_CHECKING:
 TICK_SAMPLES = SAMPLE_RATE // 100
 """AEC3 processes exactly 10 ms at a time; neither channel may be fed anything else."""
 
-DEFAULT_DELAY_MS = 25
+_DELAY_MS = 25
 """Measured speaker → air → mic → tap round trip on a MacBook Pro (24.6 ms)."""
 
 _FAR_HISTORY_S = 0.5
@@ -176,15 +176,12 @@ class EchoCanceller:
         self,
         channels: set[Channel],
         *,
-        delay_ms: int = DEFAULT_DELAY_MS,
-        noise_suppression: bool = False,
         cancel: bool = True,
         far_end_lag_s: float = 0.0,
     ) -> None:
         self.enabled = cancel and Channel.MIC in channels and Channel.SYSTEM in channels
         self.far_end_missing_ticks = 0
         self._zero_run = 0  # consecutive all-zero reference ticks under a live mic
-        self._delay_ms = delay_ms
         self._far_lag_s = far_end_lag_s
         self._near = _Track(Channel.MIC)
         self._far = _Track(Channel.SYSTEM)
@@ -196,11 +193,11 @@ class EchoCanceller:
             self._rtc = rtc
             self._apm = rtc.AudioProcessingModule(
                 echo_cancellation=True,
-                # AGC pumps the gain and fights the ASR front end; NS is off by
-                # default because this is an accuracy-first transcriber and the
+                # AGC pumps the gain and fights the ASR front end; NS is off
+                # because this is an accuracy-first transcriber and the
                 # suppressor colours speech. Neither is needed to cancel echo.
                 auto_gain_control=False,
-                noise_suppression=noise_suppression,
+                noise_suppression=False,
                 high_pass_filter=True,
             )
 
@@ -305,7 +302,7 @@ class EchoCanceller:
         assert self._apm is not None
         reverse = self._rtc.AudioFrame(far.tobytes(), SAMPLE_RATE, 1, TICK_SAMPLES)
         self._apm.process_reverse_stream(reverse)
-        self._apm.set_stream_delay_ms(self._delay_ms)
+        self._apm.set_stream_delay_ms(_DELAY_MS)
         capture = self._rtc.AudioFrame(near.tobytes(), SAMPLE_RATE, 1, TICK_SAMPLES)
         self._apm.process_stream(capture)
         return np.frombuffer(bytes(capture.data), dtype=np.int16)
@@ -355,14 +352,10 @@ class EchoCancellingProvider(CaptureProvider):
         self,
         inner: CaptureProvider,
         *,
-        delay_ms: int = DEFAULT_DELAY_MS,
-        noise_suppression: bool = False,
         cancel: bool = True,
         dump_dir: Path | None = None,
     ) -> None:
         self._inner = inner
-        self._delay_ms = delay_ms
-        self._noise_suppression = noise_suppression
         self._cancel = cancel
         self._dump_dir = dump_dir
         self._dump: AecDump | None = None
@@ -374,12 +367,7 @@ class EchoCancellingProvider(CaptureProvider):
         return self._canceller
 
     def start(self, channels: set[Channel]) -> None:
-        self._canceller = EchoCanceller(
-            channels,
-            delay_ms=self._delay_ms,
-            noise_suppression=self._noise_suppression,
-            cancel=self._cancel,
-        )
+        self._canceller = EchoCanceller(channels, cancel=self._cancel)
         if self._dump_dir is not None:
             self._dump = AecDump(self._dump_dir)
         self._inner.start(channels)

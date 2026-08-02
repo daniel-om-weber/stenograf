@@ -16,8 +16,11 @@ from collections.abc import Callable
 from typing import IO
 
 
-def read_up_to(stream: IO[bytes], n: int) -> bytes:
-    """Read ``n`` bytes, or whatever remains before end of stream."""
+def read_exact(stream: IO[bytes], n: int) -> bytes | None:
+    """Read exactly ``n`` bytes, or ``None`` at end of stream.
+
+    A partial tail is discarded — it means the writer died mid-record, and no
+    caller can use half a frame."""
     chunks = []
     remaining = n
     while remaining:
@@ -26,15 +29,7 @@ def read_up_to(stream: IO[bytes], n: int) -> bytes:
             break
         chunks.append(chunk)
         remaining -= len(chunk)
-    return b"".join(chunks)
-
-
-def read_exact(stream: IO[bytes], n: int) -> bytes | None:
-    """Read exactly ``n`` bytes, or ``None`` at end of stream.
-
-    A partial tail is discarded — it means the writer died mid-record, and no
-    caller can use half a frame."""
-    data = read_up_to(stream, n)
+    data = b"".join(chunks)
     return data if len(data) == n else None
 
 

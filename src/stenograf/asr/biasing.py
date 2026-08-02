@@ -83,7 +83,6 @@ class _Node:
     token: int = -1  # -1 marks the root
     token_score: float = 0.0  # reward on the arc *into* this node
     node_score: float = 0.0  # accumulated reward, root -> here
-    level: int = 0
     is_end: bool = False  # a phrase terminates here
     next: dict[int, _Node] = field(default_factory=dict)
     fail: _Node | None = None
@@ -159,7 +158,6 @@ class BoostingTree:
                     token=token,
                     token_score=score,
                     node_score=node.node_score + score,
-                    level=depth,
                     is_end=is_end,
                     fail=root,
                 )

@@ -70,7 +70,6 @@ from stenograf.vocab import collect_terms
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from stenograf.capture.base import CaptureProvider
     from stenograf.session import MeetingResult
 
 
@@ -435,7 +434,7 @@ class MeetingRun:
                 tee.close()  # flush + finalize the WAV header even on a dying run
                 view.status(f"recorded audio: {tee.path}")
         self.result = result
-        _report_lost_reference(provider, result, view)
+        _report_lost_reference(result, view)
         transcript = result.transcript
         if transcript is not None:
             # Usually persisted already, at the finalized event (PersistOnce
@@ -470,18 +469,16 @@ class MeetingRun:
         return transcript
 
 
-def _report_lost_reference(
-    provider: CaptureProvider, result: MeetingResult, view: LiveView
-) -> None:
+def _report_lost_reference(result: MeetingResult, view: LiveView) -> None:
     """Say how long echo cancellation ran unprotected, if it did.
 
     The canceller counts every 10 ms mic tick that ran without a usable system
     reference — frames that never arrived, or a dead tap delivering bit-exact
-    zeros. A lost reference degrades to "no cancellation" by design — but
-    silently, so say how much of the meeting ran unprotected, and whether the
-    armed text backstop had to clean up after it."""
-    canceller = getattr(provider, "canceller", None)
-    if canceller is None or canceller.far_end_missing_ticks <= 0:
+    zeros; the run reports that as ``result.reference_gap_s``. A lost
+    reference degrades to "no cancellation" by design — but silently, so say
+    how much of the meeting ran unprotected, and whether the armed text
+    backstop had to clean up after it."""
+    if not result.reference_gap_s:  # None = no canceller observed; 0 = healthy
         return
     if result.dropped_echo_lines:
         backstop = (
@@ -492,7 +489,7 @@ def _report_lost_reference(
         backstop = "; review Local lines in those spans for leaked remote speech"
     view.error(
         f"echo cancellation ran without its reference for "
-        f"{canceller.far_end_missing_ticks / 100:.1f}s — the system-audio tap "
+        f"{result.reference_gap_s:.1f}s — the system-audio tap "
         f"stalled or went silent{backstop}"
     )
 
