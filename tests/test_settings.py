@@ -146,7 +146,7 @@ provider = "dml"
     assert s.speakers.reid_threshold == 0.6
     assert s.speakers.profile_store == Path("~/steno/profiles.json").expanduser()
     assert s.asr.backend == "parakeet"
-    assert s.asr.provider == "dml"
+    assert s.asr.ep == "dml"
 
 
 def test_unknown_transcript_format_is_rejected_with_choices(tmp_path):
@@ -200,7 +200,7 @@ def test_unknown_asr_backend_is_rejected_with_choices(tmp_path):
     assert "parakeet" in str(excinfo.value)
 
 
-def test_unknown_asr_provider_is_rejected_with_choices(tmp_path):
+def test_unknown_asr_ep_is_rejected_with_choices(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text('[asr]\nprovider = "metal"\n', encoding="utf-8")
     with pytest.raises(SettingsError) as excinfo:

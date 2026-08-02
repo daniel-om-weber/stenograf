@@ -252,7 +252,7 @@ def transcribe(
             reid_threshold=reid_threshold,
             glossary_threshold=glossary_threshold,
             asr_backend=settings.asr.backend,
-            asr_provider=settings.asr.provider,
+            asr_ep=settings.asr.ep,
             asr_boost=settings.asr.boost,
             profile_store=reid_store,
         )
@@ -275,7 +275,7 @@ def transcribe(
         asr, vad, diarizer = loaders.load_backends(
             need_diarizer=speakers != 1,
             asr_backend=settings.asr.backend,
-            asr_provider=settings.asr.provider,
+            asr_ep=settings.asr.ep,
             glossary=glossary_terms,
             attendee_names=attendee_names,
             boost=settings.asr.boost,

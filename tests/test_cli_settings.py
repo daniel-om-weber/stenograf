@@ -106,9 +106,9 @@ def test_broken_settings_fail_fast_with_a_clean_error(tmp_path, stub_backends):
 def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
     calls = {}
 
-    def recording(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
+    def recording(*, need_diarizer, asr_backend=None, asr_ep=None, announce=None, **_):
         calls["asr_backend"] = asr_backend
-        calls["asr_provider"] = asr_provider
+        calls["asr_ep"] = asr_ep
         return fake_load_backends(need_diarizer=need_diarizer)
 
     monkeypatch.setattr(loaders, "load_backends", recording)
@@ -120,7 +120,7 @@ def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls["asr_backend"] == "parakeet"
-    assert calls["asr_provider"] == "dml"
+    assert calls["asr_ep"] == "dml"
 
 
 def test_glossary_reaches_the_loader_for_decode_time_biasing(tmp_path, monkeypatch):
@@ -218,8 +218,12 @@ def test_settings_show_covers_every_settings_key():
     settings = Settings()
     shown = {(table, key) for table, rows in settings_rows(settings) for key, _, _ in rows}
     # `meetings` is user-named preset sections, listed by `steno presets`, not
-    # a fixed key set; `notes.export_dir` is flattened onto its own table.
-    renamed = {("notes", "export_dir"): ("notes.export", "dir")}
+    # a fixed key set; `notes.export_dir` is flattened onto its own table;
+    # `asr.ep` keeps its user-facing key name (`provider`).
+    renamed = {
+        ("notes", "export_dir"): ("notes.export", "dir"),
+        ("asr", "ep"): ("asr", "provider"),
+    }
 
     missing = []
     for table in dataclasses.fields(settings):

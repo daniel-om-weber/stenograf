@@ -104,7 +104,7 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     monkeypatch.setattr(
         loaders,
         "load_backends",
-        lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_: (
+        lambda *, need_diarizer, asr_backend=None, asr_ep=None, announce=None, **_: (
             CliASR(),
             None,
             diar,

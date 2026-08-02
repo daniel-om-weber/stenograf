@@ -366,7 +366,7 @@ class MeetingRun:
             asr, vad, diarizer = loaders.load_backends(
                 need_diarizer=any(p.num_speakers != 1 for p in plans),
                 asr_backend=settings.asr.backend,
-                asr_provider=settings.asr.provider,
+                asr_ep=settings.asr.ep,
                 glossary=profile.glossary,
                 attendee_names=profile.attendee_names,
                 boost=settings.asr.boost,
@@ -560,7 +560,7 @@ def transcribe_recording(
             reid_threshold=settings.speakers.reid_threshold,
             glossary_threshold=settings.vocab.glossary_threshold,
             asr_backend=settings.asr.backend,
-            asr_provider=settings.asr.provider,
+            asr_ep=settings.asr.ep,
             asr_boost=settings.asr.boost,
             profile_store=settings.speakers.profile_store,
         )
@@ -572,7 +572,7 @@ def transcribe_recording(
         asr, vad, diarizer = loaders.load_backends(
             need_diarizer=diarize,
             asr_backend=settings.asr.backend,
-            asr_provider=settings.asr.provider,
+            asr_ep=settings.asr.ep,
             glossary=glossary_terms,
             attendee_names=attendee_names,
             boost=settings.asr.boost,

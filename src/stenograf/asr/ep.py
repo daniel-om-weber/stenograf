@@ -14,7 +14,7 @@ directory and silently clobber each other), so the wheel depends on
 ``onnxruntime-directml`` on Windows and plain ``onnxruntime`` elsewhere.
 ``auto`` picks the best accelerated provider that flavor actually offers,
 else CPU. This module stays import-light: settings validation reads
-``PROVIDER_CHOICES`` without touching onnxruntime.
+``EP_CHOICES`` without touching onnxruntime.
 """
 
 from __future__ import annotations
@@ -29,9 +29,9 @@ _ORT_PROVIDERS: dict[str, tuple[str, ...]] = {
     "cuda": ("CUDAExecutionProvider", "CPUExecutionProvider"),
 }
 
-PROVIDER_CHOICES: tuple[str, ...] = ("auto", *_ORT_PROVIDERS)
+EP_CHOICES: tuple[str, ...] = ("auto", *_ORT_PROVIDERS)
 
-PROVIDER_LABELS = {"cpu": "CPU", "dml": "DirectML", "cuda": "CUDA"}
+EP_LABELS = {"cpu": "CPU", "dml": "DirectML", "cuda": "CUDA"}
 """Human names for messages (doctor output)."""
 
 _ACCELERATED = ("dml", "cuda")
@@ -40,25 +40,25 @@ provider fails on the parakeet model (verified 2026-07-11), and macOS runs
 the MLX backend anyway."""
 
 
-def default_provider_name(configured: str | None = None) -> str:
+def default_ep(configured: str | None = None) -> str:
     """The provider used when none is named: the ``STENOGRAF_ASR_PROVIDER``
     override, else ``configured`` (the ``[asr] provider`` setting), else CPU."""
     return os.environ.get(ENV_OVERRIDE) or configured or "cpu"
 
 
-def validate_provider_name(name: str) -> str:
+def validate_ep(name: str) -> str:
     """``name`` if it is a known provider choice, raising :class:`ValueError`
     naming the choices otherwise (mirrors the backend-name validation)."""
-    if name not in PROVIDER_CHOICES:
+    if name not in EP_CHOICES:
         raise ValueError(
-            f"unknown ASR provider {name!r} (choose from {', '.join(PROVIDER_CHOICES)})"
+            f"unknown ASR provider {name!r} (choose from {', '.join(EP_CHOICES)})"
         )
     return name
 
 
 def resolve(name: str) -> str:
     """Collapse ``auto`` to a concrete provider against the installed ORT flavor."""
-    validate_provider_name(name)
+    validate_ep(name)
     if name != "auto":
         return name
     accelerated = available_accelerators()

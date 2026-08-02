@@ -84,7 +84,7 @@ def test_out_overwrite_guard_ignores_partial_checkpoints(tmp_path, monkeypatch):
 
 
 def test_transcribe_out_refusal_happens_before_any_transcription(tmp_path, monkeypatch):
-    def explode(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
+    def explode(*, need_diarizer, asr_backend=None, asr_ep=None, announce=None, **_):
         raise AssertionError("backends must not load when --out is refused")
 
     monkeypatch.setattr(loaders, "load_backends", explode)

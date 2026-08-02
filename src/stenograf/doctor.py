@@ -224,7 +224,7 @@ def _asr_check() -> Check:
         detail = f"{spec.label} ready"
         if model:
             detail += f" ({model}; weights from HuggingFace on first use)"
-        detail += _asr_provider_note(spec)
+        detail += _asr_ep_note(spec)
         return Check(name="ASR backend", ok=True, detail=detail)
     return Check(
         name="ASR backend",
@@ -235,35 +235,35 @@ def _asr_check() -> Check:
     )
 
 
-def _asr_provider_note(spec: BackendSpec) -> str:
+def _asr_ep_note(spec: BackendSpec) -> str:
     """Provider status for the ORT-backed backend: what's configured, or what
     acceleration the installed onnxruntime flavor offers but isn't being used.
     A broken settings file is _settings_check's finding, not this one's."""
     if spec.name != "parakeet-onnx":
         return ""
-    from stenograf.asr.providers import (
-        PROVIDER_LABELS,
+    from stenograf.asr.ep import (
+        EP_LABELS,
         available_accelerators,
-        default_provider_name,
-        validate_provider_name,
+        default_ep,
+        validate_ep,
     )
     from stenograf.settings import SettingsError, load_settings
 
     try:
-        configured = load_settings().asr.provider
+        configured = load_settings().asr.ep
     except SettingsError:
         configured = None
     try:
-        provider = validate_provider_name(default_provider_name(configured))
+        ep = validate_ep(default_ep(configured))
         accelerated = available_accelerators()
     except (ValueError, ImportError) as exc:
         return f"; provider: {exc}"
-    if provider != "cpu":
-        label = PROVIDER_LABELS.get(provider, "best available")
-        return f"; provider {provider} ({label}, CPU fallback)"
+    if ep != "cpu":
+        label = EP_LABELS.get(ep, "best available")
+        return f"; provider {ep} ({label}, CPU fallback)"
     if accelerated:
         return (
-            f"; CPU — {PROVIDER_LABELS[accelerated[0]]} available: set [asr] "
+            f"; CPU — {EP_LABELS[accelerated[0]]} available: set [asr] "
             f'provider = "{accelerated[0]}" to accelerate'
         )
     return ""

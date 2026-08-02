@@ -56,7 +56,7 @@ class ASRBackend(ABC):
     """Model identifier for display and provenance (HF repo / onnx-asr id);
     ``None`` when the backend has no meaningful id."""
 
-    provider: str | None = None
+    ep: str | None = None
     """Requested execution provider (``cpu``/``dml``/``cuda``/``auto``) —
     the ``[asr] provider`` / ``STENOGRAF_ASR_PROVIDER`` value, set by the
     loader before :meth:`load`. ``None`` (the default) declares that this

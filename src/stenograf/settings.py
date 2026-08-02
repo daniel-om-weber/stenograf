@@ -198,7 +198,7 @@ class SpeakerSettings:
 @dataclass(frozen=True)
 class AsrSettings:
     backend: str | None = None
-    provider: str | None = None
+    ep: str | None = None
     """ONNX Runtime execution provider for the ORT-backed backend; ``None`` =
     CPU. Backends with their own runtime (MLX) ignore it."""
 
@@ -459,14 +459,14 @@ def _asr_from_table(data: dict) -> AsrSettings:
             raise ValueError(
                 f"unknown ASR backend {backend!r} (choose from {', '.join(available_backends())})"
             )
-    provider = t.str_("provider")
-    if provider is not None:
-        from stenograf.asr.providers import validate_provider_name
+    ep = t.str_("provider")
+    if ep is not None:
+        from stenograf.asr.ep import validate_ep
 
-        validate_provider_name(provider)
+        validate_ep(ep)
     boost = t.number("boost", 0, 10)
     t.reject_unknown()
-    return AsrSettings(backend=backend, provider=provider, boost=boost)
+    return AsrSettings(backend=backend, ep=ep, boost=boost)
 
 
 def _notes_from_table(data: dict, label: str = "notes") -> NotesSettings:
@@ -662,7 +662,7 @@ def settings_rows(settings: Settings) -> list[tuple[str, list[tuple[str, str, st
         ("speakers", "reid_threshold", settings.speakers.reid_threshold, REID_THRESHOLD, None),
         ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
         ("asr", "backend", settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"),
-        ("asr", "provider", settings.asr.provider, "cpu", "STENOGRAF_ASR_PROVIDER"),
+        ("asr", "provider", settings.asr.ep, "cpu", "STENOGRAF_ASR_PROVIDER"),
         ("asr", "boost", settings.asr.boost, DEFAULT_ALPHA, None),
         ("notes", "auto", settings.notes.auto, False, None),
         ("notes", "backend", settings.notes.backend, notes_backend, "STENOGRAF_NOTES_BACKEND"),

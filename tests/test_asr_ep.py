@@ -17,15 +17,15 @@ import numpy as np
 import pytest
 
 from stenograf.asr.base import BackendUnavailableError
-from stenograf.asr.parakeet_onnx import ParakeetOnnxBackend
-from stenograf.asr.providers import (
-    PROVIDER_CHOICES,
+from stenograf.asr.ep import (
+    EP_CHOICES,
     available_accelerators,
-    default_provider_name,
+    default_ep,
     ort_providers,
     resolve,
-    validate_provider_name,
+    validate_ep,
 )
+from stenograf.asr.parakeet_onnx import ParakeetOnnxBackend
 
 
 def _stub_onnxruntime(monkeypatch, providers: list[str]) -> None:
@@ -33,19 +33,19 @@ def _stub_onnxruntime(monkeypatch, providers: list[str]) -> None:
     monkeypatch.setitem(sys.modules, "onnxruntime", module)
 
 
-def test_default_provider_name_precedence(monkeypatch):
+def test_default_ep_precedence(monkeypatch):
     # env override > configured ([asr] provider in settings.toml) > cpu
     monkeypatch.delenv("STENOGRAF_ASR_PROVIDER", raising=False)
-    assert default_provider_name() == "cpu"
-    assert default_provider_name("dml") == "dml"
+    assert default_ep() == "cpu"
+    assert default_ep("dml") == "dml"
     monkeypatch.setenv("STENOGRAF_ASR_PROVIDER", "cuda")
-    assert default_provider_name("dml") == "cuda"
+    assert default_ep("dml") == "cuda"
 
 
 def test_unknown_provider_raises_with_choices():
     with pytest.raises(ValueError, match="unknown ASR provider") as excinfo:
-        validate_provider_name("metal")
-    for choice in PROVIDER_CHOICES:
+        validate_ep("metal")
+    for choice in EP_CHOICES:
         assert choice in str(excinfo.value)
 
 
@@ -113,7 +113,7 @@ def test_backend_uses_accelerated_provider_after_canary(monkeypatch):
     dml = _FakeModel()
     _stub_onnxruntime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
     _stub_onnx_asr(monkeypatch, {"DmlExecutionProvider": dml})
-    backend = ParakeetOnnxBackend(provider="dml")
+    backend = ParakeetOnnxBackend(ep="dml")
     backend.load()
     assert dml.recognized == 1  # the canary decode
 
@@ -124,7 +124,7 @@ def test_backend_raises_when_session_creation_fails(monkeypatch):
         monkeypatch,
         {"DmlExecutionProvider": RuntimeError("D3D12 device unavailable")},
     )
-    backend = ParakeetOnnxBackend(provider="dml")
+    backend = ParakeetOnnxBackend(ep="dml")
     with pytest.raises(BackendUnavailableError) as excinfo:
         backend.load()
     assert "D3D12 device unavailable" in str(excinfo.value)
@@ -135,7 +135,7 @@ def test_backend_raises_when_the_canary_fails(monkeypatch):
     # The CoreML lesson: the session may build and still not run the model.
     _stub_onnxruntime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
     _stub_onnx_asr(monkeypatch, {"DmlExecutionProvider": _FakeModel(fail_recognize=True)})
-    backend = ParakeetOnnxBackend(provider="dml")
+    backend = ParakeetOnnxBackend(ep="dml")
     with pytest.raises(BackendUnavailableError) as excinfo:
         backend.load()
     # Only the first line of a multi-line ORT error is kept for the message.
@@ -151,7 +151,7 @@ def test_backend_raises_when_the_build_lacks_the_provider(monkeypatch):
     # load_model at all would KeyError, proving no session is attempted.
     _stub_onnxruntime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
     _stub_onnx_asr(monkeypatch, {})
-    backend = ParakeetOnnxBackend(provider="cuda")
+    backend = ParakeetOnnxBackend(ep="cuda")
     with pytest.raises(BackendUnavailableError) as excinfo:
         backend.load()
     assert "not in this onnxruntime build" in str(excinfo.value)

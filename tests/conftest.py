@@ -299,13 +299,13 @@ def voice_channel_pcms(seconds: int = 4) -> tuple[np.ndarray, np.ndarray]:
     return left, right
 
 
-def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
+def fake_load_backends(*, need_diarizer, asr_backend=None, asr_ep=None, announce=None, **_):
     """The loaders seam, offline: whole-buffer VAD (one window), no diarizer."""
     return CliASR(), WholeBufferVAD(), None
 
 
 def fake_channel_backends(
-    *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
+    *, need_diarizer, asr_backend=None, asr_ep=None, announce=None, **_
 ):
     return ChannelASR(), WholeBufferVAD(), None
 

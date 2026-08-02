@@ -495,7 +495,7 @@ def transcribe_split_channels(
     reid_threshold: float | None = None,
     glossary_threshold: float | None = None,
     asr_backend: str | None = None,
-    asr_provider: str | None = None,
+    asr_ep: str | None = None,
     asr_boost: float | None = None,
     profile_store: Path | None = None,
 ) -> tuple[MeetingResult, float]:
@@ -524,7 +524,7 @@ def transcribe_split_channels(
     asr, vad, diarizer = loaders.load_backends(
         need_diarizer=any(p.num_speakers != 1 for p in plans),
         asr_backend=asr_backend,
-        asr_provider=asr_provider,
+        asr_ep=asr_ep,
         glossary=profile.glossary,
         attendee_names=profile.attendee_names,
         boost=asr_boost,

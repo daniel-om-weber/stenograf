@@ -109,7 +109,7 @@ def load_backends(
     *,
     need_diarizer: bool,
     asr_backend: str | None = None,
-    asr_provider: str | None = None,
+    asr_ep: str | None = None,
     glossary: Sequence[str] = (),
     attendee_names: Sequence[str] = (),
     boost: float | None = None,
@@ -118,7 +118,7 @@ def load_backends(
     """Load the finalize backends (ASR, VAD, and optionally the diarizer).
 
     Shared by ``start`` and ``transcribe`` so both use the same committed
-    defaults. ``asr_backend`` and ``asr_provider`` are the ``[asr]`` settings;
+    defaults. ``asr_backend`` and ``asr_ep`` are the ``[asr]`` settings;
     ``STENOGRAF_ASR_BACKEND`` / ``STENOGRAF_ASR_PROVIDER`` still override them.
 
     The run's ``glossary`` and ``attendee_names`` are compiled into a boosting tree
@@ -131,7 +131,7 @@ def load_backends(
     """
     from stenograf import assets
     from stenograf.asr import create_backend
-    from stenograf.asr.providers import default_provider_name, validate_provider_name
+    from stenograf.asr.ep import default_ep, validate_ep
     from stenograf.asr.registry import default_backend_name, get_spec
     from stenograf.doctor import installed
     from stenograf.vad import SileroVAD
@@ -143,7 +143,7 @@ def load_backends(
     name = default_backend_name(asr_backend)
     try:
         spec = get_spec(name)
-        provider = validate_provider_name(default_provider_name(asr_provider))
+        ep = validate_ep(default_ep(asr_ep))
     except ValueError as exc:
         raise BackendUnavailableError(str(exc)) from exc
     missing = [module for module in spec.requires if not installed(module)]
@@ -162,10 +162,10 @@ def load_backends(
     # Only an ORT-backed backend is provider-configurable (provider != None);
     # a configured provider on a backend with its own runtime (MLX) is noted,
     # not an error, so one settings file can serve a mac and a Windows box.
-    if asr.provider is not None:
-        asr.provider = provider
-    elif provider != "cpu":
-        _say(announce, f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
+    if asr.ep is not None:
+        asr.ep = ep
+    elif ep != "cpu":
+        _say(announce, f"asr: provider {ep!r} ignored — {spec.label} manages its own runtime")
     _say(announce, f"asr: loading {asr.model_id or asr.name}")
     asr.load()  # an explicit accelerator that can't deliver raises here, loudly
     vad = SileroVAD(assets.fetch(assets.SILERO_VAD, download_progress(announce)))

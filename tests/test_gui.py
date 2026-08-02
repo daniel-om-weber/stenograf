@@ -286,7 +286,7 @@ class TestMeetingScreen:
             *,
             need_diarizer,
             asr_backend=None,
-            asr_provider=None,
+            asr_ep=None,
             glossary=(),
             attendee_names=(),
             boost=None,

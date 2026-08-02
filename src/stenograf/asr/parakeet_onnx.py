@@ -48,14 +48,14 @@ class ParakeetOnnxBackend(ASRBackend):
     # Always set; narrow the base's optional declarations (provider "cpu",
     # never None — this backend is provider-configurable).
     model_id: str
-    provider: str
+    ep: str
 
     def __init__(
         self,
         model_id: str = MODEL_ID,
         *,
         quantization: str | None = None,
-        provider: str | None = None,
+        ep: str | None = None,
         glossary: Sequence[str] = (),
         boost: float = DEFAULT_ALPHA,
     ) -> None:
@@ -65,15 +65,15 @@ class ParakeetOnnxBackend(ASRBackend):
         self._glossary = tuple(glossary)
         self._boost = boost
         # "cpu" (never None) marks this backend as provider-configurable.
-        self.provider = provider or "cpu"
+        self.ep = ep or "cpu"
 
     def load(self) -> None:
-        from stenograf.asr.providers import ort_providers, resolve, unavailable_reason
+        from stenograf.asr.ep import ort_providers, resolve, unavailable_reason
 
         # Never let onnx-asr default to "all available providers": ORT's CoreML
         # provider fails on this model (verified 2026-07-11), and acceleration
         # must be an explicit request so CPU stays the zero-surprise default.
-        requested = resolve(self.provider)
+        requested = resolve(self.ep)
         if requested != "cpu":
             # An explicit provider that can't deliver is a loud error, never a
             # silent CPU run at a fraction of the requested speed — the user
