@@ -345,9 +345,13 @@ class TestMeetingScreen:
         audio = transcripts[0].parent / "audio.wav"
         assert audio.exists() and audio.stat().st_size > 44
         # Loader progress must reach the view, never click: a GUI has no stdio,
-        # and on Windows click.echo dies probing its proxy.
-        assert callable(announced["load_backends"])
-        assert callable(announced["make_provider"])
+        # and on Windows click.echo dies probing its proxy. `callable(...)` would
+        # pass for click.echo too — prove the routing by firing the captured
+        # callbacks and requiring the probe on the screen's status line.
+        announced["load_backends"]("probe: backends announce")
+        pump(lambda: meeting.state["status"] == "probe: backends announce")
+        announced["make_provider"]("probe: provider announce")
+        pump(lambda: meeting.state["status"] == "probe: provider announce")
         assert isinstance(announced["on_log"], loaders.CaptureLog)
 
     def test_a_failed_start_lands_on_the_status_line(self, gui, tmp_path, monkeypatch):

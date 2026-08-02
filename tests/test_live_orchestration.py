@@ -73,6 +73,7 @@ class ListProvider(CaptureProvider):
         self._frames = frames
         self.started_channels: set[Channel] | None = None
         self.stopped = False
+        self.yielded = 0  # frames actually consumed — lets tests see an early stop
 
     def start(self, channels: set[Channel]) -> None:
         self.started_channels = channels
@@ -81,6 +82,7 @@ class ListProvider(CaptureProvider):
         for f in self._frames:
             if self.stopped:
                 return
+            self.yielded += 1
             yield f
 
     def stop(self) -> None:
@@ -208,7 +210,11 @@ class TestLiveWorker:
 
         assert not worker.is_alive()
         assert worker.error is None
-        assert flushes  # committed text flushed at least once (reconciled → once here)
+        # Exactly two: the interval flush (3 s processed ≥ the 1 s interval,
+        # coalesced into one by the reconcile) plus the unconditional close-time
+        # flush. The close-time flush alone would leave this at 1, so the count
+        # is what pins the interval logic.
+        assert len(flushes) == 2
 
     def test_flushes_once_more_after_the_final_decode(self):
         # 1 s of audio but a huge interval: no periodic flush ever fires, yet the
@@ -347,6 +353,18 @@ class TestMeetingRecorderLive:
         provider = ListProvider(_one_second_frames(10))
         transcript = self._recorder().run(provider, live=True, max_seconds=3.0).transcript
         assert provider.stopped
+        # The cap cut capture short: the store hits 3.0 s on the third frame and
+        # the loop pulls no more — 3 consumed, 7 never requested.
+        assert provider.yielded == 3
+        assert [e.speaker for e in transcript.entries] == ["Local-1"]
+
+    def test_batch_run_stops_at_max_seconds(self):
+        # Same cap on the batch (no-live) path, which runs capture on the
+        # calling thread through its own loop.
+        provider = ListProvider(_one_second_frames(10))
+        transcript = self._recorder().run(provider, max_seconds=3.0).transcript
+        assert provider.stopped
+        assert provider.yielded == 3
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
 
     def test_live_run_checkpoints_are_coarse_and_the_finalize_wins(self):
@@ -362,6 +380,9 @@ class TestMeetingRecorderLive:
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
         # Option B: any live checkpoint is channel-coarse and never empty (the
         # empty-flush guard means a `.partial` only appears once text exists).
+        # At minimum the close-time flush checkpoints the force-committed tail,
+        # so an empty list here means the checkpoint plumbing is disconnected.
+        assert checkpoints
         assert all(c.entries for c in checkpoints)
         assert all(e.speaker == "Local" for c in checkpoints for e in c.entries)
 
