@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 
 import click
 
+from stenograf.asr.base import BackendUnavailableError
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
@@ -43,18 +45,10 @@ if TYPE_CHECKING:
     Announce = Callable[[str], None]
 
 
-class BackendUnavailableError(RuntimeError):
-    """The configured backend cannot run here: an unknown backend/provider
-    name, or a backend whose runtime dependencies this install lacks. The
-    message is user-facing and names the setting to change."""
-
-
-def _say(announce: Announce | None, message: str, *, warn: bool = False) -> None:
+def _say(announce: Announce | None, message: str) -> None:
     """One progress line: the caller's sink, or click for the CLI (module docstring)."""
     if announce is not None:
         announce(message)
-    elif warn:
-        click.secho(message, fg="yellow", err=True)
     else:
         click.echo(message)
 
@@ -138,11 +132,7 @@ def load_backends(
     """
     from stenograf import models
     from stenograf.asr import create_backend
-    from stenograf.asr.providers import (
-        PROVIDER_LABELS,
-        default_provider_name,
-        validate_provider_name,
-    )
+    from stenograf.asr.providers import default_provider_name, validate_provider_name
     from stenograf.asr.registry import default_backend_name, get_spec
     from stenograf.doctor import installed
     from stenograf.vad import SileroVAD
@@ -178,11 +168,7 @@ def load_backends(
     elif provider != "cpu":
         _say(announce, f"asr: provider {provider!r} ignored — {spec.label} manages its own runtime")
     _say(announce, f"asr: loading {asr.model_id or asr.name}")
-    asr.load()
-    if fallback := asr.provider_fallback:
-        _say(announce, f"asr: acceleration unavailable ({fallback}) — using CPU", warn=True)
-    elif (active := asr.active_provider) not in (None, "cpu"):
-        _say(announce, f"asr: accelerated ({PROVIDER_LABELS[active]})")
+    asr.load()  # an explicit accelerator that can't deliver raises here, loudly
     vad = SileroVAD(models.fetch(models.SILERO_VAD, download_progress(announce)))
     diarizer = load_diarizer(announce=announce) if need_diarizer else None
     return asr, vad, diarizer

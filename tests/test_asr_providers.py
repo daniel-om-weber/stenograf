@@ -2,9 +2,10 @@
 
 The contract under test: CPU is the default unless a provider is configured;
 ``auto`` collapses against what the installed onnxruntime flavor offers; and an
-accelerated provider that fails to initialize *or* to decode (the CoreML
-lesson: session creation succeeding proves nothing) falls back to CPU with the
-reason recorded — a broken GPU stack must never block a meeting.
+explicitly requested accelerator that fails to initialize *or* to decode (the
+CoreML lesson: session creation succeeding proves nothing) raises with the
+reason — the user asked for acceleration, so a silent CPU run at a fraction of
+the speed is worse than a clean error naming the setting to change.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import types
 import numpy as np
 import pytest
 
+from stenograf.asr.base import BackendUnavailableError
 from stenograf.asr.parakeet_onnx import ParakeetOnnxBackend
 from stenograf.asr.providers import (
     PROVIDER_CHOICES,
@@ -104,8 +106,6 @@ def test_backend_defaults_to_cpu_without_canary(monkeypatch):
     _stub_onnx_asr(monkeypatch, {"CPUExecutionProvider": cpu})
     backend = ParakeetOnnxBackend()
     backend.load()
-    assert backend.active_provider == "cpu"
-    assert backend.provider_fallback is None
     assert cpu.recognized == 0  # no canary cost on the CPU path
 
 
@@ -115,54 +115,44 @@ def test_backend_uses_accelerated_provider_after_canary(monkeypatch):
     _stub_onnx_asr(monkeypatch, {"DmlExecutionProvider": dml})
     backend = ParakeetOnnxBackend(provider="dml")
     backend.load()
-    assert backend.active_provider == "dml"
-    assert backend.provider_fallback is None
     assert dml.recognized == 1  # the canary decode
 
 
-def test_backend_falls_back_to_cpu_when_session_creation_fails(monkeypatch):
-    cpu = _FakeModel()
+def test_backend_raises_when_session_creation_fails(monkeypatch):
     _stub_onnxruntime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
     _stub_onnx_asr(
         monkeypatch,
-        {
-            "DmlExecutionProvider": RuntimeError("D3D12 device unavailable"),
-            "CPUExecutionProvider": cpu,
-        },
+        {"DmlExecutionProvider": RuntimeError("D3D12 device unavailable")},
     )
     backend = ParakeetOnnxBackend(provider="dml")
-    backend.load()
-    assert backend.active_provider == "cpu"
-    assert backend.provider_fallback == "dml: D3D12 device unavailable"
+    with pytest.raises(BackendUnavailableError) as excinfo:
+        backend.load()
+    assert "D3D12 device unavailable" in str(excinfo.value)
+    assert '[asr] provider = "cpu"' in str(excinfo.value)  # names the way out
 
 
-def test_backend_falls_back_to_cpu_when_the_canary_fails(monkeypatch):
+def test_backend_raises_when_the_canary_fails(monkeypatch):
     # The CoreML lesson: the session may build and still not run the model.
-    cpu = _FakeModel()
     _stub_onnxruntime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
-    _stub_onnx_asr(
-        monkeypatch,
-        {"DmlExecutionProvider": _FakeModel(fail_recognize=True), "CPUExecutionProvider": cpu},
-    )
+    _stub_onnx_asr(monkeypatch, {"DmlExecutionProvider": _FakeModel(fail_recognize=True)})
     backend = ParakeetOnnxBackend(provider="dml")
-    backend.load()
-    assert backend.active_provider == "cpu"
+    with pytest.raises(BackendUnavailableError) as excinfo:
+        backend.load()
     # Only the first line of a multi-line ORT error is kept for the message.
-    assert backend.provider_fallback == "dml: no DirectML device"
+    assert "no DirectML device" in str(excinfo.value)
+    assert "long ORT traceback" not in str(excinfo.value)
 
 
-def test_backend_falls_back_when_the_build_lacks_the_provider(monkeypatch):
+def test_backend_raises_when_the_build_lacks_the_provider(monkeypatch):
     # ORT does not raise on an unlisted provider — it warns and silently runs
     # on what remains, so the backend must pre-check the build or it would
     # claim acceleration while running on CPU (observed with cuda requested
-    # against the DirectML flavor). The stub dict has no CUDA entry: reaching
-    # load_model with CUDA would KeyError, proving no session is attempted.
-    cpu = _FakeModel()
+    # against the DirectML flavor). The stub dict is empty: reaching
+    # load_model at all would KeyError, proving no session is attempted.
     _stub_onnxruntime(monkeypatch, ["DmlExecutionProvider", "CPUExecutionProvider"])
-    _stub_onnx_asr(monkeypatch, {"CPUExecutionProvider": cpu})
+    _stub_onnx_asr(monkeypatch, {})
     backend = ParakeetOnnxBackend(provider="cuda")
-    backend.load()
-    assert backend.active_provider == "cpu"
-    assert backend.provider_fallback is not None
-    assert "not in this onnxruntime build" in backend.provider_fallback
-    assert "DmlExecutionProvider" in backend.provider_fallback  # names what IS available
+    with pytest.raises(BackendUnavailableError) as excinfo:
+        backend.load()
+    assert "not in this onnxruntime build" in str(excinfo.value)
+    assert "DmlExecutionProvider" in str(excinfo.value)  # names what IS available

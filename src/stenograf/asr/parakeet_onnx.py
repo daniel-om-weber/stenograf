@@ -26,7 +26,7 @@ from typing import Any
 
 import numpy as np
 
-from stenograf.asr.base import ASRBackend, Segment, Word
+from stenograf.asr.base import ASRBackend, BackendUnavailableError, Segment, Word
 from stenograf.asr.biasing import DEFAULT_ALPHA, BoostingTree
 from stenograf.asr.biasing import build as build_tree
 from stenograf.asr.tokens import Token, load_encoder, merge_tokens
@@ -64,11 +64,8 @@ class ParakeetOnnxBackend(ASRBackend):
         self._model = None
         self._glossary = tuple(glossary)
         self._boost = boost
-        # Diagnostics surface declared on ASRBackend; "cpu" (never None)
-        # marks this backend as provider-configurable.
+        # "cpu" (never None) marks this backend as provider-configurable.
         self.provider = provider or "cpu"
-        self.active_provider = None
-        self.provider_fallback = None
 
     def load(self) -> None:
         from stenograf.asr.providers import ort_providers, resolve, unavailable_reason
@@ -78,30 +75,36 @@ class ParakeetOnnxBackend(ASRBackend):
         # must be an explicit request so CPU stays the zero-surprise default.
         requested = resolve(self.provider)
         if requested != "cpu":
+            # An explicit provider that can't deliver is a loud error, never a
+            # silent CPU run at a fraction of the requested speed — the user
+            # asked for acceleration, so its absence is theirs to resolve.
             # Pre-check the build: ORT does not raise on an unlisted provider,
             # it warns and silently runs on what remains — the canary would
             # pass on CPU and the run would claim acceleration it isn't getting.
             reason = unavailable_reason(requested)
             if reason is not None:
-                self.provider_fallback = f"{requested}: {reason}"
-            else:
-                try:
-                    model = self._load_with(ort_providers(requested))
-                    # Canary: session creation succeeding does not mean
-                    # inference works (CoreML initialized, then died decoding) —
-                    # commit only after the provider survives a second of silence.
-                    model.recognize(
-                        np.zeros(SAMPLE_RATE, dtype=np.float32), sample_rate=SAMPLE_RATE
-                    )
-                    self._model = model
-                    self.active_provider = requested
-                    return
-                except Exception as exc:  # noqa: BLE001 — any init/run failure means CPU
-                    text = str(exc).strip()
-                    first_line = text.splitlines()[0] if text else repr(exc)
-                    self.provider_fallback = f"{requested}: {first_line}"
+                raise BackendUnavailableError(
+                    f"ASR provider {requested!r} cannot run here ({reason}) — "
+                    'set [asr] provider = "cpu" in settings.toml, or unset '
+                    "STENOGRAF_ASR_PROVIDER"
+                )
+            try:
+                model = self._load_with(ort_providers(requested))
+                # Canary: session creation succeeding does not mean inference
+                # works (CoreML initialized, then died decoding) — commit only
+                # after the provider survives a second of silence.
+                model.recognize(np.zeros(SAMPLE_RATE, dtype=np.float32), sample_rate=SAMPLE_RATE)
+            except Exception as exc:
+                text = str(exc).strip()
+                first_line = text.splitlines()[0] if text else repr(exc)
+                raise BackendUnavailableError(
+                    f"ASR provider {requested!r} failed to initialize or decode "
+                    f'({first_line}) — set [asr] provider = "cpu" in settings.toml, '
+                    "or unset STENOGRAF_ASR_PROVIDER"
+                ) from exc
+            self._model = model
+            return
         self._model = self._load_with(ort_providers("cpu"))
-        self.active_provider = "cpu"
 
     def _load_with(self, providers: list[str]):
         import onnx_asr

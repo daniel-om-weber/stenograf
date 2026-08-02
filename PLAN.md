@@ -506,6 +506,15 @@ has no `win_amd64` wheel) — plus `eval/aec_alignment.py` on the dump. It is ha
 an hour of speech out loud, so it wants an empty room, and the rig pins an
 en-US SAPI voice because the system default is German.
 
+**DirectML fail-loudly (2026-08-02) — verify on the real Windows box before the
+next release.** An explicit `[asr] provider = "dml"` that can't deliver now
+raises `BackendUnavailableError` with the canary's reason instead of silently
+running on CPU; the fallback branch and the `provider_fallback`/`active_provider`
+plumbing are deleted. To confirm on the GPD notebook: a healthy `dml` run still
+loads and transcribes, and a forced failure (`STENOGRAF_ASR_PROVIDER=cuda`
+against the DirectML build) exits with the clean error naming
+`[asr] provider = "cpu"`.
+
 **Linux — the same root cause, closed by construction 2026-08-02.** The
 never-measured Linux echo-cancellation risk (`parec`, one subprocess per
 channel, both arrival-stamped by `SessionClock`) ended the way the

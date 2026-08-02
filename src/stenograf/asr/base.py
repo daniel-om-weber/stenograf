@@ -24,6 +24,13 @@ import numpy as np
 from stenograf.config import Language
 
 
+class BackendUnavailableError(RuntimeError):
+    """The configured backend cannot run here: an unknown backend/provider
+    name, a backend whose runtime dependencies this install lacks, or an
+    explicitly requested execution provider that failed to deliver. The
+    message is user-facing and names the setting to change."""
+
+
 @dataclass(frozen=True)
 class Word:
     text: str
@@ -54,13 +61,9 @@ class ASRBackend(ABC):
     the ``[asr] provider`` / ``STENOGRAF_ASR_PROVIDER`` value, set by the
     loader before :meth:`load`. ``None`` (the default) declares that this
     backend manages its own runtime (MLX) and providers do not apply; an
-    ORT-backed backend initializes it to ``"cpu"``."""
-
-    active_provider: str | None = None
-    """The provider actually running after :meth:`load` (post-fallback)."""
-
-    provider_fallback: str | None = None
-    """Why an accelerated provider was abandoned for CPU, or ``None``."""
+    ORT-backed backend initializes it to ``"cpu"``. An explicitly requested
+    accelerator that cannot deliver makes :meth:`load` raise
+    :class:`BackendUnavailableError` — never a silent CPU run."""
 
     @abstractmethod
     def load(self) -> None:

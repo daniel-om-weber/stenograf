@@ -32,7 +32,7 @@ _ORT_PROVIDERS: dict[str, tuple[str, ...]] = {
 PROVIDER_CHOICES: tuple[str, ...] = ("auto", *_ORT_PROVIDERS)
 
 PROVIDER_LABELS = {"cpu": "CPU", "dml": "DirectML", "cuda": "CUDA"}
-"""Human names for messages (`asr: accelerated (DirectML)`, doctor output)."""
+"""Human names for messages (doctor output)."""
 
 _ACCELERATED = ("dml", "cuda")
 """``auto`` preference order; CoreML is deliberately absent — ORT's CoreML
