@@ -134,6 +134,10 @@ def query_devices(channels: set[Channel]) -> dict[Channel, str]:
         result = subprocess.run(argv, capture_output=True, timeout=15, check=False)
     except OSError as exc:
         raise CaptureUnavailableError(f"the capture helper could not be run ({exc})") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CaptureUnavailableError(
+            "the capture helper's device query timed out — sound server hung?"
+        ) from exc
     if result.returncode != 0:
         raise CaptureUnavailableError(_helper_complaint(result.stderr))
     try:

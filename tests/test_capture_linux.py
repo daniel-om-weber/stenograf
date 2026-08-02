@@ -77,3 +77,19 @@ class TestDefaultDevices:
         monkeypatch.setattr(helper, "find_helper", lambda: "no-such-helper-binary")
         with pytest.raises(CaptureUnavailableError, match="could not be run"):
             default_devices({Channel.MIC})
+
+    def test_a_hung_helper_is_a_capture_error(self, monkeypatch):
+        # A sound server that accepts the connection and never answers leaves
+        # the helper blocked in its connect loop; the query's own timeout must
+        # surface as a capture error (the CLI preflight and doctor catch those),
+        # not a TimeoutExpired traceback.
+        import stenograf.capture.helper as helper
+
+        monkeypatch.setattr(helper, "find_helper", lambda: "stenocap")
+
+        def hang(command, **kwargs):
+            raise subprocess.TimeoutExpired(command, 15)
+
+        monkeypatch.setattr(helper.subprocess, "run", hang)
+        with pytest.raises(CaptureUnavailableError, match="timed out"):
+            default_devices({Channel.MIC})
