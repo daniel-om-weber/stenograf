@@ -80,6 +80,9 @@ class CaptureLog:
         """A LiveView (or None until one is attached); gets problem lines."""
 
     def __call__(self, line: str) -> None:
+        from stenograf.log import logger
+
+        logger.debug("capture: %s", line)
         self.lines.append(line)
         if self.view is not None and self._is_problem(line):
             self.view.error(line)

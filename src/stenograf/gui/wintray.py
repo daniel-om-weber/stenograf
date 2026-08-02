@@ -58,6 +58,8 @@ from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 from PySide6.QtGui import QCursor, QImage
 from PySide6.QtWidgets import QSystemTrayIcon
 
+from stenograf.log import logger
+
 if TYPE_CHECKING:
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QMenu
@@ -528,7 +530,7 @@ class WindowsStatusIcon(QObject):
         try:
             handle = _hicon(icon, _user32.GetSystemMetrics(_SM_CXSMICON))
         except OSError as exc:
-            print(f"could not draw the Stenograf status icon ({exc})", file=sys.stderr)
+            logger.warning("could not draw the Stenograf status icon (%s)", exc)
             return
         previous = self._icon_handle
         self._icon_handle = handle

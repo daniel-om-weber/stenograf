@@ -753,7 +753,7 @@ class TestTray:
         assert QGuiApplication.platformName() == "offscreen"
         assert type(_status_icon(qt_app)) is QSystemTrayIcon
 
-    def test_a_status_icon_the_shell_refuses_falls_back_to_qt_s(self, gui, monkeypatch, capsys):
+    def test_a_status_icon_the_shell_refuses_falls_back_to_qt_s(self, gui, monkeypatch, caplog):
         # Only the Windows icon can report this: NIM_ADD is refused while
         # Explorer is still starting, which is precisely when a login item runs.
         # Ignoring it would leave `install` returning a Tray, `run` no longer
@@ -772,7 +772,7 @@ class TestTray:
         tray = tray_module.Tray(shell)
         assert type(tray.icon) is QSystemTrayIcon, "the refusal was ignored"
         assert not tray.icon.icon().isNull(), "the replacement icon has no artwork"
-        assert "falling back" in capsys.readouterr().err
+        assert "falling back" in caplog.text
 
     def test_the_icon_follows_the_meeting_but_not_its_clock(self, tray, gui):
         shell, _engine = gui

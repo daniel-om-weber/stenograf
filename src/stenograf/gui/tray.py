@@ -56,6 +56,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from stenograf import ASSETS
+from stenograf.log import logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -126,10 +127,10 @@ def _status_icon(parent: QObject) -> StatusIcon:
 
             return WindowsStatusIcon(parent)
         except (OSError, ImportError) as exc:
-            print(
-                f"could not create the Stenograf status icon ({exc}) — falling back to "
+            logger.warning(
+                "could not create the Stenograf status icon (%s) — falling back to "
                 "Qt's, which Windows may keep hidden in the overflow",
-                file=sys.stderr,
+                exc,
             )
     return QSystemTrayIcon(parent)
 
@@ -267,10 +268,9 @@ class Tray(QObject):
         # Only the native icon reports; QSystemTrayIcon.show() returns None, so
         # the fallback cannot recurse into itself.
         if icon.show() is False:
-            print(
+            logger.warning(
                 "the Windows shell refused the Stenograf status icon — falling back to "
-                "Qt's, which it may keep hidden in the overflow",
-                file=sys.stderr,
+                "Qt's, which it may keep hidden in the overflow"
             )
             icon.deleteLater()
             self._show_icon(QSystemTrayIcon(self))

@@ -63,6 +63,7 @@ from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication
 
 from stenograf import ASSETS
+from stenograf.log import logger
 from stenograf.shortcut import APP_USER_MODEL_ID, APPLICATION_NAME, DESKTOP_FILE_NAME
 
 if TYPE_CHECKING:
@@ -413,11 +414,11 @@ def claim_single_instance(parent: QObject | None = None) -> QLocalServer | None:
     QLocalServer.removeServer(name)
     if not server.listen(name):
         # Never fatal: an app that will not open is worse than one that can be
-        # opened twice. Say so on stderr and carry on.
-        print(
-            f"could not claim {server.fullServerName() or name} "
-            f"({server.errorString()}) — a second launch will start a second copy",
-            file=sys.stderr,
+        # opened twice. Note it and carry on.
+        logger.warning(
+            "could not claim %s (%s) — a second launch will start a second copy",
+            server.fullServerName() or name,
+            server.errorString(),
         )
     return server
 
@@ -569,10 +570,9 @@ def run(*, tray: bool = False) -> int:
         # would quit us the moment it hides.
         app.setQuitOnLastWindowClosed(False)
     elif tray:
-        print(
+        logger.warning(
             "this desktop has no system tray, so --tray opened a window instead "
-            "(stock GNOME needs the AppIndicator extension)",
-            file=sys.stderr,
+            "(stock GNOME needs the AppIndicator extension)"
         )
     # Shown from here, not by the QML: a headless test can build the whole tree
     # (catching every QML error) without a window ever being realized.
