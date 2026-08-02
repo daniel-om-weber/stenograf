@@ -1,10 +1,10 @@
-"""Label-free evaluation of the live pass (Task 1 acceptance).
+"""Label-free evaluation of the live pass.
 
 The live pass is provisional text that the finalize pass replaces on stop, so its
 reference is finalize's own full-attention ``generate()`` output on the same
 audio — *not* a human transcript. This drives
-``stenograf.live.LiveDecoder`` over a raw clip in simulated real time and reports
-the three label-free metrics:
+``stenograf.live.WindowedLiveDecoder`` over a raw clip in simulated real time and
+reports the three label-free metrics:
 
 1. Agreement with finalize — WER of the committed-live transcript vs a full
    ``finalize_channel`` pass on the same audio (the live-degradation number).
@@ -13,7 +13,7 @@ the three label-free metrics:
 3. Commit latency — audio-arrival → commit time, per committed word.
 
 Unlike the other eval/ scripts this one imports the shipped package: it is
-testing the real ``LiveDecoder``, not a Phase-0 candidate model.
+testing the real decoder, not a candidate model.
 
 Usage:
     uv run --group eval eval/live.py                        # de-1 + en-1 wavs
@@ -36,7 +36,7 @@ from stenograf import models
 from stenograf.asr.base import Word
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.audio import SAMPLE_RATE, load_audio
-from stenograf.live import LiveDecoder, StreamingDecoder, WindowedLiveDecoder
+from stenograf.live import WindowedLiveDecoder
 from stenograf.pipeline import finalize_channel
 from stenograf.vad import SileroVAD
 
@@ -51,7 +51,7 @@ def _pctl(values: list[float], q: float) -> float:
 
 
 def stream(
-    clip, decoder: StreamingDecoder, feed_chunk: float
+    clip, decoder: WindowedLiveDecoder, feed_chunk: float
 ) -> tuple[list[Word], list[float], int]:
     """Feed the clip in real-time-sized chunks; return committed words, per-word
     commit latencies (feed commits only), and the count force-committed at flush."""
@@ -88,8 +88,6 @@ def evaluate(
     feed_chunk: float,
     asr: ParakeetMLXBackend,
     vad: SileroVAD,
-    decode_interval: float | None,
-    mode: str,
 ) -> dict:
     samples = load_audio(source)
     lo = int(start * SAMPLE_RATE)
@@ -109,10 +107,7 @@ def evaluate(
     finalize_s = time.monotonic() - t0
 
     t0 = time.monotonic()
-    if mode == "window":
-        decoder = WindowedLiveDecoder(asr, vad=vad)
-    else:
-        decoder = LiveDecoder(asr, vad=vad, decode_interval=decode_interval)
+    decoder = WindowedLiveDecoder(asr, vad=vad)
     committed, latencies, flushed = stream(clip, decoder, feed_chunk)
     live_s = time.monotonic() - t0
     hypothesis = " ".join(w.text for w in committed)
@@ -155,21 +150,7 @@ def main() -> int:
         default=1.0,
         help="Simulated arrival chunk (s) — sets the caption cadence.",
     )
-    ap.add_argument(
-        "--decode-interval",
-        default="none",
-        help="LiveDecoder decode_interval: seconds, or 'none' for utterance "
-        "mode (decode only at VAD endpoints).",
-    )
-    ap.add_argument(
-        "--mode",
-        choices=["live", "window"],
-        default="window",
-        help="'window' = WindowedLiveDecoder (the product default: finalize-"
-        "identical windows); 'live' = LiveDecoder at --decode-interval.",
-    )
     args = ap.parse_args()
-    decode_interval = None if args.decode_interval == "none" else float(args.decode_interval)
 
     sources = args.source or DEFAULT_SOURCES
     missing = [s for s in sources if not s.exists()]
@@ -185,10 +166,7 @@ def main() -> int:
     asr.load()
     vad = SileroVAD(models.fetch(models.SILERO_VAD))
 
-    summary = [
-        evaluate(s, args.start, args.dur, args.feed_chunk, asr, vad, decode_interval, args.mode)
-        for s in sources
-    ]
+    summary = [evaluate(s, args.start, args.dur, args.feed_chunk, asr, vad) for s in sources]
 
     print("\n=== summary ===")
     for row in summary:

@@ -52,7 +52,7 @@ from stenograf.config import (
 from stenograf.diarization.base import Diarizer
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
 from stenograf.lid import detect_language
-from stenograf.live import LiveDecoder, StreamingDecoder, StreamingUpdate, WindowedLiveDecoder
+from stenograf.live import StreamingUpdate, WindowedLiveDecoder
 from stenograf.pipeline import SpeakerResolver, finalize_channel, group_words, relabel_speakers
 from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD
@@ -529,7 +529,7 @@ class CaptureLoop(threading.Thread):
 
 
 class LiveWorker(threading.Thread):
-    """The single ASR inference thread — one :class:`LiveDecoder` per channel.
+    """The single ASR inference thread — one decoder per channel.
 
     Waits on the :class:`AudioBus`, and each wake feeds every channel the audio
     that arrived since it last looked (``store.view`` — O(window)), reconciled to
@@ -537,8 +537,8 @@ class LiveWorker(threading.Thread):
     single-flight, so it never contends with the finalize pass for the one
     accelerator; ``inference_lock`` makes that guarantee explicit and is the
     extension point for a future overlapping finalize. On close it feeds the final
-    window and :meth:`~stenograf.live.LiveDecoder.flush`\\ es each decoder to
-    force-commit the tail.
+    window and :meth:`~stenograf.live.WindowedLiveDecoder.flush`\\ es each decoder
+    to force-commit the tail.
 
     Option B checkpointing: every ``flush_interval`` seconds of
     processed audio the worker calls ``on_flush`` — a zero-inference hook that
@@ -551,7 +551,7 @@ class LiveWorker(threading.Thread):
         self,
         store: SessionStore,
         bus: AudioBus,
-        decoders: dict[Channel, StreamingDecoder],
+        decoders: dict[Channel, WindowedLiveDecoder],
         inference_lock: threading.Lock,
         *,
         channels: list[Channel],
@@ -741,7 +741,7 @@ class _LiveCheckpointer:
         self._closed: dict[Channel, list[TranscriptEntry]] = {}
         self._grouped: dict[Channel, int] = {}  # words already inside closed entries
 
-    def transcript(self, decoders: dict[Channel, StreamingDecoder]) -> Transcript:
+    def transcript(self, decoders: dict[Channel, WindowedLiveDecoder]) -> Transcript:
         entries: list[TranscriptEntry] = []
         for channel, decoder in decoders.items():
             closed = self._closed.setdefault(channel, [])
@@ -777,28 +777,17 @@ class MeetingRecorder:
         language: Language | None = None,
         glossary_threshold: float | None = None,
         dedup_echo: bool = True,
-        live_decode_interval: float | None = None,
     ) -> None:
         self.profile = profile
         self.asr = asr
         self.vad = vad
         self.diarizer = diarizer
         self.reid = reid
-        self.live_decode_interval = live_decode_interval
-        """Live pass decode cadence. None (the default) selects the window pass
-        (:class:`~stenograf.live.WindowedLiveDecoder`): captions land a
-        finalize-sized window at a time, each second of speech is decoded exactly
-        once, and the on-stop finalize reuses those decodes verbatim (skipping
-        its own ASR pass) — the efficiency floor, chosen because the live view
-        runs in the background. A float restores speculative LocalAgreement
-        re-decodes at that interval for a future low-latency mode; the finalize
-        pass then re-decodes everything itself."""
         self.reuse_live_finalize = True
         """Whether the on-stop finalize may reuse the window pass's decodes.
         ``--full-finalize`` clears it to force a from-scratch ASR pass at stop
         (an A/B and paranoia escape hatch). Reuse also self-disables per channel
-        on any live load-shed, and entirely on a live-worker error or a non-None
-        :attr:`live_decode_interval`."""
+        on any live load-shed, and entirely on a live-worker error."""
         self.dedup_echo = dedup_echo
         """Whether finalize may run :func:`drop_echo_duplicates` on the mic channel.
         The CLI ties this to ``--aec``: with cancellation off the user asked for
@@ -840,9 +829,9 @@ class MeetingRecorder:
 
         With ``live=True`` the meeting runs the streaming pass: capture on its own
         thread feeding a single :class:`LiveWorker` that drives a
-        :class:`~stenograf.live.LiveDecoder` per channel and streams committed and
-        interim words to the view. The heavy finalize still runs once on stop and
-        replaces the whole live transcript.
+        :class:`~stenograf.live.WindowedLiveDecoder` per channel and streams
+        committed words to the view. The heavy finalize still runs once on stop
+        and replaces the whole live transcript.
 
         Events go to the single :class:`~stenograf.view.LiveView` sink (the
         CLI's TUI / plain view; the bare base class is the null view and the
@@ -956,8 +945,8 @@ class MeetingRecorder:
         """Live pass: threaded capture + one inference worker, then finalize.
 
         Capture runs on :class:`CaptureLoop` (never blocked by inference); one
-        :class:`LiveWorker` drives a :class:`~stenograf.live.LiveDecoder` per
-        channel and streams updates to the view. On stop the worker is joined
+        :class:`LiveWorker` drives a :class:`~stenograf.live.WindowedLiveDecoder`
+        per channel and streams updates to the view. On stop the worker is joined
         and the full finalize pass runs — it replaces the whole live transcript,
         so live compromises never reach the final output.
 
@@ -972,26 +961,12 @@ class MeetingRecorder:
         """
         channels = [p.channel for p in plans]
         bus = AudioBus(channels)
-        # The window pass needs a streaming VAD; a duck-typed VAD without one
-        # (test fakes) falls back to the utterance-mode LiveDecoder, no reuse.
         vad = self.vad
-        windowed = self.live_decode_interval is None and vad is not None and hasattr(vad, "stream")
-        if windowed:
-            assert vad is not None  # windowed requires a streaming VAD
-            decoders: dict[Channel, StreamingDecoder] = {
-                ch: WindowedLiveDecoder(self.asr, vad=vad, language=self.language)
-                for ch in channels
-            }
-        else:
-            decoders = {
-                ch: LiveDecoder(
-                    self.asr,
-                    vad=vad,
-                    language=self.language,
-                    decode_interval=self.live_decode_interval,
-                )
-                for ch in channels
-            }
+        if vad is None:
+            raise ValueError("the live pass needs a streaming VAD (vad.stream)")
+        decoders = {
+            ch: WindowedLiveDecoder(self.asr, vad=vad, language=self.language) for ch in channels
+        }
         inference_lock = threading.Lock()
 
         checkpointer = _LiveCheckpointer(self.checkpoint_transcript)
@@ -1033,11 +1008,11 @@ class MeetingRecorder:
             worker.join()
             provider.stop()  # idempotent — releases the device if capture ended on its own
             # The window pass produced finalize-identical decodes (same windows,
-            # same model — eval/live.py --mode window); reuse them so finalize
+            # same model — eval/live.py); reuse them so finalize
             # skips its ASR pass. A load-shed channel has a caption gap and a
             # worker error leaves unknown coverage — both re-decode classically.
             live_words: dict[Channel, tuple[Word, ...]] | None = None
-            if windowed and self.reuse_live_finalize and worker.error is None:
+            if self.reuse_live_finalize and worker.error is None:
                 live_words = {
                     ch: decoders[ch].committed_words
                     for ch in channels
@@ -1273,7 +1248,7 @@ class MeetingRecorder:
                 view.error(f"{plan.channel}: finalize failed ({exc2}); skipping channel")
                 return []
 
-    def live_checkpoint(self, decoders: dict[Channel, StreamingDecoder]) -> Transcript:
+    def live_checkpoint(self, decoders: dict[Channel, WindowedLiveDecoder]) -> Transcript:
         """A crash checkpoint from the live pass's already-committed words.
 
         Zero inference: the words are read straight off each channel's decoder and

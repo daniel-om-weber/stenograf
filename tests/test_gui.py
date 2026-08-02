@@ -293,7 +293,7 @@ class TestMeetingScreen:
             announce=None,
         ):
             announced["load_backends"] = announce
-            return conftest.FakeASR(), None, None
+            return conftest.FakeASR(), conftest.WholeBufferVAD(), None
 
         def fake_make_provider(
             replay, plans, *, paced=False, aec=True, aec_dump=None, announce=None, on_log=None
@@ -511,7 +511,7 @@ class TestMeetingScreen:
         monkeypatch.setattr(
             loaders,
             "load_backends",
-            lambda **kwargs: (conftest.FakeASR(), None, None),
+            lambda **kwargs: (conftest.FakeASR(), conftest.WholeBufferVAD(), None),
         )
         monkeypatch.setattr(
             loaders,
@@ -600,7 +600,7 @@ class TestTranscribeScreen:
         monkeypatch.setattr(
             loaders,
             "load_backends",
-            lambda **kwargs: (conftest.FakeASR(), None, None),
+            lambda **kwargs: (conftest.FakeASR(), conftest.WholeBufferVAD(), None),
         )
         audio = tmp_path / "recording.wav"
         conftest.write_wav(audio)

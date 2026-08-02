@@ -1,7 +1,7 @@
-"""Phase 2, Task 3: the live orchestration spine (AudioBus + CaptureLoop + LiveWorker).
+"""The live orchestration spine (AudioBus + CaptureLoop + LiveWorker).
 
-These exercise the threaded plumbing, not the LiveDecoder's caption quality
-(that is Task 1's own suite / eval harness). The load-bearing guarantees:
+These exercise the threaded plumbing, not the WindowedLiveDecoder's caption
+quality (that is test_live.py / the eval harness). The load-bearing guarantees:
 
 - the worker reconciles a backlog to the latest watermark (one catch-up decode,
   not one per intermediate step), and
@@ -14,7 +14,7 @@ import time
 
 import numpy as np
 import pytest
-from conftest import CallbackView, FakeASR, ListProvider
+from conftest import CallbackView, FakeASR, ListProvider, WholeBufferVAD
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
@@ -81,11 +81,14 @@ def _one_second_frames(seconds: int) -> list[AudioFrame]:
 
 
 def _recorder(asr=None, vad=None, *, remote_speakers=0, **kwargs) -> MeetingRecorder:
-    """A one-local-speaker recorder over the given doubles (the file's default rig)."""
+    """A one-local-speaker recorder over the given doubles (the file's default rig).
+
+    The live pass requires a streaming VAD, so the default is the whole-buffer
+    fake (everything is speech, one window)."""
     return MeetingRecorder(
         MeetingProfile(local_speakers=1, remote_speakers=remote_speakers),
         asr=asr if asr is not None else FakeASR(),
-        vad=vad,
+        vad=vad if vad is not None else WholeBufferVAD(),
         **kwargs,
     )
 
@@ -492,13 +495,6 @@ class CountingASR(ASRBackend):
         return [Segment(" ".join(x.text for x in words), words[0].start, words[-1].end, words)]
 
 
-class _SilentVAD:
-    """Never reports speech — the live pass's gate must then run zero ASR."""
-
-    def speech_segments(self, samples):
-        return []
-
-
 class _OneRunStream:
     """A streaming VAD stream that reports one speech run once 2 s were pushed."""
 
@@ -529,13 +525,6 @@ class _StreamingSpeechVAD:
         return [SpeechSegment(0.2, 1.2)]  # what a classic finalize re-scan sees
 
 
-class _AlwaysSpeechVAD:
-    """Reports the whole window as speech, so the gate never suppresses a decode."""
-
-    def speech_segments(self, samples):
-        return [SpeechSegment(0.0, len(samples) / SAMPLE_RATE)]
-
-
 class _SpyView(LiveView):
     """Records the live-pass decode count at the finalize hand-off and every commit."""
 
@@ -563,8 +552,9 @@ class TestLivePassCpuProxy:
         # count at the finalize hand-off, before the on-stop finalize decodes.
         asr = CountingASR()
         spy = _SpyView(asr)
-        provider = ListProvider(_one_second_frames(5))
-        _recorder(asr, _SilentVAD()).run(provider, live=True, view=spy)
+        silence = np.zeros(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([AudioFrame(Channel.MIC, float(t), silence) for t in range(5)])
+        _recorder(asr, EnergyVAD()).run(provider, live=True, view=spy)
         assert spy.decodes_at_finalizing == 0  # no window decode while silent
         assert spy.committed == []  # and nothing was committed
 
@@ -575,7 +565,7 @@ class TestLivePassCpuProxy:
         asr = CountingASR()
         spy = _SpyView(asr)
         provider = ListProvider(_one_second_frames(4))
-        _recorder(asr, _AlwaysSpeechVAD()).run(provider, live=True, view=spy)
+        _recorder(asr, EnergyVAD()).run(provider, live=True, view=spy)
         assert spy.committed, "speech should have produced committed captions"
         starts = [w.start for w in spy.committed]
         assert starts == sorted(starts)  # a committed word never moves back in time

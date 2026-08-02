@@ -17,6 +17,7 @@ import pytest
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+from stenograf.vad import SpeechSegment
 from stenograf.view import LiveView
 
 # Shell-level overrides a developer's environment may carry; any one of them
@@ -132,14 +133,61 @@ class CliASR(FakeASR):
 
     def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
         self.calls.append(len(samples))
-        return [
-            Segment(
-                text="und das ist wirklich eine gute idee für uns alle",
-                start=0.1,
-                end=1.0,
-                words=(Word("und", 0.1, 0.3), Word("das", 0.3, 0.6)),
-            )
-        ]
+        text = "und das ist wirklich eine gute idee für uns alle"
+        tokens = text.split()
+        step = 0.9 / len(tokens)
+        words = tuple(
+            Word(tok, round(0.1 + i * step, 3), round(0.1 + (i + 1) * step, 3))
+            for i, tok in enumerate(tokens)
+        )
+        return [Segment(text=text, start=0.1, end=1.0, words=words)]
+
+
+class _WholeBufferStream:
+    """Streaming half of :class:`WholeBufferVAD`: one run, open until finish."""
+
+    def __init__(self, origin: float) -> None:
+        self._origin = origin
+        self._pushed = 0
+        self._finished = False
+        self._emitted = False
+
+    def push(self, samples) -> None:
+        self._pushed += len(samples)
+
+    def _edge(self) -> float:
+        return self._origin + self._pushed / SAMPLE_RATE
+
+    def take_completed(self) -> list[SpeechSegment]:
+        if self._finished and not self._emitted and self._pushed:
+            self._emitted = True
+            return [SpeechSegment(self._origin, self._edge())]
+        return []
+
+    def open_segment(self) -> SpeechSegment | None:
+        if self._finished or not self._pushed:
+            return None
+        return SpeechSegment(self._origin, self._edge())
+
+    def finish(self) -> None:
+        self._finished = True
+
+
+class WholeBufferVAD:
+    """Everything is speech: the whole buffer packs into one window.
+
+    The live pass (which requires a streaming VAD) keeps one run open until
+    ``finish()`` and so decodes once at flush; the batch scan reports the
+    entire buffer as a single speech run — the same single window either way.
+    """
+
+    def speech_segments(self, samples) -> list[SpeechSegment]:
+        if len(samples) == 0:
+            return []
+        return [SpeechSegment(0.0, len(samples) / SAMPLE_RATE)]
+
+    def stream(self, origin: float) -> _WholeBufferStream:
+        return _WholeBufferStream(origin)
 
 
 class FakeDiarizer(Diarizer):
@@ -274,14 +322,14 @@ def voice_channel_pcms(seconds: int = 4) -> tuple[np.ndarray, np.ndarray]:
 
 
 def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
-    """The loaders seam, offline: no VAD (whole buffer is one window), no diarizer."""
-    return CliASR(), None, None
+    """The loaders seam, offline: whole-buffer VAD (one window), no diarizer."""
+    return CliASR(), WholeBufferVAD(), None
 
 
 def fake_channel_backends(
     *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
 ):
-    return ChannelASR(), None, None
+    return ChannelASR(), WholeBufferVAD(), None
 
 
 @pytest.fixture

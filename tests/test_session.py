@@ -12,6 +12,7 @@ from conftest import (
     GermanASR,
     ListProvider,
     RaisingDiarizer,
+    WholeBufferVAD,
 )
 
 from stenograf.asr.base import ASRBackend, Segment, Word
@@ -323,7 +324,9 @@ class TestMeetingRecorder:
             provider = CountingProvider([frame(Channel.MIC, 0.0, pcm)])
             provider.start({Channel.MIC})  # the caller's early start
             recorder = MeetingRecorder(
-                MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
+                MeetingProfile(local_speakers=1, remote_speakers=0),
+                asr=FakeASR(),
+                vad=WholeBufferVAD(),
             )
             result = recorder.run(provider, live=live, provider_started=True)
 

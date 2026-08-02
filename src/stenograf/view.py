@@ -1,6 +1,6 @@
 """Live-caption views: the event interface + a plain-stdout implementation.
 
-The live pass (``LiveWorker`` → ``LiveDecoder``)
+The live pass (``LiveWorker`` → ``WindowedLiveDecoder``)
 emits a stream of events — committed words, a provisional grey tail, and the
 out-of-band notices (status, language lock, the finalize hand-off). A
 :class:`LiveView` is the sink for those events; a concrete view renders them

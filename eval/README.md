@@ -123,7 +123,7 @@ test). Results in `out/context-ab.md`:
 Windows under 8 s decode with up to 15 s of contiguous left context
 (`vad.context_start`, mirrored by `pipeline._decode` and
 `WindowedLiveDecoder._decode_window`; window bounds untouched).
-Verification: byte-identity + full suite green, `live.py --mode window` at
+Verification: byte-identity + full suite green, `live.py` at
 **0.0 % WER** vs finalize (reuse guarantee intact), `context_ab.py` re-run
 collapses the raw-context arm to **2–4 % changed with a null referee** on
 the short buckets (the product now *is* the context decode; the splice arm
@@ -172,7 +172,7 @@ must be when no decode moves. A VAD-window probe over the same audio pins
 the mechanism: 1426 of 1450 windows have a non-empty pre-roll, 442 words are
 claimed from one, and **227 are text the old arm had nowhere within ±1 s** —
 sentence heads, "Ja," / "Genau," / "Okay," / "I think not." / "Timo, kannst
-du mir sagen". `live.py --mode window` stays at **0.0 % WER** (reuse
+du mir sagen". `live.py` stays at **0.0 % WER** (reuse
 guarantee intact).
 
 **Long windows cannot claim, and buying them the ability was rejected.** A
