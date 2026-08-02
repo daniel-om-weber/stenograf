@@ -34,6 +34,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, Signal, Slot
@@ -52,14 +53,19 @@ if TYPE_CHECKING:
     from stenograf.flow import MeetingRequest, MeetingRun
     from stenograf.gui.app import StenografGui
 
-_PHASE_LABEL = {
-    "rec": "REC",
-    "finalizing": "FINALIZING",
-    "done": "DONE",
-    "failed": "FAILED",
-}
-"""Screen lifecycle: capture running → on-stop pass running → transcript shown
-(or the run never got off the ground). QML colours the dot from the same key."""
+class Phase(StrEnum):
+    """Screen lifecycle: capture running → on-stop pass running → transcript shown
+    (or the run never got off the ground). QML colours the dot from the value."""
+
+    REC = "rec"
+    FINALIZING = "finalizing"
+    DONE = "done"
+    FAILED = "failed"
+
+    @property
+    def label(self) -> str:
+        """The header badge text (the value, shouted)."""
+        return self.name
 
 
 class MeetingScreen(Screen, LiveView):
@@ -97,11 +103,14 @@ class MeetingScreen(Screen, LiveView):
         self._started = 0.0
         self._reset()
 
+    def _set_phase(self, phase: Phase, **state: object) -> None:
+        """One write for the pair QML reads: the phase id and its badge text."""
+        self.set(phase=phase, phaseLabel=phase.label, **state)
+
     def _reset(self) -> None:
-        self.set(
+        self._set_phase(
+            Phase.REC,
             active=False,
-            phase="rec",
-            phaseLabel=_PHASE_LABEL["rec"],
             elapsed="0:00",
             language="—",
             profile="",
@@ -174,12 +183,11 @@ class MeetingScreen(Screen, LiveView):
             self.app.back()
             return
         if isinstance(transcript, Transcript):
-            if self._state.get("phase") != "done":  # a run that never emitted the event
+            if self._state.get("phase") != Phase.DONE:  # a run that never emitted the event
                 self._show(transcript)
             return
-        self.set(
-            phase="done",
-            phaseLabel=_PHASE_LABEL["done"],
+        self._set_phase(
+            Phase.DONE,
             canStop=False,
             tails=[],
             status="the meeting ended before a transcript was produced; "
@@ -188,10 +196,9 @@ class MeetingScreen(Screen, LiveView):
 
     def _failed(self, message: str) -> None:
         self._clock.stop()
-        self.set(
+        self._set_phase(
+            Phase.FAILED,
             active=False,
-            phase="failed",
-            phaseLabel=_PHASE_LABEL["failed"],
             canStop=False,
             status=message,
         )
@@ -228,7 +235,7 @@ class MeetingScreen(Screen, LiveView):
         run = self._run
         if run is not None:
             run.abandon_notes.set()  # a notes step not yet started is skipped
-        if self._stop_capture is None and self._state.get("phase") == "rec":
+        if self._stop_capture is None and self._state.get("phase") == Phase.REC:
             # Capture never came up: no audio exists, so there is nothing the
             # wait below could save. Cancel the construction and give the
             # worker a moment — a provider build wedged inside CoreAudio may
@@ -238,7 +245,7 @@ class MeetingScreen(Screen, LiveView):
             if thread is not None:
                 thread.join(5.0)
             return
-        if self._stop_capture is not None and self._state.get("phase") == "rec":
+        if self._stop_capture is not None and self._state.get("phase") == Phase.REC:
             with contextlib.suppress(Exception):  # a stop error must not block the exit
                 self._stop_capture()
         # abandon_notes is set, so notes_running can only be True here if notes
@@ -263,10 +270,10 @@ class MeetingScreen(Screen, LiveView):
     def stop(self) -> None:
         """Stop & finalize while capturing; cancel while starting; leave when done."""
         phase = self._state.get("phase")
-        if phase == "rec" and self._stop_capture is not None:
-            self.set(phase="finalizing", phaseLabel=_PHASE_LABEL["finalizing"], canStop=False)
+        if phase == Phase.REC and self._stop_capture is not None:
+            self._set_phase(Phase.FINALIZING, canStop=False)
             threading.Thread(target=self._invoke_stop, name="gui-stop", daemon=True).start()
-        elif phase == "rec" and self.running:
+        elif phase == Phase.REC and self.running:
             # Capture is not up yet (the provider is still being built — exactly
             # where a wedged CoreAudio hangs, and when a user reaches for
             # Escape). Nothing is installed to stop, so cancel the run instead:
@@ -276,7 +283,7 @@ class MeetingScreen(Screen, LiveView):
             # once capture started, and the next press takes the branch above.
             self._abort.set()
             self.set(status="cancelling…")
-        elif phase in ("done", "failed"):
+        elif phase in (Phase.DONE, Phase.FAILED):
             self.app.back()
 
     def _invoke_stop(self) -> None:
@@ -305,7 +312,7 @@ class MeetingScreen(Screen, LiveView):
         self.post(self.set, language=language.value)
 
     def finalizing(self) -> None:
-        self.post(self.set, phase="finalizing", phaseLabel=_PHASE_LABEL["finalizing"])
+        self.post(self._set_phase, Phase.FINALIZING)
 
     def finalized(self, transcript: Transcript) -> None:
         if self._persist is not None:
@@ -361,9 +368,8 @@ class MeetingScreen(Screen, LiveView):
             ]
         )
         count = len(transcript.entries)
-        self.set(
-            phase="done",
-            phaseLabel=_PHASE_LABEL["done"],
+        self._set_phase(
+            Phase.DONE,
             canStop=False,
             tails=[],
             status=f"{count} {'entry' if count == 1 else 'entries'}",
@@ -375,4 +381,4 @@ class MeetingScreen(Screen, LiveView):
         )
 
 
-__all__ = ["MeetingScreen"]
+__all__ = ["MeetingScreen", "Phase"]

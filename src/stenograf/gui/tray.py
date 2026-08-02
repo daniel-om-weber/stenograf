@@ -294,10 +294,12 @@ class Tray(QObject):
 
         ``phase`` alone will not do: it reads ``rec`` before any meeting has been
         started, and it reads ``done`` while the notes run is still going."""
+        from stenograf.gui.meeting import Phase
+
         meeting = self._meeting()
         if not meeting.get("active"):
             return "idle"
-        return "rec" if meeting.get("phase") == "rec" else "busy"
+        return "rec" if meeting.get("phase") == Phase.REC else "busy"
 
     def summary(self) -> str:
         """The disabled first menu entry: one line on what the app is doing."""
