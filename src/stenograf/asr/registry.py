@@ -81,11 +81,9 @@ def default_backend_name(configured: str | None = None) -> str:
 
 
 def _builtin_default() -> str:
-    try:
-        mlx_installed = importlib.util.find_spec("parakeet_mlx") is not None
-    except (ImportError, ValueError):
-        mlx_installed = False
-    return "parakeet" if mlx_installed else "parakeet-onnx"
+    from stenograf.doctor import installed
+
+    return "parakeet" if installed("parakeet_mlx") else "parakeet-onnx"
 
 
 def get_spec(name: str | None = None) -> BackendSpec:

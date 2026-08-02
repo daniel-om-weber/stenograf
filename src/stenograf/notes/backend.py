@@ -122,11 +122,9 @@ def default_backend_name(configured: str | None = None) -> str:
 
 
 def _builtin_default() -> str:
-    try:
-        mlx_installed = importlib.util.find_spec("mlx_lm") is not None
-    except (ImportError, ValueError):
-        mlx_installed = False
-    return "mlx" if mlx_installed else "ollama"
+    from stenograf.doctor import installed
+
+    return "mlx" if installed("mlx_lm") else "ollama"
 
 
 def get_spec(name: str) -> NotesBackendSpec:

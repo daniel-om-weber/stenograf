@@ -19,7 +19,6 @@ The CLI always satisfies this (notes run synchronously on the main thread).
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import threading
 from typing import TYPE_CHECKING, Any
@@ -96,10 +95,9 @@ class MlxBackend:
         }
 
     def is_available(self) -> bool:
-        try:
-            return importlib.util.find_spec("mlx_lm") is not None
-        except (ImportError, ValueError):
-            return False
+        from stenograf.doctor import installed
+
+        return installed("mlx_lm")
 
     def weights_cached(self) -> bool:
         """Whether the model is already in the local HF cache (doctor's hint
@@ -155,13 +153,9 @@ class MlxBackend:
     def _load(self) -> tuple[Any, Any]:
         loaded = self._loaded
         if loaded is None:
-            try:
-                from mlx_lm import load
-            except ImportError as exc:
-                raise NotesBackendUnavailableError(
-                    "mlx-lm is not installed here — reinstall stenograf, or configure "
-                    "another backend under [notes] in settings.toml"
-                ) from exc
+            # No try/except: every caller gates on is_available() first
+            # (notes.generate, doctor), so the import cannot fail here.
+            from mlx_lm import load
             try:
                 model, tokenizer = load(self.model)[:2]
             except Exception as exc:
