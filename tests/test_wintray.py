@@ -343,7 +343,7 @@ class TestGettingOnScreenAndOff:
         qt_app.aboutToQuit.emit()
         assert icon._hwnd == 0, "quitting did not release the icon's window"
 
-    def test_a_gdi_failure_keeps_the_icon_already_on_screen(self, icon, monkeypatch, capsys):
+    def test_a_gdi_failure_keeps_the_icon_already_on_screen(self, icon, monkeypatch, caplog):
         # setIcon runs inside Tray.__init__ and again as a slot on the meeting's
         # changed signal, where PySide terminates the process on an unhandled
         # exception. Losing the new artwork beats losing the app.
@@ -360,7 +360,7 @@ class TestGettingOnScreenAndOff:
         monkeypatch.setattr(wintray, "_hicon", out_of_handles)
         icon.setIcon(mark("#ff5f56"))
         assert icon._icon_handle == established
-        assert "could not draw" in capsys.readouterr().err
+        assert "could not draw" in caplog.text
 
 
 class TestTheMark:

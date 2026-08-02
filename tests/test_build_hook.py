@@ -31,12 +31,6 @@ def build_data() -> dict:
     return {"force_include": {}, "pure_python": True}
 
 
-def _stenodiar(root: Path) -> Path:
-    """Where the hook expects cargo's output — `.exe` when the suite runs on Windows."""
-    name = "stenodiar.exe" if sys.platform == "win32" else "stenodiar"
-    return root / "native" / "stenodiar" / name
-
-
 def test_noop_off_macos_without_the_release_flag(hook_module, tmp_path, monkeypatch):
     # The common case: `pip install` from the sdist on Linux/Windows. Nothing
     # is built, nothing is bundled, and no cargo is required.
@@ -120,6 +114,12 @@ def _fake_build(tmp_path):
 
 
 def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch):
+    # Say which platform is being *built for*, as the wheel tests below do:
+    # `_build` picks build.sh over build.ps1 by it, and so does the fake that
+    # stands in for cargo. Left at the host's value this test builds a macOS
+    # wheel through Windows' toolchain and looks for `stenodiar` where the
+    # PowerShell branch wrote `stenodiar.exe`.
+    monkeypatch.setattr(hook_module.sys, "platform", "darwin")
     monkeypatch.setattr(hook_module, "_macos_arm64", lambda: True)
     monkeypatch.setattr(hook_module, "_cargo_available", lambda: True)
     monkeypatch.setattr(hook_module.subprocess, "run", _fake_build(tmp_path))
@@ -129,7 +129,7 @@ def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch)
     assert data["pure_python"] is False
     assert data["tag"] == hook_module.MACOS_TAG
     helper = tmp_path / "native" / "stenocap-macos" / "stenocap"
-    stenodiar = _stenodiar(tmp_path)
+    stenodiar = tmp_path / "native" / "stenodiar" / "stenodiar"
     assert data["force_include"][str(helper)] == "stenograf/bin/stenocap"
     assert data["force_include"][str(stenodiar)] == f"stenograf/bin/{stenodiar.name}"
     if os.name == "posix":  # exec bits don't exist on Windows
