@@ -290,6 +290,9 @@ class MeetingRun:
                 need_diarizer=any(p.num_speakers != 1 for p in plans),
                 asr_backend=settings.asr.backend,
                 asr_provider=settings.asr.provider,
+                glossary=profile.glossary,
+                attendee_names=profile.attendee_names,
+                boost=settings.asr.boost,
                 announce=view.status,
             )
             reid = None
@@ -449,6 +452,7 @@ def transcribe_recording(
             glossary_threshold=settings.vocab.glossary_threshold,
             asr_backend=settings.asr.backend,
             asr_provider=settings.asr.provider,
+            asr_boost=settings.asr.boost,
             profile_store=settings.speakers.profile_store,
             view=_StatusView(),
         )
@@ -463,6 +467,9 @@ def transcribe_recording(
             need_diarizer=diarize,
             asr_backend=settings.asr.backend,
             asr_provider=settings.asr.provider,
+            glossary=glossary_terms,
+            attendee_names=attendee_names,
+            boost=settings.asr.boost,
             announce=on_status,  # not click: the UI owns stdio (loaders docstring)
         )
         started = time.monotonic()

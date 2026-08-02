@@ -186,6 +186,84 @@ class TestMeetingRunAbort:
         assert stopped == [True]  # the devices were released on the way out
 
 
+class TestBiasingReachesTheDecoder:
+    """Both GUI entry points hand ``load_backends`` the same decode-time biasing
+    the CLI passes. The regression this guards: the Qt paths once omitted
+    ``glossary``/``attendee_names``/``boost``, so a clicked Start decoded
+    unbiased while a flagless ``steno start`` boosted — invisible drift, because
+    the post-hoc glossary layer still corrected the transcript text."""
+
+    def _configure(self, tmp_path, monkeypatch):
+        data = tmp_path / "data"
+        data.mkdir()
+        glossary = tmp_path / "glossary.txt"
+        glossary.write_text("Kubernetes\n", encoding="utf-8")
+        (data / "settings.toml").write_text(
+            f'[vocab]\nglossary_file = "{glossary.as_posix()}"\n'
+            'attendees = ["Ada Lovelace"]\n\n[asr]\nboost = 2.5\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+
+    def _recording_load_backends(self, monkeypatch):
+        from stenograf import loaders
+
+        seen = {}
+
+        def record(**kwargs):
+            seen.update(kwargs)
+            raise RuntimeError("recorded the load call — no models in tests")
+
+        monkeypatch.setattr(loaders, "load_backends", record)
+        return seen
+
+    def _assert_biased(self, seen):
+        assert "Kubernetes" in seen["glossary"]
+        assert "Ada Lovelace" in seen["attendee_names"]
+        assert seen["boost"] == 2.5
+
+    def test_the_meeting_run_loads_backends_with_the_settings_biasing(
+        self, tmp_path, monkeypatch
+    ):
+        from stenograf import loaders, output
+        from stenograf.flow import MeetingRun
+        from stenograf.view import LiveView
+
+        self._configure(tmp_path, monkeypatch)
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+
+        class Provider:
+            def start(self, channels):
+                pass
+
+            def stop(self):
+                pass
+
+        monkeypatch.setattr(loaders, "make_provider", lambda *args, **kwargs: Provider())
+        seen = self._recording_load_backends(monkeypatch)
+        request = resolve_meeting_request(mic=True, system=False, diarize=False)
+        with pytest.raises(RuntimeError):
+            MeetingRun(request).run(LiveView())
+        self._assert_biased(seen)
+
+    def test_transcribe_recording_loads_backends_with_the_settings_biasing(
+        self, tmp_path, monkeypatch
+    ):
+        from conftest import write_wav
+
+        from stenograf import output
+        from stenograf.flow import transcribe_recording
+
+        self._configure(tmp_path, monkeypatch)
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+        wav = tmp_path / "meeting.wav"
+        write_wav(wav)  # mono → the mixed-stream branch
+        seen = self._recording_load_backends(monkeypatch)
+        with pytest.raises(RuntimeError):
+            transcribe_recording(wav, on_status=lambda message: None)
+        self._assert_biased(seen)
+
+
 class TestCaptionStream:
     """When a caption line continues, breaks, flushes — and what stays in flight."""
 

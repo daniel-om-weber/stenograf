@@ -85,6 +85,28 @@ class TestPlainCaptions:
         view.status("end")
         assert rec.out == "[1:05] You: spät\nend\n"
 
+    def test_commits_echo_immediately_not_when_the_line_completes(self):
+        # The stream's line rules decide breaks, but rendering must not wait
+        # for a completed line — live captions appear as they are spoken.
+        view, rec = _view()
+        view.commit(Channel.MIC, [_w("hallo", 0.1, 0.5)])
+        assert rec.out == "[0:00] You: hallo"  # already visible, line still open
+
+    def test_a_long_stretch_breaks_at_the_flush_cap(self):
+        from stenograf.captions import LINE_FLUSH_CHARS
+
+        # One channel talking through sub-gap commits must not grow a single
+        # unbounded terminal line: past the cap the line breaks like the Qt
+        # view's does (the shared CaptionStream rule).
+        view, rec = _view()
+        for i in range(100):  # ~500 chars of "wort", gaps well under LINE_GAP
+            view.commit(Channel.MIC, [_w("wort", i * 0.4, i * 0.4 + 0.3)])
+        view.status("end")
+        captions = [line for line in rec.out.splitlines() if line.startswith("[")]
+        assert len(captions) > 1
+        header = len("[0:00] You: ")
+        assert all(len(line) <= LINE_FLUSH_CHARS + header + len(" wort") for line in captions)
+
 
 class TestPlainInterimAndUpdate:
     def test_interim_is_dropped(self):

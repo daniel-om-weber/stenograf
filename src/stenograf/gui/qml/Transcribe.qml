@@ -15,6 +15,9 @@ Panel {
     hint: "Pick an audio or video file; its audio track is transcribed into a new meeting folder."
     busy: page.screen.state.busy
 
+    Component.onCompleted: if (page.screen)
+        page.screen.opened()
+
     FileDialog {
         id: picker
 

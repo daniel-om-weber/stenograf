@@ -147,8 +147,8 @@ def test_srt_reflows_a_long_turn_into_multiple_cues():
     assert [b[0] for b in blocks] == [str(i) for i in range(1, len(blocks) + 1)]
     assert blocks[0][1] == "00:00:00,000 --> 00:00:05,900"
     assert blocks[0][2].startswith("Local-1: ")  # speaker prefix
-    # No single line runs past the wrap width.
-    assert all(len(line) <= 42 for b in blocks for line in b[2:] if not line.startswith("Local-1"))
+    # No single line runs past the wrap width — including the prefixed first one.
+    assert all(len(line) <= 42 for b in blocks for line in b[2:])
 
 
 def test_vtt_header_voice_tags_and_escaping():

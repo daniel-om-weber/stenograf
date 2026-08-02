@@ -125,9 +125,9 @@ class Transcript:
         """Render as SubRip (SRT) subtitles — one numbered cue per re-flowed chunk."""
         blocks = []
         for i, cue in enumerate(_build_cues(self.entries), start=1):
-            text = _wrap(cue.text)
-            if cue.speaker:
-                text = f"{cue.speaker}: {text}"
+            # The label is display text (unlike VTT's <v> markup), so it must be
+            # wrapped with the words or the first line exceeds the width.
+            text = _wrap(f"{cue.speaker}: {cue.text}" if cue.speaker else cue.text)
             blocks.append(f"{i}\n{_ts(cue.start, ',')} --> {_ts(cue.end, ',')}\n{text}\n")
         return "\n".join(blocks)
 

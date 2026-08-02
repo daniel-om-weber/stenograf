@@ -167,6 +167,23 @@ class TestQmlTree:
             assert (QML_DIR / f"{page}.qml").is_file(), f"no QML file for menu entry {page}"
             assert shell.screen(page) is not None, f"no controller for menu entry {page}"
 
+    def test_every_controller_page_calls_opened_on_completion(self, gui):
+        """A controller's ``opened()`` runs only if its page's QML calls it from
+        ``Component.onCompleted`` — the controller tests call it by hand and so
+        cannot notice a page that never wires it (Notes.qml shipped without the
+        call, leaving the newest-meeting pre-selection dead in the real app).
+        The base ``Screen.opened`` is a no-op, so the wiring is uniform: every
+        page with a controller makes the call."""
+        shell, _engine = gui
+        checked = []
+        for page in PAGES:
+            if shell.screen(page) is None:  # Home takes no controller
+                continue
+            qml = (QML_DIR / f"{page}.qml").read_text(encoding="utf-8")
+            assert "Component.onCompleted" in qml and "screen.opened()" in qml, page
+            checked.append(page)
+        assert "Notes" in checked  # the page this regression test exists for
+
     def test_navigation_is_one_signal_in_one_direction(self, gui):
         shell, _engine = gui
         seen = []
@@ -273,7 +290,14 @@ class TestMeetingScreen:
         announced = {}
 
         def fake_load_backends(
-            *, need_diarizer, asr_backend=None, asr_provider=None, announce=None
+            *,
+            need_diarizer,
+            asr_backend=None,
+            asr_provider=None,
+            glossary=(),
+            attendee_names=(),
+            boost=None,
+            announce=None,
         ):
             announced["load_backends"] = announce
             return conftest.FakeASR(), None, None
@@ -493,11 +517,7 @@ class TestMeetingScreen:
         monkeypatch.setattr(
             loaders,
             "load_backends",
-            lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None: (
-                conftest.FakeASR(),
-                None,
-                None,
-            ),
+            lambda **kwargs: (conftest.FakeASR(), None, None),
         )
         monkeypatch.setattr(
             loaders,

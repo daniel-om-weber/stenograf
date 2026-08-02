@@ -18,6 +18,9 @@ Panel {
     hint: "Summarizes a meeting's transcript into notes.md next to it."
     busy: page.screen.state.busy
 
+    Component.onCompleted: if (page.screen)
+        page.screen.opened()
+
     FolderDialog {
         id: picker
 
