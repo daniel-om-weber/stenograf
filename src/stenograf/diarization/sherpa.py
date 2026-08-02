@@ -1,5 +1,5 @@
-"""Speaker diarization via sherpa-onnx (pyannote segmentation-3.0 + CAM++
-embeddings, ONNX/CPU).
+"""Speaker diarization via sherpa-onnx (pyannote segmentation-3.0 + ERes2Net
+embeddings, ONNX/CPU; see models.SPEAKER_EMBEDDING for why not CAM++).
 
 This is the cross-platform baseline diarizer. The accuracy target is
 the pyannote community-1 pipeline; the macOS-native port of that (speakrs /

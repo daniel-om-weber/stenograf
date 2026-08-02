@@ -50,6 +50,14 @@ room), and the livekit re-ask whose trigger — the helper everywhere — has no
 fired. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
 twelve seconds.
 
+**`PLAN-DIARIZATION.md` is the one live side-plan (opened 2026-08-02):** the
+diarization + speaker re-ID accuracy program, with its research record in
+`eval/diarization-sota-2026.md`. Read both before touching `diarization/`,
+`profiles.py`, `eval/der.py`, or evaluating any diarization or
+speaker-embedding model — the declined list there (Sortformer, joint SA-ASR,
+TS-VAD, AS-Norm-by-default, pyannote.audio-as-dependency) carries measured
+reasons and re-open triggers.
+
 **Six side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 (2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`
@@ -148,7 +156,10 @@ both dispatch gates by design.
 - **MLX on background threads**: materialize weights on the load thread or
   inference dies with "no Stream(gpu, 0)"; verify MLX-threading changes
   against the real backend, not mocks.
-- **Diarization licensing**: DiariZen is CC-BY-NC — unshippable here.
+- **Diarization licensing**: DiariZen's multi-domain checkpoints are
+  CC-BY-NC — unshippable; its `meeting-base` checkpoint is MIT (trained only
+  on AMI/AISHELL-4/AliMeeting) and is `PLAN-DIARIZATION.md`'s step-5
+  candidate.
   speakrs (cross-platform: CoreML on mac, ORT elsewhere) is the chosen
   auto-count estimator, still immature at v0.5.0 — **vendored with two
   CPU-throughput patches** in `native/stenodiar/vendor/` (see VENDOR.md;

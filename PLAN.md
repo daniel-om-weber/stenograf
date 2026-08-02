@@ -8,7 +8,11 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**The side-plans are all closed.** `PLAN-CAPTURE-HELPER.md` (2026-08-02, built
+**One side-plan is live: `PLAN-DIARIZATION.md`** (opened 2026-08-02) — the
+diarization + speaker re-ID accuracy program; its research record is
+`eval/diarization-sota-2026.md`, and both are to be read before touching
+`diarization/`, `profiles.py`, or evaluating any diarization or
+speaker-embedding model. **The rest are closed.** `PLAN-CAPTURE-HELPER.md` (2026-08-02, built
 — both halves shipped and the arrival-stamped transports are gone),
 `PLAN-LINUX.md` (2026-07-26), `PLAN-WINDOWS.md` and `PLAN-ASR-CHALLENGER.md`
 (both 2026-07-27), and `PLAN-NOTES-MARKDOWN.md` + `PLAN-MEETING-PRESETS.md`
@@ -571,6 +575,10 @@ Kept here so future sessions don't re-open them.
   attribution, the 0.5 re-ID threshold and far-field speaker-count
   over-splitting (a small group measured as 8) stay unmeasured. The scorer is
   built and tested; only labels are missing, and labelling was ruled out.
+  `PLAN-DIARIZATION.md` step 0 (2026-08-02) sidesteps the ruling-out rather
+  than reversing it: AMI/ICSI are CC-BY-4.0 *with per-speaker headset
+  channels*, so references in our exact two-channel topology are built from
+  public corpora — labelling our own audio stays ruled out.
 - **Repair-only overhang — the one open accuracy idea.** Default decode stays
   the exact current slice; overhang fires only on a detected ≥1.5 s speech
   hole. It is the salvage from the reverted cut-overlap work, structurally
