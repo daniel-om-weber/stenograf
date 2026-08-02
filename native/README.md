@@ -3,10 +3,10 @@
 Two helpers live here — **stenocap**, which captures, and **stenodiar**, which
 diarizes — both speaking simple pipes to the Python core and both honoring the
 same rule: **meeting audio never touches disk**. stenocap has two
-implementations, `stenocap-macos/` (Swift) and `stenocap/` (Rust, Windows
-today and Linux at step 5 of PLAN-CAPTURE-HELPER.md), speaking one wire
-protocol; stenodiar is one crate built for every platform stenograf ships a
-wheel for. Plus
+implementations, `stenocap-macos/` (Swift) and `stenocap/` (Rust, one crate
+with a WASAPI backend for Windows and a PulseAudio-protocol backend for
+Linux), speaking one wire protocol; stenodiar is one crate built for every
+platform stenograf ships a wheel for. Plus
 `appbundle/`, which is not a helper at all but the sources for the macOS
 desktop launcher `Stenograf.app`. It breaks this directory's convention on
 purpose: its product is *committed* (`src/stenograf/assets/Stenograf.app`)
@@ -29,13 +29,15 @@ machine downloads models and compiles them for CoreML (minutes; `--warmup`
 does it eagerly). Without the binary, stenograf silently falls back to
 sherpa-only diarization.
 
-Unlike stenocap it is not macOS-only, and users never build it: all three
+Unlike stenocap it is not macOS-only, and users never build it: three
 platform wheels carry it (macOS arm64 with CoreML, manylinux_2_39 x86_64 and
 win_amd64 with ORT CPU), because at ~15 MB compressed the bytes are cheaper
 than a documented download nobody performs — the alternative that was
-considered and dropped. Platforms without one of those wheels (musl, Linux
-arm64, **anything older than glibc 2.39**) install the pure `py3-none-any`
-wheel and keep the sherpa-only fallback.
+considered and dropped. Linux x86_64 older than glibc 2.39 resolves the
+manylinux_2_28 wheel instead, which carries **stenocap only**: live capture
+survives on the distros stenodiar's floor shuts out, and diarization keeps
+the sherpa-only fallback there. Platforms with no tagged wheel at all (musl,
+Linux arm64) install the pure `py3-none-any` wheel.
 
 The Linux binary is the delicate one: it must start on distros it was not
 built on. Two things fix its floor, and only one of them is our choice.
@@ -90,18 +92,30 @@ Echo is cancelled on the Python side instead, using the system channel as the
 far-end reference — which is also Chrome's default (`kSystemLoopbackAsAecReference`
 enabled, `kEnforceSystemEchoCancellation` disabled) despite shipping both.
 
-`stenocap/` holds the **Rust implementation**, which captures on Windows through
-WASAPI: the mic from the default capture endpoint, system audio from *loopback*
-on the default render endpoint. It needs no signing — Windows gates the
-microphone through the per-user privacy consent store rather than per binary —
-and no resampler: `AUTOCONVERTPCM | SRC_DEFAULT_QUALITY` has the audio engine
-deliver mono 16 kHz server-side, the way `parec` does on Linux. `--devices`
-prints what each channel would record from, as JSON, for the CLI's preflight.
+`stenocap/` holds the **Rust implementation**, one crate with a backend per
+platform. On Windows it captures through WASAPI: the mic from the default
+capture endpoint, system audio from *loopback* on the default render endpoint.
+On Linux it opens one PulseAudio-protocol record stream per channel — the mic
+from `@DEFAULT_SOURCE@`, system audio from `@DEFAULT_MONITOR@` — which serves
+both sound servers, since PipeWire ships `pipewire-pulse` precisely so pulse
+clients need no second path (libpulse is the one system library it links).
+Neither platform signs anything — Windows gates the microphone through the
+per-user privacy consent store rather than per binary, Linux gates nothing —
+and neither needs a resampler: `AUTOCONVERTPCM | SRC_DEFAULT_QUALITY` has
+Windows' audio engine deliver mono 16 kHz server-side, and the pulse server
+resamples per stream the same way. `--devices` prints what each channel would
+record from, as JSON, for the CLI's preflight.
 
 It exists because of where its timestamps come from, and that is the whole
-story: `IAudioCaptureClient::GetBuffer` reports `pu64QPCPosition` for every
-packet — the machine-wide performance counter, in 100-ns units, for the packet's
-first sample. Three traps, all measured (`eval/wasapi_timestamps.py` re-runs the
+story. On Windows, `IAudioCaptureClient::GetBuffer` reports `pu64QPCPosition`
+for every packet — the machine-wide performance counter, in 100-ns units, for
+the packet's first sample. On Linux, the server accounts per stream how old
+the sample at the read position is (`pa_stream_get_latency`, refreshed every
+second), so each chunk is stamped `CLOCK_MONOTONIC − latency` — for a monitor
+the server folds in the sink's own latency, so its stamps mark when the audio
+becomes audible, the same render-side semantics as loopback's QPC stamps
+(measured band ±10 ms against a sample-count line, `stenocap/src/pulse.rs`).
+Three Windows traps, all measured (`eval/wasapi_timestamps.py` re-runs the
 evidence in twelve seconds) and all silent if got wrong:
 
 - **`pu64DevicePosition` is not a sample index.** It counts *device* frames,
@@ -132,9 +146,12 @@ implementations speak exactly this; the consumer of both is
 
 **Stopping differs, and only because the platforms do.** The Swift helper takes
 SIGINT/SIGTERM, flushes and exits 0. The Rust helper stops when **stdin reaches
-EOF**: Windows has no signal a parent can aim at one child (`CTRL_C_EVENT` goes
-to a whole process group), while closing a pipe needs no console, no process
-group and no handler, and cannot arrive before the helper is ready to see it.
+EOF** on both its platforms: Windows has no signal a parent can aim at one child
+(`CTRL_C_EVENT` goes to a whole process group), while closing a pipe needs no
+console, no process group and no handler, and cannot arrive before the helper is
+ready to see it. On Linux it additionally *ignores* SIGINT — a terminal's Ctrl+C
+hits the whole process group, and the parent must drain the pipe before the
+helper lets go.
 
 The shared clock matters, and it is the reason this protocol exists at all. The
 mic and the system tap are separate devices with separate transports: on macOS

@@ -47,11 +47,11 @@ Spotlight or the Dock (macOS), the application menu (Linux) or the Start menu
 the command upgrades stenograf.
 
 Works on macOS 14.4+ on Apple Silicon (the wheel ships the signed capture
-helper — no toolchain needed), Linux with PipeWire or PulseAudio (capture uses
-`parec`, shipped with pipewire-pulse / pulseaudio-utils on every desktop
-distro), and Windows 10/11 (capture is WASAPI, mic plus loopback of whatever is
-playing). Off Apple Silicon, ASR runs ONNX on CPU; on Windows any DX12 GPU can
-be opted into with `[asr] provider = "dml"`.
+helper — no toolchain needed), Linux with PipeWire or PulseAudio (the wheel
+ships a capture helper that speaks the PulseAudio protocol — mic plus the
+default output's monitor), and Windows 10/11 (capture is WASAPI, mic plus
+loopback of whatever is playing). Off Apple Silicon, ASR runs ONNX on CPU; on
+Windows any DX12 GPU can be opted into with `[asr] provider = "dml"`.
 
 On Linux the desktop app (Qt) sets the install floor: glibc 2.34 on x86_64,
 2.39 on arm64, and no musl (Alpine) builds — Qt ships no wheels for those.

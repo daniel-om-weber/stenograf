@@ -305,11 +305,11 @@ uv run python eval/aec_alignment.py probe --no-sweep # measure only
 ```
 
 It compares what it measures against what the capturing provider already
-declares, so a fixed machine reads PASS. **Run it on Linux** — `parec` is one
-subprocess per channel with the same arrival stamping, and it is now the *only*
-transport still exposed to this: macOS and Windows both run a helper that
-anchors both channels to one device clock. Every AEC number on record is from
-macOS, which was exempt by construction all along.
+declares, so a fixed machine reads PASS. No transport is arrival-stamped any
+more: the Linux backend joined the Rust helper in 2026-08 (`parec` left with
+it), so all three platforms anchor both channels to one OS clock, and this
+instrument's job is to *verify* that a dump needs no correction rather than to
+recommend one. Every AEC ERLE number on record is still from macOS.
 
 Two notes for whoever measures this next:
 

@@ -8,16 +8,20 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**The side-plans are down to one.** `PLAN-CAPTURE-HELPER.md` is live design
-work and the only one left. `PLAN-LINUX.md` (2026-07-26), `PLAN-WINDOWS.md` and
-`PLAN-ASR-CHALLENGER.md` (both 2026-07-27), and `PLAN-NOTES-MARKDOWN.md` +
-`PLAN-MEETING-PRESETS.md` (both 2026-07-30, built) were deleted; each one's
-evidence, decisions and rejected alternatives survive under
-`git log --follow -p <file>`, and what stayed open out of them is folded into
-the sections below. Read the Windows history before re-measuring anything on
-that platform — in particular its last section, which is the observation recipe
-for a real Windows desktop session (screenshot DPI, SAPI voice selection, the
-German-locale traps, how to drive the TUI without a pty).
+**The side-plans are all closed.** `PLAN-CAPTURE-HELPER.md` (2026-08-02, built
+— both halves shipped and the arrival-stamped transports are gone),
+`PLAN-LINUX.md` (2026-07-26), `PLAN-WINDOWS.md` and `PLAN-ASR-CHALLENGER.md`
+(both 2026-07-27), and `PLAN-NOTES-MARKDOWN.md` + `PLAN-MEETING-PRESETS.md`
+(both 2026-07-30, built) were deleted; each one's evidence, decisions and
+rejected alternatives survive under `git log --follow -p <file>`, and what
+stayed open out of them is folded into the sections below. Read the Windows
+history before re-measuring anything on that platform — in particular its last
+section, which is the observation recipe for a real Windows desktop session
+(screenshot DPI, SAPI voice selection, the German-locale traps, how to drive
+the TUI without a pty). Read the capture-helper history before touching
+capture, `aec.py` or the wheel matrix — its evidence section
+(`eval/wasapi_timestamps.py` re-runs in twelve seconds) and its
+decided/not-candidates lists are the part not to re-derive.
 
 What ships today: `steno start` (live captions → diarized transcript → notes)
 on macOS, Linux and Windows, published to PyPI as `stenograf`, driven either by
@@ -446,9 +450,10 @@ for an old meeting takes `--preset` explicitly).
 
 **Windows — the capture helper shipped 2026-08-02; one AEC-quality run is what
 is left.** `native/stenocap/` (Rust, WASAPI, device-stamped) replaced the
-in-process `soundcard` streams, and `FAR_END_LAG_S` went with them — see
-`PLAN-CAPTURE-HELPER.md`, whose Windows half is now built. A status icon the
-shell files under Stenograf rather than under `pythonw.exe` landed 2026-08-01
+in-process `soundcard` streams, and `FAR_END_LAG_S` went with them — the
+capture-helper plan, closed and deleted 2026-08-02 with the Linux half built
+(`git log --follow -p PLAN-CAPTURE-HELPER.md`). A status icon the shell files
+under Stenograf rather than under `pythonw.exe` landed 2026-08-01
 (`gui/wintray.py`; the design notes are in CLAUDE.md, the GUID is permanent).
 The rest of this section is the history that produced both.
 
@@ -497,26 +502,25 @@ has no `win_amd64` wheel) — plus `eval/aec_alignment.py` on the dump. It is ha
 an hour of speech out loud, so it wants an empty room, and the rig pins an
 en-US SAPI voice because the system default is German.
 
-**Unmeasured, and raised by that fix: the same shape on Linux.** `parec` runs as
-one subprocess per channel, both stamped on arrival by the same `SessionClock`,
-so a monitor-source transport slower than the mic's would misalign the reference
-there exactly as WASAPI's did — silently, since it costs nothing but echo
-cancellation. The AEC numbers in `eval/README.md` are all macOS, where one helper
-stamps both channels.
-
-**Both of those are one root cause, and it has its own plan:
-`PLAN-CAPTURE-HELPER.md` — Windows built 2026-08-02, Linux still open.**
-Arrival-stamped audio is the disease and `far_end_lag_s` was the symptom cream.
-The fix is a native capture helper per platform emitting the frame format
-`capture/macos.py:9-16` already defines — one clock for both taps, the way
-`stenocap` has worked all along. What overturned the earlier deferral was
-reading the dependency instead of the plan: soundcard already asks
-`IAudioCaptureClient::GetBuffer` for `pu64QPCPosition` and passes NULL
-(`mediafoundation.py:699`), so no COM rewrite was ever needed to find out.
-`eval/wasapi_timestamps.py` measures it in twelve seconds — **both taps
-populated, monotonic, stable to ±0.1 ms over 30 s**. **Linux is now the only
-arrival-stamped transport left**, and closing it is that plan's step 5. Read it
-before touching capture, `aec.py`, or the wheel matrix on any platform.
+**Linux — the same root cause, closed by construction 2026-08-02.** The
+never-measured Linux echo-cancellation risk (`parec`, one subprocess per
+channel, both arrival-stamped by `SessionClock`) ended the way the
+capture-helper plan prescribed: the Rust helper grew a PulseAudio-protocol
+backend (`native/stenocap/src/pulse.rs`) that stamps both taps
+`CLOCK_MONOTONIC − server latency` on one clock, `parec` and `SessionClock`
+left with it, and **no arrival-stamped transport exists on any platform now**
+(`far_end_lag_s` is deleted outright, not zeroed — `EchoCanceller` keeps the
+parameter only as `eval/aec_alignment.py`'s verification knob). Measured on
+PipeWire 1.6 the day it shipped: stamp error against a sample-count line holds
+a bounded ±10 ms band over 35 s, a played tone lands at its wall-clock instant,
+and a real live meeting through the helper transcribed word-perfectly. Real
+PulseAudio is exercised by ci.yml's `capture-linux` job. The wheel matrix grew
+the low-floor `manylinux_2_28` capture wheel so Ubuntu 22.04 / Debian 12 /
+RHEL 9 keep live capture instead of silently falling to the pure wheel. What
+was *not* run on Linux is an ERLE-scored AEC session (this machine's desk has
+no speaker echo path either); the alignment premise it would confirm is the
+one now guaranteed by construction, so it rides along as a nice-to-have with
+the Windows gate above, not as its own gate.
 
 **The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
 ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live
@@ -577,6 +581,18 @@ Kept here so future sessions don't re-open them.
   battery against a control worktree.
 - **Never move VAD window bounds.** Both bound-moving fixes were tried and
   reverted; only the decode slice may change.
+- **livekit — re-ask deferred from the capture-helper plan, and its trigger
+  has now fired.** 25.6 MB installed for one class (`rtc.AudioProcessingModule`,
+  AEC3, imported in exactly one place — `aec.py`). It was never a
+  remove-the-wrapper candidate on its own: it discards nothing and costs no
+  correctness, and replacing it risks a canceller that measures 37.6 dB on
+  macOS. The trigger was the helper holding both channels with device
+  timestamps on every platform — true since 2026-08-02. Running AEC3 *inside*
+  the helper (Rust bindings to the same WebRTC APM) would mean channel pairing
+  never crosses a language boundary: `aec.py`'s timestamp machinery would stop
+  existing rather than get a better input. Revisit on all three platforms at
+  once, against the shipped ERLE numbers; the full reasoning is in the deleted
+  plan (`git log --follow -p PLAN-CAPTURE-HELPER.md`).
 - **A cancel button for an in-flight notes call.** Quitting the app no longer
   waits one out (`5a6b902`: `shutdown()` abandons it, the transcript is already
   persisted at `finalized`, and `steno notes --last` regenerates), but actually

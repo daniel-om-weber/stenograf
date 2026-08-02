@@ -24,26 +24,33 @@ shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
 history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
 `PLAN-CLEANUP.md`).
-**`PLAN-CAPTURE-HELPER.md` is the one live side-plan; its Windows half is built
-(2026-08-02) and Linux is what remains.** Arrival-stamped audio was the root
-cause behind both the Windows far-end lag and the unmeasured Linux one, and the
-fix is a native Rust capture helper per platform emitting the frame format
-`capture/macos.py:9-16` already defines — one clock for both taps, as `stenocap`
-has always done. Shipped for Windows: `native/stenocap/` (WASAPI,
-`pu64QPCPosition`), `capture/helper.py` holding the transport macOS and Windows
-share, `soundcard` + `FAR_END_LAG_S` + `SessionClock`'s re-anchor all deleted,
-`stenocap.exe` a mandatory win_amd64 wheel payload. **Linux is now the only
-arrival-stamped transport left.** Vendoring or monkeypatching soundcard, and
-PortAudio, are rejected there with reasons; the livekit question is deferred
-with a trigger; win_arm64 was struck on measurement (five base dependencies ship
-no wheel for it, so that machine cannot install stenograf at all). What is still
-owed is the AEC-quality run that scores the helper against the 13.7 dB the
-deleted constant achieved — it needs speakers in an empty room, and it is in
-PLAN.md. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
-twelve seconds. **Read that plan before touching capture, `aec.py`, or
-`hatch_build.py` on any platform.**
+**The capture helper is whole (2026-08-02): every platform streams
+device-stamped audio from a `stenocap` helper, and no arrival-stamped
+transport exists.** Arrival-stamped audio was the root cause behind both the
+Windows far-end lag and the never-measured Linux one; the fix is one Rust
+helper (`native/stenocap/` — WASAPI/`pu64QPCPosition` on Windows,
+PulseAudio-protocol/`CLOCK_MONOTONIC − server latency` on Linux, serving
+PipeWire through pipewire-pulse) speaking the frame format
+`capture/macos.py:9-16` defines — one clock for both taps, as the macOS
+`stenocap` has always done. `capture/helper.py` holds the transport all three
+platforms share; `soundcard`, `parec`, `FAR_END_LAG_S`, `SessionClock` and
+`far_end_lag_s` itself are all deleted. The wheel matrix carries it: win_amd64
+and manylinux_2_39 bundle both helpers, and a low-floor **manylinux_2_28 wheel
+carries stenocap alone** so Ubuntu 22.04 / Debian 12 / RHEL 9 keep live
+capture (stenodiar's glibc-2.39 floor is onnxruntime's, not capture's).
+`PLAN-CAPTURE-HELPER.md` closed and was deleted that day
+(`git log --follow -p PLAN-CAPTURE-HELPER.md`) — **read its history before
+touching capture, `aec.py`, or `hatch_build.py` on any platform**: vendoring
+or monkeypatching soundcard and PortAudio are rejected with reasons, win_arm64
+was struck on measurement (five base dependencies ship no wheel for it), and
+the dependency-hygiene test its not-candidates table applies is not guessable
+from code. Still owed, in PLAN.md: the AEC-quality run scoring the Windows
+helper against the deleted constant's 13.7 dB (needs speakers in an empty
+room), and the livekit re-ask whose trigger — the helper everywhere — has now
+fired. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
+twelve seconds.
 
-**Five side-plans closed and were deleted; their evidence is in git history,
+**Six side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 (2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`
 (2026-07-27): five of six items green — the `.lnk` launcher, the
