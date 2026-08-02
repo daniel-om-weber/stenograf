@@ -32,18 +32,13 @@ equivalent alias). No code path writes audio to disk.
 
 from __future__ import annotations
 
-import json
-import subprocess
 import sys
 
 from stenograf.capture.base import (
     CaptureUnavailableError,
     Channel,
 )
-from stenograf.capture.helper import HelperCaptureProvider, find_helper
-
-_CHANNEL_FLAG = {Channel.MIC: "--mic", Channel.SYSTEM: "--system"}
-_CHANNEL_KEY = {"mic": Channel.MIC, "system": Channel.SYSTEM}
+from stenograf.capture.helper import HelperCaptureProvider, query_devices
 
 
 class WindowsCaptureProvider(HelperCaptureProvider):
@@ -61,56 +56,20 @@ class WindowsCaptureProvider(HelperCaptureProvider):
 def default_devices(channels: set[Channel]) -> dict[Channel, str]:
     """What each channel would record from right now.
 
-    Asks the helper, which resolves the defaults exactly as its pumps will at
-    start — so a missing binary, an absent default device, or a denied
-    microphone privacy toggle fails *before* capture (and models) start, and so
-    the CLI can name what the meeting will record. The
-    loopback-of-default-output choice is invisible otherwise.
+    The shared helper preflight (:func:`stenograf.capture.helper.query_devices`)
+    plus the two things only Windows has: the privacy consent store read before
+    the helper runs, and a "(loopback)" suffix — the loopback-of-default-output
+    choice is invisible in the device's own name.
     """
     for channel in sorted(channels):
         if channel is Channel.MIC and (blocked := mic_access_blocked()):
             raise CaptureUnavailableError(blocked)
 
-    argv = [str(find_helper()), "--devices"]
-    argv += [_CHANNEL_FLAG[ch] for ch in sorted(channels)]
-    try:
-        result = subprocess.run(argv, capture_output=True, timeout=15, check=False)
-    except OSError as exc:
-        raise CaptureUnavailableError(f"the capture helper could not be run ({exc})") from exc
-    if result.returncode != 0:
-        raise CaptureUnavailableError(_helper_complaint(result.stderr))
-    try:
-        named = json.loads(result.stdout.decode("utf-8", errors="replace"))
-    except ValueError as exc:
-        raise CaptureUnavailableError(
-            f"the capture helper did not report its devices ({exc})"
-        ) from exc
-
-    devices = {}
-    for key, name in named.items():
-        channel = _CHANNEL_KEY.get(key)
-        if channel is None or channel not in channels:
-            continue
-        suffix = " (loopback)" if channel is Channel.SYSTEM else ""
-        devices[channel] = f"{name}{suffix}"
-    return devices
-
-
-def _helper_complaint(stderr: bytes) -> str:
-    """The helper's own reason, or a fallback when it died without giving one.
-
-    Its diagnostics are ``stenocap: FATAL: <reason>`` lines; the prefixes are
-    noise in a message the user reads, so everything up to and including the
-    marker comes off.
-    """
-    lines = [ln.strip() for ln in stderr.decode("utf-8", errors="replace").splitlines()]
-    fatal = next((ln for ln in reversed(lines) if "FATAL" in ln), None)
-    if fatal is None:
-        return (
-            "the capture helper could not resolve the default devices "
-            "— check Windows sound settings"
-        )
-    return fatal.split("FATAL", 1)[1].lstrip(": ").strip()
+    devices = query_devices(channels)
+    return {
+        ch: f"{name} (loopback)" if ch is Channel.SYSTEM else name
+        for ch, name in devices.items()
+    }
 
 
 _CONSENT_STORE = (

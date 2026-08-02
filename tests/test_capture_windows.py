@@ -71,15 +71,17 @@ class TestDefaultDevices:
         monkeypatch.setattr(windows, "mic_access_blocked", lambda: None)
 
     def _helper(self, monkeypatch, *extra):
-        import stenograf.capture.windows as windows
+        # The query lives in the shared helper module (Linux uses it too), so
+        # that is where the lookup and the run get patched.
+        import stenograf.capture.helper as helper
 
         argv = [*FAKE, *extra]
-        monkeypatch.setattr(windows, "find_helper", lambda: argv[0])
+        monkeypatch.setattr(helper, "find_helper", lambda: argv[0])
         # find_helper returns one path; the fake needs its script argument too,
         # so the run itself is what gets patched for these tests.
         real_run = subprocess.run
         monkeypatch.setattr(
-            windows.subprocess,
+            helper.subprocess,
             "run",
             lambda command, **kw: real_run([*argv, *command[1:]], **kw),
         )
@@ -114,12 +116,12 @@ class TestDefaultDevices:
         assert "stenocap:" not in str(caught.value)
 
     def test_unparseable_output_is_a_capture_error(self, monkeypatch):
-        import stenograf.capture.windows as windows
+        import stenograf.capture.helper as helper
 
         self._unblocked(monkeypatch)
-        monkeypatch.setattr(windows, "find_helper", lambda: "helper")
+        monkeypatch.setattr(helper, "find_helper", lambda: "helper")
         monkeypatch.setattr(
-            windows.subprocess,
+            helper.subprocess,
             "run",
             lambda *a, **kw: subprocess.CompletedProcess(a, 0, b"not json", b""),
         )
@@ -127,19 +129,20 @@ class TestDefaultDevices:
             default_devices({Channel.MIC})
 
     def test_a_missing_helper_is_a_capture_error(self, monkeypatch):
-        import stenograf.capture.windows as windows
+        import stenograf.capture.helper as helper
 
         self._unblocked(monkeypatch)
-        monkeypatch.setattr(windows, "find_helper", lambda: "no-such-helper-binary")
+        monkeypatch.setattr(helper, "find_helper", lambda: "no-such-helper-binary")
         with pytest.raises(CaptureUnavailableError, match="could not be run"):
             default_devices({Channel.MIC})
 
     def test_denied_mic_privacy_fails_before_the_helper_runs(self, monkeypatch):
+        import stenograf.capture.helper as helper
         import stenograf.capture.windows as windows
 
         monkeypatch.setattr(windows, "mic_access_blocked", lambda: "privacy settings say no")
         monkeypatch.setattr(
-            windows, "find_helper", lambda: pytest.fail("the helper must not be spawned")
+            helper, "find_helper", lambda: pytest.fail("the helper must not be spawned")
         )
         with pytest.raises(CaptureUnavailableError, match="privacy settings"):
             default_devices({Channel.MIC, Channel.SYSTEM})
@@ -155,13 +158,13 @@ class TestDefaultDevices:
 
     def test_channels_the_caller_did_not_ask_for_are_dropped(self, monkeypatch):
         """The helper answering more than it was asked must not widen the preflight."""
-        import stenograf.capture.windows as windows
+        import stenograf.capture.helper as helper
 
         self._unblocked(monkeypatch)
-        monkeypatch.setattr(windows, "find_helper", lambda: "helper")
+        monkeypatch.setattr(helper, "find_helper", lambda: "helper")
         both = json.dumps({"mic": "M", "system": "S"}).encode()
         monkeypatch.setattr(
-            windows.subprocess,
+            helper.subprocess,
             "run",
             lambda *a, **kw: subprocess.CompletedProcess(a, 0, both, b""),
         )

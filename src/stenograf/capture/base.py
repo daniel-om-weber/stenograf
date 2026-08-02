@@ -8,7 +8,8 @@ Providers are platform-specific:
   speaking a framed protocol over stdio.
 - Windows: a Rust helper subprocess speaking the same protocol (WASAPI mic +
   loopback).
-- Linux: one ``parec`` subprocess per channel (PipeWire/PulseAudio sources).
+- Linux: the same Rust helper (PulseAudio-protocol streams, which PipeWire
+  serves through pipewire-pulse).
 
 The core never learns where the audio came from; it only consumes
 ``AudioFrame`` objects. No provider may ever write audio to disk.
@@ -48,8 +49,8 @@ would silently misalign everything after it (see SessionStore / WavTee)."""
 
 class CaptureUnavailableError(RuntimeError):
     """Live capture cannot run here — missing capture stack (the native
-    stenocap helper, parec/pactl), no default device, or OS privacy settings
-    deny access.
+    stenocap helper, an unreachable sound server), no default device, or OS
+    privacy settings deny access.
 
     One class for every platform backend, so callers (CLI channel preview,
     doctor) can catch it without knowing which provider raised it."""
@@ -147,6 +148,13 @@ class CaptureProvider(ABC):
     the CLI reports it before models load), and macOS/file have no equivalent
     (the signed helper owns device selection; file replay has no devices).
     ``stenograf.loaders`` dispatches it per platform.
+
+    There is deliberately no per-provider timestamp-correction knob (the
+    deleted ``far_end_lag_s``): every provider's channels come from one
+    transport stamping both taps on one OS clock, so a declared correction
+    could only *introduce* the offset it existed to cancel.
+    ``eval/aec_alignment.py`` is the instrument that verifies a transport
+    needs none.
     """
 
     @abstractmethod
@@ -160,31 +168,3 @@ class CaptureProvider(ABC):
     @abstractmethod
     def stop(self) -> None:
         """End capture and release devices; ``frames`` iterators finish."""
-
-    @property
-    def far_end_lag_s(self) -> float:
-        """How much later this provider labels far-end audio than near-end audio.
-
-        Both channels are stamped when their frames *arrive* (``SessionClock``),
-        so each channel's timeline carries its own transport latency as a
-        constant offset. When the two differ, the system channel's timestamps
-        are wrong relative to the mic's by the difference — and the echo
-        canceller pairs the two channels *by timestamp*, so it then hands AEC3 a
-        reference that does not line up with the echo it is supposed to remove.
-
-        A positive value says "the system channel's labels run this far behind
-        the mic's", i.e. the far-end audio the pipeline believes was played at
-        *t* was really played at *t* minus this. :class:`~stenograf.aec.EchoCanceller`
-        subtracts it when it files the reference.
-
-        Zero for every provider whose two channels come from one transport with
-        one clock — which today is every provider but Linux's, since the native
-        helpers stamp both taps from the OS's own clock. **Linux is the one
-        arrival-stamped transport left** (one ``parec`` per channel), and it
-        declares zero for want of a measurement rather than because one was
-        taken; closing that is step 5 of PLAN-CAPTURE-HELPER.md.
-
-        Measure before overriding: ``eval/aec_alignment.py`` reads the lag off
-        an ``--aec-dump`` and prints what a provider would have to declare.
-        """
-        return 0.0

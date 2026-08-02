@@ -240,7 +240,7 @@ def main() -> int:
     print("  Physically impossible for a real echo path, so it is the timestamps: this")
     print("  provider's tap is the slower transport and both channels are stamped on")
     print("  arrival. AEC3 searches its far-end history backwards only, so it cancels")
-    print("  nothing -- see CaptureProvider.far_end_lag_s.")
+    print("  nothing -- the transport must hand over device timestamps (native/stenocap).")
     if arguments.no_sweep:
         return 1
 

@@ -1,9 +1,9 @@
 """Providers whose transport is the native ``stenocap`` helper.
 
-Two platforms capture through a helper subprocess — macOS through the signed
-Swift binary (`native/stenocap-macos`), Windows through the Rust one
+Every platform captures through a helper subprocess — macOS through the signed
+Swift binary (`native/stenocap-macos`), Windows and Linux through the Rust one
 (`native/stenocap`) — and they differ in almost nothing on this side of the
-pipe, because the helper is where the platform lives. Both spawn one process
+pipe, because the helper is where the platform lives. All spawn one process
 owning both channels, read framed PCM off its stdout, and route its stderr
 somewhere a user can see it.
 
@@ -18,11 +18,11 @@ simultaneous capture; ``samples`` is mono 16 kHz int16 PCM. There is no control
 channel back to the helper — selecting channels is done with argv flags.
 
 **That shared clock is the reason this transport exists**, and why the Windows
-provider is here rather than opening WASAPI streams in-process. Stamping frames
-when they arrive gives each channel its own transport latency as a hidden
-offset, and the echo canceller pairs the two channels *by timestamp*; the helper
-stamps both taps from one OS clock so the question cannot arise. See
-`native/README.md`, and `PLAN-CAPTURE-HELPER.md` for what it replaced.
+and Linux providers are here rather than reading audio in-process. Stamping
+frames when they arrive gives each channel its own transport latency as a
+hidden offset, and the echo canceller pairs the two channels *by timestamp*;
+the helper stamps both taps from one OS clock so the question cannot arise.
+See `native/README.md`, and `PLAN-CAPTURE-HELPER.md` for what it replaced.
 
 Stopping differs, and only because the platforms do — see :attr:`
 HelperCaptureProvider._stop_signal`.
@@ -31,6 +31,7 @@ HelperCaptureProvider._stop_signal`.
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import queue
 import signal
@@ -63,15 +64,17 @@ if TYPE_CHECKING:
 _HEADER = struct.Struct("<BdI")  # channel u8, timestamp f64, count u32
 _CHANNEL_CODE = {0: Channel.MIC, 1: Channel.SYSTEM}
 _CHANNEL_FLAG = {Channel.MIC: "--mic", Channel.SYSTEM: "--system"}
+_CHANNEL_KEY = {"mic": Channel.MIC, "system": Channel.SYSTEM}
 _MAX_FRAME_SAMPLES = SAMPLE_RATE * 10  # sanity bound to catch stream desync (10 s)
 
 HELPER_NAME = "stenocap.exe" if sys.platform == "win32" else "stenocap"
 _ENV_OVERRIDE = "STENOGRAF_CAPTURE_HELPER"
 
-_SOURCE_DIR = {"darwin": "stenocap-macos", "win32": "stenocap"}
+_SOURCE_DIR = {"darwin": "stenocap-macos", "win32": "stenocap", "linux": "stenocap"}
 _BUILD_SCRIPT = {
     "darwin": "native/stenocap-macos/build.sh",
     "win32": "powershell -File native/stenocap/build.ps1",
+    "linux": "native/stenocap/build.sh",
 }
 
 
@@ -111,6 +114,59 @@ def find_helper() -> Path:
         f"capture helper '{HELPER_NAME}' not found. Build it with "
         f"{build}, or set {_ENV_OVERRIDE} to its path."
     )
+
+
+def query_devices(channels: set[Channel]) -> dict[Channel, str]:
+    """What the helper says each channel would record from (``--devices``).
+
+    The preflight shared by the platforms whose helper owns device selection
+    (Windows, Linux): it resolves the defaults exactly as its pumps will at
+    start — so a missing binary, a broken audio stack, or an absent default
+    device fails *before* capture (and models) start, and the CLI can name
+    what the meeting will record. macOS has no equivalent; its helper is
+    device-selection-free by design. The platform modules wrap this with
+    whatever only they have (Windows: the privacy consent store, a
+    "(loopback)" suffix).
+    """
+    argv = [str(find_helper()), "--devices"]
+    argv += [_CHANNEL_FLAG[ch] for ch in sorted(channels)]
+    try:
+        result = subprocess.run(argv, capture_output=True, timeout=15, check=False)
+    except OSError as exc:
+        raise CaptureUnavailableError(f"the capture helper could not be run ({exc})") from exc
+    if result.returncode != 0:
+        raise CaptureUnavailableError(_helper_complaint(result.stderr))
+    try:
+        named = json.loads(result.stdout.decode("utf-8", errors="replace"))
+    except ValueError as exc:
+        raise CaptureUnavailableError(
+            f"the capture helper did not report its devices ({exc})"
+        ) from exc
+
+    devices = {}
+    for key, name in named.items():
+        channel = _CHANNEL_KEY.get(key)
+        if channel is None or channel not in channels:
+            continue
+        devices[channel] = name
+    return devices
+
+
+def _helper_complaint(stderr: bytes) -> str:
+    """The helper's own reason, or a fallback when it died without giving one.
+
+    Its diagnostics are ``stenocap: FATAL: <reason>`` lines; the prefixes are
+    noise in a message the user reads, so everything up to and including the
+    marker comes off.
+    """
+    lines = [ln.strip() for ln in stderr.decode("utf-8", errors="replace").splitlines()]
+    fatal = next((ln for ln in reversed(lines) if "FATAL" in ln), None)
+    if fatal is None:
+        return (
+            "the capture helper could not resolve the default devices "
+            "— check the system sound settings"
+        )
+    return fatal.split("FATAL", 1)[1].lstrip(": ").strip()
 
 
 class HelperCaptureProvider(CaptureProvider):

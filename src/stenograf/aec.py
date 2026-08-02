@@ -29,12 +29,13 @@ Two properties of AEC3 shape the design:
   far-end history, so a reference that arrives *after* its own echo cannot be
   used at all — the error is one-sided, and being early costs almost nothing
   while being late costs everything. Pairing the two channels by timestamp is
-  only as good as the timestamps: a provider whose tap labels run late
-  (``far_end_lag_s``, and Windows' WASAPI loopback runs ~60 ms late) hands AEC3
-  a future reference and measures as a dead canceller. Measured on the Windows
-  notebook 2026-07-26, sweeping the correction over one real dump: 4.7 dB ERLE
-  at 0 ms, 15.1 dB at 60 ms, and a flat 14.5-15.8 dB plateau all the way out to
-  250 ms. Hence a *generous* correction rather than a precise one.
+  only as good as the timestamps: arrival-stamped WASAPI capture labelled its
+  loopback tap ~60 ms late and measured as a dead canceller (4.7 dB ERLE at
+  0 ms correction, 15.1 dB at 60 ms, a flat plateau out to 250 ms; Windows
+  notebook, 2026-07-26). Every capture transport now stamps both taps on one
+  device clock, so no provider declares a correction any more — the
+  ``far_end_lag_s`` parameter below survives as the knob
+  ``eval/aec_alignment.py`` sweeps to *verify* that, not as configuration.
 
 Measured across the AEC scenario matrix (quiet/loud, batch/live,
 built-in/Bluetooth, double-talk), a canceller with a live reference leaks
@@ -378,7 +379,6 @@ class EchoCancellingProvider(CaptureProvider):
             delay_ms=self._delay_ms,
             noise_suppression=self._noise_suppression,
             cancel=self._cancel,
-            far_end_lag_s=self._inner.far_end_lag_s,
         )
         if self._dump_dir is not None:
             self._dump = AecDump(self._dump_dir)

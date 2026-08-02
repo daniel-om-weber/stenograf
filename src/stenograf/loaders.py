@@ -51,7 +51,7 @@ problem the user must see, vs. routine chatter (formats, started/stopped)."""
 class CaptureLog:
     """Capture-transport diagnostics for a run whose owner is not the terminal.
 
-    The native transports (stenocap, parec) normally inherit stderr, so their
+    The native transport (stenocap) normally inherits stderr, so its
     status lines land on the terminal — right for the CLI, but the Qt meeting
     screen (:mod:`stenograf.flow`) has no terminal to show them on, and its
     process may not even have a usable stderr. Passed as ``on_log`` to

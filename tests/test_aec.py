@@ -265,15 +265,10 @@ class TestFailureModes:
 
 
 class _FakeProvider(CaptureProvider):
-    def __init__(self, frames: list[AudioFrame], *, far_end_lag_s: float = 0.0) -> None:
+    def __init__(self, frames: list[AudioFrame]) -> None:
         self._frames = frames
-        self._far_end_lag_s = far_end_lag_s
         self.started: set[Channel] | None = None
         self.stopped = False
-
-    @property
-    def far_end_lag_s(self) -> float:
-        return self._far_end_lag_s
 
     def start(self, channels: set[Channel]) -> None:
         self.started = channels
@@ -300,29 +295,6 @@ class TestProvider:
         mic = np.concatenate([f.samples for f in out if f.channel is Channel.MIC])
         assert mic.size % TICK_SAMPLES == 0
 
-    def test_the_inner_providers_far_end_lag_reaches_the_canceller(self) -> None:
-        # The value is the platform's, so it can only come from the provider —
-        # measured for the transport it opened (capture/windows.py).
-        far = _speech(SECONDS, seed=13)
-        lag = 0.15
-        frames = _interleave(_i16(_echo_of(far)), _i16(far), sys_ts=lag)
-        cancelled = {}
-        for declared in (0.0, lag):
-            provider = EchoCancellingProvider(_FakeProvider(frames, far_end_lag_s=declared))
-            provider.start(BOTH)
-            out = [f for f in provider.frames() if f.channel is Channel.MIC]
-            provider.stop()
-            cancelled[declared] = _energy_db(_tail(np.concatenate([f.samples for f in out])))
-
-        # Declaring the lag is what makes the wrapper cancel a late-tap stream;
-        # the untouched forwarded frames are identical either way.
-        assert cancelled[0.0] - cancelled[lag] > 6.0
-
-    def test_a_provider_declares_no_lag_by_default(self) -> None:
-        # macOS's helper and file replay stamp both channels off one clock. The
-        # base property is what says so, and it is what every provider but
-        # Windows relies on.
-        assert _FakeProvider([]).far_end_lag_s == 0.0
 
 
 class TestDump:

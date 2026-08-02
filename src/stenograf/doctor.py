@@ -126,26 +126,25 @@ def _capture_helper_check() -> Check:
 
 
 def _linux_capture_check() -> Check:
-    """Whether `steno start` can capture here: parec present, server up, defaults set.
+    """Whether `steno start` can capture here: helper present, server up, defaults set.
 
-    Uses the same resolution the provider uses at meeting start, so an OK here
-    means a meeting would actually record — and names the devices it would
-    record from (the monitor-of-default-sink choice is invisible otherwise).
+    Uses the same resolution the provider uses at meeting start — the helper's
+    own ``--devices`` — so an OK here means a meeting would actually record, and
+    names the devices it would record from (the monitor-of-default-sink choice
+    is invisible otherwise).
     """
-    from stenograf.capture.base import Channel
-    from stenograf.capture.linux import (
-        CaptureUnavailableError,
-        LinuxCaptureProvider,
-        default_devices,
-    )
+    from stenograf.capture.base import CaptureUnavailableError, Channel
+    from stenograf.capture.linux import LinuxCaptureProvider, default_devices
 
     try:
-        LinuxCaptureProvider()  # fails fast when parec is missing
+        LinuxCaptureProvider()  # fails fast when the helper binary is missing
         devices = default_devices({Channel.MIC, Channel.SYSTEM})
     except CaptureUnavailableError as exc:
         return Check(name="Capture", ok=False, detail=str(exc))
     listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))
-    return Check(name="Capture", ok=True, detail=f"parec via PipeWire/PulseAudio ({listing})")
+    return Check(
+        name="Capture", ok=True, detail=f"PipeWire/PulseAudio via stenocap ({listing})"
+    )
 
 
 def _windows_capture_check() -> Check:

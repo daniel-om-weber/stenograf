@@ -99,10 +99,15 @@ def test_unsupported_platform_check_is_optional(monkeypatch):
 
 
 def test_linux_capture_check_names_the_devices(monkeypatch):
+    from stenograf.capture import helper as capture_helper
     from stenograf.capture import linux
     from stenograf.capture.base import Channel
 
-    monkeypatch.setattr(linux.shutil, "which", lambda name: f"/usr/bin/{name}")
+    # The provider resolves the binary through the helper module's own
+    # find_helper, not the name linux.py imported — patching the import site
+    # leaves the check hitting the real lookup, which only succeeds on a machine
+    # that happens to have a helper built.
+    monkeypatch.setattr(capture_helper, "find_helper", lambda: Path("stenocap"))
     monkeypatch.setattr(
         linux,
         "default_devices",
@@ -116,13 +121,16 @@ def test_linux_capture_check_names_the_devices(monkeypatch):
     assert "system ← mysink.monitor" in check.detail
 
 
-def test_linux_capture_check_fails_without_parec(monkeypatch):
-    from stenograf.capture import linux
+def test_linux_capture_check_fails_without_the_helper(monkeypatch):
+    from stenograf.capture import helper as capture_helper
 
-    monkeypatch.setattr(linux.shutil, "which", lambda name: None)
+    def boom():
+        raise capture_helper.HelperNotFoundError("capture helper 'stenocap' not found")
+
+    monkeypatch.setattr(capture_helper, "find_helper", boom)
     check = doctor._linux_capture_check()
     assert not check.ok
-    assert "parec" in check.detail
+    assert "stenocap" in check.detail
 
 
 def test_windows_capture_check_names_the_devices(monkeypatch):
