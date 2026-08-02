@@ -318,12 +318,17 @@ jobs:
       - name: The bundled helper runs and doctor reaches it
         # No sound server in the container, so the capture check must fail
         # with the helper's own connection complaint — proof the binary ran —
-        # and never with a missing-helper message.
+        # and never with a missing-helper message. stenodiar is absent from
+        # this wheel *on purpose*, and doctor says so with its own "not found"
+        # line, so the guard matches the capture helper's failure messages
+        # ("capture helper 'stenocap' not found", "the capture helper could
+        # not be run") rather than "not found" at large — the working path's
+        # complaint comes from the helper itself and never names it.
         run: |
           steno doctor > doctor.txt 2>&1 || true
           cat doctor.txt
           grep -q "sound server" doctor.txt
-          if grep -qi "not found" doctor.txt; then
+          if grep -qi "capture helper" doctor.txt; then
             echo "the installed wheel has no working capture helper" >&2
             exit 1
           fi
