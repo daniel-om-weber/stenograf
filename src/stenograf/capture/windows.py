@@ -7,19 +7,6 @@ on its stdout. The transport is shared with macOS in
 :mod:`stenograf.capture.helper`; what lives here is the two things Windows has
 that no other platform does.
 
-**Why a helper at all, when WASAPI is reachable from Python.** It was in-process
-through ``soundcard`` until 2026-08, and the reason it moved is timestamps.
-Frames stamped when they *arrive* carry their channel's transport latency as a
-hidden offset, and the loopback tap is the longer path — so the echo canceller,
-which pairs the two channels by timestamp, was handed a reference labelled
-~60 ms *after* its own echo, which AEC3 cannot use at any delay hint. That
-measured 2.6 dB ERLE with far-end speech attributed to the local speaker. A
-declared constant (``FAR_END_LAG_S``) held the line at 13.7 dB while it lasted,
-but the offset is re-rolled at every meeting start, so no declared value could
-ever be right. WASAPI reports a device-side timestamp on every packet
-(``pu64QPCPosition``) and the helper puts both taps on it — see
-`native/README.md` and `PLAN-CAPTURE-HELPER.md`.
-
 **Windows never prompts for the microphone.** There is no TCC equivalent: a
 denied privacy toggle silently makes the stream deliver zeros, so the consent
 store is read up front instead (:func:`mic_access_blocked`), before capture and

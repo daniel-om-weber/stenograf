@@ -291,8 +291,8 @@ def load_settings(path: Path | None = None) -> Settings:
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise SettingsError(f"cannot read {path}: {exc}") from exc
     if "archive" in data:
-        # The Stage C de-scope renamed the table; a stale file must say so, not
-        # just "unknown setting: archive".
+        # The table was renamed; a stale file must say so, not just
+        # "unknown setting: archive".
         raise SettingsError(
             f"invalid settings in {path}: [archive] was renamed to [output] — meetings "
             "now always get their own folder in the output home (set [output] dir; "

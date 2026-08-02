@@ -118,7 +118,7 @@ def test_file_is_playable_before_close(tmp_path):
 
 
 def test_read_channels_round_trips_stereo(tmp_path):
-    # read_channels is the exact inverse of the stereo tee layout (B4 rehydration).
+    # read_channels is the exact inverse of the stereo tee layout.
     path = tmp_path / "rec.wav"
     tee = WavTee(path, {Channel.MIC, Channel.SYSTEM})
     tee.add(frame(Channel.MIC, 0.0, np.array([10, 11, 12], dtype=np.int16)))

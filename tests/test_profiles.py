@@ -1,4 +1,4 @@
-"""Speaker-profile store + cosine re-ID (Phase 3, Task 1b).
+"""Speaker-profile store + cosine re-ID.
 
 Pure unit tests on synthetic unit vectors — no models, no audio. The real
 embedding path (``diarize_with_embeddings``) is covered by

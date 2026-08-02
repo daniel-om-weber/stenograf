@@ -1,4 +1,4 @@
-"""Menu-bar / system-tray mode — Phase 8 step 6.
+"""Menu-bar / system-tray mode.
 
 A meeting is the one thing this tool does that outlives the window you started
 it from: the video call is in front, stenograf is behind it, and the two
@@ -7,13 +7,12 @@ questions that matter for the next half hour — *is it still recording?* and
 item: the mark from its icon in the menu bar, tinted while a meeting is live,
 with a menu that can start, stop and quit without a window existing at all.
 
-That also makes the window optional, which is where the power argument lands.
-Phase 8 step 1 measured a *visible* Qt Quick window being woken at the display's
-refresh rate — ~120/s on this panel — no matter how disciplined the QML is,
-against a live pipeline tuned to ~0.6 W. Occlusion drops that to ~1/s, and a
-hidden window is at least as good, so closing to the tray is worth roughly two
-orders of magnitude for the majority of a meeting's runtime. Hence the two
-behaviour changes here, both conditional on a tray host actually existing:
+That also makes the window optional, which is where the power argument lands:
+a *visible* Qt Quick window is woken at the display's refresh rate no matter
+how disciplined the QML is, and a hidden one wakes ~100× less (measured; the
+full record is in PLAN.md), so closing to the tray is worth roughly two orders
+of magnitude for the majority of a meeting's runtime. Hence the two behaviour
+changes here, both conditional on a tray host actually existing:
 
 - **closing the window hides it instead of quitting**, and a meeting in progress
   keeps running — the tray is what tells you it is still there;
@@ -25,12 +24,10 @@ the case that matters — :func:`install` returns ``None`` and none of that
 happens: the window is the app, and closing it quits, exactly as before.
 
 On Windows the icon itself comes from :mod:`stenograf.gui.wintray` rather than
-from ``QSystemTrayIcon`` (:func:`_status_icon` picks). Qt's implementation works,
-but it files the icon under the *interpreter's* path, and Windows 11 then hides
-it in the overflow with the user's show/hide choice attached to ``pythonw.exe``
-— lost on the next Python upgrade. The replacement registers a stable GUID and
-promotes itself once. Everything below is written against the small surface both
-share, so this module has one status-item story, not two.
+from ``QSystemTrayIcon`` (:func:`_status_icon` picks) — why Qt's implementation
+loses the user's show/hide choice is that module's docstring. Everything below
+is written against the small surface both share, so this module has one
+status-item story, not two.
 
 Two landmines paid for here:
 
@@ -141,7 +138,7 @@ def set_dock_icon(visible: bool) -> bool:
     """Show or hide the macOS Dock tile at runtime; ``False`` if that is not possible.
 
     ``NSApplicationActivationPolicyAccessory`` is what makes an app menu-bar-only,
-    and it is settable while the app runs — measured in step 5, and the reason
+    and it is settable while the app runs — measured, and the reason
     menu-bar mode needs no ``LSUIElement`` key in ``Stenograf.app``'s frozen
     Info.plist. The key was tried and rejected besides: a UIElement app cannot be
     brought forward by ``open``, so double-clicking the bundle opened the window

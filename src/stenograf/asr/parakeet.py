@@ -216,7 +216,7 @@ class ParakeetMLXBackend(ASRBackend):
         # first decode on another thread — the live pass's LiveWorker — then dies
         # with "There is no Stream(gpu, 0) in current thread". Forcing them
         # concrete here makes the one loaded backend safe to call from the worker
-        # thread and the finalize thread alike (Phase 2, Task 3).
+        # thread and the finalize thread alike.
         mx.eval(self._model.parameters())
 
         # Swap in the boosting decode loop only when there is something to boost.

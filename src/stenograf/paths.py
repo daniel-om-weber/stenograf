@@ -42,7 +42,7 @@ def cache_dir() -> Path:
 def data_dir() -> Path:
     """Directory for precious user data (speaker profiles, settings), distinct
     from the model cache: ``$STENOGRAF_DATA`` if set, else the platform data
-    dir (``%APPDATA%`` on Windows — added with Phase 6, before any Windows
+    dir (``%APPDATA%`` on Windows — added before any Windows
     release, so no pre-existing installs need migrating)."""
     if override := os.environ.get("STENOGRAF_DATA"):
         return Path(override).expanduser()

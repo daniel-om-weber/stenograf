@@ -1,5 +1,5 @@
 """The native desktop app — bare ``steno`` in a terminal, ``steno --gui``,
-or the app icon (Phase 8).
+or the app icon.
 
 The button-driven entry to the pipeline: a real Qt Quick window (home menu →
 one screen per workflow) over the same library the CLI subcommands use — the
@@ -16,7 +16,7 @@ from __future__ import annotations
 def run_gui(*, tray: bool = False) -> None:
     """Open the desktop app and block until it quits.
 
-    With ``tray`` it starts in the menu bar with no window (Phase 8 step 6).
+    With ``tray`` it starts in the menu bar with no window.
 
     PySide6 is a base dependency since the default flip, so an ImportError here
     means a broken or pre-flip install — that includes Qt *present* but not

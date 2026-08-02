@@ -725,7 +725,7 @@ def run_tts(backend_name: str, *, alpha: float) -> int:
     backend.unload()
 
     # The verdict is per error *class*, not per fixture, because the only question
-    # this tier may ask is the plan's own: can biasing reach this class of error at
+    # this tier may ask is: can biasing reach this class of error at
     # all? A fixture whose audio does not contain the term cannot answer it — and we
     # have watched the same sentence, in two voices of the same engine, land on
     # either side of that line ("Grafana-Dashboard" survives one voice and comes out

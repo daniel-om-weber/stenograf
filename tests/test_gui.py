@@ -1,4 +1,4 @@
-"""Phase 8: the Qt desktop app (shell, QML tree, and one controller per screen).
+"""The Qt desktop app (shell, QML tree, and one controller per screen).
 
 Two kinds of test, because a GUI has two kinds of failure:
 
@@ -705,7 +705,7 @@ class TestDoctorScreen:
 
 
 class TestTray:
-    """Menu-bar / system-tray mode (Phase 8 step 6).
+    """Menu-bar / system-tray mode.
 
     The status item is built directly rather than through ``tray.install``,
     which correctly declines here: the offscreen platform hosts no tray, and

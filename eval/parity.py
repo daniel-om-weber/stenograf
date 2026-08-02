@@ -1,8 +1,8 @@
-"""MLX ↔ ONNX Parakeet parity (Phase 5 verification, label-free).
+"""MLX ↔ ONNX Parakeet parity (verification tier, label-free).
 
 Runs the two shipped backends — ``parakeet`` (parakeet-mlx) and
 ``parakeet-onnx`` (onnx-asr fp32) — over the eval WAVs and reports how far
-apart they are, without hand-written references (the Phase-2 approach: the
+apart they are, without hand-written references (the
 same model in two runtimes should agree, and where it doesn't, disagreement
 is symmetric evidence, not error):
 
@@ -15,7 +15,7 @@ is symmetric evidence, not error):
 Advisory thresholds, not a test suite: cross-WER ≤ 8 % and median |Δstart|
 ≤ 0.12 s per file prints PASS. The WER bar is the measured fp32 two-runtime
 disagreement on this audio (2.0–6.8 %, 2026-07-11; sherpa's int8-only v3
-export sat at 4.1–20.8 %, which is why Decision A went to onnx-asr — see
+export sat at 4.1–20.8 %, which is why the backend choice went to onnx-asr — see
 asr/parakeet_onnx.py). macOS-arm64 only (MLX).
 
 Usage: uv run --group eval python eval/parity.py [wav ...]

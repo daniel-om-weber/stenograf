@@ -60,8 +60,8 @@ class ResolvedParameters:
     """The meeting parameters as finally resolved, each tagged with provenance.
 
     Written back onto the finalized :class:`~stenograf.transcript.Transcript` so a
-    reader (or a re-run) can tell a user-set value from a detected one — the plan's
-    "Detected: German, 2 remote speakers" editability made durable. ``speakers`` is
+    reader (or a re-run) can tell a user-set value from a detected one — the
+    "Detected: German, 2 remote speakers" report made durable and editable. ``speakers`` is
     keyed by channel (``mic``/``system`` for a meeting, ``audio`` for a file
     transcribe); meeting-mode provenance is deferred with mode auto-detection.
     """

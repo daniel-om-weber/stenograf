@@ -1,7 +1,7 @@
 """Shared paths, manifest access, and audio I/O for the eval harness.
 
 The harness (``uv run --group eval eval/<script>.py``) has two tiers: the
-Phase 0 candidate-comparison scripts (score, extract, adjudicate, …) are
+candidate-comparison scripts (score, extract, adjudicate, …) are
 standalone and deliberately do not import the stenograf package, so they can
 evaluate candidates the package never shipped; the verification scripts
 (parity, live, diarize) exist precisely to exercise the *real* package

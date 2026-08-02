@@ -48,7 +48,7 @@ def run_checks() -> list[Check]:
         checks.append(_windows_capture_check())
         checks.append(_diarizer_helper_check())
     else:
-        # Optional: `steno transcribe` is fully supported everywhere (Phase 5's
+        # Optional: `steno transcribe` is fully supported everywhere (the
         # ONNX backend), so a box missing only live capture is healthy.
         checks.append(
             Check(

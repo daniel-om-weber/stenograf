@@ -1,9 +1,9 @@
 """The desktop launchers ``steno setup`` drops, and the entries they rely on.
 
 Three rules are worth the tests. The launchers embed the absolute
-interpreter and run ``-m stenograf`` (Phase 7 Task 6) — a double-clicked
+interpreter and run ``-m stenograf`` — a double-clicked
 shortcut gets a login-shell PATH that may lack uv's shim directory, so ``steno``
-by name is never good enough. ``Stenograf.app`` (Phase 8 step 5) is copied
+by name is never good enough. ``Stenograf.app`` is copied
 byte for byte and never generated, because macOS pins the app's microphone
 grant to the bundle's exact contents. And a pre-flip terminal launcher is
 retired or converted in place on every setup, never left beside the app as a
@@ -33,7 +33,7 @@ BUNDLE_FINGERPRINT = "69f0436e2e1b774402c95f2e8d808e60d8912b3442c1cb02b5eb9f78cf
 
 The one constant in this file that is a *decision*, not an observation. TCC
 stores the app's microphone and system-audio grants against the cdhash of
-``Contents/MacOS/Stenograf`` — no identifier, no anchor (PLAN.md Phase 8 step 2)
+``Contents/MacOS/Stenograf`` — no identifier, no anchor (measured)
 — and the Info.plist and the icon are sealed into that hash. So changing
 anything in the bundle, including rebuilding the same source, makes every
 machine that already granted access prompt again, with no way to migrate the
@@ -99,7 +99,7 @@ def test_the_bundle_has_the_shape_macos_requires():
     # Both usage strings: the capture helper's prompt is attributed to this app.
     assert "microphone" in info["NSMicrophoneUsageDescription"]
     assert info["NSAudioCaptureUsageDescription"]
-    # Menu-bar mode (step 6) is a runtime activation-policy call in the spawned
+    # Menu-bar mode is a runtime activation-policy call in the spawned
     # child, measured 2026-07-25 — an LSUIElement here would only stop `open`
     # from bringing the window forward, and could never be added later anyway.
     assert "LSUIElement" not in info

@@ -1,58 +1,16 @@
 """Does the model's own confidence separate a real fix from a false insertion?
 
-The whole argument for a confidence gate on ``stenograf.glossary`` rests on one
-empirical claim, and this script is the cheapest possible test of it. The claim:
+Measures — never gates: decodes the German tier exactly as shipped (boost = 1.0),
+applies post-correction at the old 0.82 threshold, and asks what the model believed
+about each word it rewrote. Rewrites are classified per utterance against the
+normalized reference (original in reference, replacement not → false insertion;
+the converse → true fix; anything else excluded and counted) — a bag-of-words
+diagnostic, unbiased between the two classes, deliberately cheaper than alignment.
 
-    When post-correction rewrites a word it should NOT have (``pound`` → ``compound``),
-    the model was *confident* about that word — it heard it perfectly well. When it
-    rewrites a word it SHOULD (a genuine misrecognition), the model was *unsure*.
-
-If that holds, a gate on ``Word.confidence`` lets us drop the similarity threshold back
-toward 0.82 — recovering the recall we surrendered when the over-correction disaster
-forced it to 0.95 — while refusing the rewrites that caused the disaster. If it does
-not hold (RNN-T greedy confidences are notoriously overconfident, so it may not), the
-design is dead and we have spent one decode pass learning that instead of a refactor.
-
-**This measures, it does not gate.** Nothing here changes shipped behaviour: it decodes
-the German tier exactly as stenograf ships it (boost = 1.0), applies post-correction at
-the *old* 0.82 threshold, and asks what the model believed about each word it rewrote.
-
-**How a rewrite is classified.** Per utterance, against the normalized reference:
-
-    original word in the reference, replacement not  → FALSE INSERTION (we broke it)
-    replacement in the reference, original not       → TRUE FIX      (we mended it)
-    anything else                                    → ambiguous, excluded
-
-That is a bag-of-words test, not an alignment: a word repeated in an utterance can be
-misjudged. It is the right trade for a diagnostic — it is unbiased between the two
-classes (nothing about the rule favours one), and the alternative costs an alignment
-pass to sharpen a number that only has to be *directionally* true to justify building
-the real thing. Every excluded case is counted and printed, so the discard rate is
-visible rather than assumed.
-
-**VERDICT: the gate is dead. Do not build it.** (Measured 2026-07-13, German, 500 utts,
-boost 1.0, threshold 0.82.) The claim is *directionally* true and *practically* useless:
-
-    false insertions  n=53   median confidence 0.999   p10 0.938
-    true fixes        n=165  median confidence 0.951   p10 0.858
-
-The words we wrongly overwrite really are the ones the model was surer about — and the
-distributions overlap so heavily that no threshold separates them. The best operating
-point (c = 0.95) blocks 45 of 53 false insertions and destroys **84 of 165 true fixes**;
-every looser point is worse (c = 0.90 → 98 % blocked, 81 % of fixes lost). ``der`` →
-``deri`` (a false insertion) scored 1.000; ``finde`` → ``find`` (a real fix) scored
-0.997. They are not distinguishable, because the entropy-normalized confidence of a
-greedy RNN-T saturates at ~1.0 for nearly everything.
-
-**Why it failed, and what would not.** The gate asks *"how sure was the model about the
-word it wrote?"* — a question whose answer is almost always "certain". The discriminative
-question is the other one: *"how much does the model dislike the word we want to put
-there?"* — i.e. score the **candidate term** over that span under the model and compare it
-against the tokens actually emitted. That is what FluidAudio approximates with a second
-CTC model (badly, with a weak English-only 110M — see ``bias_fluid.py``), and what we
-could do properly with the same TDT that produced the transcript, via forced alignment
-through the joint. It is real work, and it is unproven; this script is kept as the thing
-that will price it, and as the record of why the cheap version does not work.
+**Verdict: the gate is dead; do not build it.** The measured distributions, why
+they cannot carry a threshold, and the follow-up question that *would* be
+discriminative are in **eval/README.md** ("The confidence gate we did NOT build").
+This script is kept as the thing that would price that follow-up.
 
 Usage:
     uv run --group eval eval/bias_confidence.py            # 500-utt German subsample

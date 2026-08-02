@@ -227,7 +227,7 @@ class _Cue:
 
 # Subtitle re-flow budgets. A TranscriptEntry is a whole gap-split speaker turn —
 # far too long to show as one subtitle — so SRT/VTT export re-flows each entry's
-# retained word timestamps (Phase 3 Task 0e) into short cues.
+# retained word timestamps into short cues.
 _MAX_CUE_CHARS = 84  # ~two 42-char subtitle lines of spoken text
 _MAX_CUE_SECONDS = 6.0  # a single cue never lingers longer than this
 _MAX_CUE_GAP = 1.0  # a pause this long inside a turn starts a new cue

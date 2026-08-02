@@ -1,73 +1,13 @@
 """FluidAudio on our benchmark — the head-to-head against TypeWhisper's engine.
 
-TypeWhisper is the closest thing to a competitor that ships glossary support on the
-*same acoustic model we do* (Parakeet TDT 0.6b v3), so it is the one comparison where
-the model can be held fixed and the biasing *mechanism* is the only variable. Its
-Parakeet plugin does not implement biasing itself: it calls FluidAudio (Apache-2.0),
-which is what this driver runs.
+Runs the same acoustic model we ship (Parakeet TDT 0.6b v3) through FluidAudio's
+post-decode CTC rescoring — the engine behind TypeWhisper's glossary support — on
+the same pinned utterances and term lists, scored by the same ``bias_score``, each
+system against its **own** unbiased baseline. Knobs are set the way TypeWhisper
+actually runs them (``rescorerConfig(forVocabSize:)``, ``marginSeconds`` 0.5).
 
-**The mechanisms differ in kind, not degree.** We bias the decoder *while it
-transcribes* — a boosting tree over the token logits inside the greedy TDT loop
-(``stenograf.asr.biasing``). FluidAudio lets the TDT decoder finish, then runs a
-*second* acoustic model over the same audio (Parakeet CTC-110m), keyword-spots the
-vocabulary against its per-frame posteriors, and rewrites words in the completed
-transcript. Post-decode, alignment-anchored, acoustically-scored replacement. It is a
-far better instrument than the find-and-replace every other dictation app ships, and
-it is still downstream of the decision it is trying to influence.
-
-**English only, and that is their constraint, not a choice of ours.** FluidAudio's
-spotter is ``parakeet-ctc-110m``, whose tokenizer holds 1024 tokens and *zero*
-non-ASCII ones (our TDT v3 vocab: 8192 tokens, 194 carrying umlauts/ß). German terms
-tokenize into ``<unk>`` holes, and ``loadWithCtcTokens`` drops only *empty* token
-lists — so a poisoned term is silently kept and scored as noise. TypeWhisper pairs
-this English-only spotter with the multilingual transcriber with no language check.
-Our German tier therefore has no opponent to run: it is not a number they lose, it is
-a capability they do not have.
-
-**Fairness.** Their encoder is CoreML int8, ours is MLX fp32, so the two baselines are
-*different models* and their absolute WERs are not comparable. Only the relative move
-each mechanism makes against **its own** unbiased baseline is — which is why this runs
-their engine twice, with and without the vocabulary, and reports Δ against their
-baseline, never against ours. Their knobs are set the way TypeWhisper actually runs
-them: ``rescorerConfig(forVocabSize:)`` overrides the documented cbw 3.0 / minSim 0.52
-to **4.5 / 0.55** at our 100-term lists, and ``marginSeconds`` is TypeWhisper's one
-hardcoded knob (0.5, against FluidAudio's own 0.10 default).
-
-**What it found (2026-07-13, 500 utts, N=100).** Two things, and the second matters
-more than the first.
-
-*As TypeWhisper ships it, the vocabulary destroys the transcript.* B-WER −75.3 %,
-which looks like it laps us — bought with U-WER **+305.6 %** and **375 false
-insertions**, altering 287 of 500 utterances. The rewrites are not subtle
-(``glowing``→``unloving``, ``pound``→``compound``, ``words``→``awards``) and every one
-we sampled snapped a correct common word onto a *distractor* — a term the benchmark
-put in the list precisely because it is **not** spoken. It is not a tuning accident:
-FluidAudio's own defaults give 374 and their documented ``cbw 3.0`` gives 362.
-
-*But the mechanism is fine; the shipped configuration is not.* Forced to
-``minSimilarity 0.85``, the same engine lands at **B-WER −32.2 %, U-WER +2.4 %, 8 false
-insertions** — real parity with our −34.9 % / +0.0 % / 2. Post-decode CTC rescoring is
-a legitimate instrument, and on accuracy alone this benchmark does not separate the two
-approaches. What separates them is everything around the number: we get ours in one
-pass, in-loop, with no second model, in a decoder that also streams, in a language they
-cannot process at all.
-
-Two defaults do the damage, and both are worst exactly where real users live:
-
-- ``rescorerConfig(forVocabSize:)`` sets minSimilarity **0.60 above 100 terms, 0.55 for
-  11–100, and 0.50 at ≤10** — the *smaller* the glossary, the *looser* the match. A real
-  meeting glossary is 10–30 terms, i.e. their loosest setting.
-- the **spotter rescue** ("acoustic single-word rescue"), on by default, is what wrecks
-  small lists: with an oracle list of only words genuinely spoken it produces 762 false
-  insertions and U-WER +1407 %, and ``--vocab-disable-spotter-rescue`` alone drops that
-  to 104 / +72.6 %. minSimilarity does not touch it — 0.85 leaves the collapse intact.
-
-**Read this fairly.** is21's "rare words" are ordinary English words (``frail``, ``idly``,
-``holiness``), not the entities and jargon FluidAudio is built for — their published
-99.3 % precision on earnings calls is plausibly true in that domain, and this benchmark
-is harsher on their design than their target use case is. The claim here is bounded:
-*on the standard contextual-biasing benchmark, at its standard list size, the
-configuration TypeWhisper ships is destructive, and the mechanism underneath it is not.*
+Findings, numbers and the fairness caveats live in **eval/README.md** ("The
+head-to-head: FluidAudio"); this docstring deliberately repeats none of them.
 
 Usage:
     swift build -c release --product fluidaudiocli          # in a FluidAudio checkout

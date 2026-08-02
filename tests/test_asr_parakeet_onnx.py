@@ -1,4 +1,4 @@
-"""Model-free tests for the onnx-asr ASR backend (Phase 5).
+"""Model-free tests for the onnx-asr ASR backend.
 
 The real model is a ~2.4 GB download, so ``transcribe`` is exercised against
 a fake onnx-asr adapter returning the token/timestamp lists the real one

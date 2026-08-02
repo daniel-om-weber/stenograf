@@ -145,8 +145,9 @@ class TestLateTap:
 
     def test_the_provider_declared_lag_restores_it(self) -> None:
         # The same bar the aligned case is held to: correcting the label is all
-        # AEC3 needed. Generous is fine — 0.15 against a 0.15 lag here, and
-        # 2.5x the real one in production (capture.windows.FAR_END_LAG_S).
+        # AEC3 needed. No production transport declares a lag any more — the
+        # helper stamps both taps on one clock — so this pins the eval knob
+        # `eval/aec_alignment.py` sweeps to verify that.
         assert self._erle(far_end_lag_s=self.LAG) > 12.0
 
     def test_waiting_for_the_corrected_reference_is_not_reference_loss(self) -> None:

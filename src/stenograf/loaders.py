@@ -13,8 +13,7 @@ pure selection seams live one layer down
 
 Both front-ends call these factories. The Qt app runs them inside a GUI,
 where progress must not go through click — the process may own no usable
-stdio at all (a Windows ``pythonw`` launch, or the retired Textual TUI whose
-stdio proxy click probed to death with EBADF). Every announcing entry point
+stdio at all (a Windows ``pythonw`` launch). Every announcing entry point
 therefore takes ``announce``: ``None`` keeps the click-echoed CLI behaviour,
 a callable routes the same lines to the caller's sink (the meeting screen's
 status line).

@@ -19,7 +19,7 @@ hence ``eval/bias.py --post``, which prices both layers on the same benchmark.
 Matching is diacritic- and case-insensitive (so German umlaut/ß spellings match
 their ASCII-ish transcriptions) and operates on whole word tokens: an ``n``-word
 window is replaced by the term's ``n`` canonical tokens, preserving each word's
-timing and attached punctuation — so the retained word timestamps (Task 0e) and
+timing and attached punctuation — so the retained word timestamps and
 the SRT/VTT cues derived from them stay in sync with the corrected text. Known
 limit: a term and its transcription must share a *token count* (no split/merge
 across word boundaries), so attendee names are also registered token-by-token and

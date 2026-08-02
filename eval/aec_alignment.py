@@ -163,7 +163,7 @@ def declared_lag_s() -> float:
     stamps both channels from a single device clock. Windows was the last
     holdout: it declared 0.15 s while its two WASAPI streams were arrival-
     stamped in-process, and the constant went away with the capture helper that
-    replaced them (PLAN-CAPTURE-HELPER.md). Pass ``--declared`` to score a dump
+    replaced them. Pass ``--declared`` to score a dump
     taken by an older build.
     """
     return 0.0

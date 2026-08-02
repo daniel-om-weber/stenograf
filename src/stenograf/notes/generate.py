@@ -191,7 +191,7 @@ def _validate(body: str, template: str, *, raw: str) -> list[str]:
     wanted = headings(template)
     if not wanted:
         # A template with no ## headings is legal but degrades the gate to
-        # "some content exists" — stated as weaker in the plan, warned here.
+        # "some content exists" — a deliberately weaker check, so warn.
         if not content_lines(body, template):
             raise NotesGenerationError("the model returned the template unchanged — no content")
         return ["the template has no ## headings, so structure was not validated"]

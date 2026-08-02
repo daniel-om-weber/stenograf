@@ -11,7 +11,7 @@ from conftest import (
 from stenograf import cli, loaders
 from stenograf.diarization.base import SpeakerTurn
 
-# ---- speaker profiles (Task 1c) -------------------------------------------
+# ---- speaker profiles ------------------------------------------------------
 
 
 def _patch_diarizer(monkeypatch, diarizer):

@@ -3,7 +3,7 @@
 Decodes eval segments exactly the way a meeting's finalize pass does — Silero
 VAD → ``pack_windows`` → one batch Parakeet decode per window (the same code
 path ``pipeline._decode`` runs, and byte-identical audio slices) — and records
-*which window produced which words*. That provenance is what the plain Phase 0
+*which window produced which words*. That provenance is what a plain
 ``transcribe.py --backend parakeet`` run cannot give: it feeds the model the
 whole segment at once, so its output says nothing about how the product's
 windowing affects accuracy.

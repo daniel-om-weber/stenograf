@@ -79,7 +79,7 @@ class SessionStore:
     at t=0. That shared clock is what lets the two channels' finalized entries
     interleave correctly. No audio is ever written to disk.
 
-    Thread-safe for a single-writer/many-reader pattern (Phase 2 live pass): the
+    Thread-safe for a single-writer/many-reader pattern (the live pass): the
     capture thread :meth:`append`\\ s while the live worker :meth:`view`\\ s
     trailing windows. Each channel's chunk list is append-only, so any chunk once
     stored is immutable and never moves (prefix-immortal). Readers therefore only
@@ -622,7 +622,7 @@ class LiveWorker(threading.Thread):
         decoder's window and restart at the recent edge, feeding only the last
         ``window_cap`` seconds: the skipped span becomes a caption *gap* (the
         finalize pass fills it on stop), not an ever-growing decode. Returns the
-        (possibly advanced) start second to feed from (Task 0f)."""
+        (possibly advanced) start second to feed from."""
         cap = self._decoders[channel].window_cap
         if mark - start <= cap:
             return start

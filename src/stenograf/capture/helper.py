@@ -22,7 +22,7 @@ reads audio in-process. Stamping
 frames when they arrive gives each channel its own transport latency as a
 hidden offset, and the echo canceller pairs the two channels *by timestamp*;
 the helper stamps both taps from one OS clock so the question cannot arise.
-See `native/README.md`, and `PLAN-CAPTURE-HELPER.md` for what it replaced.
+See `native/README.md` for the helpers themselves.
 
 Stopping differs, and only because the platforms do — see :attr:`
 HelperCaptureProvider._stop_signal`. What else is genuinely per-platform:

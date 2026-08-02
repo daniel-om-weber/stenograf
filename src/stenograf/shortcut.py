@@ -2,7 +2,7 @@
 
 After the one-time setup nobody has to type a command again. Every launcher
 opens the desktop app — Qt has been a base dependency since the GUI became
-the default (Phase 8 step 7); the pre-flip terminal launchers survive only as
+the default; the pre-flip terminal launchers survive only as
 retirement targets (:func:`_retire_command_file`, :func:`_retire_cmd_file`),
 so an upgrade never leaves a second "Stenograf" behind that opens a dead TUI:
 
@@ -30,8 +30,8 @@ are rewritten in place, never duplicated.
 
 **The app bundle is the exception to that self-healing, and it matters.** macOS
 stores the microphone and system-audio grants against the cdhash of
-``Contents/MacOS/Stenograf`` — no identifier, no anchor (measured, PLAN.md Phase
-8 step 2) — so a bundle rewritten with a machine-specific path inside it would
+``Contents/MacOS/Stenograf`` — no identifier, no anchor (measured) — so a
+bundle rewritten with a machine-specific path inside it would
 be a different app to TCC on every install, and every change to it silently
 revokes the grant of everyone who already answered the prompt. The bundle is
 therefore copied byte-for-byte and never generated: the part that varies, the

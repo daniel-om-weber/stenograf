@@ -239,10 +239,9 @@ def test_capture_log_buffers_chatter_and_surfaces_problems(capsys):
 
 
 def test_plain_flag_stays_an_accepted_no_op(tmp_path, monkeypatch):
-    # --plain used to force the line stream instead of the full-screen Textual
-    # TUI. The TUI is retired and the stream is the only live terminal mode,
-    # but external scripts still pass the flag — it must stay accepted (and
-    # change nothing) rather than turn into a usage error.
+    # The line stream --plain once selected is now the only live terminal
+    # mode, but external scripts still pass the flag — it must stay accepted
+    # (and change nothing) rather than turn into a usage error.
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
@@ -300,7 +299,7 @@ def test_start_generates_notes_through_the_finish_tail(tmp_path, monkeypatch):
 
 
 class TestSpeakerCountHints:
-    """The 'lock the detected count' hint must stay actionable (Phase 3→4 audit).
+    """The 'lock the detected count' hint must stay actionable.
 
     An unconstrained diarizer can detect more (or, on silence, zero) speakers than
     the user can set, so the hint is clamped to the settable range and suppressed

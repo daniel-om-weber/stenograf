@@ -1,4 +1,4 @@
-"""Phase 2, Task 5: the live-caption views (LiveView interface + PlainLiveView).
+"""The live-caption views (LiveView interface + PlainLiveView).
 
 PlainLiveView is exercised through an injected ``echo`` recorder that mirrors
 ``click.echo``'s ``message``/``nl``/``err`` semantics exactly (message text plus

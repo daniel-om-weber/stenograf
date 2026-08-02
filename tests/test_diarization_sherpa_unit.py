@@ -1,8 +1,8 @@
-"""Unit coverage for SherpaOnnxDiarizer's pure-python aggregation (Phase 3→4).
+"""Unit coverage for SherpaOnnxDiarizer's pure-python aggregation.
 
 The real-backend test (``test_diarization_sherpa.py``) is gated on cached ONNX
 models + private audio, so on a fresh checkout / Linux CI ``sherpa.py`` executes
-zero test lines — yet Phase 4 ships this "cross-platform baseline diarizer" to
+zero test lines — yet this "cross-platform baseline diarizer" ships to
 Linux. These drive ``diarize_with_embeddings`` and ``l2_normalize`` through a
 fake ``SpeakerEmbeddingExtractor`` + fake pipeline, so the aggregation logic
 (per-cluster unit-norm mean, duration weighting, empty-cluster omission,

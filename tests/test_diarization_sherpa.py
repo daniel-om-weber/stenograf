@@ -1,8 +1,8 @@
-"""Real-backend SherpaOnnxDiarizer test (Phase 3, Task 0c).
+"""Real-backend SherpaOnnxDiarizer test.
 
 Every other diarizer test uses ``FakeDiarizer``; this one drives the actual
 sherpa-onnx ONNX pipeline (pyannote segmentation-3.0 + eres2net embeddings) —
-the surface speaker re-ID (Stage 1) extends. Precedent for why it matters: the
+the surface speaker re-ID extends. Precedent for why it matters: the
 MLX thread-stream bug showed a real backend can break what every mocked test
 passes green.
 
@@ -10,9 +10,9 @@ It is **gated**: it runs only when sherpa-onnx is installed, both diarization
 models are already cached, and a real eval clip is present (the audio is
 gitignored private meeting content, the models are a multi-hundred-MB download).
 A fresh checkout / CI therefore skips it; run it on a dev machine that has done
-Phase 0/1 setup. Assertions are structural (turns are well-formed, sorted, in
+the eval setup. Assertions are structural (turns are well-formed, sorted, in
 bounds; the known count caps clusters; the estimation and count-change-rebuild
-paths run) rather than accuracy numbers — DER scoring is Task 0d.
+paths run) rather than accuracy numbers — DER scoring is ``eval/der.py``'s job.
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ def test_distinct_clusters_have_distinct_embeddings(diarized):
 
 
 def test_reid_round_trips_real_cluster_embeddings(diarized):
-    # Task 1b end-to-end on REAL eres2net vectors (fakes can't catch a
+    # Re-ID end-to-end on REAL eres2net vectors (fakes can't catch a
     # dimension/geometry/threshold surprise): enrol each cluster as a profile,
     # then the resolver must re-identify each cluster as itself. A self-match is
     # cosine 1.0 — the maximum — so with the one-to-one constraint every cluster

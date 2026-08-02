@@ -1,4 +1,4 @@
-"""ASR backend registry/factory (Phase 3→4 readiness: the backend-selection seam).
+"""ASR backend registry/factory (the backend-selection seam).
 
 The factory is the single point a Linux ONNX/CTranslate2 backend registers into,
 so the finalize path is a drop-in rather than a rewrite. These assert the seam

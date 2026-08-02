@@ -1,8 +1,7 @@
 """ASR backend registry + factory.
 
-One selection seam so a second backend — the Linux ONNX/CTranslate2 path the plan
-calls for, or a Whisper/Voxtral backend — is a drop-in *registration* rather than a
-rewrite of the CLI's backend loading (Phase 3→4 readiness audit). Imports
+One selection seam so a new backend — a Whisper/Voxtral one, say — is a
+drop-in *registration* rather than a rewrite of the CLI's backend loading. Imports
 stay lazy: choosing one backend never imports another backend's (possibly
 platform-specific, e.g. MLX-only) dependencies. ``parakeet`` (MLX, macOS) and
 ``parakeet-onnx`` (onnx-asr CPU, cross-platform) ship; a new backend registers a

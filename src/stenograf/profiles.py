@@ -53,7 +53,7 @@ _STORE_VERSION = 1
 # array is ambiguous" and ``hash`` raises "unhashable type: ndarray". Identity
 # semantics are what the store actually uses (``remove``/``_replace`` match by
 # ``is``, names are unique per model), and they keep a profile safe to put in a set
-# or dict key — which a Phase-4 web UI will do.
+# or dict key.
 @dataclass(frozen=True, eq=False)
 class SpeakerProfile:
     """A named voice, identified by a unit-norm mean embedding under one model.
@@ -200,7 +200,7 @@ class ProfileStore:
         return updated
 
     def rename(self, profile: SpeakerProfile, new_name: str) -> SpeakerProfile:
-        """Rename a profile (the Task 1c "name this unmatched speaker" action)."""
+        """Rename a profile (the "name this unmatched speaker" action)."""
         if new_name != profile.name and self.get(new_name, profile.embedding_model) is not None:
             raise ValueError(
                 f"a profile named {new_name!r} already exists for model {profile.embedding_model!r}"

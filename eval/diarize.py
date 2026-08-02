@@ -1,6 +1,6 @@
 """Produce diarization hypotheses (and bootstrap references) for DER scoring.
 
-Phase 3, Task 0d. Runs stenograf's real diarizer + finalize pass over the
+Runs stenograf's real diarizer + finalize pass over the
 extracted eval segments and writes, per segment, into ``eval/out/diar/``:
 
 - ``<id>.rttm`` — the raw diarization turns (the DER hypothesis), and

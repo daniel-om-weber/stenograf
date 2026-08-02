@@ -6,7 +6,7 @@ Backends wrap one model + runtime combination. Implementations:
   finalize and live pass on macOS; Canary-1B-v2 was dropped — no Apple Silicon
   runtime with word timestamps)
 - ``parakeet-onnx`` — the same model, fp32 ONNX via onnx-asr on CPU (the
-  cross-platform default off macOS; Phase 5)
+  cross-platform default off macOS)
 - planned: ``voxtral_mlx`` — Voxtral Small 24B via mlx-voxtral (opt-in max
   accuracy)
 
@@ -75,7 +75,7 @@ class ASRBackend(ABC):
 
         ``language`` is the resolved meeting language, or ``None`` when it is
         not (yet) known: the default backend (Parakeet) is multilingual and
-        ignores it, and Phase-1 language detection runs over the finalized text
+        ignores it, and language detection runs over the finalized text
         (see ``stenograf.lid``). A language-*requiring* backend must handle
         ``None`` itself (detect once, then lock) rather than assume a value."""
 

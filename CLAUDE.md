@@ -111,6 +111,19 @@ the index.
   than running them in the main loop.
 - Release = version bump + tag (CI publishes to PyPI).
 
+## Comment policy
+
+1. Comments answer WHY. If a comment can be inferred from the line, delete it.
+2. A measured claim keeps its number and its date; the date says when to
+   re-measure.
+3. Never name a phase, stage, task, step, or plan file. State the fact; git
+   has the history.
+4. Never describe what a file used to contain. Tombstones only where they
+   stop a revert, in the present tense.
+5. A fact lives at exactly ONE address — code, `eval/README.md`, or
+   `PLAN.md`. Link, don't copy.
+6. Module-docstring length is bounded by the cost of the mistake it prevents.
+
 ## Phase 8 step 7 SHIPPED and OBSERVED 2026-07-30 — the GUI is the default UI
 
 The Textual front-end is retired — Daniel answered step 7's "pick one" with

@@ -37,7 +37,7 @@ from stenograf.cli import (  # noqa: F401
     # This flag has to keep working forever, including after the GUI becomes
     # the default: `Stenograf.app`'s launcher stub is a frozen binary that
     # cannot be changed without revoking every user's microphone grant, and
-    # `--gui` is compiled into it as the fallback argv (PLAN.md Phase 8 step 5).
+    # `--gui` is compiled into it as the fallback argv.
     "--gui",
     is_flag=True,
     help="Open the desktop app (what bare `steno` in a terminal does anyway).",
@@ -82,7 +82,7 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
         raise click.UsageError("--tray is a mode of the desktop app; pass --gui as well")
 
     # Bare `steno` in an interactive terminal with a display opens the desktop
-    # app (Phase 8 step 7); everywhere else it prints help. Both gates are
+    # app; everywhere else it prints help. Both gates are
     # load-bearing: the TTY gate keeps the cron / launchd / pipe / `make` / CI
     # class of invocation on help text exactly as before the flip, and the
     # display gate keeps SSH and consoles without a display server off a Qt

@@ -1,12 +1,8 @@
 """Pipe readers shared by every subprocess capture transport.
 
-All that remains of the queue-streaming provider machinery: the
-arrival-anchored ``SessionClock`` and the per-channel pump base class lived
-here while Linux captured through ``parec``, and left with it (2026-08, step 5
-of PLAN-CAPTURE-HELPER.md) — every platform now streams device-stamped frames
-from a ``stenocap`` helper (:mod:`stenograf.capture.helper`), so no provider
-stamps frames on arrival any more. A transport that would need arrival
-stamping again should be handing over real timestamps instead.
+Nothing here stamps frames: timestamps come from the helper
+(:mod:`stenograf.capture.helper`), and a transport that would need to stamp on
+arrival should be handing over real timestamps instead.
 """
 
 from __future__ import annotations

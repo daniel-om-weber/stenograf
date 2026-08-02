@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from stenograf import cli, loaders
 
-# -- bare invocation (Phase 8 step 7: the desktop-app entry) ------------------
+# -- bare invocation (the desktop-app entry) ----------------------------------
 
 
 def test_bare_invocation_without_a_tty_prints_help():
@@ -154,7 +154,7 @@ def test_gui_flag_opens_the_desktop_app_without_needing_a_tty(monkeypatch):
 
 
 def test_tray_flag_starts_the_desktop_app_in_the_menu_bar(monkeypatch):
-    # Phase 8 step 6: the windowless launch, and the one that idles at the
+    # The windowless launch, and the one that idles at the
     # wakeup floor. It is a mode of the app, not a second front end.
     import stenograf.gui
 
@@ -222,9 +222,9 @@ def test_subcommands_never_open_the_app(monkeypatch):
 
 
 def test_native_provider_with_announce_never_touches_click(monkeypatch):
-    # The TUIs hand loaders an announce sink because click.echo under Textual's
-    # redirected stdio crashes on Windows (EBADF probing the proxy's fd against
-    # the real console); with a sink given, the seam must not touch click.
+    # GUI hosts hand loaders an announce sink because click.echo needs usable
+    # stdio the process may not own (a Windows ``pythonw`` launch); with a
+    # sink given, the seam must not touch click.
     import click
 
     from stenograf.config import MeetingProfile

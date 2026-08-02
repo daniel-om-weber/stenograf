@@ -30,7 +30,7 @@ class DiarizationResult:
     """Turns plus, optionally, a mean voice embedding per cluster.
 
     The embedding lets the core match a run's clusters against saved speaker
-    profiles for cross-meeting re-ID (Phase 3, Stage 1). Each value is an
+    profiles for cross-meeting re-ID. Each value is an
     L2-normalized mean embedding keyed by the same cluster label used in
     ``turns`` (e.g. ``"S0"``); a cluster with too little clean audio to embed is
     simply absent from the mapping. Backends that cannot produce embeddings

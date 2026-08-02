@@ -151,10 +151,9 @@ _RECORD_DEFAULT = "\0default"
     "--plain",
     is_flag=True,
     hidden=True,
-    # Accepted no-op: it used to force the line stream instead of the
-    # full-screen Textual TUI. The TUI is retired and the line stream is the
-    # only live terminal mode, but external scripts still pass the flag, so
-    # deleting it would break them for nothing.
+    # Accepted no-op: the line stream it once selected is now the only live
+    # terminal mode, but external scripts still pass the flag, so deleting it
+    # would break them for nothing.
 )
 @click.option(
     "--aec/--no-aec",

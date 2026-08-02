@@ -1,4 +1,4 @@
-"""Unit tests for the diarization scorer (eval/der.py, eval/rttm.py) — Task 0d.
+"""Unit tests for the diarization scorer (eval/der.py, eval/rttm.py).
 
 The scorer is the gating measurement for everything speaker-centric, so its math
 is pinned here against hand-computable cases. The eval harness is standalone

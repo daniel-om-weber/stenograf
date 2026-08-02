@@ -1,6 +1,6 @@
 """Spoken-language identification for stenograf's German/English scope.
 
-Phase 1 resolves the meeting language from the *finalized transcript* with a
+The meeting language is resolved from the *finalized transcript* with a
 function-word + diacritic vote. For a binary de/en decision over
 meeting-length text this separates the two languages far more reliably than a
 small acoustic LID model would, and it needs no extra model download — the
@@ -9,8 +9,8 @@ and nothing needs the language before transcription runs.
 
 The plan's acoustic path — LID on the first confident speech segment, locked
 before any text exists (sherpa-onnx exposes a Whisper-based
-``SpokenLanguageIdentification``) — is the upgrade the live pass needs
-(Phase 2) and what a language-*requiring* backend (Whisper/Voxtral)
+``SpokenLanguageIdentification``) — is the upgrade the live pass would
+need and what a language-*requiring* backend (Whisper/Voxtral)
 would use. Either would slot in behind :func:`detect_language`.
 """
 

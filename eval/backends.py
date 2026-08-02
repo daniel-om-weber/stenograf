@@ -53,10 +53,10 @@ class WhisperMLX(Backend):
             path_or_hf_repo=self.model_id,
             language=language,
             word_timestamps=True,
-            # Phase 0 finding: with condition_on_previous_text=True, decoder
+            # Measured: with condition_on_previous_text=True, decoder
             # loops snowballed across windows (up to 220 repeated words on
-            # overlap/silence regions). False stops the propagation; the plan's
-            # cross-window-consistency preference loses to that in practice.
+            # overlap/silence regions). False stops the propagation;
+            # cross-window consistency loses to that in practice.
             condition_on_previous_text=False,
             hallucination_silence_threshold=2.0,
         )
