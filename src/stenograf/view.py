@@ -141,6 +141,8 @@ class PlainLiveView(LiveView):
                 self._printed = len(open_text)
 
     def status(self, message: str) -> None:
+        if not message:  # "" is a screen's clear-the-label event, not a line
+            return
         self._notice(message)
 
     def language(self, language: Language) -> None:

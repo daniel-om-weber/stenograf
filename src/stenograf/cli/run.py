@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from stenograf.diarization.base import Diarizer
     from stenograf.profiles import SpeakerReID
     from stenograf.settings import MeetingPreset, Settings
+    from stenograf.view import LiveView
 
 def _library_errors[T](func: Callable[..., T]) -> Callable[..., T]:
     """The command boundary: the library's typed failures become clean CLI errors.
@@ -138,8 +139,8 @@ def _resolve_run_config(
 def _notes_enabled(notes_flag: bool | None, settings: Settings) -> bool:
     """Whether this run generates notes: ``--notes`` asked for them, or — with
     no flag either way — ``[notes] auto`` is on; ``--no-notes`` skips them even
-    then. One seam, so ``start``'s in-TUI notes and :func:`_finish_run` can
-    never disagree."""
+    then. One seam, so ``start``'s ``MeetingRequest.notes`` and ``transcribe``'s
+    :func:`_finish_run` tail can never disagree."""
     return notes_flag if notes_flag is not None else settings.notes.auto is True
 
 
@@ -158,12 +159,15 @@ def _finish_run(
 ) -> None:
     """The tail both commands share: optional notes, optional stdout print.
 
-    Notes run per :func:`_notes_enabled`; the per-run trio overrides the
-    ``[notes]`` snapshot for this run only."""
-    from stenograf.cli.notes import _notes_after_run
+    Notes run per :func:`_notes_enabled`, through the one shared
+    :func:`~stenograf.notes.run.run_notes` tail (non-fatal, Ctrl-C
+    choreography included); the per-run trio overrides the ``[notes]``
+    snapshot for this run only."""
+    from stenograf.notes import run as notes_run
 
     if _notes_enabled(notes_flag, settings):
-        _notes_after_run(
+        notes_run.run_notes(
+            _notes_echo_view(),
             transcript,
             out_dir,
             basename,
@@ -176,6 +180,21 @@ def _finish_run(
     if print_markdown:
         click.echo()
         click.echo(transcript.to_markdown(), nl=False)
+
+
+def _notes_echo_view() -> LiveView:
+    """The notes tail's CLI presentation: progress to stdout, problems yellow
+    to stderr (the transcript already stands, so nothing here is fatal)."""
+    from stenograf.view import LiveView
+
+    class _NotesEcho(LiveView):
+        def status(self, message: str) -> None:
+            click.echo(message)
+
+        def error(self, message: str) -> None:
+            click.secho(message, fg="yellow", err=True)
+
+    return _NotesEcho()
 
 
 def _parse_formats(spec: str) -> list[str]:

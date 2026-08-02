@@ -1,22 +1,17 @@
 """The workflows a *UI* runs: meeting, transcribe, notes — without any UI in them.
 
-``steno start``'s command body is the CLI's; this module is the equivalent
-for the button-driven entry, the Qt desktop app (:mod:`stenograf.gui`) — and
-the reason it must stay out of the screens: the app and the CLI must run the
-*same* meeting — same folder allocation, same load order, same notes tail —
-or they drift into two products. So the screens keep only what a screen is:
-gathering inputs, showing progress, handling the answer. Everything between
-those lives here, expressed against :class:`~stenograf.view.LiveView` and
-plain callbacks, so it is drivable from a Qt worker thread or a test with no
-UI at all.
-
-Differences from the CLI are deliberate scope, not drift: no ``--out``/``--force``
-(a fresh date-named folder can't collide), no replay/AEC-dump/full-finalize
-(developer flags), and progress reports through the view instead of
-``click.echo``. Everything the CLI resolves from flags — formats, vocabulary,
-re-ID, AEC, checkpoint cadence — comes from settings.toml through the very same
-library seams ``cli/run.py`` uses, so a flagless ``steno start`` and a clicked
-Start button can never disagree about defaults.
+:class:`MeetingRun` is **the** meeting: ``steno start`` and the Qt app's
+Start button (:mod:`stenograf.gui`) are both thin adapters over it — the CLI
+translates flags into a :class:`MeetingRequest` plus :class:`RunOptions`, the
+app builds the request from its setup form and takes every option's default.
+There is exactly one assembly sequence (resolve → plan channels → capture →
+load backends → record → persist → notes tail); a front-end that wants to
+run it differently has nothing to fork, which is what keeps the two from
+drifting into two products. The screens keep only what a screen is:
+gathering inputs, showing progress, handling the answer. Everything here is
+expressed against :class:`~stenograf.view.LiveView` and plain callbacks, so
+it is drivable from a Qt worker thread, a terminal, or a test with no UI at
+all — progress goes through the view, never ``click.echo``.
 
 Ordering matters twice in :meth:`MeetingRun.run`:
 
@@ -55,6 +50,7 @@ from stenograf.pipeline import (
 )
 from stenograf.recording import WavTee
 from stenograf.session import (
+    BATCH_FLUSH_INTERVAL_S,
     LIVE_FLUSH_INTERVAL_S,
     CheckpointConfig,
     MeetingRecorder,
@@ -75,6 +71,9 @@ from stenograf.vocab import collect_terms
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from stenograf.capture.base import CaptureProvider
+    from stenograf.session import MeetingResult
+
 
 class MeetingRequestError(Exception):
     """A setup form's inputs (plus settings.toml) do not describe a runnable meeting.
@@ -91,13 +90,70 @@ class MeetingRequest:
 
     ``settings`` rides along so the run uses the exact values in force when the
     user pressed Start — not whatever the file says seconds later.
-    ``record_audio`` is the CLI's bare ``--record-audio``: keep the raw capture
-    as the meeting folder's ``audio.wav``."""
+    ``record_audio`` is the CLI's ``--record-audio``: keep the raw capture as
+    the meeting folder's ``audio.wav`` (or :attr:`RunOptions.audio_path`)."""
 
     profile: MeetingProfile
     settings: Settings
     notes: bool
     record_audio: bool
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    """The per-run knobs beyond a setup form's controls — ``steno start``'s
+    developer and tuning flags. Every default is the button UI's fixed
+    choice, so a default-constructed ``RunOptions`` and a clicked Start
+    describe the same run; the CLI adapter fills in whatever its flags say.
+    ``None`` throughout means "the settings.toml value" (or the built-in
+    default behind it)."""
+
+    replay: str | None = None
+    """Dev: replay audio file(s) as the mic (and optional system) channel."""
+    out: Path | None = None
+    """Use this directory as the meeting's folder (``--out``); ``None``
+    allocates a fresh date-named folder that cannot collide."""
+    force: bool = False
+    """Let ``out`` overwrite a folder already holding a transcript."""
+    live: bool = True
+    """Stream live captions; ``False`` is the silent batch capture."""
+    aec: bool = True
+    """Echo-cancel the mic against the system channel (and dedup at merge)."""
+    aec_dump: Path | None = None
+    """Write the canceller's mic/lpb/enh WAV triple here for offline scoring."""
+    flush_interval: float | None = None
+    """Seconds between crash checkpoints; ``None`` picks the mode's default
+    cadence (live: cheap file I/O, tight; batch: a real finalize, sparse)."""
+    max_seconds: float | None = None
+    """Stop capture automatically after this much audio."""
+    full_finalize: bool = False
+    """Re-transcribe from scratch at stop instead of reusing the live pass."""
+    use_reid: bool = True
+    """Relabel diarized speakers from the saved voiceprint store."""
+    reid_threshold: float | None = None
+    reid_store: Path | None = None
+    glossary_threshold: float | None = None
+    formats: tuple[str, ...] | None = None
+    """Transcript formats to write; ``None`` = ``[transcript] formats``."""
+    audio_path: Path | None = None
+    """Where ``record_audio`` writes; ``None`` = ``audio.wav`` in the folder."""
+    notes_backend: str | None = None
+    notes_model: str | None = None
+    notes_instructions: Path | None = None
+    """The per-run notes trio — one meeting with a different notes setup."""
+    transport_stderr: bool = False
+    """Leave the capture transports' diagnostics on inherited stderr (a
+    terminal command owns its stderr and a raw write corrupts nothing);
+    ``False`` buffers them and routes problem lines to the view — a GUI
+    process may own no usable stderr at all."""
+
+    def resolved_flush_interval(self) -> float:
+        """The checkpoint cadence this run uses: the explicit value (0 = off),
+        else the mode's default — sized to what a checkpoint costs; the
+        per-mode constants beside ``CheckpointConfig`` say how."""
+        if self.flush_interval is not None:
+            return self.flush_interval
+        return LIVE_FLUSH_INTERVAL_S if self.live else BATCH_FLUSH_INTERVAL_S
 
 
 def standing_settings() -> Settings:
@@ -197,17 +253,34 @@ class MeetingRun:
     names. :meth:`run` then does the slow work on whatever thread the UI gives
     it."""
 
-    def __init__(self, request: MeetingRequest, *, abort: threading.Event | None = None) -> None:
+    def __init__(
+        self,
+        request: MeetingRequest,
+        *,
+        options: RunOptions | None = None,
+        abort: threading.Event | None = None,
+    ) -> None:
         self.request = request
+        self.options = options or RunOptions()
         self.created_at = datetime.now()
-        self.basename = output.TRANSCRIPT_STEM
-        # A fresh date-named folder under the visible output home — a button has
-        # no --out equivalent, so allocation can never collide with an existing
-        # meeting. Nothing is created until the first write.
-        self.out_dir = output.allocate_meeting_dir(
-            request.settings.output.dir or output.default_output_home(), self.created_at
+        # A fresh date-named folder under the visible output home (which cannot
+        # collide with an existing meeting), or options.out as the folder —
+        # refused if it already holds a transcript, unless options.force.
+        # Nothing is created until the first write.
+        self.out_dir, self.basename, audio_default = output.prepare_output(
+            self.options.out, self.created_at, request.settings, force=self.options.force
         )
-        formats = list(request.settings.transcript.formats or DEFAULT_FORMATS)
+        self.audio_path = self.options.audio_path or audio_default
+        """Where ``record_audio`` lands — resolved here so a front-end can
+        name (or banner) the file before the run starts."""
+        self.result: MeetingResult | None = None
+        """The recorder's full result (speaker counts, echo-dedup stats),
+        for reporting a view's events don't carry. Set once :meth:`run` has it."""
+        self.elapsed: float | None = None
+        """Wall-clock seconds from capture start to the persisted transcript."""
+        formats = list(
+            self.options.formats or request.settings.transcript.formats or DEFAULT_FORMATS
+        )
 
         def write(transcript: Transcript) -> list[Path]:
             paths = output.write_transcript(transcript, self.out_dir, self.basename, formats)
@@ -243,29 +316,34 @@ class MeetingRun:
         a stale flag is ignored."""
 
     def run(self, view: LiveView) -> Transcript | None:
-        """Capture, finalize, and (if asked) write notes, reporting through ``view``.
+        """Capture, finalize, persist, and (if asked) write notes, reporting
+        through ``view``.
 
         Blocking, and meant for a worker thread: it returns when the meeting is
         over. Ends when the view's stop callback — installed here, on the first
         line that has something to stop — is invoked."""
         settings, profile = self.request.settings, self.request.profile
+        options = self.options
         plans = plan_channels(profile)
 
         if self.abort.is_set():
             return None
         view.status("starting capture…")
         # announce=view.status everywhere below: loader progress must go to the
-        # view, never through click — a TUI owns stdio, a GUI has no stdio at
-        # all, and on Windows click.echo dies probing its proxy (loaders module
-        # docstring). on_log likewise: the capture transports' stderr chatter
-        # must not be written over the running app; problems reach the view.
+        # view, never through click — a GUI has no stdio at all, and on Windows
+        # click.echo dies probing its proxy (loaders module docstring). on_log
+        # likewise, unless the front-end owns a real stderr and says so.
         provider = loaders.make_provider(
-            None,
+            options.replay,
             plans,
-            paced=True,
-            aec=True,
+            # Pace file replay to wall-clock only when it feeds the live pass,
+            # so a replay demonstrates captions at meeting cadence; batch just
+            # dumps it.
+            paced=options.live,
+            aec=options.aec,
+            aec_dump=options.aec_dump,
             announce=view.status,
-            on_log=loaders.CaptureLog(view=view),
+            on_log=None if options.transport_stderr else loaders.CaptureLog(view=view),
         )
         if self.abort.is_set():
             # The cancel arrived while the provider was being built. Release
@@ -280,12 +358,13 @@ class MeetingRun:
         # (cold) model load instead of being lost. The run below consumes the
         # buffer (``provider_started=True``).
         provider.start({p.channel for p in plans})
+        started = time.monotonic()
         tee = None
         try:
             if self.request.record_audio:
                 # The tee is this run's first write, so it creates the folder.
-                self.out_dir.mkdir(parents=True, exist_ok=True)
-                tee = WavTee(self.out_dir / output.AUDIO_NAME, {p.channel for p in plans})
+                self.audio_path.parent.mkdir(parents=True, exist_ok=True)
+                tee = WavTee(self.audio_path, {p.channel for p in plans})
             view.status("recording · loading models…")
             asr, vad, diarizer = loaders.load_backends(
                 need_diarizer=any(p.num_speakers != 1 for p in plans),
@@ -297,12 +376,18 @@ class MeetingRun:
                 announce=view.status,
             )
             reid = None
-            if diarizer is not None:
+            if diarizer is not None:  # re-ID relabels diarized speakers only
                 reid = loaders.load_reid(
-                    enabled=True,
-                    threshold=settings.speakers.reid_threshold,
-                    store_path=settings.speakers.profile_store,
+                    enabled=options.use_reid,
+                    threshold=(
+                        settings.speakers.reid_threshold
+                        if options.reid_threshold is None
+                        else options.reid_threshold
+                    ),
+                    store_path=options.reid_store or settings.speakers.profile_store,
                 )
+                if reid is not None:
+                    view.status(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
             recorder = MeetingRecorder(
                 profile,
                 asr=asr,
@@ -310,9 +395,14 @@ class MeetingRun:
                 diarizer=diarizer,
                 reid=reid,
                 language=profile.language,
-                glossary_threshold=settings.vocab.glossary_threshold,
-                dedup_echo=True,
+                glossary_threshold=(
+                    settings.vocab.glossary_threshold
+                    if options.glossary_threshold is None
+                    else options.glossary_threshold
+                ),
+                dedup_echo=options.aec,
             )
+            recorder.reuse_live_finalize = not options.full_finalize
         except BaseException:
             # Capture is already live but the run will never start (a load
             # failure) — release the devices on the way out; the error itself
@@ -328,20 +418,38 @@ class MeetingRun:
         try:
             result = recorder.run(
                 provider,
-                live=True,
+                live=options.live,
                 view=view,
                 on_frame=tee.add if tee else None,
                 checkpoint=CheckpointConfig(
-                    output.checkpoint_writer(self.out_dir, self.basename), LIVE_FLUSH_INTERVAL_S
+                    output.checkpoint_writer(
+                        self.out_dir,
+                        self.basename,
+                        # Live views keep the caption stream clean; the batch
+                        # shape narrates each write, as it always has.
+                        announce=None if options.live else view.status,
+                    ),
+                    options.resolved_flush_interval(),
                 ),
+                max_seconds=options.max_seconds,
                 provider_started=True,
             )
         finally:
             if tee is not None:
                 tee.close()  # flush + finalize the WAV header even on a dying run
+                view.status(f"recorded audio: {tee.path}")
+        self.result = result
+        _report_lost_reference(provider, result, view)
         transcript = result.transcript
         if transcript is not None:
-            # Persisted already, at the finalized event — this is display only.
+            # Usually persisted already, at the finalized event (PersistOnce
+            # replays); a view that skipped the event writes here.
+            paths = self.persist(transcript)
+            self.elapsed = time.monotonic() - started
+            view.status(
+                f"wrote {', '.join(p.name for p in paths)} → {self.out_dir} "
+                f"({self.elapsed:.1f}s)"
+            )
             notes_ok = True
             if self.request.notes and not self.abandon_notes.is_set():
                 self.notes_running = True
@@ -353,6 +461,9 @@ class MeetingRun:
                         self.basename,
                         created_at=self.created_at,
                         notes_settings=settings.notes,
+                        backend_name=options.notes_backend,
+                        model=options.notes_model,
+                        instructions_file=options.notes_instructions,
                     )
                 finally:
                     self.notes_running = False
@@ -361,6 +472,33 @@ class MeetingRun:
                 # them is a terminal. Each says how to leave in its own footer.
                 view.status("saved")
         return transcript
+
+
+def _report_lost_reference(
+    provider: CaptureProvider, result: MeetingResult, view: LiveView
+) -> None:
+    """Say how long echo cancellation ran unprotected, if it did.
+
+    The canceller counts every 10 ms mic tick that ran without a usable system
+    reference — frames that never arrived, or a dead tap delivering bit-exact
+    zeros. A lost reference degrades to "no cancellation" by design — but
+    silently, so say how much of the meeting ran unprotected, and whether the
+    armed text backstop had to clean up after it."""
+    canceller = getattr(provider, "canceller", None)
+    if canceller is None or canceller.far_end_missing_ticks <= 0:
+        return
+    if result.dropped_echo_lines:
+        backstop = (
+            f"; the text backstop removed {result.dropped_echo_lines} mic "
+            "line(s) that duplicated remote speech"
+        )
+    else:
+        backstop = "; review Local lines in those spans for leaked remote speech"
+    view.error(
+        f"echo cancellation ran without its reference for "
+        f"{canceller.far_end_missing_ticks / 100:.1f}s — the system-audio tap "
+        f"stalled or went silent{backstop}"
+    )
 
 
 @dataclass(frozen=True)
@@ -539,20 +677,9 @@ def generate_notes_for(
     the validation produced (they are also in the note's own footer).
 
     Blocking; meant for a worker thread. Every failure raises."""
-    stem = output.TRANSCRIPT_STEM
-    path = target / f"{stem}.json" if target.is_dir() else target
-    if not path.is_file():
-        raise ValueError(f"{target} holds no {stem}.json")
-    try:
-        transcript = Transcript.from_json(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise ValueError(f"{path} is not a readable transcript JSON: {exc}") from exc
-    out_dir = path.parent
-    created_at = output.created_at_from_dir_name(out_dir.name) or datetime.fromtimestamp(
-        path.stat().st_mtime
-    )
+    transcript, path, created_at = output.load_transcript(target)
     written, notes = notes_run.generate_and_write_notes(
-        transcript, out_dir, path.stem, created_at=created_at, on_progress=on_progress
+        transcript, path.parent, path.stem, created_at=created_at, on_progress=on_progress
     )
     warnings = notes.provenance.warnings if notes.provenance is not None else ()
     return written, warnings
@@ -562,6 +689,7 @@ __all__ = [
     "MeetingRequest",
     "MeetingRequestError",
     "MeetingRun",
+    "RunOptions",
     "TranscribeResult",
     "generate_notes_for",
     "notes_home",

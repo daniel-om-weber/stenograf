@@ -196,6 +196,32 @@ def prepare_output(
     return out_dir, TRANSCRIPT_STEM, out_dir / AUDIO_NAME
 
 
+def load_transcript(target: Path) -> tuple[Transcript, Path, datetime]:
+    """Load a finished meeting's transcript from a folder or a transcript JSON.
+
+    The one way *back* from disk: every consumer of a finished meeting —
+    ``steno notes``, both notes screens — resolves its user-named target
+    here, so "a meeting folder or its transcript.json" means the same thing
+    (and fails with the same message) everywhere. Returns ``(transcript,
+    json_path, created_at)``; ``created_at`` is the start time the date-named
+    folder encodes, else the file's mtime (a loose transcript file). Raises
+    :class:`ValueError` with a user-facing message for a target that holds no
+    transcript or one that does not parse."""
+    from stenograf.transcript import Transcript
+
+    path = target / f"{TRANSCRIPT_STEM}.json" if target.is_dir() else target
+    if not path.is_file():
+        raise ValueError(f"{target} holds no {TRANSCRIPT_STEM}.json")
+    try:
+        transcript = Transcript.from_json(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"{path} is not a readable transcript JSON: {exc}") from exc
+    created_at = created_at_from_dir_name(path.parent.name) or datetime.fromtimestamp(
+        path.stat().st_mtime
+    )
+    return transcript, path, created_at
+
+
 def cleanup_checkpoints(out_dir: Path, basename: str) -> None:
     """Remove the crash-recovery checkpoints once the final transcript is written."""
     for fmt in CHECKPOINT_FORMATS:

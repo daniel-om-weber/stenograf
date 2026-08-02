@@ -1,29 +1,29 @@
-"""``steno start`` — capture a meeting live, finalize on stop."""
+"""``steno start`` — capture a meeting live, finalize on stop.
+
+A click-flag adapter over :class:`stenograf.flow.MeetingRun` — the one
+meeting assembly sequence both front-ends share. This module only translates
+flags into a :class:`~stenograf.flow.MeetingRequest` plus
+:class:`~stenograf.flow.RunOptions`, prints the pre-run banner lines a
+terminal wants, and picks the view (the live caption stream, or the indented
+batch echo for ``--no-live``); everything between Start and the written
+transcript happens in the library."""
 
 from __future__ import annotations
 
-import time
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from stenograf.view import LiveView
 
-    from stenograf.capture.base import AudioFrame, CaptureProvider
-    from stenograf.recording import WavTee
-    from stenograf.session import ChannelPlan, MeetingRecorder, MeetingResult
-
-from stenograf import loaders
 from stenograf.cli.format import _MEETING_MAX_SPEAKERS, _report_speaker_counts
 from stenograf.cli.run import (
     _apply_no_diarization,
     _echo_glossary,
-    _finish_run,
     _library_errors,
-    _load_reid,
+    _notes_enabled,
     _notes_options,
     _reid_format_options,
     _resolve_diarization,
@@ -31,29 +31,9 @@ from stenograf.cli.run import (
     _vocab_options,
 )
 from stenograf.config import Language, MeetingProfile
-from stenograf.output import (
-    PersistOnce,
-    checkpoint_writer,
-    cleanup_checkpoints,
-    prepare_output,
-    write_transcript,
-)
-from stenograf.transcript import Transcript
 
 # Sentinel for --record-audio given without a value (write next to the transcript).
 _RECORD_DEFAULT = "\0default"
-
-
-def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
-    """The ``--flush-interval`` default is sized to what a checkpoint costs —
-    the per-mode constants beside ``CheckpointConfig`` say how. An explicit
-    value (including 0 = disabled) wins in both modes.
-    """
-    if value is not None:
-        return value
-    from stenograf.session import BATCH_FLUSH_INTERVAL_S, LIVE_FLUSH_INTERVAL_S
-
-    return LIVE_FLUSH_INTERVAL_S if live else BATCH_FLUSH_INTERVAL_S
 
 
 @click.command()
@@ -243,7 +223,9 @@ def start(
     print_markdown: bool,
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
-    from stenograf.session import MeetingRecorder, plan_channels
+    from stenograf.capture.base import Channel
+    from stenograf.flow import MeetingRequest, MeetingRun, RunOptions
+    from stenograf.session import plan_channels
 
     if no_record_audio and record_audio is not None:  # before any model loads
         raise click.UsageError("--record-audio and --no-record-audio are mutually exclusive")
@@ -258,10 +240,6 @@ def start(
         profile_store=profile_store,
         preset=preset,
     )
-    settings, write_formats = cfg.settings, cfg.write_formats
-    glossary_terms, attendee_names = cfg.glossary_terms, cfg.attendee_names
-    glossary_threshold, reid_threshold = cfg.glossary_threshold, cfg.reid_threshold
-    reid_store = cfg.reid_store
     if cfg.preset is not None:
         # Preset values are defaults a typed flag still beats.
         title = title or cfg.preset.title
@@ -272,7 +250,7 @@ def start(
         notes_backend = notes_backend or cfg.preset.notes.backend
 
     diarize = _resolve_diarization(
-        diarization_flag, settings.speakers.diarization, local_speakers, remote_speakers
+        diarization_flag, cfg.settings.speakers.diarization, local_speakers, remote_speakers
     )
     if not diarize and diarization_flag is None:  # off without an explicit flag — say so
         click.echo("diarization: off (--diarization or a speaker count enables it)")
@@ -284,8 +262,8 @@ def start(
             language=Language(lang) if lang else None,
             local_speakers=local_speakers,
             remote_speakers=remote_speakers,
-            glossary=glossary_terms,
-            attendee_names=attendee_names,
+            glossary=cfg.glossary_terms,
+            attendee_names=cfg.attendee_names,
             speaker_profile_store=profile_store,
             title=title,
         )
@@ -294,17 +272,63 @@ def start(
     mode = profile.mode.value if profile.mode else "auto"
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
 
-    plans = plan_channels(profile)
-    # Pace file replay to wall-clock only when it feeds the live pass, so
-    # `--replay` demonstrates captions at meeting cadence; batch just dumps it.
-    # No on_log sink: the capture transports inherit stderr, so their chatter
-    # (and any FATAL line) prints straight to the terminal — this command owns
-    # no screen a raw write could corrupt.
-    provider = loaders.make_provider(replay, plans, paced=live, aec=use_aec, aec_dump=aec_dump)
-    if aec_dump is not None:
-        from stenograf.aec import EchoCancellingProvider
+    # A bare --record-audio wins; absent one, [output] record_audio makes the
+    # meeting folder's audio.wav the standing default. --no-record-audio is the
+    # per-run opt-out of that default (the two are rejected together up top).
+    if not no_record_audio and record_audio is None and cfg.settings.output.record_audio:
+        record_audio = _RECORD_DEFAULT
+    audio_path = None  # None → the meeting folder's audio.wav
+    if record_audio is not None and record_audio != _RECORD_DEFAULT:
+        audio_path = Path(record_audio)
 
-        if isinstance(provider, EchoCancellingProvider):
+    request = MeetingRequest(
+        profile=profile,
+        settings=cfg.settings,
+        notes=_notes_enabled(notes_flag, cfg.settings),
+        record_audio=record_audio is not None,
+    )
+    options = RunOptions(
+        replay=replay,
+        out=out,
+        force=force,
+        live=live,
+        aec=use_aec,
+        aec_dump=aec_dump,
+        flush_interval=flush_interval,
+        max_seconds=max_seconds,
+        full_finalize=full_finalize,
+        use_reid=use_reid,
+        reid_threshold=cfg.reid_threshold,
+        reid_store=cfg.reid_store,
+        glossary_threshold=cfg.glossary_threshold,
+        formats=tuple(cfg.write_formats),
+        audio_path=audio_path,
+        notes_backend=notes_backend,
+        notes_model=notes_model,
+        notes_instructions=notes_instructions,
+        # The capture transports inherit stderr, so their chatter (and any
+        # FATAL line) prints straight to the terminal — this command owns no
+        # screen a raw write could corrupt.
+        transport_stderr=True,
+    )
+    # Every meeting gets its own date-named folder in the visible output home
+    # (or --out as the folder), holding transcript.{md,json,…} + optional
+    # audio.wav — self-describing files, no index. An --out collision raises
+    # here; the _library_errors boundary reports it cleanly.
+    run = MeetingRun(request, options=options)
+
+    plans = plan_channels(profile)
+    channels = ", ".join(p.channel.value for p in plans)
+    stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
+    click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
+    if len(plans) > 1:
+        state = "on" if use_aec else "off"
+        click.echo(f"echo cancellation: {state} (mic cancelled against system audio)")
+    _echo_glossary(cfg.glossary_terms, cfg.attendee_names)
+    if aec_dump is not None:
+        # Same condition make_provider wraps the canceller on (dump wraps even
+        # with --no-aec, recording the uncancelled baseline).
+        if {Channel.MIC, Channel.SYSTEM} <= {p.channel for p in plans}:
             click.secho(
                 f"● AEC DUMP to {aec_dump} — mic/lpb/enh audio is being written to disk",
                 fg="red",
@@ -315,181 +339,50 @@ def start(
                 "--aec-dump ignored: it needs both the mic and the system channel",
                 fg="yellow",
             )
-
-    # Every meeting gets its own date-named folder in the visible output home
-    # (or --out as the folder), holding transcript.{md,json,…} + optional
-    # audio.wav — self-describing files, no index.
-    created_at = datetime.now()
-    out_dir, basename, audio_default = prepare_output(out, created_at, settings, force=force)
-
-    channels = ", ".join(p.channel.value for p in plans)
-    stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
-    click.echo(f"capturing: {channels} ({stop_hint} and transcribe)")
-    if len(plans) > 1:
-        state = "on" if use_aec else "off"
-        click.echo(f"echo cancellation: {state} (mic cancelled against system audio)")
-
-    # Capture starts NOW, before the models load: the provider's frame queue is
-    # unbounded, so the meeting's first seconds buffer through a slow (cold)
-    # model load and the live pass catches up — instead of recording beginning
-    # tens of seconds after the command. The run below consumes the buffer
-    # (``provider_started=True`` keeps it from starting capture a second time).
-    provider.start({p.channel for p in plans})
-    started = time.monotonic()
-    try:
-        asr, vad, diarizer = loaders.load_backends(
-            need_diarizer=any(p.num_speakers != 1 for p in plans),
-            asr_backend=settings.asr.backend,
-            asr_provider=settings.asr.provider,
-            glossary=glossary_terms,
-            attendee_names=attendee_names,
-            boost=settings.asr.boost,
-        )
-        reid = _load_reid(diarizer, enabled=use_reid, threshold=reid_threshold, store=reid_store)
-        _echo_glossary(glossary_terms, attendee_names)
-        recorder = MeetingRecorder(
-            profile,
-            asr=asr,
-            vad=vad,
-            diarizer=diarizer,
-            reid=reid,
-            language=profile.language,
-            glossary_threshold=glossary_threshold,
-            dedup_echo=use_aec,
-        )
-        recorder.reuse_live_finalize = not full_finalize
-
-        # A bare --record-audio wins; absent one, [output] record_audio makes the
-        # meeting folder's audio.wav the standing default (same loud banner in the
-        # tee). --no-record-audio is the per-run opt-out of that default (the two are
-        # rejected together up top).
-        if not no_record_audio and record_audio is None and settings.output.record_audio:
-            record_audio = _RECORD_DEFAULT
-        tee = _make_tee(record_audio, audio_default, plans)
-        flush_interval = _resolve_flush_interval(flush_interval, live=live)
-    except BaseException:
-        # Capture is already live but nothing will ever consume it (a missing
-        # backend, Ctrl-C during the load, …) — release the devices on the way out.
-        provider.stop()
-        raise
-
-    def _persist_files(transcript: Transcript) -> list[Path]:
-        """Write the transcript files and drop the ``.partial`` checkpoint."""
-        paths = write_transcript(transcript, out_dir, basename, write_formats)
-        cleanup_checkpoints(out_dir, basename)
-        return paths
-
-    persist = PersistOnce(_persist_files)
-
-    try:
-        # A capture transport that dies with nothing recorded raises
-        # CaptureHelperError (its FATAL detail already printed on inherited
-        # stderr); the _library_errors boundary reports it cleanly.
-        result = _run_meeting(
-            recorder,
-            provider,
-            live=live,
-            on_frame=tee.add if tee else None,
-            out_dir=out_dir,
-            basename=basename,
-            flush_interval=flush_interval,
-            max_seconds=max_seconds,
-        )
-    finally:
-        if tee is not None:
-            tee.close()
-            click.echo(f"recorded audio: {tee.path}")
-
-    # The canceller counts every 10 ms mic tick that ran without a usable system
-    # reference — frames that never arrived, or a dead tap delivering bit-exact
-    # zeros. A lost reference degrades to "no cancellation" by design — but
-    # silently, so say how much of the meeting ran unprotected, and whether the
-    # armed text backstop had to clean up after it.
-    canceller = getattr(provider, "canceller", None)
-    if canceller is not None and canceller.far_end_missing_ticks > 0:
-        if result.dropped_echo_lines:
-            backstop = (
-                f"; the text backstop removed {result.dropped_echo_lines} mic "
-                "line(s) that duplicated remote speech"
-            )
-        else:
-            backstop = "; review Local lines in those spans for leaked remote speech"
+    if request.record_audio:
         click.secho(
-            f"echo cancellation ran without its reference for "
-            f"{canceller.far_end_missing_ticks / 100:.1f}s — the system-audio tap "
-            f"stalled or went silent{backstop}",
-            fg="yellow",
+            f"● RECORDING AUDIO to {run.audio_path} — raw audio is being written to disk",
+            fg="red",
+            bold=True,
         )
 
-    transcript = result.transcript
-    paths = persist(transcript)
-    elapsed = time.monotonic() - started
-    _report_speaker_counts(result.speaker_counts)
-    click.echo(f"wrote {', '.join(p.name for p in paths)} → {out_dir} ({elapsed:.1f}s)")
-    _finish_run(
-        transcript,
-        out_dir,
-        basename,
-        created_at=created_at,
-        settings=settings,
-        notes_flag=notes_flag,
-        print_markdown=print_markdown,
-        notes_backend=notes_backend,
-        notes_model=notes_model,
-        notes_instructions=notes_instructions,
-    )
+    # Two view shapes behind the one run:
+    #
+    # - **Live** (the default): the meeting runs on this thread and streams
+    #   committed captions to stdout; checkpoints written silently. Ctrl-C is
+    #   the stop gesture (session.py catches it, stops the provider and joins
+    #   capture; the finalize is shielded against a second Ctrl-C).
+    # - **Batch** (``--no-live``): no live pass; status and checkpoint notices
+    #   echo indented, as they always have.
+    #
+    # A capture transport that dies with nothing recorded raises
+    # CaptureHelperError (its FATAL detail already printed on inherited
+    # stderr); the _library_errors boundary reports it cleanly.
+    from stenograf.view import PlainLiveView
+
+    view = PlainLiveView() if live else _batch_view()
+    with view:
+        transcript = run.run(view)
+    if transcript is None:
+        raise click.ClickException(
+            "the meeting ended before a transcript was produced; "
+            "any .partial checkpoint is kept"
+        )
+    if run.result is not None:
+        _report_speaker_counts(run.result.speaker_counts)
+    if print_markdown:
+        click.echo()
+        click.echo(transcript.to_markdown(), nl=False)
 
 
-def _run_meeting(
-    recorder: MeetingRecorder,
-    provider: CaptureProvider,
-    *,
-    live: bool,
-    on_frame: Callable[[AudioFrame], None] | None,
-    out_dir: Path,
-    basename: str,
-    flush_interval: float,
-    max_seconds: float | None,
-) -> MeetingResult:
-    """Run the capture session through the right live view and return its result.
-
-    The caller has already started the provider (capture begins before the
-    models load and frames buffer meanwhile), so both shapes run with
-    ``provider_started=True``.
-
-    Two shapes behind one call:
-
-    - **Live** (the default): the meeting runs on this thread and streams
-      committed captions to stdout; checkpoints written silently. Ctrl-C is the
-      stop gesture (session.py catches it, stops the provider and joins
-      capture; the finalize is shielded against a second Ctrl-C).
-    - **Batch** (``--no-live``): no live pass; status and checkpoint notices
-      echo as before.
-    """
-    from stenograf.session import CheckpointConfig
-
-    checkpoint = CheckpointConfig(checkpoint_writer(out_dir, basename), flush_interval)
-    if live:
-        from stenograf.view import PlainLiveView
-
-        with PlainLiveView() as view:
-            return recorder.run(
-                provider,
-                live=True,
-                view=view,
-                on_frame=on_frame,
-                checkpoint=checkpoint,
-                max_seconds=max_seconds,
-                provider_started=True,
-            )
-
+def _batch_view() -> LiveView:
+    """Batch-mode sink: notices echo indented under the "capturing" line."""
     from stenograf.view import LiveView
 
     class _BatchEcho(LiveView):
-        """Batch-mode sink: notices echo indented under the "capturing" line."""
-
         def status(self, message: str) -> None:
-            click.echo(f"  {message}")
+            if message:  # "" is a screen's clear-the-label event, not a line
+                click.echo(f"  {message}")
 
         def language(self, language: Language) -> None:
             click.echo(f"  detected language: {language.value}")
@@ -497,38 +390,4 @@ def _run_meeting(
         def error(self, message: str) -> None:
             click.echo(f"  {message}")
 
-    return recorder.run(
-        provider,
-        view=_BatchEcho(),
-        on_frame=on_frame,
-        checkpoint=CheckpointConfig(
-            checkpoint_writer(out_dir, basename, announce=lambda m: click.echo(f"  {m}")),
-            flush_interval,
-        ),
-        max_seconds=max_seconds,
-        provider_started=True,
-    )
-
-
-def _make_tee(
-    record_audio: str | None, default_path: Path, plans: list[ChannelPlan]
-) -> WavTee | None:
-    """Create the audio tee if --record-audio was given, with a loud banner.
-
-    ``default_path`` is where a bare ``--record-audio`` (no value) writes — the
-    meeting folder's ``audio.wav``; an explicit ``--record-audio PATH``
-    overrides it.
-    """
-    if record_audio is None:
-        return None
-    from stenograf.recording import WavTee
-
-    path = default_path if record_audio == _RECORD_DEFAULT else Path(record_audio)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tee = WavTee(path, {p.channel for p in plans})
-    click.secho(
-        f"● RECORDING AUDIO to {path} — raw audio is being written to disk",
-        fg="red",
-        bold=True,
-    )
-    return tee
+    return _BatchEcho()

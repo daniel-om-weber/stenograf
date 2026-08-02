@@ -182,10 +182,12 @@ def test_resolve_flush_interval_defaults_are_mode_aware():
     # The live checkpoint is zero-inference file I/O → tight default; the batch
     # checkpoint runs VAD+ASR over the tail → sparse default. Explicit values
     # (including 0 = disabled) win in both modes.
-    assert cli.start._resolve_flush_interval(None, live=True) == 15.0
-    assert cli.start._resolve_flush_interval(None, live=False) == 180.0
-    assert cli.start._resolve_flush_interval(45.0, live=True) == 45.0
-    assert cli.start._resolve_flush_interval(0.0, live=True) == 0.0
+    from stenograf.flow import RunOptions
+
+    assert RunOptions(live=True).resolved_flush_interval() == 15.0
+    assert RunOptions(live=False).resolved_flush_interval() == 180.0
+    assert RunOptions(live=True, flush_interval=45.0).resolved_flush_interval() == 45.0
+    assert RunOptions(live=True, flush_interval=0.0).resolved_flush_interval() == 0.0
 
 
 def test_persist_once_writes_once_and_replays_paths():
@@ -271,9 +273,9 @@ def test_plain_flag_stays_an_accepted_no_op(tmp_path, monkeypatch):
 
 
 def test_start_generates_notes_through_the_finish_tail(tmp_path, monkeypatch):
-    # With the TUI gone there is exactly one notes path for `steno start`:
-    # _finish_run, after the transcript is safely written — same as the
-    # no-TTY runs always had.
+    # There is exactly one notes path for `steno start`: MeetingRun's shared
+    # run_notes tail, after the transcript is safely written — the same tail
+    # the Qt app and `steno transcribe` use.
     notes_calls: list = []
 
     def fake_generate(transcript, out_dir, basename, **kwargs):

@@ -15,13 +15,15 @@ non-fatal wrapper for a run that reports through a
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import signal
 from typing import TYPE_CHECKING
 
 from stenograf.output import atomic_write_text
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from datetime import datetime
     from pathlib import Path
 
@@ -130,32 +132,74 @@ def run_notes(
     model: str | None = None,
     instructions_file: Path | None = None,
 ) -> bool:
-    """The notes tail for a run that reports through a view: non-fatal.
+    """The notes tail after a run: non-fatal, reported through a view.
 
-    The transcript is already on disk when this runs, so a notes failure
-    reports through the view and returns ``False`` — rerun later with
-    ``steno notes``. Shared by the app's meeting flow and the ``steno start``
-    live shape, so both generate notes *while the meeting screen is still up*
-    instead of after the user quits it.
+    *The* wrapper for every after-the-transcript notes step — the app's meeting
+    flow, ``steno start`` and ``steno transcribe`` — so all of them generate
+    (and fail) identically. The transcript is already on disk when this runs,
+    so a notes failure reports through the view and returns ``False`` — rerun
+    later with ``steno notes``. A Ctrl-C during generation warns first and
+    skips only on a second press (:func:`_second_interrupt_skips`).
     """
     view.status("generating notes…")
     try:
-        _written, notes = generate_and_write_notes(
-            transcript,
-            out_dir,
-            basename,
-            created_at=created_at,
-            notes_settings=notes_settings,
-            backend_name=backend_name,
-            model=model,
-            instructions_file=instructions_file,
-            on_progress=lambda message: view.status(f"notes: {message}"),
+        with _second_interrupt_skips(view):
+            written, notes = generate_and_write_notes(
+                transcript,
+                out_dir,
+                basename,
+                created_at=created_at,
+                notes_settings=notes_settings,
+                backend_name=backend_name,
+                model=model,
+                instructions_file=instructions_file,
+                on_progress=lambda message: view.status(f"notes: {message}"),
+            )
+    except KeyboardInterrupt:
+        view.error(
+            f"notes skipped — the transcript is safe; `steno notes {out_dir}` regenerates them"
         )
+        return False
     except Exception as exc:  # noqa: BLE001 — non-fatal by contract
-        view.error(f"notes failed: {exc} — the transcript is safe; retry with `steno notes`")
+        view.error(
+            f"notes failed: {exc} — the transcript is safe; retry with `steno notes {out_dir}`"
+        )
         return False
     if notes.provenance is not None and notes.provenance.warnings:
         # A courtesy flash only — the durable copy is the note's own footer,
         # because the done screen's next status line overwrites this one.
         view.error(f"notes warning: {'; '.join(notes.provenance.warnings)}")
+    view.status(f"notes: wrote {', '.join(str(p) for p in written)}")
     return True
+
+
+@contextlib.contextmanager
+def _second_interrupt_skips(view: LiveView) -> Iterator[None]:
+    """First Ctrl-C during the notes tail warns and keeps going; the second skips.
+
+    A stray Ctrl-C right after a meeting ends must not kill a half-written
+    notes run — but an unconditional shield would trap the user behind an
+    agentic ``[notes] command`` backend for up to its ``timeout_s`` (the same
+    reason the Qt app quits *around* a notes run). So: announce once, and let
+    a second press raise into :func:`run_notes`'s KeyboardInterrupt arm. A
+    no-op off the main thread — a GUI worker — where handlers cannot be
+    installed (and where no terminal delivers SIGINT anyway).
+    """
+    interrupted = False
+
+    def handler(signum: int, frame: object) -> None:
+        nonlocal interrupted
+        if interrupted:
+            raise KeyboardInterrupt
+        interrupted = True
+        view.error("finishing notes — Ctrl-C again to skip them")
+
+    try:
+        previous = signal.signal(signal.SIGINT, handler)
+    except (ValueError, OSError):  # not on the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)

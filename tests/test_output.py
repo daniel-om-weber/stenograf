@@ -8,6 +8,7 @@ from stenograf.output import (
     created_at_from_dir_name,
     default_output_home,
     latest_meeting_dir,
+    load_transcript,
 )
 from stenograf.paths import documents_dir
 
@@ -104,6 +105,35 @@ def test_latest_is_newest_by_name_skipping_unfinished_and_unrelated(tmp_path):
 def test_latest_none_for_a_missing_or_empty_home(tmp_path):
     assert latest_meeting_dir(tmp_path / "nope") is None
     assert latest_meeting_dir(tmp_path) is None
+
+
+def test_load_transcript_resolves_folder_or_json_with_the_folder_time(tmp_path):
+    # The one way back from disk: a meeting folder and its transcript.json are
+    # the same target, and the date-named folder supplies created_at.
+    from stenograf.config import MeetingProfile
+    from stenograf.transcript import Transcript
+
+    d = tmp_path / "meeting-20260710-091500"
+    d.mkdir()
+    empty = Transcript(language=None, profile=MeetingProfile())
+    (d / "transcript.json").write_text(empty.to_json(), encoding="utf-8")
+
+    for target in (d, d / "transcript.json"):
+        transcript, path, created_at = load_transcript(target)
+        assert path == d / "transcript.json"
+        assert created_at == WHEN
+        assert transcript.entries == []
+
+
+def test_load_transcript_failures_are_one_valueerror(tmp_path):
+    import pytest
+
+    with pytest.raises(ValueError, match="holds no transcript.json"):
+        load_transcript(tmp_path)  # a folder without a finished meeting
+    bad = tmp_path / "transcript.json"
+    bad.write_text("not json", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a readable transcript JSON"):
+        load_transcript(bad)
 
 
 def test_created_at_round_trips_the_dir_name():

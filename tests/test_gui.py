@@ -516,9 +516,7 @@ class TestMeetingScreen:
         monkeypatch.setattr(
             loaders,
             "make_provider",
-            lambda replay, plans, *, paced=True, aec=True, announce=None, on_log=None: (
-                FileCaptureProvider({Channel.MIC: mic})
-            ),
+            lambda replay, plans, **kwargs: FileCaptureProvider({Channel.MIC: mic}),
         )
 
     @staticmethod
@@ -545,7 +543,7 @@ class TestMeetingScreen:
         self._stub_offline_meeting(monkeypatch, tmp_path)
         notes_started, release = threading.Event(), threading.Event()
 
-        def slow_notes(view, transcript, out_dir, basename, *, created_at, notes_settings):
+        def slow_notes(view, transcript, out_dir, basename, **kwargs):
             notes_started.set()
             release.wait(10)
             return True
