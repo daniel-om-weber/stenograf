@@ -59,9 +59,9 @@ from stenograf.vad import SileroVAD
 from stenograf.view import LiveView
 
 _CHANNEL_LABEL = {Channel.MIC: "Local-{n}", Channel.SYSTEM: "Remote-{n}"}
-# Channel-coarse labels for the crash checkpoints (live committed text or the
-# batch tail finalize): the checkpoint is not diarized, so it can only say which
-# channel spoke, not which speaker. The on-stop finalize replaces these with the
+# Channel-coarse labels for the crash checkpoint (the live pass's committed
+# text): the checkpoint is not diarized, so it can only say which channel
+# spoke, not which speaker. The on-stop finalize replaces these with the
 # diarized ``Local-N``/``Remote-M`` labels.
 _CHANNEL_COARSE = {Channel.MIC: "Local", Channel.SYSTEM: "Remote"}
 
@@ -384,20 +384,15 @@ straight to the worker."""
 
 
 LIVE_FLUSH_INTERVAL_S = 15.0
-"""Default checkpoint cadence for a live run. A live checkpoint is
-zero-inference — it snapshots the captions the live pass already committed, a
-few KB of atomic file I/O — so it can afford to be tight (a crash loses
-seconds of text, not minutes)."""
-
-BATCH_FLUSH_INTERVAL_S = 180.0
-"""Default checkpoint cadence for a batch (no-live) run, which finalizes the
-new tail with VAD+ASR per checkpoint — sparse, to keep that mode's
-near-zero-power promise."""
+"""Default checkpoint cadence. A live checkpoint is zero-inference — it
+snapshots the captions the live pass already committed, a few KB of atomic
+file I/O — so it can afford to be tight (a crash loses seconds of text, not
+minutes)."""
 
 
 @dataclass(frozen=True)
 class CheckpointConfig:
-    """Crash-checkpoint wiring.
+    """Crash-checkpoint wiring — live runs only (batch runs never checkpoint).
 
     ``write`` receives each coalesced checkpoint transcript (the CLI wires the
     ``.partial`` writer here); ``interval`` is the seconds of captured audio
@@ -406,7 +401,7 @@ class CheckpointConfig:
     """
 
     write: Callable[[Transcript], None]
-    interval: float = BATCH_FLUSH_INTERVAL_S
+    interval: float = LIVE_FLUSH_INTERVAL_S
 
     @property
     def enabled(self) -> bool:
@@ -648,82 +643,6 @@ def _join_until_done(thread: threading.Thread, poll: float = 0.1) -> None:
         thread.join(poll)
 
 
-class _TailCheckpointer(threading.Thread):
-    """Batch (``--no-live``) crash checkpoint: tail-only finalize, off capture.
-
-    Waits on the :class:`AudioBus` and, each time a channel accumulates another
-    ``interval`` seconds, finalizes just that new tail (``store.view`` — O(window))
-    and appends its entries to a running transcript flushed via ``on_checkpoint``.
-    Each second of audio is finalized exactly once, so the whole run is O(audio),
-    not the old whole-buffer re-finalize's O(n²); running on its own thread means a
-    slow finalize never stalls capture, which on a live device would drop audio.
-
-    The checkpoint is channel-coarse and un-diarized (``finalize_tail`` is
-    :meth:`MeetingRecorder.tail_entries`): diarizing each tail independently
-    would renumber speakers every tail. The authoritative on-stop
-    :meth:`MeetingRecorder.finalize` diarizes the whole buffer and supersedes
-    it. On close the worker exits without finalizing the final sub-interval
-    tail — a clean stop supersedes the checkpoint anyway, and a crash is
-    defined to lose at most one interval of finalized text.
-
-    Depends on the recorder only through the two bound callables, so it can be
-    driven (and tested) without one.
-    """
-
-    def __init__(
-        self,
-        store: SessionStore,
-        plans: list[ChannelPlan],
-        bus: AudioBus,
-        *,
-        finalize_tail: Callable[[SessionStore, ChannelPlan, float, float], list[TranscriptEntry]],
-        wrap_checkpoint: Callable[[list[TranscriptEntry]], Transcript],
-        on_checkpoint: Callable[[Transcript], None],
-        interval: float,
-    ) -> None:
-        super().__init__(name="tail-checkpoint", daemon=True)
-        self._finalize_tail = finalize_tail
-        self._wrap_checkpoint = wrap_checkpoint
-        self._store = store
-        self._plans = plans
-        self._bus = bus
-        self._on_checkpoint = on_checkpoint
-        self._interval = interval
-        self._entries: list[TranscriptEntry] = []
-        self.error: BaseException | None = None
-
-    def run(self) -> None:
-        finalized = {p.channel: 0.0 for p in self._plans}
-        next_cp = {p.channel: self._interval for p in self._plans}
-        # Wait on the marks last *observed*, not last *checkpointed*: `finalized`
-        # only advances every `interval`, so waiting on it makes the predicate
-        # permanently true after the first frame and turns this loop into a hot
-        # spin. Measured on live hardware, that spin starves the capture thread
-        # off the GIL, the helper's stdout pipe fills, and Core Audio kills the
-        # system tap ~3 s into every batch meeting — the remote channel dies.
-        seen = dict(finalized)
-        try:
-            while True:
-                marks, closed = self._bus.wait(seen)
-                seen = marks
-                flushed = False
-                for plan in self._plans:
-                    ch = plan.channel
-                    if marks[ch] >= next_cp[ch]:
-                        tail = self._finalize_tail(self._store, plan, finalized[ch], marks[ch])
-                        self._entries.extend(tail)
-                        finalized[ch] = marks[ch]
-                        while marks[ch] >= next_cp[ch]:
-                            next_cp[ch] += self._interval
-                        flushed = True
-                if flushed:
-                    self._on_checkpoint(self._wrap_checkpoint(self._entries))
-                if closed:
-                    return
-        except Exception as exc:  # surfaced on join, like the capture thread
-            self.error = exc
-
-
 class _LiveCheckpointer:
     """Groups the live pass's committed words into checkpoint entries, tail-only.
 
@@ -731,8 +650,7 @@ class _LiveCheckpointer:
     closes an entry on the silence gap to its successor — a gap later words can
     only confirm, never reopen. Entries once closed are therefore final: each
     flush regroups only the words from the newest (still-open) run on, keeping
-    the flush stream O(new words) — the same tail-only discipline as
-    :class:`_TailCheckpointer` — instead of regrouping the whole meeting every
+    the flush stream O(new words) instead of regrouping the whole meeting every
     interval.
     """
 
@@ -839,27 +757,35 @@ class MeetingRecorder:
         — ``status`` / ``language`` / ``finalizing`` / ``finalized`` /
         ``error`` — around the capture and finalize passes.
 
-        Both modes checkpoint for crash recovery, if a
+        Only the live mode checkpoints for crash recovery, if a
         :class:`CheckpointConfig` is given, coalesced to its ``interval`` seconds
-        of capture — but never any inference the mode does not already do. Live:
-        the already-committed live text is flushed as-is (zero inference). Batch:
-        only the *new* tail since the last checkpoint is finalized (O(audio), off
-        the capture thread), not the whole buffer. Either way a crash loses at
-        most one interval of text, audio is never persisted, and the
-        authoritative transcript is the full finalize returned on stop (the
-        :class:`MeetingResult` carries it plus the run's report).
+        of capture — and never any extra inference: the already-committed live
+        text is flushed as-is, so a crash loses at most one interval of text.
+        Batch runs are eval/debug runs and get no crash checkpoints. Audio is
+        never persisted, and the authoritative transcript is the full finalize
+        returned on stop (the :class:`MeetingResult` carries it plus the run's
+        report).
         """
         plans = plan_channels(self.profile)
         store = SessionStore({p.channel for p in plans})
         sink = view if view is not None else LiveView()
-        run_mode = self._run_live if live else self._run_batch
-        return run_mode(
+        if live:
+            return self._run_live(
+                provider,
+                plans,
+                store,
+                on_frame=on_frame,
+                view=sink,
+                checkpoint=checkpoint,
+                max_seconds=max_seconds,
+                provider_started=provider_started,
+            )
+        return self._run_batch(
             provider,
             plans,
             store,
             on_frame=on_frame,
             view=sink,
-            checkpoint=checkpoint,
             max_seconds=max_seconds,
             provider_started=provider_started,
         )
@@ -872,42 +798,21 @@ class MeetingRecorder:
         *,
         on_frame: Callable[[AudioFrame], None] | None,
         view: LiveView,
-        checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
         provider_started: bool = False,
     ) -> MeetingResult:
-        """Consume-thread capture + a tail-only checkpoint thread (no live view).
+        """Consume-thread capture, then finalize (no live view, no checkpoints).
 
-        Capture stays on this thread (so a ``KeyboardInterrupt`` in the provider
-        ends the meeting cleanly), but the crash checkpoint is a separate
-        :class:`_TailCheckpointer` fed via an :class:`AudioBus`: it finalizes only
-        the newest tail each interval, off this thread, so it neither stalls
-        capture nor re-finalizes the whole buffer.
+        Capture stays on this thread so a ``KeyboardInterrupt`` in the provider
+        ends the meeting cleanly.
         """
         channels = [p.channel for p in plans]
-        checkpointing = checkpoint is not None and checkpoint.enabled
-        bus = AudioBus(channels) if checkpointing else None
-        checkpointer: _TailCheckpointer | None = None
-        # The provider starts before the checkpointer thread: a start failure
-        # propagates (as it must) and would skip the finally below, so the
-        # checkpointer must not yet exist or it would block on bus.wait forever.
         if not provider_started:
             provider.start(set(channels))
-        if bus is not None and checkpoint is not None:
-            checkpointer = _TailCheckpointer(
-                store,
-                plans,
-                bus,
-                finalize_tail=self.tail_entries,
-                wrap_checkpoint=self.checkpoint_transcript,
-                on_checkpoint=checkpoint.write,
-                interval=checkpoint.interval,
-            )
-            checkpointer.start()
         capture_error: BaseException | None = None
         try:
             for frame in provider.frames():
-                if _consume_frame(frame, store, bus, on_frame, channels, max_seconds):
+                if _consume_frame(frame, store, None, on_frame, channels, max_seconds):
                     break
         except KeyboardInterrupt:
             view.status("interrupted — finalizing captured audio")
@@ -917,17 +822,8 @@ class MeetingRecorder:
             capture_error = exc
         finally:
             provider.stop()
-            if bus is not None:
-                bus.close()  # wakes the checkpointer so it drains and exits
-            if checkpointer is not None:
-                checkpointer.join()
-        aux_error = (
-            f"checkpoint stopped early: {checkpointer.error}"
-            if checkpointer is not None and checkpointer.error is not None
-            else None
-        )
         return self._finalize_and_publish(
-            provider, store, plans, view, capture_error=capture_error, aux_error=aux_error
+            provider, store, plans, view, capture_error=capture_error, aux_error=None
         )
 
     def _run_live(
@@ -1260,40 +1156,6 @@ class MeetingRecorder:
         so each flush regroups only the new tail.
         """
         return _LiveCheckpointer(self.checkpoint_transcript).transcript(decoders)
-
-    def tail_entries(
-        self, store: SessionStore, plan: ChannelPlan, start_s: float, end_s: float
-    ) -> list[TranscriptEntry]:
-        """Finalize one channel's ``[start_s, end_s)`` tail into coarse entries.
-
-        The batch (``--no-live``) crash checkpoint: VAD + ASR over just the new
-        tail (O(window)), no diarization, times shifted back onto the session
-        clock and attributed to the channel-coarse label. Speaker identity is the
-        on-stop finalize's job; here each tail is finalized exactly once.
-        """
-        view = store.view(plan.channel, start_s, end_s)
-        raw = finalize_channel(
-            view,
-            asr=self.asr,
-            language=self.language,
-            vad=self.vad,
-            diarizer=None,
-            num_speakers=1,
-        )
-        label = _CHANNEL_COARSE[plan.channel]
-        return [
-            TranscriptEntry(
-                label,
-                e.text,
-                e.start + start_s,
-                e.end + start_s,
-                e.provisional,
-                words=tuple(
-                    Word(w.text, w.start + start_s, w.end + start_s, w.confidence) for w in e.words
-                ),
-            )
-            for e in raw
-        ]
 
     def checkpoint_transcript(self, entries: list[TranscriptEntry]) -> Transcript:
         """Wrap accumulated coarse checkpoint entries into an ordered transcript.

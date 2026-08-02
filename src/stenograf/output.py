@@ -228,20 +228,16 @@ def cleanup_checkpoints(out_dir: Path, basename: str) -> None:
         (out_dir / f"{basename}.partial.{fmt}").unlink(missing_ok=True)
 
 
-def checkpoint_writer(
-    out_dir: Path, basename: str, announce: Callable[[str], None] | None = None
-) -> Callable[[Transcript], None]:
+def checkpoint_writer(out_dir: Path, basename: str) -> Callable[[Transcript], None]:
     """Build the ``on_checkpoint`` sink that writes the ``.partial`` crash file.
 
-    Live views keep the caption stream clean (``announce=None`` → write silently);
-    the batch path narrates each write, as it always has. The final transcript
-    supersedes these files, which :func:`cleanup_checkpoints` then removes.
+    Writes silently — the live caption stream stays clean. The final
+    transcript supersedes these files, which :func:`cleanup_checkpoints` then
+    removes.
     """
 
     def on_checkpoint(transcript: Transcript) -> None:
-        md = write_transcript(transcript, out_dir, f"{basename}.partial", CHECKPOINT_FORMATS)[0]
-        if announce is not None:
-            announce(f"checkpoint: {md.name} ({len(transcript.entries)} entries)")
+        write_transcript(transcript, out_dir, f"{basename}.partial", CHECKPOINT_FORMATS)
 
     return on_checkpoint
 

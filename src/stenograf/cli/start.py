@@ -131,9 +131,8 @@ _RECORD_DEFAULT = "\0default"
     default=None,
     metavar="SECONDS",
     help="Flush a <transcript>.partial crash checkpoint every N seconds of capture "
-    "(live: the already-committed captions, zero extra inference — default 15; "
-    "batch: only the newest tail is finalized, off the capture thread — "
-    "default 180); 0 disables it.",
+    "(the already-committed live captions, zero extra inference — default 15); "
+    "0 disables it. Batch (--no-live) runs never checkpoint.",
 )
 @click.option(
     "--max-seconds",
@@ -352,8 +351,8 @@ def start(
     #   committed captions to stdout; checkpoints written silently. Ctrl-C is
     #   the stop gesture (session.py catches it, stops the provider and joins
     #   capture; the finalize is shielded against a second Ctrl-C).
-    # - **Batch** (``--no-live``): no live pass; status and checkpoint notices
-    #   echo indented, as they always have.
+    # - **Batch** (``--no-live``): no live pass and no checkpoints; status
+    #   notices echo indented, as they always have.
     #
     # A capture transport that dies with nothing recorded raises
     # CaptureHelperError (its FATAL detail already printed on inherited

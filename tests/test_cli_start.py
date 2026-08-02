@@ -178,14 +178,12 @@ def test_flush_interval_and_checkpoint_interval_are_aliases(tmp_path, stub_backe
         assert result.exit_code == 0, result.output
 
 
-def test_resolve_flush_interval_defaults_are_mode_aware():
-    # The live checkpoint is zero-inference file I/O → tight default; the batch
-    # checkpoint runs VAD+ASR over the tail → sparse default. Explicit values
-    # (including 0 = disabled) win in both modes.
+def test_resolve_flush_interval_defaults():
+    # The live checkpoint is zero-inference file I/O → tight default. Explicit
+    # values (including 0 = disabled) win.
     from stenograf.flow import RunOptions
 
     assert RunOptions(live=True).resolved_flush_interval() == 15.0
-    assert RunOptions(live=False).resolved_flush_interval() == 180.0
     assert RunOptions(live=True, flush_interval=45.0).resolved_flush_interval() == 45.0
     assert RunOptions(live=True, flush_interval=0.0).resolved_flush_interval() == 0.0
 

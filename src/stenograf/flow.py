@@ -50,7 +50,6 @@ from stenograf.pipeline import (
 )
 from stenograf.recording import WavTee
 from stenograf.session import (
-    BATCH_FLUSH_INTERVAL_S,
     LIVE_FLUSH_INTERVAL_S,
     CheckpointConfig,
     MeetingRecorder,
@@ -122,8 +121,8 @@ class RunOptions:
     aec_dump: Path | None = None
     """Write the canceller's mic/lpb/enh WAV triple here for offline scoring."""
     flush_interval: float | None = None
-    """Seconds between crash checkpoints; ``None`` picks the mode's default
-    cadence (live: cheap file I/O, tight; batch: a real finalize, sparse)."""
+    """Seconds between live crash checkpoints (cheap file I/O); ``None`` picks
+    the default cadence. Batch runs never checkpoint."""
     max_seconds: float | None = None
     """Stop capture automatically after this much audio."""
     full_finalize: bool = False
@@ -148,12 +147,11 @@ class RunOptions:
     process may own no usable stderr at all."""
 
     def resolved_flush_interval(self) -> float:
-        """The checkpoint cadence this run uses: the explicit value (0 = off),
-        else the mode's default — sized to what a checkpoint costs; the
-        per-mode constants beside ``CheckpointConfig`` say how."""
+        """The live checkpoint cadence: the explicit value (0 = off), else the
+        default beside ``CheckpointConfig``. Batch runs never checkpoint."""
         if self.flush_interval is not None:
             return self.flush_interval
-        return LIVE_FLUSH_INTERVAL_S if self.live else BATCH_FLUSH_INTERVAL_S
+        return LIVE_FLUSH_INTERVAL_S
 
 
 def standing_settings() -> Settings:
@@ -421,15 +419,13 @@ class MeetingRun:
                 live=options.live,
                 view=view,
                 on_frame=tee.add if tee else None,
-                checkpoint=CheckpointConfig(
-                    output.checkpoint_writer(
-                        self.out_dir,
-                        self.basename,
-                        # Live views keep the caption stream clean; the batch
-                        # shape narrates each write, as it always has.
-                        announce=None if options.live else view.status,
-                    ),
-                    options.resolved_flush_interval(),
+                checkpoint=(
+                    CheckpointConfig(
+                        output.checkpoint_writer(self.out_dir, self.basename),
+                        options.resolved_flush_interval(),
+                    )
+                    if options.live
+                    else None
                 ),
                 max_seconds=options.max_seconds,
                 provider_started=True,

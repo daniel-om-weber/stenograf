@@ -1,6 +1,5 @@
 import signal
 import threading
-import time
 
 import numpy as np
 import pytest
@@ -22,19 +21,17 @@ from stenograf.config import Language, MeetingProfile, Provenance, ResolvedValue
 from stenograf.diarization.base import SpeakerTurn
 from stenograf.profiles import ProfileStore, SpeakerProfile, SpeakerReID
 from stenograf.session import (
-    AudioBus,
     ChannelPlan,
     CheckpointConfig,
     MeetingRecorder,
     SessionStore,
     SpeakerCount,
     _shield_interrupt,
-    _TailCheckpointer,
     interleave,
     plan_channels,
     resolve_parameters,
 )
-from stenograf.transcript import Transcript, TranscriptEntry
+from stenograf.transcript import TranscriptEntry
 
 
 def frame(channel: Channel, timestamp: float, samples: np.ndarray) -> AudioFrame:
@@ -241,20 +238,6 @@ def test_interleave_orders_channels_by_start():
         TranscriptEntry(speaker="Remote-1", text="c", start=2.0, end=2.5),
     ]
     assert [e.text for e in interleave(entries)] == ["a", "b", "c"]
-
-
-class RecordingASR(FakeASR):
-    """Records the length of every buffer it transcribes (proves tail exactly-once)."""
-
-    name = "recording"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.lengths: list[int] = []
-
-    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
-        self.lengths.append(len(samples))
-        return [Segment(text="w", start=0.0, end=0.1, words=(Word("w", 0.0, 0.1),))]
 
 
 class TwoSpeakerASR(FakeASR):
@@ -535,31 +518,9 @@ class TestMeetingRecorder:
         assert [e.speaker for e in transcript.entries] == ["Local-1"]  # first frame finalized
         assert any("capture stopped early" in m for m in errors)
 
-    def test_batch_checkpoints_accumulate_with_coarse_labels(self):
-        one_second = np.ones(SAMPLE_RATE, dtype=np.int16)
-        provider = ListProvider(
-            [frame(Channel.MIC, float(t), one_second) for t in range(3)]  # 3 s of audio
-        )
-        recorder = MeetingRecorder(
-            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
-        )
-        checkpoints: list[Transcript] = []
-        result = recorder.run(provider, checkpoint=CheckpointConfig(checkpoints.append, 1.0))
-        transcript = result.transcript
-        # The tail checkpoint runs off-thread and coalesces, so the *count* is
-        # timing-dependent — but at least one always fires for 3 s at interval 1.
-        assert checkpoints
-        # Checkpoints are channel-coarse (un-diarized); only the final transcript
-        # carries the diarized ``Local-1`` label.
-        assert all(e.speaker == "Local" for c in checkpoints for e in c.entries)
-        assert [e.speaker for e in transcript.entries] == ["Local-1"]
-        # Each checkpoint holds the full transcript-so-far: entries only ever grow.
-        counts = [len(c.entries) for c in checkpoints]
-        assert counts == sorted(counts)
-
-    def test_failed_provider_start_leaves_no_checkpointer_thread(self):
-        # A provider that fails to start propagates the error; the checkpoint
-        # thread must not be left behind blocked on bus.wait forever.
+    def test_failed_provider_start_propagates(self):
+        # A provider that fails to start propagates the error instead of
+        # finalizing an empty meeting.
         class ExplodingProvider(CaptureProvider):
             def start(self, channels: set[Channel]) -> None:
                 raise RuntimeError("no capture device")
@@ -574,64 +535,7 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         with pytest.raises(RuntimeError, match="no capture device"):
-            recorder.run(ExplodingProvider(), checkpoint=CheckpointConfig(lambda t: None, 1.0))
-        leftover = [t for t in threading.enumerate() if t.name == "tail-checkpoint"]
-        assert not leftover
-
-    def test_checkpointer_blocks_between_frames_instead_of_spinning(self):
-        """Waiting on the last-*checkpointed* marks makes wait() return instantly
-        forever once any audio exists — a hot spin that, measured on live
-        hardware, starves the capture thread off the GIL until the helper's
-        stdout pipe fills and Core Audio kills the system tap ~3 s in. The
-        checkpointer must block until audio it has not yet *seen* arrives."""
-
-        class CountingBus(AudioBus):
-            def __init__(self, channels):
-                super().__init__(channels)
-                self.wait_returns = 0
-
-            def wait(self, seen):
-                result = super().wait(seen)
-                self.wait_returns += 1
-                return result
-
-        bus = CountingBus([Channel.MIC])
-        recorder = MeetingRecorder(
-            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
-        )
-        store = SessionStore({Channel.MIC})
-        checkpointer = _TailCheckpointer(
-            store,
-            plan_channels(recorder.profile),
-            bus,
-            finalize_tail=recorder.tail_entries,
-            wrap_checkpoint=recorder.checkpoint_transcript,
-            on_checkpoint=lambda t: None,
-            interval=180.0,
-        )
-        checkpointer.start()
-        bus.advance(Channel.MIC, 1.0)  # far below the interval: nothing to do yet
-        time.sleep(0.2)
-        bus.close()
-        checkpointer.join(timeout=5)
-        assert checkpointer.error is None
-        # One wake for the frame, one for close; a spinning loop racks up thousands.
-        assert bus.wait_returns <= 10, (
-            f"checkpointer woke {bus.wait_returns} times for a single frame — busy-spinning"
-        )
-
-    def testtail_entries_shift_onto_the_session_clock_with_a_coarse_label(self):
-        store = SessionStore({Channel.MIC})
-        for t in range(3):
-            store.append(frame(Channel.MIC, float(t), np.ones(SAMPLE_RATE, dtype=np.int16)))
-        recorder = MeetingRecorder(
-            MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
-        )
-        plan = plan_channels(recorder.profile)[0]
-        entries = recorder.tail_entries(store, plan, 1.0, 2.0)
-        assert entries
-        assert all(e.speaker == "Local" for e in entries)  # coarse, not diarized Local-1
-        assert all(e.start >= 1.0 for e in entries)  # word times shifted into the tail
+            recorder.run(ExplodingProvider())
 
     def testlive_checkpoint_groups_committed_words_by_channel(self):
         recorder = MeetingRecorder(
@@ -654,7 +558,24 @@ class TestMeetingRecorder:
         transcript = recorder.live_checkpoint({Channel.MIC: CommittedWords([])})
         assert transcript.entries == []
 
-    def test_checkpointing_disabled_by_default_interval_zero(self):
+    def test_checkpointing_disabled_by_interval_zero(self):
+        provider = ListProvider(
+            [frame(Channel.MIC, float(t), np.ones(SAMPLE_RATE, dtype=np.int16)) for t in range(3)]
+        )
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=0),
+            asr=FakeASR(),
+            vad=WholeBufferVAD(),
+        )
+        checkpoints = []
+        recorder.run(
+            provider, live=True, checkpoint=CheckpointConfig(checkpoints.append, interval=0)
+        )
+        assert checkpoints == []
+
+    def test_batch_run_never_checkpoints(self):
+        # Batch runs are eval/debug runs: a checkpoint config is ignored, and
+        # no crash checkpoint is ever written.
         provider = ListProvider(
             [frame(Channel.MIC, float(t), np.ones(SAMPLE_RATE, dtype=np.int16)) for t in range(3)]
         )
@@ -662,7 +583,7 @@ class TestMeetingRecorder:
             MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR()
         )
         checkpoints = []
-        recorder.run(provider, checkpoint=CheckpointConfig(checkpoints.append, interval=0))
+        recorder.run(provider, checkpoint=CheckpointConfig(checkpoints.append, interval=1.0))
         assert checkpoints == []
 
     def test_language_is_auto_detected_from_the_transcript(self):
@@ -701,42 +622,6 @@ class TestMeetingRecorder:
         assert second.speaker_counts == first.speaker_counts
         # Detection never locks onto the recorder — the configured language stays unset.
         assert recorder.language is None
-
-
-class TestTailCheckpointer:
-    """The batch (--no-live) crash checkpoint: tail-only finalize, off capture."""
-
-    def test_finalizes_each_second_of_audio_exactly_once(self):
-        store = SessionStore({Channel.MIC})
-        for t in range(3):  # 3 s of audio
-            store.append(frame(Channel.MIC, float(t), np.ones(SAMPLE_RATE, dtype=np.int16)))
-        bus = AudioBus([Channel.MIC])
-        asr = RecordingASR()
-        recorder = MeetingRecorder(MeetingProfile(local_speakers=1, remote_speakers=0), asr=asr)
-        plans = plan_channels(recorder.profile)
-        writes: list[Transcript] = []
-        checkpointer = _TailCheckpointer(
-            store,
-            plans,
-            bus,
-            finalize_tail=recorder.tail_entries,
-            wrap_checkpoint=recorder.checkpoint_transcript,
-            on_checkpoint=writes.append,
-            interval=1.0,
-        )
-        checkpointer.start()
-        bus.advance(Channel.MIC, store.duration(Channel.MIC))
-        bus.close()
-        checkpointer.join(timeout=5)
-
-        assert not checkpointer.is_alive()
-        assert checkpointer.error is None
-        # The old whole-buffer re-finalize would total 1+2+3 = 6 s of ASR; the
-        # tail-only path finalizes each second exactly once → 3 s, whatever the
-        # thread interleaving (one catch-up tail or three).
-        assert sum(asr.lengths) == 3 * SAMPLE_RATE
-        assert writes  # at least one checkpoint written
-        assert all(e.speaker == "Local" for t in writes for e in t.entries)
 
 
 class TestShieldInterrupt:
