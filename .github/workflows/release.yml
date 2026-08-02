@@ -376,10 +376,14 @@ jobs:
           # The capture check cannot *pass* on a runner — there is no audio
           # endpoint — but it must fail for that reason and not because the
           # wheel shipped without a capture helper, which is the regression a
-          # platform-tagged wheel exists to prevent. When the binary is there,
-          # the complaint comes from the helper itself instead.
-          if grep -qi "not found" doctor.txt; then
-            echo "the installed wheel has no capture helper" >&2
+          # platform-tagged wheel exists to prevent. The complaint quoted here
+          # is wasapi.rs's own, so seeing it proves the binary shipped and ran;
+          # a missing or unrunnable helper is Python-side and always names the
+          # "capture helper". Matching "not found" at large cannot tell them
+          # apart — WASAPI reports an absent endpoint as "Element not found".
+          grep -q "check Windows sound settings" doctor.txt
+          if grep -qi "capture helper" doctor.txt; then
+            echo "the installed wheel has no working capture helper" >&2
             exit 1
           fi
       - name: Pipeline smoke on a synthetic WAV
