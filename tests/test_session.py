@@ -4,13 +4,21 @@ import time
 
 import numpy as np
 import pytest
-from conftest import CallbackView, FakeASR, FakeDiarizer, RaisingDiarizer
+from conftest import (
+    CallbackView,
+    EmbeddingDiarizer,
+    FakeASR,
+    FakeDiarizer,
+    GermanASR,
+    ListProvider,
+    RaisingDiarizer,
+)
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 from stenograf.config import Language, MeetingProfile, Provenance, ResolvedValue
-from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+from stenograf.diarization.base import SpeakerTurn
 from stenograf.profiles import ProfileStore, SpeakerProfile, SpeakerReID
 from stenograf.session import (
     AudioBus,
@@ -234,16 +242,6 @@ def test_interleave_orders_channels_by_start():
     assert [e.text for e in interleave(entries)] == ["a", "b", "c"]
 
 
-class GermanASR(FakeASR):
-    """Transcribes to German text, for language-detection tests."""
-
-    name = "german"
-
-    def transcribe(self, samples: np.ndarray, language) -> list[Segment]:
-        text = "und das ist wirklich eine gute idee für uns"
-        return [Segment(text=text, start=0.1, end=1.0, words=(Word(text, 0.1, 1.0),))]
-
-
 class RecordingASR(FakeASR):
     """Records the length of every buffer it transcribes (proves tail exactly-once)."""
 
@@ -284,38 +282,6 @@ class CommittedWords:
     @property
     def committed_words(self) -> tuple[Word, ...]:
         return self._words
-
-
-class EmbeddingDiarizer(Diarizer):
-    """FakeDiarizer that also carries a per-cluster embedding (the re-ID surface)."""
-
-    def __init__(self, turns: list[SpeakerTurn], embeddings: dict[str, np.ndarray]):
-        self.turns = turns
-        self.embeddings = embeddings
-
-    def diarize(self, samples, num_speakers=None):
-        return self.turns
-
-    def diarize_with_embeddings(self, samples, num_speakers=None):
-        return DiarizationResult(turns=self.turns, embeddings=self.embeddings)
-
-
-class ListProvider(CaptureProvider):
-    """Yields a preset list of frames — an in-process stand-in for a device."""
-
-    def __init__(self, frames: list[AudioFrame]):
-        self._frames = frames
-        self.started_channels: set[Channel] | None = None
-        self.stopped = False
-
-    def start(self, channels: set[Channel]) -> None:
-        self.started_channels = channels
-
-    def frames(self):
-        yield from self._frames
-
-    def stop(self) -> None:
-        self.stopped = True
 
 
 class TestMeetingRecorder:

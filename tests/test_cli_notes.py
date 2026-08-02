@@ -4,8 +4,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from conftest import write_wav
-from test_cli import fake_load_backends
+from conftest import fake_load_backends, write_settings, write_wav
 
 from stenograf import cli, loaders
 from stenograf import notes as notes_pkg
@@ -33,15 +32,6 @@ Es wurde das Quartal geplant.
 
 - Q3-Einstellungen?
 """
-
-
-@pytest.fixture(autouse=True)
-def _isolate_data_dir(tmp_path, monkeypatch):
-    from stenograf import output
-
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "steno-data"))
-    monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings-home")
-    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
 
 
 class FakeBackend:
@@ -252,13 +242,9 @@ def test_notes_export_dir_writes_combined_note(tmp_path, fake_backend):
 
 
 def test_notes_export_defaults_from_settings_and_no_export_disables(tmp_path, fake_backend):
-    import os
-
     vault = tmp_path / "vault"
-    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
-    settings.parent.mkdir(parents=True, exist_ok=True)
     # as_posix(): a raw Windows path in a TOML basic string is invalid (\U…).
-    settings.write_text(f'[notes.export]\ndir = "{vault.as_posix()}"\n', encoding="utf-8")
+    write_settings(f'[notes.export]\ndir = "{vault.as_posix()}"\n')
     path = tmp_path / "transcript.json"
     write_transcript_json(path)
 
@@ -290,11 +276,7 @@ def test_transcribe_with_notes_flag_writes_notes(tmp_path, monkeypatch, fake_bac
 
 def test_settings_notes_auto_generates_notes_without_the_flag(tmp_path, monkeypatch, fake_backend):
     # [notes] auto = true is the standing "always summarize" choice: no --notes.
-    import os
-
-    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text("[notes]\nauto = true\n", encoding="utf-8")
+    write_settings("[notes]\nauto = true\n")
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -307,14 +289,10 @@ def test_settings_notes_auto_generates_notes_without_the_flag(tmp_path, monkeypa
 
 def test_no_notes_beats_settings_notes_auto(tmp_path, monkeypatch):
     # The per-run flag wins outright — auto = true still yields to --no-notes.
-    import os
-
     def explode(name, settings):
         raise AssertionError("--no-notes was given; no backend may be created")
 
-    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text("[notes]\nauto = true\n", encoding="utf-8")
+    write_settings("[notes]\nauto = true\n")
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
     monkeypatch.setattr(notes_pkg, "create_backend", explode)
     audio = tmp_path / "meeting.wav"
@@ -395,13 +373,9 @@ def test_transcribe_per_run_notes_trio_reaches_the_backend(tmp_path, monkeypatch
 def test_notes_instructions_flag_replaces_the_settings_file(tmp_path, monkeypatch):
     # The per-run file replaces the standing one — trying a different style
     # must not stack the two.
-    import os
-
     standing = tmp_path / "standing.md"
     standing.write_text("Standing style.", encoding="utf-8")
-    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(f'[notes]\ninstructions = "{standing.as_posix()}"\n', encoding="utf-8")
+    write_settings(f'[notes]\ninstructions = "{standing.as_posix()}"\n')
     seen = {}
 
     class Recording(FakeBackend):
@@ -470,11 +444,7 @@ Es wurde das Budget besprochen.
 
 
 def _write_preset_settings(tmp_path, template_path) -> None:
-    import os
-
-    settings = Path(os.environ["STENOGRAF_DATA"]) / "settings.toml"
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(
+    write_settings(
         f"""
 [notes]
 backend = "command"
@@ -491,8 +461,7 @@ backend = "mlx"
 
 [meetings.controlling.vocab]
 attendees = ["Anja Preset"]
-""",
-        encoding="utf-8",
+"""
     )
 
 

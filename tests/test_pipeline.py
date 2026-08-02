@@ -1,10 +1,10 @@
 import numpy as np
-from conftest import FakeASR, FakeDiarizer, RaisingDiarizer
+from conftest import EmbeddingDiarizer, FakeASR, FakeDiarizer, GermanASR, RaisingDiarizer
 
 from stenograf.asr.base import Segment, Word
 from stenograf.audio import SAMPLE_RATE
 from stenograf.config import Language, MeetingProfile, Provenance
-from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+from stenograf.diarization.base import SpeakerTurn
 from stenograf.pipeline import (
     finalize_channel,
     finalize_file,
@@ -359,24 +359,6 @@ class TestFinalizeChannelReuse:
         assert entries[0].speaker == "S1"
 
 
-class EmbeddingDiarizer(Diarizer):
-    """A diarizer that carries per-cluster embeddings (the re-ID surface)."""
-
-    def __init__(self, turns, embeddings):
-        self.turns = turns
-        self.embeddings = embeddings
-        self.diarize_calls = 0
-        self.embed_calls = 0
-
-    def diarize(self, samples, num_speakers=None):
-        self.diarize_calls += 1
-        return self.turns
-
-    def diarize_with_embeddings(self, samples, num_speakers=None):
-        self.embed_calls += 1
-        return DiarizationResult(turns=self.turns, embeddings=self.embeddings)
-
-
 class MappingReID:
     """A fake SpeakerResolver: relabels clusters by a fixed lookup."""
 
@@ -461,11 +443,6 @@ class TestFinalizeFile:
     """finalize_file assembles the same artifact shape a meeting's stop does."""
 
     def test_detects_language_and_records_audio_channel_provenance(self):
-        class GermanASR(FakeASR):
-            def transcribe(self, samples, language):
-                text = "und das ist wirklich eine gute idee für uns"
-                return [Segment(text=text, start=0.1, end=1.0, words=(Word(text, 0.1, 1.0),))]
-
         profile = MeetingProfile(title="Planung")
         transcript = finalize_file(
             np.zeros(SAMPLE_RATE, dtype=np.float32), profile=profile, asr=GermanASR()

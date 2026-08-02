@@ -31,6 +31,7 @@ import pytest
 # needed — nothing here shows a window.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from conftest import write_settings  # noqa: E402
 from PySide6.QtCore import QEventLoop, QtMsgType, qInstallMessageHandler  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlComponent  # noqa: E402
@@ -198,7 +199,6 @@ class TestSetupScreen:
     def test_start_resolves_a_request_and_replaces_the_form(self, gui, tmp_path, monkeypatch):
         from stenograf import output
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         # This one really starts a meeting (recordAudio below), so it needs the
         # same output redirect as every other test that does — $STENOGRAF_DATA
         # does not cover it, the transcript home is resolved separately.
@@ -233,7 +233,6 @@ class TestSetupScreen:
         assert meeting.state["language"] == "de"
 
     def test_an_impossible_profile_keeps_the_form_open(self, gui, tmp_path, monkeypatch):
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         shell, _engine = gui
         seen = []
         shell.navigation.connect(lambda page, mode: seen.append((page, mode)))
@@ -256,12 +255,7 @@ class TestSetupScreen:
         assert error and ("speaker" in error or "source" in error), error
 
     def test_standing_settings_preset_the_switches(self, gui, tmp_path, monkeypatch):
-        data = tmp_path / "data"
-        data.mkdir()
-        (data / "settings.toml").write_text(
-            "[speakers]\ndiarization = true\n\n[notes]\nauto = true\n", encoding="utf-8"
-        )
-        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        write_settings("[speakers]\ndiarization = true\n\n[notes]\nauto = true\n")
         shell, _engine = gui
         setup = shell.screen("Setup")
         setup.opened()  # what the page does on every visit
@@ -282,7 +276,6 @@ class TestMeetingScreen:
         from stenograf.capture.base import Channel
         from stenograf.capture.file import FileCaptureProvider
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         home_dir = tmp_path / "meetings"
         monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
         mic = tmp_path / "mic.wav"
@@ -357,7 +350,6 @@ class TestMeetingScreen:
     def test_a_failed_start_lands_on_the_status_line(self, gui, tmp_path, monkeypatch):
         from stenograf import loaders, output
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
 
         def no_devices(*args, **kwargs):
@@ -395,7 +387,6 @@ class TestMeetingScreen:
         from stenograf.capture.base import Channel
         from stenograf.capture.file import FileCaptureProvider
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
         mic = tmp_path / "mic.wav"
         conftest.write_wav(mic)
@@ -514,7 +505,6 @@ class TestMeetingScreen:
         from stenograf.capture.base import Channel
         from stenograf.capture.file import FileCaptureProvider
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
         mic = tmp_path / "mic.wav"
         conftest.write_wav(mic)
@@ -607,7 +597,6 @@ class TestTranscribeScreen:
 
         from stenograf import loaders, output
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         home_dir = tmp_path / "meetings"
         monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
         monkeypatch.setattr(
@@ -630,7 +619,6 @@ class TestTranscribeScreen:
         assert list(home_dir.glob("*/transcript.md"))
 
     def test_a_failing_run_lands_on_the_status_line(self, gui, tmp_path, monkeypatch):
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         shell, _engine = gui
         screen = shell.screen("Transcribe")
         screen.choose((tmp_path / "not-audio.wav").as_uri())
@@ -645,7 +633,6 @@ class TestNotesScreen:
         import stenograf.notes as notes_pkg
         from stenograf import output
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         home_dir = tmp_path / "meetings"
         monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
         older = home_dir / "meeting-20260101-090000"
@@ -667,7 +654,6 @@ class TestNotesScreen:
     def test_no_meetings_yet_says_so(self, gui, tmp_path, monkeypatch):
         from stenograf import output
 
-        monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
         monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "nowhere")
         shell, _engine = gui
         screen = shell.screen("Notes")
@@ -678,10 +664,7 @@ class TestNotesScreen:
 
 class TestSettingsScreen:
     def test_renders_every_table_with_value_provenance(self, gui, tmp_path, monkeypatch):
-        data = tmp_path / "data"
-        data.mkdir()
-        (data / "settings.toml").write_text('[transcript]\nformats = ["md"]\n', encoding="utf-8")
-        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        write_settings('[transcript]\nformats = ["md"]\n')
 
         shell, _engine = gui
         screen = shell.screen("Settings")
@@ -692,10 +675,7 @@ class TestSettingsScreen:
         assert any("settings.toml" in line and "formats" in line for line in screen.lines)
 
     def test_a_broken_file_renders_its_error(self, gui, tmp_path, monkeypatch):
-        data = tmp_path / "data"
-        data.mkdir()
-        (data / "settings.toml").write_text("not toml [", encoding="utf-8")
-        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        write_settings("not toml [")
 
         shell, _engine = gui
         screen = shell.screen("Settings")

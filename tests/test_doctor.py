@@ -3,8 +3,20 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import write_settings
 
 from stenograf import doctor
+
+
+@pytest.fixture(autouse=True)
+def _no_ollama_probe(monkeypatch):
+    """``run_checks()``'s notes check probes the configured backend — on the
+    platforms that default to Ollama that is a real HTTP request to localhost
+    (5 s timeout), so a dev with a live Ollama would get a different run than
+    CI. Tests that want a reachable Ollama patch ``is_available`` back."""
+    from stenograf.notes.ollama import OllamaBackend
+
+    monkeypatch.setattr(OllamaBackend, "is_available", lambda self: False)
 
 
 def test_run_checks_includes_python_and_asr():
@@ -207,7 +219,6 @@ def test_models_check_reflects_cache(monkeypatch):
 
 
 def test_notes_check_ollama_down_is_optional_not_ok(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
     monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "ollama")  # force the branch under test
     from stenograf.notes.ollama import OllamaBackend
 
@@ -219,7 +230,6 @@ def test_notes_check_ollama_down_is_optional_not_ok(monkeypatch, tmp_path):
 
 
 def test_notes_check_ollama_up_but_model_missing(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
     monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "ollama")  # force the branch under test
     from stenograf.notes.ollama import OllamaBackend
 
@@ -232,7 +242,6 @@ def test_notes_check_ollama_up_but_model_missing(monkeypatch, tmp_path):
 
 
 def test_notes_check_mlx_reports_cache_state(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
     monkeypatch.setenv("STENOGRAF_NOTES_BACKEND", "mlx")
     from stenograf.notes.mlx import MlxBackend
 
@@ -250,21 +259,13 @@ def test_notes_check_mlx_reports_cache_state(monkeypatch, tmp_path):
 
 
 def test_notes_check_command_backend_reports_path_presence(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
-    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
-    settings = tmp_path / "settings.toml"
     # Forward slashes: a raw Windows path in a TOML basic string is invalid (\U…).
     executable = sys.executable.replace("\\", "/")
-    settings.write_text(
-        f'[notes]\nbackend = "command"\ncommand = ["{executable}", "-c", "pass"]\n',
-        encoding="utf-8",
-    )
+    write_settings(f'[notes]\nbackend = "command"\ncommand = ["{executable}", "-c", "pass"]\n')
     check = doctor._notes_check()
     assert check.ok, check.detail
 
-    settings.write_text(
-        '[notes]\nbackend = "command"\ncommand = ["no-such-notes-binary"]\n', encoding="utf-8"
-    )
+    write_settings('[notes]\nbackend = "command"\ncommand = ["no-such-notes-binary"]\n')
     check = doctor._notes_check()
     assert not check.ok
     assert check.optional
@@ -272,9 +273,7 @@ def test_notes_check_command_backend_reports_path_presence(monkeypatch, tmp_path
 
 
 def test_notes_check_unconfigured_command_backend_is_optional(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
-    monkeypatch.delenv("STENOGRAF_NOTES_BACKEND", raising=False)
-    (tmp_path / "settings.toml").write_text('[notes]\nbackend = "command"\n', encoding="utf-8")
+    write_settings('[notes]\nbackend = "command"\n')
     check = doctor._notes_check()
     assert not check.ok
     assert check.optional
@@ -302,9 +301,7 @@ def test_preset_notes_checks_cover_what_the_standing_check_misses(tmp_path, monk
     # to get a green doctor and a failed notes run after a real meeting.
     from stenograf import doctor
 
-    data = tmp_path / "data"
-    data.mkdir()
-    (data / "settings.toml").write_text(
+    write_settings(
         """
 [meetings.agentic.notes]
 backend = "command"
@@ -312,10 +309,8 @@ command = ["definitely-not-a-real-binary-xyz"]
 
 [meetings.plain]
 title = "No notes overlay"
-""",
-        encoding="utf-8",
+"""
     )
-    monkeypatch.setenv("STENOGRAF_DATA", str(data))
 
     checks = {check.name: check for check in doctor._preset_checks()}
 

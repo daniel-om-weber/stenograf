@@ -13,7 +13,7 @@ import threading
 
 import numpy as np
 import pytest
-from conftest import CallbackView, FakeASR
+from conftest import CallbackView, FakeASR, ListProvider
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
@@ -66,29 +66,6 @@ class StubDecoder:
         self.dropped += 1
 
 
-class ListProvider(CaptureProvider):
-    """Yields a preset list of frames; stops cleanly when told."""
-
-    def __init__(self, frames: list[AudioFrame]):
-        self._frames = frames
-        self.started_channels: set[Channel] | None = None
-        self.stopped = False
-        self.yielded = 0  # frames actually consumed — lets tests see an early stop
-
-    def start(self, channels: set[Channel]) -> None:
-        self.started_channels = channels
-
-    def frames(self):
-        for f in self._frames:
-            if self.stopped:
-                return
-            self.yielded += 1
-            yield f
-
-    def stop(self) -> None:
-        self.stopped = True
-
-
 def _frames(channel: Channel, pcm: np.ndarray, frame_len: int) -> list[AudioFrame]:
     return [
         AudioFrame(channel, start / SAMPLE_RATE, pcm[start : start + frame_len])
@@ -100,6 +77,16 @@ def _one_second_frames(seconds: int) -> list[AudioFrame]:
     """`seconds` one-second mic frames, one per whole second (t = 0, 1, 2, …)."""
     pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
     return [AudioFrame(Channel.MIC, float(t), pcm) for t in range(seconds)]
+
+
+def _recorder(asr=None, vad=None, *, remote_speakers=0, **kwargs) -> MeetingRecorder:
+    """A one-local-speaker recorder over the given doubles (the file's default rig)."""
+    return MeetingRecorder(
+        MeetingProfile(local_speakers=1, remote_speakers=remote_speakers),
+        asr=asr if asr is not None else FakeASR(),
+        vad=vad,
+        **kwargs,
+    )
 
 
 class TestAudioBus:
@@ -327,14 +314,11 @@ class CrashingProvider(CaptureProvider):
 
 
 class TestMeetingRecorderLive:
-    def _recorder(self) -> MeetingRecorder:
-        return MeetingRecorder(MeetingProfile(local_speakers=1, remote_speakers=0), asr=FakeASR())
-
     def test_live_run_streams_commits_and_still_finalizes(self):
         provider = ListProvider(_one_second_frames(4))
         updates: list[tuple[Channel, StreamingUpdate]] = []
         transcript = (
-            self._recorder()
+            _recorder()
             .run(
                 provider,
                 live=True,
@@ -351,7 +335,7 @@ class TestMeetingRecorderLive:
 
     def test_live_run_stops_at_max_seconds(self):
         provider = ListProvider(_one_second_frames(10))
-        transcript = self._recorder().run(provider, live=True, max_seconds=3.0).transcript
+        transcript = _recorder().run(provider, live=True, max_seconds=3.0).transcript
         assert provider.stopped
         # The cap cut capture short: the store hits 3.0 s on the third frame and
         # the loop pulls no more — 3 consumed, 7 never requested.
@@ -362,7 +346,7 @@ class TestMeetingRecorderLive:
         # Same cap on the batch (no-live) path, which runs capture on the
         # calling thread through its own loop.
         provider = ListProvider(_one_second_frames(10))
-        transcript = self._recorder().run(provider, max_seconds=3.0).transcript
+        transcript = _recorder().run(provider, max_seconds=3.0).transcript
         assert provider.stopped
         assert provider.yielded == 3
         assert [e.speaker for e in transcript.entries] == ["Local-1"]
@@ -371,7 +355,7 @@ class TestMeetingRecorderLive:
         provider = ListProvider(_one_second_frames(4))
         checkpoints: list[object] = []
         transcript = (
-            self._recorder()
+            _recorder()
             .run(provider, live=True, checkpoint=CheckpointConfig(checkpoints.append, 1.0))
             .transcript
         )
@@ -396,7 +380,7 @@ class TestMeetingRecorderLive:
         provider = ListProvider([good, backward])
         errors: list[str] = []
         transcript = (
-            self._recorder()
+            _recorder()
             .run(provider, live=True, view=CallbackView(on_status=errors.append))
             .transcript
         )
@@ -412,7 +396,7 @@ class TestMeetingRecorderLive:
         for live in (True, False):
             provider = CrashingProvider()
             with pytest.raises(CaptureHelperError, match="tap unavailable"):
-                self._recorder().run(provider, live=live)
+                _recorder().run(provider, live=live)
             assert provider.stopped  # the device is still released
 
     def test_capture_crash_after_audio_still_finalizes(self):
@@ -422,7 +406,7 @@ class TestMeetingRecorderLive:
         provider = CrashingProvider([good])
         errors: list[str] = []
         transcript = (
-            self._recorder()
+            _recorder()
             .run(provider, live=True, view=CallbackView(on_status=errors.append))
             .transcript
         )
@@ -521,11 +505,6 @@ class TestLivePassCpuProxy:
     decoder in isolation), so a future orchestration change can't quietly re-decode
     in silence or rewrite committed captions."""
 
-    def _recorder(self, asr, vad) -> MeetingRecorder:
-        return MeetingRecorder(
-            MeetingProfile(local_speakers=1, remote_speakers=0), asr=asr, vad=vad
-        )
-
     def test_zero_window_decodes_during_silence(self):
         # The VAD reports no speech, so the whole live pass must run no ASR — the
         # ~0% accelerator-in-silence budget. We snapshot the decode
@@ -533,7 +512,7 @@ class TestLivePassCpuProxy:
         asr = CountingASR()
         spy = _SpyView(asr)
         provider = ListProvider(_one_second_frames(5))
-        self._recorder(asr, _SilentVAD()).run(provider, live=True, view=spy)
+        _recorder(asr, _SilentVAD()).run(provider, live=True, view=spy)
         assert spy.decodes_at_finalizing == 0  # no window decode while silent
         assert spy.committed == []  # and nothing was committed
 
@@ -544,7 +523,7 @@ class TestLivePassCpuProxy:
         asr = CountingASR()
         spy = _SpyView(asr)
         provider = ListProvider(_one_second_frames(4))
-        self._recorder(asr, _AlwaysSpeechVAD()).run(provider, live=True, view=spy)
+        _recorder(asr, _AlwaysSpeechVAD()).run(provider, live=True, view=spy)
         assert spy.committed, "speech should have produced committed captions"
         starts = [w.start for w in spy.committed]
         assert starts == sorted(starts)  # a committed word never moves back in time
@@ -555,18 +534,12 @@ class TestLivePassCpuProxy:
 class TestFinalizeReuse:
     """The on-stop finalize reuses the window pass's decodes (halving total ASR)."""
 
-    def _recorder(self, asr) -> MeetingRecorder:
-        return MeetingRecorder(
-            MeetingProfile(local_speakers=1, remote_speakers=0),
-            asr=asr,
-            vad=_StreamingSpeechVAD(),
-        )
-
     def test_finalize_runs_zero_asr_when_reusing(self):
         asr = CountingASR()
         spy = _SpyView(asr)
         provider = ListProvider(_one_second_frames(4))
-        transcript = self._recorder(asr).run(provider, live=True, view=spy).transcript
+        recorder = _recorder(asr, _StreamingSpeechVAD())
+        transcript = recorder.run(provider, live=True, view=spy).transcript
         # Every decode happened in the live pass; the finalize added none.
         assert spy.decodes_at_finalizing is not None
         assert asr.calls == spy.decodes_at_finalizing
@@ -578,7 +551,7 @@ class TestFinalizeReuse:
     def test_full_finalize_opt_out_re_decodes(self):
         asr = CountingASR()
         spy = _SpyView(asr)
-        recorder = self._recorder(asr)
+        recorder = _recorder(asr, _StreamingSpeechVAD())
         recorder.reuse_live_finalize = False  # the --full-finalize escape hatch
         result = recorder.run(ListProvider(_one_second_frames(4)), live=True, view=spy)
         transcript = result.transcript
@@ -745,28 +718,22 @@ class TestTwoChannelLive:
         system = _pcm_with_speech(self.SECONDS, self.SYSTEM_SPANS, 3000)
         return ListProvider(_interleaved_frames(mic, system))
 
-    def _recorder(self, asr, **kwargs) -> MeetingRecorder:
-        return MeetingRecorder(
-            MeetingProfile(local_speakers=1, remote_speakers=1),
-            asr=asr,
-            vad=EnergyVAD(),
-            **kwargs,
-        )
-
     def test_live_reuse_matches_batch_and_full_finalize(self):
         # The headline parity: online with reuse, online with --full-finalize,
         # and pure offline batch must produce the same transcript for the same
         # two-channel audio, overlapping speech included.
         reuse_asr = AmplitudeASR()
-        reused = self._recorder(reuse_asr).run(self._provider(), live=True).transcript
+        reuse_recorder = _recorder(reuse_asr, EnergyVAD(), remote_speakers=1)
+        reused = reuse_recorder.run(self._provider(), live=True).transcript
 
         full_asr = AmplitudeASR()
-        recorder = self._recorder(full_asr)
+        recorder = _recorder(full_asr, EnergyVAD(), remote_speakers=1)
         recorder.reuse_live_finalize = False
         full = recorder.run(self._provider(), live=True).transcript
 
         batch_asr = AmplitudeASR()
-        batch = self._recorder(batch_asr).run(self._provider()).transcript
+        batch_recorder = _recorder(batch_asr, EnergyVAD(), remote_speakers=1)
+        batch = batch_recorder.run(self._provider()).transcript
 
         assert reused.entries == full.entries == batch.entries
         # Reuse decoded each channel's one window exactly once, in the live pass;
@@ -792,7 +759,7 @@ class TestTwoChannelLive:
         updates: list[tuple[Channel, StreamingUpdate]] = []
         checkpoints: list[object] = []
         transcript = (
-            self._recorder(AmplitudeASR())
+            _recorder(AmplitudeASR(), EnergyVAD(), remote_speakers=1)
             .run(
                 provider,
                 live=True,
@@ -838,7 +805,7 @@ class TestTwoChannelLive:
         def run(dedup: bool):
             pcm = _pcm_with_speech(5, [(1.0, 3.0)], 1000)
             provider = ListProvider(_interleaved_frames(pcm, pcm.copy()))
-            recorder = self._recorder(AmplitudeASR(), dedup_echo=dedup)
+            recorder = _recorder(AmplitudeASR(), EnergyVAD(), remote_speakers=1, dedup_echo=dedup)
             return recorder.run(provider, live=True)
 
         armed = run(dedup=True)

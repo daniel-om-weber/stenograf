@@ -7,77 +7,18 @@ import conftest
 import numpy as np
 import pytest
 from click.testing import CliRunner
-from conftest import write_wav
+from conftest import (
+    CliASR,
+    EnrollmentDiarizer,
+    fake_load_backends,
+    write_settings,
+    write_wav,
+)
 
 from stenograf import cli, loaders, output
 from stenograf.asr.base import Segment, Word
-from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+from stenograf.diarization.base import SpeakerTurn
 from stenograf.view import LiveView
-
-
-@pytest.fixture(autouse=True)
-def _isolate_data_dir(tmp_path, monkeypatch):
-    """Point the data dir (profile store, settings) and the meetings output home
-    at throwaway locations.
-
-    A run without ``--out`` creates its meeting folder in the output home
-    (~/Documents/Meetings by default); patching :func:`default_output_home`
-    keeps every CLI test out of the real one, and ``$STENOGRAF_DATA`` keeps
-    settings/profiles off the real data dir."""
-    from stenograf import output
-
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "steno-data"))
-    monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings-home")
-
-
-class FakeASR(conftest.FakeASR):
-    """Returns fixed German text so the whole CLI path (incl. LID) runs offline."""
-
-    model_id = "fake/model"
-
-    def transcribe(self, samples, language) -> list[Segment]:
-        return [
-            Segment(
-                text="und das ist wirklich eine gute idee für uns alle",
-                start=0.1,
-                end=1.0,
-                words=(Word("und", 0.1, 0.3), Word("das", 0.3, 0.6)),
-            )
-        ]
-
-
-class FakeDiarizer(Diarizer):
-    """Fixed clusters with fixed unit embeddings — no ONNX model, no real audio.
-
-    Lets the CLI re-ID/enrollment paths run offline: enrollment reads
-    ``diarize_with_embeddings`` and the finalize pass matches against the same
-    vectors, so a profile enrolled from this diarizer self-matches (cosine 1.0).
-    """
-
-    def __init__(self, embeddings, turns=None):
-        self._embeddings = {k: np.asarray(v, dtype=np.float32) for k, v in embeddings.items()}
-        # One long turn per cluster by default (covers every word's midpoint).
-        self._turns = turns or [SpeakerTurn(s, 0.0, 1e9) for s in embeddings]
-
-    def diarize(self, samples, num_speakers=None):
-        return list(self._turns)
-
-    def diarize_with_embeddings(self, samples, num_speakers=None):
-        return DiarizationResult(turns=list(self._turns), embeddings=dict(self._embeddings))
-
-
-def fake_load_backends(*, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_):
-    # No VAD (whole buffer is one window) and no diarizer (single speaker).
-    return FakeASR(), None, None
-
-
-@pytest.fixture
-def stub_backends(monkeypatch):
-    """Route the loaders seam to the offline fakes — no weights, no downloads.
-
-    Tests that need a *custom* fake (a recording wrapper, a specific diarizer)
-    still patch ``loaders.load_backends`` themselves."""
-    monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
 
 
 def test_transcribe_writes_outputs_and_detects_language(tmp_path, stub_backends):
@@ -144,16 +85,7 @@ def test_transcribe_format_writes_requested_subtitle_files(tmp_path, stub_backen
     assert "transcript.srt" in result.output
 
 
-def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
-    calls = {}
-
-    def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-    ):
-        calls["need_diarizer"] = need_diarizer
-        return fake_load_backends(need_diarizer=need_diarizer)
-
-    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, backend_calls):
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -162,7 +94,7 @@ def test_transcribe_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert calls["need_diarizer"] is False  # the diarizer model is never requested
+    assert backend_calls["need_diarizer"] is False  # the diarizer model is never requested
     entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
     assert {e["speaker"] for e in entries} == {"Speaker 1"}
 
@@ -198,71 +130,37 @@ def test_resolve_diarization_precedence():
     assert resolve(None, True, None, 1) is True  # explicit on in the file
 
 
-def _write_settings(monkeypatch_env_dir: Path, body: str) -> None:
-    """Drop a settings.toml into the test's $STENOGRAF_DATA dir."""
-    data = monkeypatch_env_dir / "steno-data"
-    data.mkdir(parents=True, exist_ok=True)
-    (data / "settings.toml").write_text(body, encoding="utf-8")
-
-
-def test_transcribe_diarization_off_by_default(tmp_path, monkeypatch):
+def test_transcribe_diarization_off_by_default(tmp_path, backend_calls):
     # No settings file, no flag, no count: diarization must not run — the
     # built-in default is off, and the run says so.
-    calls = {}
-
-    def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-    ):
-        calls["need_diarizer"] = need_diarizer
-        return fake_load_backends(need_diarizer=need_diarizer)
-
-    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
     result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert calls["need_diarizer"] is False
+    assert backend_calls["need_diarizer"] is False
     assert "diarization: off" in result.output
     entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
     assert {e["speaker"] for e in entries} == {"Speaker 1"}
 
 
-def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch):
-    calls = {}
-
-    def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-    ):
-        calls["need_diarizer"] = need_diarizer
-        return fake_load_backends(need_diarizer=need_diarizer)
-
-    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
-    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, backend_calls):
+    write_settings("[speakers]\ndiarization = false\n")
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
     result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert calls["need_diarizer"] is False
+    assert backend_calls["need_diarizer"] is False
     assert "diarization: off" in result.output  # the file's default is announced
     entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
     assert {e["speaker"] for e in entries} == {"Speaker 1"}
 
 
-def test_transcribe_diarization_flag_beats_settings_off(tmp_path, monkeypatch):
-    calls = {}
-
-    def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-    ):
-        calls["need_diarizer"] = need_diarizer
-        return fake_load_backends(need_diarizer=need_diarizer)
-
-    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
-    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+def test_transcribe_diarization_flag_beats_settings_off(tmp_path, backend_calls):
+    write_settings("[speakers]\ndiarization = false\n")
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -271,23 +169,14 @@ def test_transcribe_diarization_flag_beats_settings_off(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert calls["need_diarizer"] is True
+    assert backend_calls["need_diarizer"] is True
     assert "diarization: off" not in result.output
 
 
-def test_transcribe_explicit_count_beats_settings_off(tmp_path, monkeypatch):
+def test_transcribe_explicit_count_beats_settings_off(tmp_path, backend_calls):
     # A per-run --speakers above 1 is itself a request to diarize; the file's
     # default must not force it off (or error like the explicit flag does).
-    calls = {}
-
-    def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-    ):
-        calls["need_diarizer"] = need_diarizer
-        return fake_load_backends(need_diarizer=need_diarizer)
-
-    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
-    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+    write_settings("[speakers]\ndiarization = false\n")
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -296,7 +185,7 @@ def test_transcribe_explicit_count_beats_settings_off(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert calls["need_diarizer"] is True
+    assert backend_calls["need_diarizer"] is True
 
 
 def test_cleanup_checkpoints_removes_every_checkpoint_format(tmp_path):
@@ -319,7 +208,7 @@ def test_transcribe_rejects_unknown_format(tmp_path, stub_backends):
 
 
 def test_transcribe_glossary_corrects_the_transcript(tmp_path, stub_backends):
-    # FakeASR emits "...eine gute idee für uns alle"; the glossary snaps "idee"
+    # CliASR emits "...eine gute idee für uns alle"; the glossary snaps "idee"
     # to its canonical spelling in the written transcript.
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -533,16 +422,7 @@ def test_start_replay_streams_live_captions_by_default(tmp_path, stub_backends):
     assert "finalized:" in result.output  # the on-stop finalize swap was announced
 
 
-def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
-    calls = {}
-
-    def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-    ):
-        calls["need_diarizer"] = need_diarizer
-        return fake_load_backends(need_diarizer=need_diarizer)
-
-    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
+def test_start_no_diarization_skips_the_diarizer(tmp_path, backend_calls):
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -561,22 +441,13 @@ def test_start_no_diarization_skips_the_diarizer(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 0, result.output
-    assert calls["need_diarizer"] is False  # counts collapsed to 1 → no diarizer load
+    assert backend_calls["need_diarizer"] is False  # counts collapsed to 1 → no diarizer load
     entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
     assert {e["speaker"] for e in entries} == {"Local-1"}
 
 
-def test_start_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch):
-    calls = {}
-
-    def recording_load_backends(
-        *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_
-    ):
-        calls["need_diarizer"] = need_diarizer
-        return fake_load_backends(need_diarizer=need_diarizer)
-
-    monkeypatch.setattr(loaders, "load_backends", recording_load_backends)
-    _write_settings(tmp_path, "[speakers]\ndiarization = false\n")
+def test_start_settings_diarization_off_skips_the_diarizer(tmp_path, backend_calls):
+    write_settings("[speakers]\ndiarization = false\n")
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 
@@ -586,7 +457,7 @@ def test_start_settings_diarization_off_skips_the_diarizer(tmp_path, monkeypatch
     )
 
     assert result.exit_code == 0, result.output
-    assert calls["need_diarizer"] is False
+    assert backend_calls["need_diarizer"] is False
     assert "diarization: off" in result.output
     entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
     assert {e["speaker"] for e in entries} == {"Local-1"}
@@ -837,25 +708,18 @@ def test_doctor_runs_and_prints_checks():
 # ---- speaker profiles (Task 1c) -------------------------------------------
 
 
-def _isolate_store(tmp_path, monkeypatch):
-    """Point the profile store at a throwaway dir so tests never touch the real one."""
-    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "data"))
-
-
 def _patch_diarizer(monkeypatch, diarizer):
     monkeypatch.setattr(loaders, "load_diarizer", lambda: diarizer)
 
 
 def test_profiles_list_empty(tmp_path, monkeypatch):
-    _isolate_store(tmp_path, monkeypatch)
     result = CliRunner().invoke(cli.main, ["profiles", "list"])
     assert result.exit_code == 0, result.output
     assert "no speaker profiles yet" in result.output
 
 
 def test_profiles_enroll_then_list(tmp_path, monkeypatch):
-    _isolate_store(tmp_path, monkeypatch)
-    _patch_diarizer(monkeypatch, FakeDiarizer({"S0": [1.0, 0, 0]}))
+    _patch_diarizer(monkeypatch, EnrollmentDiarizer({"S0": [1.0, 0, 0]}))
     audio = tmp_path / "daniel.wav"
     write_wav(audio)
 
@@ -869,8 +733,7 @@ def test_profiles_enroll_then_list(tmp_path, monkeypatch):
 
 
 def test_profiles_enroll_duplicate_then_reinforce(tmp_path, monkeypatch):
-    _isolate_store(tmp_path, monkeypatch)
-    _patch_diarizer(monkeypatch, FakeDiarizer({"S0": [1.0, 0, 0]}))
+    _patch_diarizer(monkeypatch, EnrollmentDiarizer({"S0": [1.0, 0, 0]}))
     audio = tmp_path / "a.wav"
     write_wav(audio)
     CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
@@ -887,8 +750,7 @@ def test_profiles_enroll_duplicate_then_reinforce(tmp_path, monkeypatch):
 
 
 def test_profiles_enroll_multispeaker_needs_speaker_choice(tmp_path, monkeypatch):
-    _isolate_store(tmp_path, monkeypatch)
-    diar = FakeDiarizer(
+    diar = EnrollmentDiarizer(
         {"S0": [1.0, 0, 0], "S1": [0, 1.0, 0]},
         turns=[SpeakerTurn("S0", 0.0, 2.0), SpeakerTurn("S1", 2.0, 3.0)],
     )
@@ -909,8 +771,7 @@ def test_profiles_enroll_multispeaker_needs_speaker_choice(tmp_path, monkeypatch
 
 
 def test_profiles_rename_and_remove(tmp_path, monkeypatch):
-    _isolate_store(tmp_path, monkeypatch)
-    _patch_diarizer(monkeypatch, FakeDiarizer({"S0": [1.0, 0, 0]}))
+    _patch_diarizer(monkeypatch, EnrollmentDiarizer({"S0": [1.0, 0, 0]}))
     audio = tmp_path / "a.wav"
     write_wav(audio)
     CliRunner().invoke(cli.main, ["profiles", "enroll", "Speaker 1", str(audio)])
@@ -928,8 +789,7 @@ def test_profiles_rename_and_remove(tmp_path, monkeypatch):
 def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     # End-to-end: enroll Daniel, then a diarized transcribe relabels his cluster
     # to "Daniel" instead of the generic "Speaker 1"; --no-reid restores it.
-    _isolate_store(tmp_path, monkeypatch)
-    diar = FakeDiarizer({"S0": [1.0, 0, 0]})
+    diar = EnrollmentDiarizer({"S0": [1.0, 0, 0]})
     _patch_diarizer(monkeypatch, diar)
     audio = tmp_path / "m.wav"
     write_wav(audio)
@@ -939,7 +799,7 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
         loaders,
         "load_backends",
         lambda *, need_diarizer, asr_backend=None, asr_provider=None, announce=None, **_: (
-            FakeASR(),
+            CliASR(),
             None,
             diar,
         ),
@@ -1130,7 +990,7 @@ def test_record_audio_lands_in_the_meeting_folder(tmp_path, monkeypatch):
 
 
 def test_output_record_audio_setting_keeps_audio_without_a_flag(tmp_path, monkeypatch):
-    _write_settings(tmp_path, "[output]\nrecord_audio = true\n")
+    write_settings("[output]\nrecord_audio = true\n")
     result = _start_batch(tmp_path, monkeypatch)
     assert result.exit_code == 0, result.output
 
@@ -1139,7 +999,7 @@ def test_output_record_audio_setting_keeps_audio_without_a_flag(tmp_path, monkey
 
 
 def test_no_record_audio_opts_out_of_the_standing_default(tmp_path, monkeypatch):
-    _write_settings(tmp_path, "[output]\nrecord_audio = true\n")
+    write_settings("[output]\nrecord_audio = true\n")
     result = _start_batch(tmp_path, monkeypatch, "--no-record-audio")
     assert result.exit_code == 0, result.output
 
@@ -1328,15 +1188,8 @@ def test_load_backends_refuses_unknown_backend(monkeypatch):
 # proving once, not per field).
 
 
-def _write_settings(tmp_path, text):
-    """Write settings.toml into the isolated $STENOGRAF_DATA dir."""
-    data_dir = tmp_path / "steno-data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    (data_dir / "settings.toml").write_text(text, encoding="utf-8")
-
-
 def test_settings_formats_are_the_default_but_format_flag_wins(tmp_path, stub_backends):
-    _write_settings(tmp_path, '[transcript]\nformats = ["srt"]\n')
+    write_settings('[transcript]\nformats = ["srt"]\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1358,7 +1211,7 @@ def test_settings_formats_are_the_default_but_format_flag_wins(tmp_path, stub_ba
 def test_settings_output_dir_replaces_the_home_and_out_flag_wins(tmp_path, stub_backends):
     home = tmp_path / "configured-home"
     # as_posix(): a raw Windows path in a TOML basic string is invalid (\U…).
-    _write_settings(tmp_path, f'[output]\ndir = "{home.as_posix()}"\n')
+    write_settings(f'[output]\ndir = "{home.as_posix()}"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1379,8 +1232,7 @@ def test_settings_output_dir_replaces_the_home_and_out_flag_wins(tmp_path, stub_
 def test_settings_vocab_merges_with_flags(tmp_path, stub_backends):
     glossary_file = tmp_path / "glossary.txt"
     glossary_file.write_text("Idee\n", encoding="utf-8")
-    _write_settings(
-        tmp_path, f'[vocab]\nglossary_file = "{glossary_file.as_posix()}"\nattendees = ["Ada"]\n'
+    write_settings(f'[vocab]\nglossary_file = "{glossary_file.as_posix()}"\nattendees = ["Ada"]\n'
     )
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -1397,7 +1249,7 @@ def test_settings_vocab_merges_with_flags(tmp_path, stub_backends):
 
 
 def test_settings_missing_glossary_file_is_a_clean_error(tmp_path, stub_backends):
-    _write_settings(tmp_path, '[vocab]\nglossary_file = "/nonexistent/glossary.txt"\n')
+    write_settings('[vocab]\nglossary_file = "/nonexistent/glossary.txt"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1409,7 +1261,7 @@ def test_settings_missing_glossary_file_is_a_clean_error(tmp_path, stub_backends
 
 
 def test_broken_settings_fail_fast_with_a_clean_error(tmp_path, stub_backends):
-    _write_settings(tmp_path, '[vocab]\nglossry_file = "x"\n')
+    write_settings('[vocab]\nglossry_file = "x"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1430,7 +1282,7 @@ def test_settings_asr_backend_reaches_the_loader(tmp_path, monkeypatch):
         return fake_load_backends(need_diarizer=need_diarizer)
 
     monkeypatch.setattr(loaders, "load_backends", recording)
-    _write_settings(tmp_path, '[asr]\nbackend = "parakeet"\nprovider = "dml"\n')
+    write_settings('[asr]\nbackend = "parakeet"\nprovider = "dml"\n')
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1453,7 +1305,7 @@ def test_glossary_reaches_the_loader_for_decode_time_biasing(tmp_path, monkeypat
         return fake_load_backends(need_diarizer=need_diarizer)
 
     monkeypatch.setattr(loaders, "load_backends", recording)
-    _write_settings(tmp_path, "[asr]\nboost = 2.0\n")
+    write_settings("[asr]\nboost = 2.0\n")
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
@@ -1483,8 +1335,7 @@ def test_settings_profile_store_stays_off_the_transcript(tmp_path, stub_backends
     # The configured store must feed re-ID loading only: MeetingProfile serializes
     # into every transcript, and keeping machine-local paths out of shared files
     # is the settings file's founding rule.
-    _write_settings(
-        tmp_path, f'[speakers]\nprofile_store = "{tmp_path.as_posix()}/profiles.json"\n'
+    write_settings(f'[speakers]\nprofile_store = "{tmp_path.as_posix()}/profiles.json"\n'
     )
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
@@ -1497,7 +1348,7 @@ def test_settings_profile_store_stays_off_the_transcript(tmp_path, stub_backends
 
 
 def test_settings_show_reports_values_and_sources(tmp_path, monkeypatch):
-    _write_settings(tmp_path, '[transcript]\nformats = ["srt"]\n')
+    write_settings('[transcript]\nformats = ["srt"]\n')
 
     result = CliRunner().invoke(cli.main, ["settings", "show"])
 
@@ -1518,7 +1369,7 @@ def test_settings_show_reports_record_audio(tmp_path):
     # The one key that decides whether raw audio reaches disk: a run announces
     # it, but until then the report that promises the effective configuration
     # left it out entirely.
-    _write_settings(tmp_path, "[output]\nrecord_audio = true\n")
+    write_settings("[output]\nrecord_audio = true\n")
 
     result = CliRunner().invoke(cli.main, ["settings", "show"])
 
@@ -1559,7 +1410,7 @@ def test_settings_show_names_a_missing_file(tmp_path):
 
 
 def test_settings_show_broken_file_points_at_edit(tmp_path):
-    _write_settings(tmp_path, "[vocab]\nbad_key = 1\n")
+    write_settings("[vocab]\nbad_key = 1\n")
     result = CliRunner().invoke(cli.main, ["settings", "show"])
     assert result.exit_code != 0
     assert "bad_key" in result.output
