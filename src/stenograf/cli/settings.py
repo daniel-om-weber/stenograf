@@ -7,12 +7,12 @@ import click
 from stenograf.cli.run import _library_errors
 
 
-@click.group("settings")
-def settings_group() -> None:
+@click.group()
+def settings() -> None:
     """Inspect and edit the settings.toml defaults."""
 
 
-@settings_group.command("show")
+@settings.command("show")
 def settings_show() -> None:
     """Print the effective configuration and where each value comes from.
 
@@ -29,7 +29,7 @@ def settings_show() -> None:
         click.echo(line)
 
 
-@settings_group.command("edit")
+@settings.command("edit")
 def settings_edit() -> None:
     """Open settings.toml in $EDITOR and validate it on save.
 
@@ -52,9 +52,9 @@ def settings_edit() -> None:
     click.echo(f"{path} OK")
 
 
-@click.command("presets")
+@click.command()
 @_library_errors
-def presets_command() -> None:
+def presets() -> None:
     """List the meeting presets ([meetings.<name>] in settings.toml).
 
     A preset bundles what a *kind* of meeting sets — title, language,

@@ -23,7 +23,7 @@ def _echo_progress(message: str) -> None:
     click.echo(f"notes: {message}")
 
 
-@click.command("notes")
+@click.command()
 @click.argument(
     "meeting", required=False, type=click.Path(exists=True, path_type=Path), metavar="[PATH]"
 )
@@ -81,7 +81,7 @@ def _echo_progress(message: str) -> None:
     help="Skip the combined-note export even when settings.toml configures a dir.",
 )
 @_library_errors
-def notes_command(
+def notes(
     meeting: Path | None,
     last: bool,
     backend_name: str | None,
