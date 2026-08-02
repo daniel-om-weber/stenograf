@@ -41,17 +41,48 @@ pub const UNITS_PER_SAMPLE: i64 = 10_000_000 / SAMPLE_RATE as i64;
 /// (`capture.base.DEFAULT_FRAME_MS`).
 pub const FRAME_SAMPLES: usize = SAMPLE_RATE as usize / 5;
 
-/// Stamp/timeline disagreement absorbed rather than acted on (5 ms).
-///
-/// Packets arrive every ~10 ms and their stamps jitter by a fraction of that,
-/// so reacting to every difference would churn the timeline by a sample or two
-/// forever. Anything larger is a real gap (or a real overrun) and is treated as
-/// one — including slow drift between the device's clock and QPC, which
-/// accumulates until it crosses this line and is then corrected in one step.
-const GAP_TOLERANCE_UNITS: i64 = 50_000;
-
 pub const CHANNEL_MIC: u8 = 0;
 pub const CHANNEL_SYSTEM: u8 = 1;
+
+/// How often the system channel's silence is topped up, and how far behind
+/// real time that fill deliberately stops.
+///
+/// Both platforms' system taps deliver nothing at all while nothing renders
+/// (WASAPI loopback during render silence, a pulse monitor whose sink
+/// suspended), so the fill is what keeps the far-end reference tracking real
+/// time through quiet stretches. The lead has to exceed a packet's worst
+/// delivery jitter: audio filled over is audio placed late. 100 ms is an
+/// order of magnitude past the ~10 ms WASAPI packet cadence and 2.5× the
+/// 40 ms pulse fragment cadence, and it is also the most the reference can
+/// trail real time during silence — which the canceller's 0.5 s hold budget
+/// absorbs without reporting reference loss.
+#[cfg(any(windows, target_os = "linux"))]
+pub const FILL_TICK: std::time::Duration = std::time::Duration::from_millis(40);
+#[cfg(any(windows, target_os = "linux"))]
+pub const FILL_LEAD_UNITS: i64 = 1_000_000;
+
+/// Keep the system channel's reference tracking real time while nothing
+/// renders — the fill thread's whole body, shared by both backends; `now`
+/// is the backend's clock in the same 100-ns units its stamps use.
+#[cfg(any(windows, target_os = "linux"))]
+pub fn fill_silence(
+    framer: &std::sync::Mutex<Framer>,
+    sink: &FrameSink,
+    stop: &std::sync::atomic::AtomicBool,
+    now: impl Fn() -> i64,
+) -> Option<String> {
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        std::thread::sleep(FILL_TICK);
+        let filled = framer
+            .lock()
+            .expect("framer poisoned")
+            .fill_silence(now(), FILL_LEAD_UNITS, sink);
+        if let Err(err) = filled {
+            return Some(format!("could not write frames ({err})"));
+        }
+    }
+    None
+}
 
 /// The one writer of the frame stream: serializes records from every channel.
 ///
@@ -145,6 +176,16 @@ impl Write for Queued {
 }
 
 /// One channel's timeline: packets in, whole frames out.
+///
+/// `tolerance_units` is the stamp/timeline disagreement absorbed rather than
+/// acted on. Reacting to every difference would churn the timeline by a sample
+/// or two forever, so under it the sample count stays the authority; anything
+/// larger is a real gap (or a real overrun) and is treated as one — including
+/// slow drift between the stamp clock and the device's, which accumulates
+/// until it crosses the line and is then corrected in one step. Each backend
+/// declares its own (`GAP_TOLERANCE_UNITS`): the right value is an order of
+/// magnitude above that platform's stamp jitter, and the platforms disagree
+/// about that by two orders of magnitude.
 pub struct Framer {
     channel: u8,
     pending: Vec<i16>,
@@ -152,6 +193,7 @@ pub struct Framer {
     /// `None` until the channel anchors — on its first packet, or at
     /// construction for a channel that must exist from t=0 ([`Framer::anchored`]).
     next: Option<i64>,
+    tolerance_units: i64,
     warned_backwards: bool,
 }
 
@@ -160,8 +202,8 @@ impl Framer {
     ///
     /// Its timeline starts where its audio does; inventing leading silence
     /// would be a claim about audio nobody captured.
-    pub fn new(channel: u8) -> Self {
-        Self { channel, pending: Vec::new(), next: None, warned_backwards: false }
+    pub fn new(channel: u8, tolerance_units: i64) -> Self {
+        Self { channel, pending: Vec::new(), next: None, tolerance_units, warned_backwards: false }
     }
 
     /// A channel that exists from `at` whether or not it has delivered anything
@@ -173,8 +215,14 @@ impl Framer {
     /// arrive, then charges the wait to its reference-loss budget. Anchoring at
     /// the shared origin lets [`Framer::fill_silence`] deliver the digital
     /// silence that genuinely is at the endpoint.
-    pub fn anchored(channel: u8, at: i64) -> Self {
-        Self { channel, pending: Vec::new(), next: Some(at), warned_backwards: false }
+    pub fn anchored(channel: u8, at: i64, tolerance_units: i64) -> Self {
+        Self {
+            channel,
+            pending: Vec::new(),
+            next: Some(at),
+            tolerance_units,
+            warned_backwards: false,
+        }
     }
 
     /// Place one packet's samples at the device's stamp for its first sample.
@@ -187,9 +235,9 @@ impl Framer {
         let next = *self.next.get_or_insert(stamp);
         let gap = stamp - next;
         let mut complaint = None;
-        if gap > GAP_TOLERANCE_UNITS {
+        if gap > self.tolerance_units {
             self.append(&vec![0i16; (gap / UNITS_PER_SAMPLE) as usize]);
-        } else if gap < -GAP_TOLERANCE_UNITS && !self.warned_backwards {
+        } else if gap < -self.tolerance_units && !self.warned_backwards {
             self.warned_backwards = true;
             complaint = Some(format!(
                 "channel {} delivered a stamp {:.0} ms behind its own timeline; \
@@ -259,6 +307,9 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// The Windows tolerance; the tests' gaps and jitters are scaled to it.
+    const TOL: i64 = 50_000;
+
     /// A sink that keeps the bytes, and the parser the Python side implements.
     #[derive(Clone, Default)]
     struct Recorder(Arc<Mutex<Vec<u8>>>);
@@ -321,7 +372,7 @@ mod tests {
     #[test]
     fn emits_whole_frames_only_until_flushed() {
         let (sink, recorder) = sink();
-        let mut framer = Framer::new(CHANNEL_MIC);
+        let mut framer = Framer::new(CHANNEL_MIC, TOL);
         framer.push(0, &vec![7i16; FRAME_SAMPLES + 100], &sink).unwrap();
 
         let records = parse(&recorder);
@@ -340,7 +391,7 @@ mod tests {
     fn the_first_packets_stamp_becomes_the_channels_origin() {
         let (sink, recorder) = sink();
         // t0 is 0, but the mic's first packet is stamped a second in.
-        let mut framer = Framer::new(CHANNEL_MIC);
+        let mut framer = Framer::new(CHANNEL_MIC, TOL);
         framer.push(10_000_000, &vec![1i16; FRAME_SAMPLES], &sink).unwrap();
         assert_eq!(parse(&recorder)[0].timestamp, 1.0);
     }
@@ -348,7 +399,7 @@ mod tests {
     #[test]
     fn a_gap_in_the_capture_is_filled_so_later_audio_keeps_its_instant() {
         let (sink, recorder) = sink();
-        let mut framer = Framer::new(CHANNEL_SYSTEM);
+        let mut framer = Framer::new(CHANNEL_SYSTEM, TOL);
         framer.push(0, &[1i16; 1600], &sink).unwrap(); // 100 ms
         // The next packet is stamped 500 ms in: 400 ms of the capture is missing.
         framer.push(5_000_000, &[2i16; 1600], &sink).unwrap();
@@ -365,7 +416,7 @@ mod tests {
     #[test]
     fn jitter_under_the_tolerance_does_not_move_the_timeline() {
         let (sink, recorder) = sink();
-        let mut framer = Framer::new(CHANNEL_MIC);
+        let mut framer = Framer::new(CHANNEL_MIC, TOL);
         for packet in 0..20 {
             // Each packet is 10 ms but stamped 1 ms late — jitter, not a gap.
             let stamp = packet * 100_000 + 10_000;
@@ -379,7 +430,7 @@ mod tests {
     #[test]
     fn a_backwards_stamp_is_reported_once_and_never_acted_on() {
         let (sink, _recorder) = sink();
-        let mut framer = Framer::new(CHANNEL_MIC);
+        let mut framer = Framer::new(CHANNEL_MIC, TOL);
         framer.push(10_000_000, &[1i16; 160], &sink).unwrap();
         let first = framer.push(0, &[1i16; 160], &sink).unwrap();
         let second = framer.push(0, &[1i16; 160], &sink).unwrap();
@@ -390,7 +441,7 @@ mod tests {
     #[test]
     fn an_anchored_channel_delivers_silence_it_never_received() {
         let (sink, recorder) = sink();
-        let mut framer = Framer::anchored(CHANNEL_SYSTEM, 0);
+        let mut framer = Framer::anchored(CHANNEL_SYSTEM, 0, TOL);
         // Nothing has rendered for a second; the tap has produced no packets.
         framer.fill_silence(10_000_000, 1_000_000, &sink).unwrap();
 
@@ -403,7 +454,7 @@ mod tests {
     #[test]
     fn a_delivering_channel_is_never_filled() {
         let (sink, recorder) = sink();
-        let mut framer = Framer::anchored(CHANNEL_SYSTEM, 0);
+        let mut framer = Framer::anchored(CHANNEL_SYSTEM, 0, TOL);
         framer.push(0, &[5i16; 16_000], &sink).unwrap(); // a second of real audio
         framer.fill_silence(10_000_000, 1_000_000, &sink).unwrap();
         framer.flush(&sink).unwrap();
@@ -416,7 +467,7 @@ mod tests {
     #[test]
     fn frames_stay_contiguous_across_a_fill() {
         let (sink, recorder) = sink();
-        let mut framer = Framer::anchored(CHANNEL_SYSTEM, 0);
+        let mut framer = Framer::anchored(CHANNEL_SYSTEM, 0, TOL);
         framer.fill_silence(5_000_000, 1_000_000, &sink).unwrap();
         framer.push(5_000_000, &[9i16; 1600], &sink).unwrap();
         framer.flush(&sink).unwrap();

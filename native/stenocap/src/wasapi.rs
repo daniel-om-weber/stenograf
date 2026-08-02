@@ -24,8 +24,8 @@
 //!   correcting; assuming they should agree in sign reintroduces the bug this
 //!   file exists to remove.
 //! - **Loopback delivers nothing while nothing renders.** There is no silent
-//!   packet to read; the tap simply goes quiet. [`Framer::fill_silence`] is what
-//!   covers it, driven from here on a timer.
+//!   packet to read; the tap simply goes quiet. The shared silence filler
+//!   (`frame::fill_silence`, ticking on [`now_units`]) is what covers it.
 //!
 //! Everything is timer-driven. Event-driven buffering is not available for a
 //! loopback stream, and one polling loop for both channels is less machinery
@@ -64,17 +64,12 @@ const BUFFER_DURATION_HNS: i64 = 3_000_000;
 /// How often each pump asks for packets. WASAPI's own period is ~10 ms.
 const POLL: Duration = Duration::from_millis(5);
 
-/// How often the system channel's silence is topped up, and how far behind real
-/// time that fill deliberately stops.
+/// Stamp/timeline disagreement absorbed rather than acted on (5 ms).
 ///
-/// The lead has to exceed a packet's worst delivery jitter: audio filled over
-/// is audio placed late. Loopback stamps *lead* receipt, so in steady state
-/// there is no risk at all — 100 ms is margin against a stalled pump, an order
-/// of magnitude more than the ~10 ms observed. It is also the most the far-end
-/// reference can trail real time during silence, which the canceller's 0.5 s
-/// hold budget absorbs without reporting reference loss.
-const FILL_TICK: Duration = Duration::from_millis(40);
-const FILL_LEAD_UNITS: i64 = 1_000_000;
+/// Packets arrive every ~10 ms and their QPC stamps jitter by a fraction of a
+/// millisecond (±0.1 ms measured, `eval/wasapi_timestamps.py`), so this sits
+/// well above the noise while staying far under a real dropout.
+pub const GAP_TOLERANCE_UNITS: i64 = 50_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tap {
@@ -324,24 +319,5 @@ pub fn pump(
 
     let _ = unsafe { stream.client.Stop() };
     outcome
-}
-
-/// Keep the system channel's reference tracking real time while nothing renders.
-pub fn fill_silence(
-    framer: Arc<Mutex<Framer>>,
-    sink: Arc<FrameSink>,
-    stop: Arc<AtomicBool>,
-) -> Option<String> {
-    while !stop.load(Ordering::Relaxed) {
-        std::thread::sleep(FILL_TICK);
-        let filled = framer
-            .lock()
-            .expect("framer poisoned")
-            .fill_silence(now_units(), FILL_LEAD_UNITS, &sink);
-        if let Err(err) = filled {
-            return Some(format!("could not write frames ({err})"));
-        }
-    }
-    None
 }
 

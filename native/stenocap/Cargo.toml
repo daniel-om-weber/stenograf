@@ -6,10 +6,10 @@ description = "Capture helper: mic + system audio on one device clock, framed PC
 license = "MIT"
 publish = false
 
-# The Windows backend is the only one built today; the Linux one (PipeWire /
-# PulseAudio) joins this crate at step 5 of PLAN-CAPTURE-HELPER.md. macOS keeps
-# its Swift helper in ../stenocap-macos — process taps have no Rust binding and
-# the binary's signature is load-bearing there.
+# Two backends: Windows (WASAPI) and Linux (the PulseAudio client protocol,
+# which PipeWire speaks natively through pipewire-pulse). macOS keeps its Swift
+# helper in ../stenocap-macos — process taps have no Rust binding and the
+# binary's signature is load-bearing there.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Devices_FunctionDiscovery",
@@ -22,6 +22,14 @@ windows = { version = "0.62", features = [
     # name, which is the whole of `--devices`.
     "Win32_UI_Shell_PropertiesSystem",
 ] }
+
+# libpulse (LGPL, linked dynamically — present on any desktop with audio) is
+# the one client library both sound servers speak: PipeWire ships
+# pipewire-pulse precisely so pulse clients need no second path. libc is for
+# CLOCK_MONOTONIC (the shared stamp clock) and for shielding SIGINT.
+[target.'cfg(target_os = "linux")'.dependencies]
+libpulse-binding = "2"
+libc = "0.2"
 
 [profile.release]
 lto = true
