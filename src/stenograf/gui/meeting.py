@@ -40,8 +40,8 @@ from PySide6.QtCore import QTimer, Signal, Slot
 
 from stenograf.captions import LIVE_LABEL, CaptionStream
 from stenograf.gui.app import Screen
-from stenograf.transcript import Transcript
-from stenograf.view import LiveView, clock, profile_label
+from stenograf.transcript import Transcript, format_timestamp
+from stenograf.view import LiveView, profile_label
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -253,7 +253,7 @@ class MeetingScreen(Screen, LiveView):
     # -- the 1 Hz tick -----------------------------------------------------
 
     def _tick(self) -> None:
-        self.set(elapsed=clock(time.monotonic() - self._started))
+        self.set(elapsed=format_timestamp(time.monotonic() - self._started))
         if self._captions.flush_if_idle():  # a stretch of speech ended
             self._render_tails()
 
@@ -353,7 +353,7 @@ class MeetingScreen(Screen, LiveView):
             [
                 {
                     "speaker": entry.speaker,
-                    "time": clock(entry.start),
+                    "time": format_timestamp(entry.start),
                     "text": entry.text,
                     "provisional": entry.provisional,
                 }

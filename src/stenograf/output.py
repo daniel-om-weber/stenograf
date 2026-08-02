@@ -75,6 +75,11 @@ def default_output_home() -> Path:
     return documents_dir() / "Meetings"
 
 
+def output_home(settings: Settings) -> Path:
+    """The output home in force: ``[output] dir`` or the platform default."""
+    return settings.output.dir or default_output_home()
+
+
 def allocate_meeting_dir(home: Path, created_at: datetime) -> Path:
     """Pick this meeting's directory under ``home``: ``meeting-YYYYMMDD-HHMMSS``.
 
@@ -192,7 +197,7 @@ def prepare_output(
                 )
         out_dir = out
     else:
-        out_dir = allocate_meeting_dir(settings.output.dir or default_output_home(), created_at)
+        out_dir = allocate_meeting_dir(output_home(settings), created_at)
     return out_dir, TRANSCRIPT_STEM, out_dir / AUDIO_NAME
 
 

@@ -211,6 +211,47 @@ def _attribute(
     return entries
 
 
+def assemble_transcript(
+    entries: list[TranscriptEntry],
+    *,
+    profile: MeetingProfile,
+    language: Language | None,
+    parameters_for: Callable[[Language | None], ResolvedParameters],
+    glossary_threshold: float | None = None,
+    on_language: Callable[[Language], None] | None = None,
+) -> Transcript:
+    """The shared finalize post-steps: glossary snap → language resolve →
+    parameter provenance → :class:`Transcript`.
+
+    Applied by :meth:`MeetingRecorder.finalize` and :func:`finalize_file`
+    alike, so a file transcribe and a live meeting produce the same artifact
+    shape. The glossary snap runs on the authoritative transcript only
+    (checkpoints stay raw). ``language`` is the *configured* language
+    (``None`` = detect over the finalized text; a detection fires
+    ``on_language``); ``parameters_for`` builds the provenance record from the
+    resolved language, since the two callers record speakers differently
+    (per-channel counts vs one ``"audio"`` channel).
+    """
+    threshold = DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
+    entries = apply_glossary(
+        entries,
+        glossary=profile.glossary,
+        attendee_names=profile.attendee_names,
+        threshold=threshold,
+    )
+    resolved = language
+    if resolved is None:
+        resolved = detect_language(" ".join(e.text for e in entries))
+        if resolved is not None and on_language is not None:
+            on_language(resolved)
+    return Transcript(
+        language=resolved,
+        profile=profile,
+        entries=entries,
+        parameters=parameters_for(resolved),
+    )
+
+
 def finalize_file(
     samples: np.ndarray,
     *,
@@ -226,7 +267,7 @@ def finalize_file(
     """One mixed audio stream → a finished transcript (``steno transcribe``).
 
     Runs the same accuracy core a meeting's stop runs (:func:`finalize_channel`)
-    followed by the same post-steps :meth:`MeetingRecorder.finalize` applies —
+    followed by the same post-steps (:func:`assemble_transcript`) —
     display relabel, glossary snap, language detection, parameter provenance —
     so a file transcribe and a live meeting produce the same artifact shape.
     One un-split stream has no local/remote model, so speakers get the neutral
@@ -246,21 +287,17 @@ def finalize_file(
             on_progress=on_progress,
         )
     )
-    threshold = DEFAULT_THRESHOLD if glossary_threshold is None else glossary_threshold
-    entries = apply_glossary(
+    detected = len({e.speaker for e in entries})
+    return assemble_transcript(
         entries,
-        glossary=profile.glossary,
-        attendee_names=profile.attendee_names,
-        threshold=threshold,
+        profile=profile,
+        language=profile.language,
+        glossary_threshold=glossary_threshold,
+        parameters_for=lambda resolved: ResolvedParameters(
+            language=resolve_value(profile.language, resolved),
+            speakers={"audio": resolve_value(num_speakers, detected)},
+        ),
     )
-    language = profile.language
-    if language is None:
-        language = detect_language(" ".join(e.text for e in entries))
-    parameters = ResolvedParameters(
-        language=resolve_value(profile.language, language),
-        speakers={"audio": resolve_value(num_speakers, len({e.speaker for e in entries}))},
-    )
-    return Transcript(language=language, profile=profile, entries=entries, parameters=parameters)
 
 
 def _shift(seg: Segment, offset: float) -> Segment:

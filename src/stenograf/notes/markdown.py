@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import re
 
+from stenograf.notes.template import fence_walk, is_fence
 from stenograf.notes.template import h1 as _outside_h1
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 _OPEN_THINK = re.compile(r"<think>.*\Z", re.DOTALL)
-_FENCE_LINE = re.compile(r"^\s*(```|~~~)")
 _BARE_FENCE = re.compile(r"^\s*(```|~~~)\s*$")
 _H1_LINE = re.compile(r"^#\s+(.+?)\s*#*\s*$")
 
@@ -65,12 +65,8 @@ def unwrap_markdown(raw: str) -> tuple[str | None, str]:
 
 def _from_first_h1(text: str) -> str:
     lines = text.splitlines()
-    in_fence = False
-    for i, line in enumerate(lines):
-        if _FENCE_LINE.match(line):
-            in_fence = not in_fence
-            continue
-        if not in_fence and _H1_LINE.match(line):
+    for i, (line, marker, in_fence) in enumerate(fence_walk(text)):
+        if not marker and not in_fence and _H1_LINE.match(line):
             return "\n".join(lines[i:])
     return text
 
@@ -80,7 +76,7 @@ def _fenced_block_with_h1(text: str) -> str | None:
     lines = text.splitlines()
     block: list[str] | None = None
     for line in lines:
-        if _FENCE_LINE.match(line):
+        if is_fence(line):
             if block is None:
                 block = []
                 continue
@@ -100,7 +96,7 @@ def _fenced_block_with_h1(text: str) -> str | None:
 def _strip_trailing_orphan_fence(text: str) -> str:
     lines = text.rstrip().splitlines()
     if lines and _BARE_FENCE.match(lines[-1]):
-        markers = sum(1 for line in lines if _FENCE_LINE.match(line))
+        markers = sum(1 for line in lines if is_fence(line))
         if markers % 2 == 1:
             lines.pop()
     return "\n".join(lines).rstrip()

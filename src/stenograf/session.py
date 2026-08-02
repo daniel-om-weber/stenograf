@@ -50,10 +50,15 @@ from stenograf.config import (
     resolve_value,
 )
 from stenograf.diarization.base import Diarizer
-from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
-from stenograf.lid import detect_language
+from stenograf.glossary import DEFAULT_THRESHOLD
 from stenograf.live import StreamingUpdate, WindowedLiveDecoder
-from stenograf.pipeline import SpeakerResolver, finalize_channel, group_words, relabel_speakers
+from stenograf.pipeline import (
+    SpeakerResolver,
+    assemble_transcript,
+    finalize_channel,
+    group_words,
+    relabel_speakers,
+)
 from stenograf.transcript import Transcript, TranscriptEntry
 from stenograf.vad import SileroVAD
 from stenograf.view import LiveView
@@ -1075,24 +1080,20 @@ class MeetingRecorder:
         counts: list[SpeakerCount],
         view: LiveView,
     ) -> Transcript:
-        """Interleave the channels, snap the glossary, resolve language/provenance."""
+        """Interleave the channels, then run the shared finalize post-steps
+        (:func:`~stenograf.pipeline.assemble_transcript`): glossary snap,
+        language resolve (an explicit setting wins, else LID over the
+        finalized text), parameter provenance."""
         entries = [entry for plan in plans for entry in by_channel.get(plan.channel, [])]
-        interleaved = interleave(entries)
-        # Snap domain vocabulary / attendee names to canonical spelling on the
-        # authoritative transcript only (checkpoints stay raw).
-        interleaved = apply_glossary(
-            interleaved,
-            glossary=self.profile.glossary,
-            attendee_names=self.profile.attendee_names,
-            threshold=self.glossary_threshold,
-        )
-        language = self._resolve_language(interleaved, view=view)
-        parameters = resolve_parameters(self.profile, language=language, speaker_counts=counts)
-        return Transcript(
-            language=language,
+        return assemble_transcript(
+            interleave(entries),
             profile=self.profile,
-            entries=interleaved,
-            parameters=parameters,
+            language=self.language,
+            glossary_threshold=self.glossary_threshold,
+            parameters_for=lambda resolved: resolve_parameters(
+                self.profile, language=resolved, speaker_counts=counts
+            ),
+            on_language=view.language,
         )
 
     def _finalize_channel_safe(
@@ -1165,22 +1166,6 @@ class MeetingRecorder:
         on-stop :meth:`finalize`, over the authoritative text.
         """
         return Transcript(language=self.language, profile=self.profile, entries=interleave(entries))
-
-    def _resolve_language(
-        self,
-        entries: list[TranscriptEntry],
-        *,
-        view: LiveView,
-    ) -> Language | None:
-        """Resolve the meeting language: an explicit user setting always wins,
-        else LID over the finalized text. The
-        result rides on the returned transcript, never on the recorder."""
-        if self.language is not None:
-            return self.language
-        detected = detect_language(" ".join(e.text for e in entries))
-        if detected is not None:
-            view.language(detected)
-        return detected
 
 
 def _reference_gap(provider: CaptureProvider) -> float | None:

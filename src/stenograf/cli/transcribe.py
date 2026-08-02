@@ -352,13 +352,9 @@ def transcribe(
 
 def _echo_view():
     """The CLI's view for library calls: status to stdout, warnings to stderr."""
-    from stenograf.view import LiveView
+    from stenograf.view import CallbackView
 
-    class _StatusEcho(LiveView):
-        def status(self, message: str) -> None:
-            click.echo(message)
-
-        def error(self, message: str) -> None:
-            click.echo(f"warning: {message}", err=True)
-
-    return _StatusEcho()
+    return CallbackView(
+        on_status=click.echo,
+        on_error=lambda message: click.echo(f"warning: {message}", err=True),
+    )

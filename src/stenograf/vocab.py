@@ -10,6 +10,7 @@ about what a run's terms are.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from stenograf.settings import SettingsError
@@ -80,3 +81,23 @@ def read_glossary_lines(path: Path, *, source: str | None = None) -> list[str]:
         if line:
             terms.append(line)
     return terms
+
+
+def attendee_name_forms(names: Iterable[str]) -> list[str]:
+    """Each attendee's full name plus each of its parts.
+
+    A name is usually misheard one part at a time, so both vocabulary layers
+    register the parts individually — and the full name too: the biasing
+    tree's phrase reward grows with depth, and the glossary's whole-name match
+    wins where both parts drifted. The one expansion rule, shared so the
+    decoder and the post-correction can never disagree about a name's forms.
+    """
+    forms: list[str] = []
+    for name in names:
+        parts = name.split()
+        if not parts:
+            continue
+        forms.append(name)
+        if len(parts) > 1:
+            forms.extend(parts)
+    return forms

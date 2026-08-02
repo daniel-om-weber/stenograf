@@ -31,7 +31,7 @@ from stenograf.captions import LIVE_LABEL, CaptionStream
 from stenograf.capture.base import Channel
 from stenograf.config import Language, MeetingProfile
 from stenograf.live import StreamingUpdate
-from stenograf.transcript import Transcript
+from stenograf.transcript import Transcript, format_timestamp
 
 
 class LiveView:
@@ -136,7 +136,8 @@ class PlainLiveView(LiveView):
             remainder = open_text[self._printed :]
             if remainder:
                 if self._printed == 0:
-                    remainder = f"[{clock(self._start)}] {LIVE_LABEL[channel]}: {remainder}"
+                    stamp = format_timestamp(self._start)
+                    remainder = f"[{stamp}] {LIVE_LABEL[channel]}: {remainder}"
                 self._echo(remainder, nl=False)
                 self._printed = len(open_text)
 
@@ -177,18 +178,50 @@ class PlainLiveView(LiveView):
         remainder = text[self._printed :]
         if remainder and self._printed == 0:
             # The whole line arrived and flushed within one commit.
-            remainder = f"[{clock(self._start)}] {LIVE_LABEL[channel]}: {remainder}"
+            stamp = format_timestamp(self._start)
+            remainder = f"[{stamp}] {LIVE_LABEL[channel]}: {remainder}"
         if remainder:
             self._echo(remainder, nl=False)
         self._echo("")
         self._printed = 0
 
 
-def clock(seconds: float) -> str:
-    """``m:ss`` (``h:mm:ss`` past an hour) — timestamps and elapsed time alike."""
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:d}:{s:02d}"
+class CallbackView(LiveView):
+    """A LiveView over plain callables — for a UI whose "view" is one label,
+    stream, or list.
+
+    ``on_status`` receives status lines, ``on_error`` the error lines
+    (defaulting to ``on_status``), ``on_update`` the raw worker updates; a
+    detected language renders as a ``detected language: <code>`` status line.
+    The CLI's and flow's one-off echo shims are all constructions of this one
+    class, presentation living in the callables they pass.
+    """
+
+    def __init__(
+        self,
+        on_update: Callable[[Channel, StreamingUpdate], None] | None = None,
+        on_status: Callable[[str], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
+    ) -> None:
+        self._on_update = on_update
+        self._on_status = on_status
+        self._on_error = on_error if on_error is not None else on_status
+
+    def update(self, channel: Channel, update: StreamingUpdate) -> None:
+        if self._on_update is not None:
+            self._on_update(channel, update)
+
+    def status(self, message: str) -> None:
+        if self._on_status is not None:
+            self._on_status(message)
+
+    def language(self, language: Language) -> None:
+        if self._on_status is not None:
+            self._on_status(f"detected language: {language.value}")
+
+    def error(self, message: str) -> None:
+        if self._on_error is not None:
+            self._on_error(message)
 
 
 def profile_label(profile: MeetingProfile) -> str:

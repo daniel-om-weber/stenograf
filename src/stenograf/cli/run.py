@@ -185,16 +185,12 @@ def _finish_run(
 def _notes_echo_view() -> LiveView:
     """The notes tail's CLI presentation: progress to stdout, problems yellow
     to stderr (the transcript already stands, so nothing here is fatal)."""
-    from stenograf.view import LiveView
+    from stenograf.view import CallbackView
 
-    class _NotesEcho(LiveView):
-        def status(self, message: str) -> None:
-            click.echo(message)
-
-        def error(self, message: str) -> None:
-            click.secho(message, fg="yellow", err=True)
-
-    return _NotesEcho()
+    return CallbackView(
+        on_status=click.echo,
+        on_error=lambda message: click.secho(message, fg="yellow", err=True),
+    )
 
 
 def _parse_formats(spec: str) -> list[str]:

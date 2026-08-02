@@ -79,7 +79,7 @@ def _settings_check() -> Check:
     fixed — the documents folder is localised on Linux, so a user whose meetings
     are in ``~/Dokumente`` needs somewhere to read that off instead of guessing.
     """
-    from stenograf.output import default_output_home
+    from stenograf.output import output_home
     from stenograf.settings import SettingsError, load_settings, settings_path
 
     path = settings_path()
@@ -87,7 +87,7 @@ def _settings_check() -> Check:
         settings = load_settings()
     except SettingsError as exc:
         return Check(name="Settings", ok=False, detail=str(exc))
-    home = settings.output.dir or default_output_home()
+    home = output_home(settings)
     state = "OK" if path.exists() else "not present — all defaults"
     return Check(name="Settings", ok=True, detail=f"{path} {state}; meetings → {home}")
 

@@ -91,10 +91,10 @@ class _Term:
 def build_terms(glossary: Iterable[str] = (), attendee_names: Iterable[str] = ()) -> list[_Term]:
     """Compile canonical terms from a glossary and attendee names.
 
-    Attendee names are registered both whole (``"Daniel Weber"``) and per token
-    (``"Daniel"``, ``"Weber"``), since a name is usually mis-transcribed one part
-    at a time. Terms are de-duplicated by their match key (first spelling wins),
-    and terms too short to correct safely are dropped.
+    Attendee names expand through :func:`stenograf.vocab.attendee_name_forms`
+    (whole and per part — one rule shared with decode-time biasing). Terms are
+    de-duplicated by their match key (first spelling wins), and terms too
+    short to correct safely are dropped.
 
     A term's capitalization is treated as *information*, exactly as
     ``asr.biasing.surface_forms`` treats it: capitals in the written term are a
@@ -102,6 +102,8 @@ def build_terms(glossary: Iterable[str] = (), attendee_names: Iterable[str] = ()
     while an all-lowercase term carries no case information at all and must not
     overwrite the case the model chose — see :func:`_recase`.
     """
+    from stenograf.vocab import attendee_name_forms
+
     terms: dict[str, _Term] = {}
 
     def add(phrase: str) -> None:
@@ -115,10 +117,8 @@ def build_terms(glossary: Iterable[str] = (), attendee_names: Iterable[str] = ()
 
     for phrase in glossary:
         add(phrase)
-    for name in attendee_names:
-        add(name)
-        for token in name.split():
-            add(token)
+    for form in attendee_name_forms(attendee_names):
+        add(form)
     return list(terms.values())
 
 

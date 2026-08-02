@@ -18,7 +18,11 @@ from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.capture.base import SAMPLE_RATE, AudioFrame, CaptureProvider, Channel
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 from stenograf.vad import SpeechSegment
-from stenograf.view import LiveView
+
+# Re-exported: the library's callable-backed view is exactly the test double
+# the session tests need (update/status forward; language/error fold onto
+# on_status).
+from stenograf.view import CallbackView  # noqa: F401
 
 # Shell-level overrides a developer's environment may carry; any one of them
 # would give that machine a different run than CI, so isolation clears them.
@@ -66,32 +70,6 @@ def write_settings(body: str) -> Path:
     return path
 
 
-class CallbackView(LiveView):
-    """A LiveView over plain test callbacks (the orchestrator is view-only).
-
-    ``update``/``status`` forward to their callback; ``language``/``error``
-    fold onto ``on_status`` as text so a status-collecting test sees them too.
-    """
-
-    def __init__(self, on_update=None, on_status=None) -> None:
-        self._on_update = on_update
-        self._on_status = on_status
-
-    def update(self, channel, update) -> None:
-        if self._on_update is not None:
-            self._on_update(channel, update)
-
-    def status(self, message: str) -> None:
-        if self._on_status is not None:
-            self._on_status(message)
-
-    def language(self, language) -> None:
-        if self._on_status is not None:
-            self._on_status(f"detected language: {language.value}")
-
-    def error(self, message: str) -> None:
-        if self._on_status is not None:
-            self._on_status(message)
 
 
 class FakeASR(ASRBackend):

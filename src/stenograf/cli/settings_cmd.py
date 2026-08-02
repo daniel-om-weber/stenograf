@@ -19,20 +19,14 @@ def settings_show() -> None:
     Sources: an environment override, settings.toml, or the built-in default.
     (CLI flags outrank all three but are per-run, so they never appear here.)
     """
-    from stenograf.settings import SettingsError, load_settings, settings_path, settings_rows
+    from stenograf.flow import settings_report
 
-    path = settings_path()
-    suffix = "" if path.exists() else " (not present — all defaults)"
-    click.echo(f"settings: {path}{suffix}")
-    try:
-        settings = load_settings()
-    except SettingsError as exc:
-        raise click.ClickException(f"{exc} — fix it with `steno settings edit`") from exc
-    for table, rows in settings_rows(settings):
-        click.echo(f"\n[{table}]")
-        width = max(len(key) for key, _, _ in rows)
-        for key, value, source in rows:
-            click.echo(f"  {key:<{width}} = {value}  ({source})")
+    lines, ok = settings_report()
+    if not ok:
+        click.echo(lines[0])  # the settings-path header still helps
+        raise click.ClickException(f"{lines[-1]} — fix it with `steno settings edit`")
+    for line in lines:
+        click.echo(line)
 
 
 @settings_group.command("edit")

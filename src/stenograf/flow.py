@@ -64,7 +64,7 @@ from stenograf.settings import (
     settings_rows,
 )
 from stenograf.transcript import DEFAULT_FORMATS, Transcript
-from stenograf.view import LiveView
+from stenograf.view import CallbackView, LiveView
 from stenograf.vocab import collect_terms
 
 if TYPE_CHECKING:
@@ -532,9 +532,7 @@ def transcribe_recording(
     Blocking; meant for a worker thread. Every failure raises."""
     settings = load_settings()
     glossary_terms, attendee_names = collect_terms((), None, (), vocab=settings.vocab)
-    out_dir = output.allocate_meeting_dir(
-        settings.output.dir or output.default_output_home(), datetime.now()
-    )
+    out_dir = output.allocate_meeting_dir(output.output_home(settings), datetime.now())
     write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)
 
     split_pcms, _correlation = resolve_split_channels(audio_file, "auto")
@@ -551,19 +549,13 @@ def transcribe_recording(
         duration = len(split_pcms[0]) / SAMPLE_RATE
         on_status("2 voice channels — transcribing per channel…")
 
-        class _StatusView(LiveView):
-            """Routes the split-channel finalize's status lines to ``on_status``."""
-
-            def status(self, message: str) -> None:
-                on_status(message)
-
-            def error(self, message: str) -> None:
-                on_status(f"warning: {message}")
-
+        status_view = CallbackView(
+            on_status=on_status, on_error=lambda m: on_status(f"warning: {m}")
+        )
         result, elapsed = transcribe_split_channels(
             *split_pcms,
             profile=profile,
-            view=_StatusView(),
+            view=status_view,
             use_reid=True,
             reid_threshold=settings.speakers.reid_threshold,
             glossary_threshold=settings.vocab.glossary_threshold,
@@ -649,10 +641,9 @@ def notes_home() -> Path:
 
     Tolerates a broken settings.toml (falls back to the default home) — a picker
     that refuses to open is worse than one pointing at the standard folder."""
-    home = None
     with contextlib.suppress(Exception):  # a broken settings.toml
-        home = load_settings().output.dir
-    return home or output.default_output_home()
+        return output.output_home(load_settings())
+    return output.default_output_home()
 
 
 def generate_notes_for(

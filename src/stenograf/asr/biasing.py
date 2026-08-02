@@ -291,23 +291,13 @@ def surface_forms(term: str) -> list[str]:
 
 
 def boost_terms(glossary: Iterable[str], attendee_names: Iterable[str] = ()) -> list[str]:
-    """Everything worth boosting for a run: the glossary, each attendee's full
-    name, and each part of it.
+    """Everything worth boosting for a run: the glossary, plus every attendee
+    name form (:func:`stenograf.vocab.attendee_name_forms` — whole and per
+    part, one rule shared with the post-hoc glossary)."""
+    from stenograf.vocab import attendee_name_forms
 
-    Names are registered whole *and* per part because a name is usually misheard
-    one part at a time — the same reasoning ``stenograf.glossary.build_terms``
-    applies to post-correction. Registering the full name too is not redundant:
-    a phrase's reward grows with its depth, so "Ada Lovelace" pulls the decoder
-    through the surname far harder than "Lovelace" alone can.
-    """
     terms: list[str] = [term for term in glossary if term.strip()]
-    for name in attendee_names:
-        if not name.strip():
-            continue
-        terms.append(name)
-        parts = name.split()
-        if len(parts) > 1:
-            terms.extend(parts)
+    terms.extend(attendee_name_forms(attendee_names))
     return terms
 
 

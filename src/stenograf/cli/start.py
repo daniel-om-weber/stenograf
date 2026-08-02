@@ -376,17 +376,10 @@ def start(
 
 def _batch_view() -> LiveView:
     """Batch-mode sink: notices echo indented under the "capturing" line."""
-    from stenograf.view import LiveView
+    from stenograf.view import CallbackView
 
-    class _BatchEcho(LiveView):
-        def status(self, message: str) -> None:
-            if message:  # "" is a screen's clear-the-label event, not a line
-                click.echo(f"  {message}")
-
-        def language(self, language: Language) -> None:
-            click.echo(f"  detected language: {language.value}")
-
-        def error(self, message: str) -> None:
+    def indent(message: str) -> None:
+        if message:  # "" is a screen's clear-the-label event, not a line
             click.echo(f"  {message}")
 
-    return _BatchEcho()
+    return CallbackView(on_status=indent)

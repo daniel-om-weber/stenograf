@@ -11,6 +11,7 @@ a separate instruction (:mod:`.prompt`).
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 DEFAULT_TEMPLATE = """\
 # <Short, specific meeting title derived from the content>
@@ -42,6 +43,27 @@ _FENCE = re.compile(r"^\s*(```|~~~)")
 _H1 = re.compile(r"^#\s+(.+?)\s*#*\s*$")
 
 
+def is_fence(line: str) -> bool:
+    """Whether ``line`` is a code-fence marker (``` or ~~~)."""
+    return _FENCE.match(line) is not None
+
+
+def fence_walk(text: str) -> Iterator[tuple[str, bool, bool]]:
+    """``(line, is_marker, in_fence)`` per line — the ONE fence-state walk.
+
+    Every markdown reader here must agree on what is inside a fence, or a
+    ``#`` line in a code block reads as a heading to one of them and not
+    another. A marker line reports the state *after* its toggle (an opener is
+    ``in_fence=True``); content lines report the state they sit in.
+    """
+    in_fence = False
+    for line in text.splitlines():
+        marker = is_fence(line)
+        if marker:
+            in_fence = not in_fence
+        yield line, marker, in_fence
+
+
 def headings(template: str) -> list[str]:
     """The ``##``-and-deeper heading texts of ``template``, in order.
 
@@ -51,12 +73,8 @@ def headings(template: str) -> list[str]:
     degrades validation to its weaker non-empty form (see :mod:`.generate`).
     """
     found: list[str] = []
-    in_fence = False
-    for line in template.splitlines():
-        if _FENCE.match(line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
+    for line, marker, in_fence in fence_walk(template):
+        if marker or in_fence:
             continue
         match = _HEADING.match(line)
         if match:
@@ -66,12 +84,8 @@ def headings(template: str) -> list[str]:
 
 def h1(text: str) -> str | None:
     """The first H1's text in ``text`` (fence-aware), or ``None``."""
-    in_fence = False
-    for line in text.splitlines():
-        if _FENCE.match(line):
-            in_fence = not in_fence
-            continue
-        if in_fence:
+    for line, marker, in_fence in fence_walk(text):
+        if marker or in_fence:
             continue
         match = _H1.match(line)
         if match:
@@ -87,14 +101,8 @@ def sections(body: str) -> dict[str, list[str]]:
     the section it sits in, not a new section."""
     result: dict[str, list[str]] = {}
     current: list[str] | None = None
-    in_fence = False
-    for line in body.splitlines():
-        if _FENCE.match(line):
-            in_fence = not in_fence
-            if current is not None:
-                current.append(line)
-            continue
-        match = None if in_fence else _HEADING.match(line)
+    for line, marker, in_fence in fence_walk(body):
+        match = None if marker or in_fence else _HEADING.match(line)
         if match:
             current = result.setdefault(match.group(2), [])
             continue
@@ -123,4 +131,12 @@ def content_lines(body: str, template: str) -> list[str]:
     return kept
 
 
-__all__ = ["DEFAULT_TEMPLATE", "content_lines", "h1", "headings", "sections"]
+__all__ = [
+    "DEFAULT_TEMPLATE",
+    "content_lines",
+    "fence_walk",
+    "h1",
+    "headings",
+    "is_fence",
+    "sections",
+]

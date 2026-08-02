@@ -162,13 +162,13 @@ def _resolve_notes_target(meeting: Path | None, last: bool) -> Path:
     output home for the newest finished meeting folder (by name — the name
     encodes the start time). Resolving the target to its transcript is
     :func:`~stenograf.output.load_transcript`'s job, not this one's."""
-    from stenograf.output import default_output_home, latest_meeting_dir
+    from stenograf.output import latest_meeting_dir, output_home
     from stenograf.settings import load_settings
 
     if last and meeting is not None:
         raise click.UsageError("give either a PATH or --last, not both")
     if last:
-        home = load_settings().output.dir or default_output_home()
+        home = output_home(load_settings())
         newest = latest_meeting_dir(home)
         if newest is None:
             raise click.ClickException(
