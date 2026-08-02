@@ -7,9 +7,9 @@ from stenograf.output import (
     allocate_meeting_dir,
     created_at_from_dir_name,
     default_output_home,
-    documents_dir,
     latest_meeting_dir,
 )
+from stenograf.paths import documents_dir
 
 WHEN = datetime(2026, 7, 10, 9, 15, 0)
 

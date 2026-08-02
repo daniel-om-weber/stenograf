@@ -282,6 +282,7 @@ def _ffmpeg_check() -> Check:
 
 def _models_check() -> Check:
     from stenograf import models
+    from stenograf.paths import cache_dir
 
     assets = (models.SILERO_VAD, models.PYANNOTE_SEGMENTATION, models.SPEAKER_EMBEDDING)
     missing = [asset.name for asset in assets if models.cached_path(asset) is None]
@@ -291,7 +292,7 @@ def _models_check() -> Check:
             "(or they download on first use): " + ", ".join(missing)
         )
     else:
-        detail = f"VAD + diarization cached in {models.cache_dir()} (ASR weights via HuggingFace)"
+        detail = f"VAD + diarization cached in {cache_dir()} (ASR weights via HuggingFace)"
     return Check(name="Models", ok=not missing, detail=detail)
 
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from stenograf import models
+from stenograf import models, paths
 
 
 class _FakeResponse(io.BytesIO):
@@ -34,27 +34,27 @@ def asset_for(base: models.ModelAsset, payload: bytes) -> models.ModelAsset:
 
 def test_cache_dir_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
-    assert models.cache_dir() == tmp_path
+    assert paths.cache_dir() == tmp_path
 
 
 def test_cache_dir_macos_default(monkeypatch):
     monkeypatch.delenv("STENOGRAF_CACHE", raising=False)
-    monkeypatch.setattr(models.sys, "platform", "darwin")
-    assert models.cache_dir() == Path.home() / "Library" / "Caches" / "stenograf"
+    monkeypatch.setattr(paths.sys, "platform", "darwin")
+    assert paths.cache_dir() == Path.home() / "Library" / "Caches" / "stenograf"
 
 
 def test_cache_dir_xdg_default(monkeypatch, tmp_path):
     monkeypatch.delenv("STENOGRAF_CACHE", raising=False)
-    monkeypatch.setattr(models.sys, "platform", "linux")
+    monkeypatch.setattr(paths.sys, "platform", "linux")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    assert models.cache_dir() == tmp_path / "stenograf"
+    assert paths.cache_dir() == tmp_path / "stenograf"
 
 
 def test_cache_dir_windows_default(monkeypatch, tmp_path):
     monkeypatch.delenv("STENOGRAF_CACHE", raising=False)
-    monkeypatch.setattr(models.sys, "platform", "win32")
+    monkeypatch.setattr(paths.sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    assert models.cache_dir() == tmp_path / "stenograf" / "cache"
+    assert paths.cache_dir() == tmp_path / "stenograf" / "cache"
 
 
 def test_cached_path_none_when_absent(monkeypatch, tmp_path):

@@ -185,7 +185,7 @@ def install_shortcut() -> Path | None:
 def launch_target_path() -> Path:
     """The file naming the command ``Stenograf.app`` launches.
 
-    Deliberately not under :func:`~stenograf.profiles.data_dir`, whose location
+    Deliberately not under :func:`~stenograf.paths.data_dir`, whose location
     ``$STENOGRAF_DATA`` can move: the app's launcher stub is started by launchd
     with no user environment, reads one hard-coded path and has no way to learn
     about an override. The two must agree, so both are fixed.

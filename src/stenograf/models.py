@@ -2,18 +2,13 @@
 
 The ASR backends manage their own weights (parakeet-mlx pulls from
 HuggingFace); this module covers the sherpa-onnx assets, which have no
-built-in downloader. Files land in one cache directory:
-
-- ``$STENOGRAF_CACHE`` if set,
-- ``~/Library/Caches/stenograf`` on macOS,
-- ``$XDG_CACHE_HOME/stenograf`` (default ``~/.cache/stenograf``) elsewhere.
+built-in downloader. Files land in one cache directory
+(:func:`stenograf.paths.cache_dir`; ``$STENOGRAF_CACHE`` overrides it).
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
-import sys
 import tarfile
 import tempfile
 import urllib.request
@@ -21,6 +16,8 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+
+from stenograf.paths import cache_dir
 
 _RELEASES = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
 
@@ -70,18 +67,6 @@ SPEAKER_EMBEDDING = ModelAsset(
     url=f"{_RELEASES}/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
     sha256="c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
 )
-
-
-def cache_dir() -> Path:
-    if override := os.environ.get("STENOGRAF_CACHE"):
-        return Path(override).expanduser()
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "stenograf"
-    if sys.platform == "win32":
-        local = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
-        return Path(local) / "stenograf" / "cache"
-    xdg = os.environ.get("XDG_CACHE_HOME", "~/.cache")
-    return Path(xdg).expanduser() / "stenograf"
 
 
 def cached_path(asset: ModelAsset) -> Path | None:

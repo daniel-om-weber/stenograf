@@ -117,7 +117,7 @@ backend-name validation is registry-level, not platform-aware — ``backend =
 "mlx"`` validates on any platform because the spec is registered everywhere;
 whether the backend can *run* (mlx-lm installed, Ollama reachable) is checked
 at use, which keeps settings validation independent of what's installed. The
-file's location comes from :func:`stenograf.profiles.data_dir` (``%APPDATA%``
+file's location comes from :func:`stenograf.paths.data_dir` (``%APPDATA%``
 on Windows).
 """
 
@@ -128,7 +128,7 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import NoReturn
 
-from stenograf.profiles import data_dir
+from stenograf.paths import data_dir
 
 
 class SettingsError(Exception):

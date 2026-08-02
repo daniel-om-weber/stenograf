@@ -14,8 +14,9 @@ Two facts shape the design:
   embedding model simply starts a fresh,
   disjoint set of profiles rather than silently mis-matching.
 - **Profiles are precious user data, not a re-downloadable cache.** The store
-  lives in the platform *data* dir (separate from ``models.cache_dir``) and writes
-  atomically, so a crash mid-save never corrupts the library.
+  lives in the platform *data* dir (:func:`stenograf.paths.data_dir`, separate
+  from the model cache) and writes atomically, so a crash mid-save never
+  corrupts the library.
 
 The store and the cosine match live here, in the core — deliberately *not* in the
 diarizer ([[phase3-verified-library-constraints]]): sherpa's
@@ -27,8 +28,6 @@ into names is this module's job.
 from __future__ import annotations
 
 import json
-import os
-import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -37,6 +36,7 @@ import numpy as np
 
 from stenograf.audio import l2_normalize
 from stenograf.output import atomic_write_text
+from stenograf.paths import data_dir
 
 DEFAULT_THRESHOLD = 0.5
 """Cosine similarity at or above which a cluster is deemed the same speaker as a
@@ -263,22 +263,6 @@ class SpeakerReID:
             mapping[cluster] = name
             claimed.add(name)
         return mapping
-
-
-def data_dir() -> Path:
-    """Directory for precious user data (speaker profiles, settings), distinct
-    from the model cache: ``$STENOGRAF_DATA`` if set, else the platform data
-    dir (``%APPDATA%`` on Windows — added with Phase 6, before any Windows
-    release, so no pre-existing installs need migrating)."""
-    if override := os.environ.get("STENOGRAF_DATA"):
-        return Path(override).expanduser()
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "stenograf"
-    if sys.platform == "win32":
-        appdata = os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
-        return Path(appdata) / "stenograf"
-    xdg = os.environ.get("XDG_DATA_HOME", "~/.local/share")
-    return Path(xdg).expanduser() / "stenograf"
 
 
 def default_store_path() -> Path:
