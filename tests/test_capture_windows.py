@@ -1,7 +1,8 @@
 """WindowsCaptureProvider unit tests — the fake helper, no audio hardware.
 
-The transport itself is tested once, against macOS, in test_capture_macos.py:
-both providers are the same :class:`HelperCaptureProvider`. What is tested here
+The transport itself is tested once, for both stop gestures, in
+test_capture_transport.py: every provider is the same
+:class:`HelperCaptureProvider`. What is tested here
 is what Windows does differently — it stops its helper by closing stdin rather
 than signalling it — and what only Windows has: the device preflight it runs
 through the helper, and the privacy consent store it reads before capture.

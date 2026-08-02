@@ -1,3 +1,14 @@
+"""The shared helper transport (capture/helper.py), against the fake helper.
+
+One :class:`HelperCaptureProvider` serves all three platforms; the only
+per-platform variation is the stop gesture — SIGINT for the Swift helper,
+stdin-EOF for the Rust one. Every transport test runs against both gestures,
+so the transport stays covered on Windows too (where the SIGINT flavor cannot
+run: Windows has no signal a parent can aim at one child). The platform test
+files keep only what is genuinely per-platform: the device preflight, the
+privacy consent store, and the stop-gesture wiring of each subclass.
+"""
+
 import io
 import os
 import struct
@@ -14,9 +25,38 @@ from stenograf.capture.helper import (
     read_frame,
 )
 from stenograf.capture.macos import MacOSCaptureProvider
+from stenograf.capture.windows import WindowsCaptureProvider
 
 FAKE = [sys.executable, str(Path(__file__).parent / "fake_stenocap.py")]
 _HEADER = struct.Struct("<BdI")
+
+GESTURES = [
+    pytest.param(
+        MacOSCaptureProvider,
+        id="sigint",
+        marks=pytest.mark.skipif(
+            sys.platform == "win32",
+            reason="the SIGINT stop gesture does not exist on Windows",
+        ),
+    ),
+    pytest.param(WindowsCaptureProvider, id="stdin-eof"),
+]
+
+
+@pytest.fixture(params=GESTURES)
+def transport(request):
+    """A provider factory for the current stop-gesture flavor.
+
+    The stdin-EOF flavor gets ``--stop-on-stdin`` so the fake helper honors
+    the gesture; the SIGINT flavor must not (under pytest the inherited stdin
+    may already be closed, which would end the fake immediately)."""
+    cls = request.param
+    extra = () if cls._stop_signal is not None else ("--stop-on-stdin",)
+
+    def make(*args: str, **kwargs):
+        return cls(command=[*FAKE, *args, *extra], **kwargs)
+
+    return make
 
 
 def make_frame(code: int, timestamp: float, samples: list[int]) -> bytes:
@@ -50,13 +90,9 @@ class TestReadFrame:
             read_frame(io.BytesIO(_HEADER.pack(0, 0.0, 10_000_000)))
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="MacOSCaptureProvider.stop() delivers SIGINT, which Windows cannot send",
-)
-class TestMacOSCaptureProvider:
-    def test_reads_both_channels_until_eof(self):
-        provider = MacOSCaptureProvider(command=FAKE)
+class TestHelperTransport:
+    def test_reads_both_channels_until_eof(self, transport):
+        provider = transport()
         provider.start({Channel.MIC, Channel.SYSTEM})
         frames = list(provider.frames())
         provider.stop()
@@ -66,49 +102,49 @@ class TestMacOSCaptureProvider:
         assert len(mic) == 3
         assert [f.timestamp for f in mic] == [0.0, 0.1, 0.2]
 
-    def test_only_requested_channel_is_started(self):
-        provider = MacOSCaptureProvider(command=FAKE)
+    def test_only_requested_channel_is_started(self, transport):
+        provider = transport()
         provider.start({Channel.MIC})  # in-room: no system tap
         channels = {f.channel for f in provider.frames()}
         provider.stop()
         assert channels == {Channel.MIC}
 
-    def test_stop_terminates_a_running_helper(self):
-        provider = MacOSCaptureProvider(command=[*FAKE, "--forever"])
+    def test_stop_terminates_a_running_helper(self, transport):
+        provider = transport("--forever")
         provider.start({Channel.MIC})
         first = next(provider.frames())
         assert first.channel is Channel.MIC
         provider.stop()
         assert provider._proc is None  # torn down
 
-    def test_a_stalled_consumer_never_blocks_the_helper(self):
+    def test_a_stalled_consumer_never_blocks_the_helper(self, transport):
         # The regression behind two production bugs (ebf660a, 7dd1510): the
         # consumer stalls, the 64 KB pipe fills, the helper blocks in write()
         # and Core Audio kills the tap permanently. The drain thread must absorb
         # the stream regardless of the consumer, so a helper with far more
         # output than the pipe holds can exit before frames() is ever read.
-        provider = MacOSCaptureProvider(command=[*FAKE, "--frames", "200"])
+        provider = transport("--frames", "200")
         provider.start({Channel.MIC})
         assert provider._proc.wait(timeout=10) == 0  # a blocked write would time out
         frames = list(provider.frames())
         provider.stop()
         assert len(frames) == 200  # buffered while the consumer stalled, none dropped
 
-    def test_stream_desync_raises_in_the_consumer(self):
+    def test_stream_desync_raises_in_the_consumer(self, transport):
         # The drain thread hits the malformed header; the error must surface in
         # frames(), not die silently on the drain thread.
-        provider = MacOSCaptureProvider(command=[*FAKE, "--malformed"])
+        provider = transport("--malformed")
         provider.start({Channel.MIC})
         with pytest.raises(ValueError, match="malformed"):
             list(provider.frames())
         provider.stop()
 
-    def test_on_log_keeps_helper_stderr_off_the_terminal(self, capfd):
+    def test_on_log_keeps_helper_stderr_off_the_terminal(self, transport, capfd):
         # The GUI path: helper chatter must reach the sink line-by-line and
         # never the real stderr, which a GUI process has no terminal to show
         # (the "device format at start / stopped at Ctrl-C" bug).
         lines = []
-        provider = MacOSCaptureProvider(command=[*FAKE, "--chatter"], on_log=lines.append)
+        provider = transport("--chatter", on_log=lines.append)
         provider.start({Channel.MIC})
         list(provider.frames())
         provider.stop()  # joins the relay: the final lines are in by now
@@ -116,59 +152,57 @@ class TestMacOSCaptureProvider:
         assert "fake-stenocap: stopped" in lines
         assert capfd.readouterr().err == ""
 
-    def test_helper_stderr_is_inherited_by_default(self, capfd):
+    def test_helper_stderr_is_inherited_by_default(self, transport, capfd):
         # The plain CLI keeps today's behaviour: no sink, chatter lands on the
         # terminal's stderr where capture errors have always been visible.
-        provider = MacOSCaptureProvider(command=[*FAKE, "--chatter"])
+        provider = transport("--chatter")
         provider.start({Channel.MIC})
         list(provider.frames())
         provider.stop()
         assert "fake-stenocap: mic format" in capfd.readouterr().err
 
-    def test_a_raising_sink_does_not_break_capture(self):
+    def test_a_raising_sink_does_not_break_capture(self, transport):
         def bad_sink(line: str) -> None:
             raise RuntimeError("sink is broken")
 
-        provider = MacOSCaptureProvider(command=[*FAKE, "--chatter"], on_log=bad_sink)
+        provider = transport("--chatter", on_log=bad_sink)
         provider.start({Channel.MIC})
         frames = list(provider.frames())
         provider.stop()
         assert len(frames) == 3  # audio unaffected by the sink's failures
 
-    def test_startup_crash_retries_once_then_raises_the_fatal_detail(self):
+    def test_startup_crash_retries_once_then_raises_the_fatal_detail(self, transport):
         # The helper dying before any frame (coreaudiod wedged by a concurrent
         # capture app) used to look like a clean end-of-stream — the meeting
         # finalized an empty transcript that read as success. It must retry
         # once (the wedge is measurably transient), then raise with the
         # helper's own FATAL line so the failure toast says why.
         lines: list[str] = []
-        provider = MacOSCaptureProvider(command=[*FAKE, "--die-at-start"], on_log=lines.append)
+        provider = transport("--die-at-start", on_log=lines.append)
         provider.start({Channel.MIC})
         with pytest.raises(CaptureHelperError, match="tap unavailable"):
             list(provider.frames())
         provider.stop()
         assert any("retrying once" in ln for ln in lines)
 
-    def test_startup_crash_recovers_when_the_respawn_succeeds(self, tmp_path):
+    def test_startup_crash_recovers_when_the_respawn_succeeds(self, transport, tmp_path):
         # First spawn crashes (marker absent), the respawn streams normally:
         # the consumer sees the frames and no error — the transient-wedge case.
         marker = tmp_path / "died-once"
         lines: list[str] = []
-        provider = MacOSCaptureProvider(
-            command=[*FAKE, "--die-once", str(marker)], on_log=lines.append
-        )
+        provider = transport("--die-once", str(marker), on_log=lines.append)
         provider.start({Channel.MIC})
         frames = list(provider.frames())
         provider.stop()
         assert len(frames) == 3
         assert any("retrying once" in ln for ln in lines)
 
-    def test_midstream_crash_raises_without_a_retry(self):
+    def test_midstream_crash_raises_without_a_retry(self, transport):
         # After audio has flowed a respawn can't help (the fresh helper would
         # restart the shared clock at t=0); the crash must surface so the
         # session finalizes what it has and reports the error.
         lines: list[str] = []
-        provider = MacOSCaptureProvider(command=[*FAKE, "--die-after", "2"], on_log=lines.append)
+        provider = transport("--die-after", "2", on_log=lines.append)
         provider.start({Channel.MIC})
         received = []
         with pytest.raises(CaptureHelperError, match="died mid-meeting"):
@@ -178,11 +212,11 @@ class TestMacOSCaptureProvider:
         assert len(received) == 2
         assert not any("retrying" in ln for ln in lines)
 
-    def test_startup_crash_without_a_sink_still_raises(self, capfd):
+    def test_startup_crash_without_a_sink_still_raises(self, transport, capfd):
         # Plain-CLI mode (stderr inherited): no tail is collected, but the
         # crash must still raise — with the exit status, and the FATAL line
         # itself visible on the terminal's stderr as ever.
-        provider = MacOSCaptureProvider(command=[*FAKE, "--die-at-start"])
+        provider = transport("--die-at-start")
         provider.start({Channel.MIC})
         with pytest.raises(CaptureHelperError, match="exited with status 1"):
             list(provider.frames())
@@ -191,11 +225,11 @@ class TestMacOSCaptureProvider:
         assert "FATAL" in err  # the helper's own line, inherited
         assert "retrying once" in err  # the provider's announcement
 
-    def test_stop_does_not_close_the_pipe_under_a_paused_reader(self):
+    def test_stop_does_not_close_the_pipe_under_a_paused_reader(self, transport):
         # stop() may fire (max_seconds, TUI quit) while the consumer sits between
         # yields; the read that resumes afterwards must end at clean EOF, not
         # raise "read of closed file" because stop() closed the pipe object.
-        provider = MacOSCaptureProvider(command=[*FAKE, "--forever"])
+        provider = transport("--forever")
         provider.start({Channel.MIC})
         frames = provider.frames()
         next(frames)  # reader is now paused mid-iteration
@@ -216,7 +250,6 @@ class TestFindHelper:
         # paths drop it) must come back executable, not fail later with EACCES.
         import stenograf.capture.helper as helper
 
-        monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)
         packaged = tmp_path / "bin" / helper.HELPER_NAME
         packaged.parent.mkdir()
         packaged.write_bytes(b"\x00")
@@ -227,7 +260,6 @@ class TestFindHelper:
         assert os.access(found, os.X_OK)
 
     def test_raises_when_absent(self, monkeypatch):
-        monkeypatch.delenv("STENOGRAF_CAPTURE_HELPER", raising=False)
         # Point the package-resource and dev-tree lookups at nothing by faking
         # __file__ location is overkill; instead assert the error type when the
         # binary is genuinely missing is exercised via a fresh temp env.

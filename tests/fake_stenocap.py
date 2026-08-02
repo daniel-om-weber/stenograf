@@ -76,9 +76,13 @@ def main() -> None:
         # The Windows stop gesture: the parent closes the pipe, nothing is ever
         # sent on it. A daemon thread so the emit loop below stays the same —
         # and os._exit, because sys.exit off the main thread only ends the
-        # thread and would leave the helper running.
+        # thread and would leave the helper running. os.read, not
+        # sys.stdin.buffer.read: a natural exit (fixed frame count, crash
+        # modes) would otherwise abort interpreter shutdown on the buffer
+        # lock this thread holds while blocked.
         def on_eof() -> None:
-            sys.stdin.buffer.read()
+            while os.read(0, 4096):
+                pass
             if chatter:
                 log("stopped")
             sys.stderr.flush()

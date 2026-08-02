@@ -1,9 +1,9 @@
 """LinuxCaptureProvider unit tests — the fake helper, no audio hardware.
 
-The transport is tested once, against macOS (test_capture_macos.py), and the
-stdin-EOF stop gesture once, against Windows (test_capture_windows.py):
-LinuxCaptureProvider shares both, because one Rust helper serves Windows and
-Linux and it stops on stdin EOF on each. What is tested here is the wiring
+The transport, both stop gestures included, is tested once in
+test_capture_transport.py: LinuxCaptureProvider shares it all, because one
+Rust helper serves Windows and Linux and it stops on stdin EOF on each.
+What is tested here is the wiring
 only Linux has: the provider subclass really stops its helper the stdin way,
 and the device preflight passes the helper's names through undecorated (a
 monitor's name already says ``….monitor``; Windows is the platform that needs
