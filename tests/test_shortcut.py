@@ -363,28 +363,6 @@ def test_the_links_retire_the_pre_flip_batch_file(tmp_path, monkeypatch):
     assert not legacy.exists()  # one launcher named Stenograf, never two
 
 
-@pytest.mark.skipif(not WINDOWS, reason="only the Windows shell can write a shell link")
-def test_retiring_links_leaves_a_foreign_shell_link_alone(tmp_path, monkeypatch):
-    # Same rule as the macOS command file: a shortcut we did not write is the
-    # user's. Ours are identified by the app id, which nothing else declares.
-    # The retire runs on the COM-refusal fallback path, so it is unit-tested.
-    from stenograf import winlink
-
-    _windows(monkeypatch, tmp_path)
-    theirs = tmp_path / "Desktop" / "Stenograf.lnk"
-    winlink.write_shortcut(theirs, target=sys.executable, description="mine, not yours")
-    ours = tmp_path / "Programs" / "Stenograf.lnk"
-    ours.parent.mkdir(parents=True)
-    winlink.write_shortcut(
-        ours, target=sys.executable, description="ours", app_id=shortcut.APP_USER_MODEL_ID
-    )
-
-    shortcut._retire_windows_links()
-
-    assert theirs.is_file()  # no app id: the user's, left alone
-    assert not ours.exists()  # our identity: retired with the links
-
-
 def test_the_windows_app_launcher_prefers_the_console_less_interpreter(tmp_path, monkeypatch):
     # A plain python.exe would put a console window behind the app for the
     # whole meeting; pythonw.exe is the same interpreter without one.
@@ -422,20 +400,6 @@ def test_reinstall_overwrites_and_self_heals(tmp_path, monkeypatch):
 
     assert second == first
     assert sys.executable in second.read_text()
-
-
-def test_the_windows_batch_fallback_starts_the_app(tmp_path, monkeypatch):
-    # The COM-refusal fallback: a Desktop .cmd that `start`s the app and
-    # exits, so no console window lives behind the meeting.
-    monkeypatch.setattr(shortcut, "_windows_desktop", lambda: tmp_path / "Desktop")
-
-    target = shortcut._install_cmd_file()
-
-    assert target == tmp_path / "Desktop" / "Stenograf.cmd"
-    content = target.read_text()
-    assert content.startswith("@echo off")
-    assert "-m stenograf --gui" in content
-    assert content.count("start ") == 1  # hand over and exit, no lingering console
 
 
 @pytest.mark.skipif(not WINDOWS, reason="reads the real User Shell Folders registry key")

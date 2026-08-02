@@ -58,7 +58,13 @@ def setup(models_only: bool) -> None:
     if not models_only:
         from stenograf.shortcut import install_shortcut
 
-        if (launcher := install_shortcut()) is not None:
+        try:
+            launcher = install_shortcut()
+        except OSError as exc:
+            # Windows COM refusing the shell-link service (policy, a
+            # locked-down profile) — a clear error, not a degraded launcher.
+            raise click.ClickException(f"could not write the Stenograf launcher: {exc}") from exc
+        if launcher is not None:
             click.echo(click.style("✓", fg="green") + f" launcher installed: {launcher}")
             if launcher.suffix == ".app":  # macOS: the real app
                 click.echo("  Open it from Spotlight or the Dock — no terminal needed.")
@@ -76,8 +82,6 @@ def setup(models_only: bool) -> None:
                 )
             elif sys.platform.startswith("linux"):  # menu entry
                 click.echo('  Look for "Stenograf" in your application menu.')
-            else:  # the Windows COM-refusal batch fallback lands on the Desktop
-                click.echo("  Double-click it to start stenograf — no terminal needed.")
 
     # Permissions first (they need the user at the keyboard), then the long
     # unattended part: everything a first meeting would otherwise stop to fetch.
