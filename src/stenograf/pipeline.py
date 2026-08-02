@@ -8,12 +8,18 @@ interleaves the results. ``steno transcribe`` runs it on a file.
 from __future__ import annotations
 
 import re
+import time
 from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Protocol
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from stenograf.session import MeetingResult
+    from stenograf.view import LiveView
 
 from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import SAMPLE_RATE, sample_index
@@ -403,6 +409,110 @@ def _assign(word: Word, turns: _TurnIndex) -> tuple[str, bool]:
     if nearest is None:
         return "S0", False
     return nearest.speaker, False
+
+
+def resolve_split_channels(
+    audio_file: Path, mode: str
+) -> tuple[tuple[np.ndarray, np.ndarray] | None, float | None]:
+    """Decide mixed vs per-channel transcription for a recorded file.
+
+    ``mode`` is ``auto``/``mix``/``split`` (the CLI's ``--channels``; the app
+    always passes ``auto``). Returns ``(pcms, correlation)``: ``pcms`` is the
+    ``(left, right)`` float32 pair when the file should be transcribed as two
+    voice channels, ``None`` for the classic mixed stream. ``correlation`` is
+    the envelope correlation whenever ``auto`` examined a 2-channel file (for
+    the caller to explain its decision), ``None`` when no decision was needed
+    or the split was forced. Raises :class:`ValueError` when a forced split
+    meets audio without exactly 2 channels.
+    """
+    from stenograf.audio import (
+        audio_channel_count,
+        channels_look_independent,
+        load_audio_channels,
+    )
+
+    count = audio_channel_count(audio_file)
+    if mode == "split" and count != 2:
+        raise ValueError(
+            f"--channels split needs 2-channel audio; {audio_file.name} has {count} channel(s)"
+        )
+    if count != 2 or mode == "mix":
+        return None, None
+    left, right = load_audio_channels(audio_file)
+    if mode == "split":
+        return (left, right), None
+    independent, correlation = channels_look_independent(left, right)
+    return ((left, right) if independent else None), correlation
+
+
+def transcribe_split_channels(
+    left: np.ndarray,
+    right: np.ndarray,
+    *,
+    profile: MeetingProfile,
+    view: LiveView,
+    use_reid: bool = True,
+    reid_threshold: float | None = None,
+    glossary_threshold: float | None = None,
+    asr_backend: str | None = None,
+    asr_provider: str | None = None,
+    asr_boost: float | None = None,
+    profile_store: Path | None = None,
+) -> tuple[MeetingResult, float]:
+    """Transcribe two voice channels through the meeting finalize.
+
+    This is the exact pipeline a live meeting runs on stop — per-channel ASR
+    and diarization with the channel's speaker count, cross-channel echo-text
+    dedup (armed conservatively: the recording's canceller state is unknown),
+    glossary, one interleaved Local-N/Remote-N transcript — just fed from a
+    file instead of a capture session. Returns ``(result, elapsed)``; the
+    :class:`~stenograf.session.MeetingResult` carries the per-channel speaker
+    counts for reporting, ``elapsed`` the processing seconds (clocked after
+    model load, so a first-run weight download never masquerades as
+    transcription speed).
+
+    ``view`` receives the loader progress and per-channel status lines — the
+    CLI passes an echoing view, the app its meeting-screen view; a click echo
+    has no terminal to land on in a GUI process.
+    """
+    from stenograf import loaders
+    from stenograf.audio import to_int16
+    from stenograf.capture.base import AudioFrame, Channel
+    from stenograf.session import MeetingRecorder, SessionStore, plan_channels
+
+    plans = plan_channels(profile)
+    asr, vad, diarizer = loaders.load_backends(
+        need_diarizer=any(p.num_speakers != 1 for p in plans),
+        asr_backend=asr_backend,
+        asr_provider=asr_provider,
+        glossary=profile.glossary,
+        attendee_names=profile.attendee_names,
+        boost=asr_boost,
+        announce=view.status,
+    )
+    reid = None
+    if diarizer is not None:  # re-ID relabels diarized speakers only
+        reid = loaders.load_reid(
+            enabled=use_reid,
+            threshold=reid_threshold,
+            store_path=profile_store or profile.speaker_profile_store,
+        )
+        if reid is not None:
+            view.status(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
+    recorder = MeetingRecorder(
+        profile,
+        asr=asr,
+        vad=vad,
+        diarizer=diarizer,
+        reid=reid,
+        glossary_threshold=glossary_threshold,
+    )
+    store = SessionStore({Channel.MIC, Channel.SYSTEM})
+    store.append(AudioFrame(Channel.MIC, 0.0, to_int16(left)))
+    store.append(AudioFrame(Channel.SYSTEM, 0.0, to_int16(right)))
+    started = time.monotonic()
+    result = recorder.finalize(store, plans, view=view)
+    return result, time.monotonic() - started
 
 
 def relabel_speakers(

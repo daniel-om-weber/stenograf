@@ -15,8 +15,8 @@ Differences from the CLI are deliberate scope, not drift: no ``--out``/``--force
 (developer flags), and progress reports through the view instead of
 ``click.echo``. Everything the CLI resolves from flags — formats, vocabulary,
 re-ID, AEC, checkpoint cadence — comes from settings.toml through the very same
-helpers ``cli/run.py`` uses, so a flagless ``steno start`` and a clicked Start
-button can never disagree about defaults.
+library seams ``cli/run.py`` uses, so a flagless ``steno start`` and a clicked
+Start button can never disagree about defaults.
 
 Ordering matters twice in :meth:`MeetingRun.run`:
 
@@ -25,28 +25,55 @@ Ordering matters twice in :meth:`MeetingRun.run`:
   (:meth:`~stenograf.view.LiveView.set_stop`) and the meeting's first seconds
   buffer in the provider's queue through a slow (cold) model load instead of
   being lost;
-- the transcript is persisted at the ``finalized`` event (the ``_PersistOnce``
-  contract the CLI TUI path uses), so a force-quit on the "done" screen — or
-  even mid-finalize — never loses the meeting.
+- the transcript is persisted at the ``finalized`` event (the
+  :class:`~stenograf.output.PersistOnce` contract the CLI path shares), so a
+  force-quit on the "done" screen — or even mid-finalize — never loses the
+  meeting.
 """
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+from stenograf import loaders, output
+from stenograf.audio import SAMPLE_RATE, load_audio
 from stenograf.config import Language, MeetingProfile
+from stenograf.notes import run as notes_run
+from stenograf.pipeline import (
+    STAGE_ASR,
+    STAGE_DIARIZATION,
+    finalize_file,
+    resolve_split_channels,
+    transcribe_split_channels,
+)
+from stenograf.recording import WavTee
+from stenograf.session import (
+    LIVE_FLUSH_INTERVAL_S,
+    CheckpointConfig,
+    MeetingRecorder,
+    plan_channels,
+)
+from stenograf.settings import (
+    Settings,
+    SettingsError,
+    apply_meeting_preset,
+    load_settings,
+    settings_path,
+    settings_rows,
+)
 from stenograf.transcript import DEFAULT_FORMATS, Transcript
+from stenograf.view import LiveView
+from stenograf.vocab import collect_terms
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
-
-    from stenograf.settings import Settings
-    from stenograf.view import LiveView
 
 
 class MeetingRequestError(Exception):
@@ -79,8 +106,6 @@ def standing_settings() -> Settings:
     A form must open even when settings.toml is unusable — the error belongs on
     the Start attempt (:func:`resolve_meeting_request` reports it), not on a
     screen the user cannot yet act on."""
-    from stenograf.settings import Settings, SettingsError, load_settings
-
     try:
         return load_settings()
     except SettingsError:
@@ -120,28 +145,20 @@ def resolve_meeting_request(
     documented rather than plumbed.
 
     Raises :class:`MeetingRequestError` with a message meant for the user."""
-    # The CLI's own resolution seams, reused so both entries share one source of
-    # defaults (the thin-client rule): load_settings for the tables,
-    # _collect_terms for the [vocab] glossary/attendee baseline.
-    from click import ClickException
-
-    from stenograf.cli.run import _collect_terms
-    from stenograf.settings import SettingsError, apply_meeting_preset, load_settings
-
     try:
         settings = load_settings()
         preset_obj = None
         if preset is not None:
             settings, preset_obj = apply_meeting_preset(settings, preset)
-        glossary_terms, attendee_names = _collect_terms(
+        glossary_terms, attendee_names = collect_terms(
             (),
             None,
             (),
             vocab=settings.vocab,
             extra_vocab=preset_obj.vocab if preset_obj is not None else None,
         )
-    except (SettingsError, ClickException) as exc:  # e.g. a stale [vocab] glossary_file
-        raise MeetingRequestError(getattr(exc, "message", str(exc))) from exc
+    except SettingsError as exc:  # e.g. a stale [vocab] glossary_file
+        raise MeetingRequestError(str(exc)) from exc
     if preset_obj is not None:
         title = title or (preset_obj.title or "")
         if language is None and preset_obj.language is not None:
@@ -181,32 +198,23 @@ class MeetingRun:
     it."""
 
     def __init__(self, request: MeetingRequest, *, abort: threading.Event | None = None) -> None:
-        from stenograf.cli.start import _PersistOnce
-        from stenograf.output import (
-            TRANSCRIPT_STEM,
-            allocate_meeting_dir,
-            cleanup_checkpoints,
-            default_output_home,
-            write_transcript,
-        )
-
         self.request = request
         self.created_at = datetime.now()
-        self.basename = TRANSCRIPT_STEM
+        self.basename = output.TRANSCRIPT_STEM
         # A fresh date-named folder under the visible output home — a button has
         # no --out equivalent, so allocation can never collide with an existing
         # meeting. Nothing is created until the first write.
-        self.out_dir = allocate_meeting_dir(
-            request.settings.output.dir or default_output_home(), self.created_at
+        self.out_dir = output.allocate_meeting_dir(
+            request.settings.output.dir or output.default_output_home(), self.created_at
         )
         formats = list(request.settings.transcript.formats or DEFAULT_FORMATS)
 
         def write(transcript: Transcript) -> list[Path]:
-            paths = write_transcript(transcript, self.out_dir, self.basename, formats)
-            cleanup_checkpoints(self.out_dir, self.basename)
+            paths = output.write_transcript(transcript, self.out_dir, self.basename, formats)
+            output.cleanup_checkpoints(self.out_dir, self.basename)
             return paths
 
-        self.persist = _PersistOnce(write)
+        self.persist = output.PersistOnce(write)
         """Write-the-transcript-once callback; hand it to the view so the files
         land at the ``finalized`` event rather than after the user closes the
         screen."""
@@ -240,11 +248,6 @@ class MeetingRun:
         Blocking, and meant for a worker thread: it returns when the meeting is
         over. Ends when the view's stop callback — installed here, on the first
         line that has something to stop — is invoked."""
-        from stenograf import loaders
-        from stenograf.cli.start import _LIVE_FLUSH_INTERVAL_S
-        from stenograf.output import AUDIO_NAME, checkpoint_writer
-        from stenograf.session import CheckpointConfig, MeetingRecorder, plan_channels
-
         settings, profile = self.request.settings, self.request.profile
         plans = plan_channels(profile)
 
@@ -280,11 +283,9 @@ class MeetingRun:
         tee = None
         try:
             if self.request.record_audio:
-                from stenograf.recording import WavTee
-
                 # The tee is this run's first write, so it creates the folder.
                 self.out_dir.mkdir(parents=True, exist_ok=True)
-                tee = WavTee(self.out_dir / AUDIO_NAME, {p.channel for p in plans})
+                tee = WavTee(self.out_dir / output.AUDIO_NAME, {p.channel for p in plans})
             view.status("recording · loading models…")
             asr, vad, diarizer = loaders.load_backends(
                 need_diarizer=any(p.num_speakers != 1 for p in plans),
@@ -331,7 +332,7 @@ class MeetingRun:
                 view=view,
                 on_frame=tee.add if tee else None,
                 checkpoint=CheckpointConfig(
-                    checkpoint_writer(self.out_dir, self.basename), _LIVE_FLUSH_INTERVAL_S
+                    output.checkpoint_writer(self.out_dir, self.basename), LIVE_FLUSH_INTERVAL_S
                 ),
                 provider_started=True,
             )
@@ -343,11 +344,9 @@ class MeetingRun:
             # Persisted already, at the finalized event — this is display only.
             notes_ok = True
             if self.request.notes and not self.abandon_notes.is_set():
-                from stenograf.cli.notes import _generate_notes
-
                 self.notes_running = True
                 try:
-                    notes_ok = _generate_notes(
+                    notes_ok = notes_run.run_notes(
                         view,
                         transcript,
                         self.out_dir,
@@ -400,28 +399,14 @@ def transcribe_recording(
     not per window, and reports through ``on_status`` instead.
 
     Blocking; meant for a worker thread. Every failure raises."""
-    import dataclasses
-    import time
-
-    from stenograf import loaders
-    from stenograf.audio import SAMPLE_RATE, load_audio
-    from stenograf.cli.run import _collect_terms
-    from stenograf.cli.transcribe import _resolve_split_channels, _transcribe_split_channels
-    from stenograf.output import (
-        TRANSCRIPT_STEM,
-        allocate_meeting_dir,
-        default_output_home,
-        write_transcript,
-    )
-    from stenograf.settings import load_settings
-    from stenograf.view import LiveView
-
     settings = load_settings()
-    glossary_terms, attendee_names = _collect_terms((), None, (), vocab=settings.vocab)
-    out_dir = allocate_meeting_dir(settings.output.dir or default_output_home(), datetime.now())
+    glossary_terms, attendee_names = collect_terms((), None, (), vocab=settings.vocab)
+    out_dir = output.allocate_meeting_dir(
+        settings.output.dir or output.default_output_home(), datetime.now()
+    )
     write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)
 
-    split_pcms, _correlation = _resolve_split_channels(audio_file, "auto")
+    split_pcms, _correlation = resolve_split_channels(audio_file, "auto")
     # Diarization is off unless [speakers] diarization = true — the button UIs'
     # only switch for it (or rerun with the CLI's --diarization): counts collapse
     # to one speaker per channel and the diarizer is never loaded.
@@ -444,9 +429,10 @@ def transcribe_recording(
             def error(self, message: str) -> None:
                 on_status(f"warning: {message}")
 
-        result, elapsed = _transcribe_split_channels(
+        result, elapsed = transcribe_split_channels(
             *split_pcms,
             profile=profile,
+            view=_StatusView(),
             use_reid=True,
             reid_threshold=settings.speakers.reid_threshold,
             glossary_threshold=settings.vocab.glossary_threshold,
@@ -454,12 +440,9 @@ def transcribe_recording(
             asr_provider=settings.asr.provider,
             asr_boost=settings.asr.boost,
             profile_store=settings.speakers.profile_store,
-            view=_StatusView(),
         )
         transcript = result.transcript
     else:
-        from stenograf.pipeline import STAGE_ASR, STAGE_DIARIZATION, finalize_file
-
         samples = load_audio(audio_file)
         duration = len(samples) / SAMPLE_RATE
         on_status("loading models…")
@@ -500,7 +483,7 @@ def transcribe_recording(
         )
         elapsed = time.monotonic() - started
 
-    paths = write_transcript(transcript, out_dir, TRANSCRIPT_STEM, write_formats)
+    paths = output.write_transcript(transcript, out_dir, output.TRANSCRIPT_STEM, write_formats)
     return TranscribeResult(paths=paths, out_dir=out_dir, duration=duration, elapsed=elapsed)
 
 
@@ -509,13 +492,11 @@ def settings_report() -> tuple[list[str], bool]:
 
     Every key with its value and where it came from (env override,
     settings.toml, built-in default), rendered through the same
-    ``_settings_rows`` helper the CLI prints from, so no two entries can
-    disagree about the effective configuration. A broken file renders its error
-    instead and returns ``False`` — what to *do* about it is the calling UI's
-    line to write, since one has a keybinding and the other a button."""
-    from stenograf.cli.settings_cmd import _settings_rows
-    from stenograf.settings import SettingsError, load_settings, settings_path
-
+    :func:`~stenograf.settings.settings_rows` helper the CLI prints from, so no
+    two entries can disagree about the effective configuration. A broken file
+    renders its error instead and returns ``False`` — what to *do* about it is
+    the calling UI's line to write, since one has a keybinding and the other a
+    button."""
     path = settings_path()
     suffix = "" if path.exists() else " (not present — all defaults)"
     lines = [f"settings: {path}{suffix}"]
@@ -523,7 +504,7 @@ def settings_report() -> tuple[list[str], bool]:
         settings = load_settings()
     except SettingsError as exc:
         return [*lines, "", str(exc)], False
-    for table, rows in _settings_rows(settings):
+    for table, rows in settings_rows(settings):
         lines.append("")
         lines.append(f"[{table}]")
         width = max(len(key) for key, _, _ in rows)
@@ -537,16 +518,10 @@ def notes_home() -> Path:
 
     Tolerates a broken settings.toml (falls back to the default home) — a picker
     that refuses to open is worse than one pointing at the standard folder."""
-    import contextlib
-
-    from stenograf.output import default_output_home
-
     home = None
     with contextlib.suppress(Exception):  # a broken settings.toml
-        from stenograf.settings import load_settings
-
         home = load_settings().output.dir
-    return home or default_output_home()
+    return home or output.default_output_home()
 
 
 def generate_notes_for(
@@ -564,21 +539,19 @@ def generate_notes_for(
     the validation produced (they are also in the note's own footer).
 
     Blocking; meant for a worker thread. Every failure raises."""
-    from stenograf.cli.notes import _generate_and_write_notes
-    from stenograf.output import TRANSCRIPT_STEM, created_at_from_dir_name
-
-    path = target / f"{TRANSCRIPT_STEM}.json" if target.is_dir() else target
+    stem = output.TRANSCRIPT_STEM
+    path = target / f"{stem}.json" if target.is_dir() else target
     if not path.is_file():
-        raise ValueError(f"{target} holds no {TRANSCRIPT_STEM}.json")
+        raise ValueError(f"{target} holds no {stem}.json")
     try:
         transcript = Transcript.from_json(path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise ValueError(f"{path} is not a readable transcript JSON: {exc}") from exc
     out_dir = path.parent
-    created_at = created_at_from_dir_name(out_dir.name) or datetime.fromtimestamp(
+    created_at = output.created_at_from_dir_name(out_dir.name) or datetime.fromtimestamp(
         path.stat().st_mtime
     )
-    written, notes = _generate_and_write_notes(
+    written, notes = notes_run.generate_and_write_notes(
         transcript, out_dir, path.stem, created_at=created_at, on_progress=on_progress
     )
     warnings = notes.provenance.warnings if notes.provenance is not None else ()

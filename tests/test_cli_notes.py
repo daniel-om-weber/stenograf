@@ -213,7 +213,7 @@ def test_notes_reports_a_bug_as_a_traceback_not_a_clean_error(tmp_path, monkeypa
     def buggy(*args, **kwargs):
         raise AttributeError("'NoneType' object has no attribute 'entries'")
 
-    monkeypatch.setattr(cli.notes, "_generate_and_write_notes", buggy)
+    monkeypatch.setattr("stenograf.notes.run.generate_and_write_notes", buggy)
     path = tmp_path / "transcript.json"
     write_transcript_json(path)
 
@@ -620,7 +620,7 @@ def test_one_interrupt_lets_notes_finish_and_a_second_skips_them(tmp_path, monke
         signal.raise_signal(signal.SIGINT)  # second: skip
         raise AssertionError("unreachable — the second interrupt must raise")
 
-    monkeypatch.setattr(notes_mod, "_generate_and_write_notes", interrupted_generation)
+    monkeypatch.setattr("stenograf.notes.run.generate_and_write_notes", interrupted_generation)
 
     notes_mod._notes_after_run(
         transcript, tmp_path, "transcript", created_at=datetime.now(), notes_settings=None

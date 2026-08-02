@@ -1,8 +1,9 @@
-"""Flag+settings resolution and the command tail shared by ``start`` and
-``transcribe`` (plus ``notes``' settings loading)."""
+"""Flag+settings resolution, the command tail shared by ``start`` and
+``transcribe``, and the boundary that maps library errors to CLI errors."""
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,26 +11,49 @@ from typing import TYPE_CHECKING
 
 import click
 
+from stenograf.capture.base import CaptureHelperError, CaptureUnavailableError
+from stenograf.loaders import BackendUnavailableError
+from stenograf.settings import (
+    SettingsError,
+    UnknownPresetError,
+    apply_meeting_preset,
+    load_settings,
+)
 from stenograf.transcript import DEFAULT_FORMATS, FORMATS, Transcript
+from stenograf.vocab import collect_terms
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from stenograf.settings import MeetingPreset, Settings
 
+def _library_errors[T](func: Callable[..., T]) -> Callable[..., T]:
+    """The command boundary: the library's typed failures become clean CLI errors.
 
-def _cli_settings():
-    """Load settings.toml once, at command start, as a clean CLI error.
+    The library raises its own types — :class:`SettingsError` (a broken
+    settings.toml, a stale glossary path), :class:`BackendUnavailableError`,
+    :class:`CaptureUnavailableError`/:class:`CaptureHelperError`,
+    :class:`FileExistsError` from :func:`~stenograf.output.prepare_output` —
+    and every command maps them here, once, instead of per call site.
+    :class:`UnknownPresetError` is bad command-line input, hence a UsageError.
+    Anything else is a bug and keeps its traceback."""
 
-    Every ``start``/``transcribe``/``notes`` invocation resolves its defaults
-    from here — and loading up front means a broken file fails *before* an
-    hour of capture, not when the finalize (or notes) step first reads it."""
-    from stenograf.settings import SettingsError, load_settings
+    @functools.wraps(func)
+    def wrapper(*args: object, **kwargs: object) -> T:
+        try:
+            return func(*args, **kwargs)
+        except UnknownPresetError as exc:
+            raise click.UsageError(str(exc)) from exc
+        except (
+            SettingsError,
+            BackendUnavailableError,
+            CaptureUnavailableError,
+            CaptureHelperError,
+            FileExistsError,
+        ) as exc:
+            raise click.ClickException(str(exc)) from exc
 
-    try:
-        return load_settings()
-    except SettingsError as exc:
-        raise click.ClickException(str(exc)) from exc
+    return wrapper
 
 
 def _resolve_formats(spec: str | None, settings) -> list[str]:
@@ -76,19 +100,17 @@ def _resolve_run_config(
     profile_store: Path | None,
     preset: str | None = None,
 ) -> _RunConfig:
-    settings = _cli_settings()
+    # Loading up front means a broken settings.toml fails *before* an hour of
+    # capture, not when the finalize (or notes) step first reads it; the
+    # _library_errors boundary turns it into a clean CLI error.
+    settings = load_settings()
     preset_obj = None
     if preset is not None:
-        from stenograf.settings import SettingsError, apply_meeting_preset
-
-        try:
-            settings, preset_obj = apply_meeting_preset(settings, preset)
-        except SettingsError as exc:
-            raise click.UsageError(str(exc)) from exc
+        settings, preset_obj = apply_meeting_preset(settings, preset)
         click.echo(f"preset: {preset}")  # echo-on-use: the typo mitigation
-    # The preset must enter HERE, before _collect_terms — its [vocab] feeds
+    # The preset must enter HERE, before collect_terms — its [vocab] feeds
     # decode-time biasing, not just the notes prompt.
-    glossary_terms, attendee_names = _collect_terms(
+    glossary_terms, attendee_names = collect_terms(
         glossary,
         glossary_file,
         attendee,
@@ -354,110 +376,3 @@ def _load_reid(diarizer, *, enabled: bool, threshold: float | None, store: Path 
 def _echo_glossary(terms: tuple[str, ...], names: tuple[str, ...]) -> None:
     if terms or names:
         click.echo(f"glossary: {len(terms)} term(s), {len(names)} name(s)")
-
-
-def _collect_terms(
-    glossary: tuple[str, ...],
-    glossary_file: Path | None,
-    attendee: tuple[str, ...],
-    *,
-    vocab=None,
-    extra_vocab=None,
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Gather glossary terms (inline + file) and attendee names from the options.
-
-    ``vocab`` (the ``[vocab]`` settings table) is the standing baseline: its
-    glossary file and attendees come first and per-run ``--glossary``/
-    ``--glossary-file``/``--attendee`` values *merge* on top — configuring a
-    vocabulary must never make the flags stop working, or vice versa.
-    ``extra_vocab`` (a meeting preset's ``[meetings.*.vocab]``) merges the same
-    way: a preset adds vocabulary for its kind of meeting, it never removes the
-    baseline. Inline values may each be comma-separated; a file is one term per
-    line. Both lists are de-duplicated preserving first-seen order.
-    """
-    terms: list[str] = []
-    names: list[str] = []
-    if vocab is not None:
-        if vocab.glossary_file is not None:
-            terms.extend(_read_glossary_lines(vocab.glossary_file, source="[vocab] glossary_file"))
-        names.extend(vocab.attendees)
-    if extra_vocab is not None:
-        if extra_vocab.glossary_file is not None:
-            terms.extend(
-                _read_glossary_lines(
-                    extra_vocab.glossary_file, source="[meetings.*.vocab] glossary_file"
-                )
-            )
-        names.extend(extra_vocab.attendees)
-    for value in glossary:
-        terms.extend(part.strip() for part in value.split(",") if part.strip())
-    if glossary_file is not None:
-        terms.extend(_read_glossary_lines(glossary_file))
-    for value in attendee:
-        names.extend(part.strip() for part in value.split(",") if part.strip())
-    return tuple(dict.fromkeys(terms)), tuple(dict.fromkeys(names))
-
-
-def _read_glossary_lines(path: Path, *, source: str | None = None) -> list[str]:
-    """Terms from a glossary file (# comments and blank lines ignored).
-
-    ``source`` names the setting that configured the path — the CLI flag
-    validates existence itself (``exists=True``), but a stale path in
-    settings.toml must say where it came from, not just fail to open."""
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        where = f" ({source} in settings.toml)" if source else ""
-        raise click.ClickException(f"cannot read glossary file {path}{where}: {exc}") from exc
-    terms = []
-    for raw_line in raw.splitlines():
-        line = raw_line.split("#", 1)[0].strip()
-        if line:
-            terms.append(line)
-    return terms
-
-
-def _prepare_output(
-    out: Path | None, created_at: datetime, settings, *, force: bool = False
-) -> tuple[Path, str, Path]:
-    """Resolve the directory this run's files land in.
-
-    Returns ``(out_dir, basename, audio_default)``. By default the meeting gets
-    a fresh date-named folder under the visible output home (``[output] dir``
-    in settings.toml, else ``Meetings`` in the user's documents folder — see
-    :func:`~stenograf.output.default_output_home`); ``--out`` uses that path
-    itself as the meeting's folder. Either way the files inside are plainly
-    named — ``transcript.{fmt}``, ``audio.wav``.
-
-    File names inside a meeting folder are fixed, so pointing ``--out`` at a
-    folder that already holds a transcript would silently replace that meeting;
-    refuse unless ``--force`` says overwriting is the point (a re-run over the
-    same recording). The default path allocates a fresh name and cannot collide;
-    ``.partial`` checkpoints don't count — resuming after a crash must not
-    demand ``--force``."""
-    from stenograf.output import (
-        AUDIO_NAME,
-        TRANSCRIPT_STEM,
-        allocate_meeting_dir,
-        default_output_home,
-    )
-
-    if out is not None:
-        if not force:
-            existing = next(
-                (
-                    f"{TRANSCRIPT_STEM}.{ext}"
-                    for ext in FORMATS
-                    if (out / f"{TRANSCRIPT_STEM}.{ext}").exists()
-                ),
-                None,
-            )
-            if existing is not None:
-                raise click.ClickException(
-                    f"{out} already holds {existing} — pass --force to overwrite "
-                    "this meeting's files, or drop --out for a fresh folder"
-                )
-        out_dir = out
-    else:
-        out_dir = allocate_meeting_dir(settings.output.dir or default_output_home(), created_at)
-    return out_dir, TRANSCRIPT_STEM, out_dir / AUDIO_NAME

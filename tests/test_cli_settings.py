@@ -213,11 +213,10 @@ def test_settings_show_covers_every_settings_key():
     that claims to print the effective configuration stayed silent about it."""
     import dataclasses
 
-    from stenograf.cli.settings_cmd import _settings_rows
-    from stenograf.settings import Settings
+    from stenograf.settings import Settings, settings_rows
 
     settings = Settings()
-    shown = {(table, key) for table, rows in _settings_rows(settings) for key, _, _ in rows}
+    shown = {(table, key) for table, rows in settings_rows(settings) for key, _, _ in rows}
     # `meetings` is user-named preset sections, listed by `steno presets`, not
     # a fixed key set; `notes.export_dir` is flattened onto its own table.
     renamed = {("notes", "export_dir"): ("notes.export", "dir")}

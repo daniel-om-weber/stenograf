@@ -256,9 +256,9 @@ class SettingsScreen(Screen):
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
 
-        from stenograf.cli.settings_cmd import _ensure_settings_file
+        from stenograf.settings import ensure_settings_file
 
-        path, _created = _ensure_settings_file()
+        path, _created = ensure_settings_file()
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
             self.set(text=f"Nothing on this machine opens .toml files — edit {path} directly.")
 

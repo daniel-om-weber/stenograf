@@ -540,7 +540,7 @@ class TestMeetingScreen:
         # minutes, and by the time the notes tail starts the transcript is
         # already on disk — so the window's force-quit must not block on the
         # notes join for up to [notes] timeout_s.
-        from stenograf.cli import notes as cli_notes
+        from stenograf.notes import run as notes_run
 
         self._stub_offline_meeting(monkeypatch, tmp_path)
         notes_started, release = threading.Event(), threading.Event()
@@ -550,7 +550,7 @@ class TestMeetingScreen:
             release.wait(10)
             return True
 
-        monkeypatch.setattr(cli_notes, "_generate_notes", slow_notes)
+        monkeypatch.setattr(notes_run, "run_notes", slow_notes)
 
         shell, _engine = gui
         meeting = shell.screen("Meeting")
@@ -569,12 +569,12 @@ class TestMeetingScreen:
         # skipped entirely (steno notes --last regenerates), never started
         # into a run whose window is already gone.
         import stenograf.flow as flow_mod
-        from stenograf.cli import notes as cli_notes
+        from stenograf.notes import run as notes_run
 
         self._stub_offline_meeting(monkeypatch, tmp_path)
         calls = []
         monkeypatch.setattr(
-            cli_notes, "_generate_notes", lambda *args, **kwargs: calls.append(args) or True
+            notes_run, "run_notes", lambda *args, **kwargs: calls.append(args) or True
         )
 
         class AbandonedRun(flow_mod.MeetingRun):

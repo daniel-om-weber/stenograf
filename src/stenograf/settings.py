@@ -123,6 +123,7 @@ on Windows).
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -133,6 +134,15 @@ from stenograf.paths import data_dir
 
 class SettingsError(Exception):
     """settings.toml exists but cannot be used; the message names the file."""
+
+
+class UnknownPresetError(SettingsError):
+    """``--preset`` (or a setup form) named a ``[meetings.<name>]`` section that
+    does not exist.
+
+    Its own type — still a :class:`SettingsError`, so every existing catch
+    holds — because the remedy differs: not "repair the file" but "pick one of
+    the presets it defines", which the CLI reports as a usage error."""
 
 
 SETTINGS_TEMPLATE = """\
@@ -641,7 +651,7 @@ def apply_meeting_preset(settings: Settings, name: str) -> tuple[Settings, Meeti
     preset = settings.meetings.get(name)
     if preset is None:
         available = ", ".join(sorted(settings.meetings)) or "none defined"
-        raise SettingsError(f"unknown meeting preset {name!r} (available: {available})")
+        raise UnknownPresetError(f"unknown meeting preset {name!r} (available: {available})")
     changes: dict[str, object] = {}
     for f in fields(NotesSettings):
         value = getattr(preset.notes, f.name)
@@ -667,3 +677,125 @@ def apply_meeting_preset(settings: Settings, name: str) -> tuple[Settings, Meeti
         vocab = replace(vocab, glossary_threshold=preset.vocab.glossary_threshold)
     overlaid = replace(settings, notes=replace(settings.notes, **changes), vocab=vocab)  # type: ignore[arg-type]
     return overlaid, preset
+
+
+def ensure_settings_file() -> tuple[Path, bool]:
+    """settings.toml's path, created from the commented template when missing.
+
+    Shared by ``steno settings edit`` and the app's Settings screen — the
+    template (every key present, commented out) is the editing surface both
+    hand to the user's editor. Returns ``(path, created)``."""
+    from stenograf.output import atomic_write_text
+
+    path = settings_path()
+    if path.exists():
+        return path, False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, SETTINGS_TEMPLATE)
+    return path, True
+
+
+def settings_rows(settings: Settings) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """``(table, [(key, value, source), …])`` rows behind every settings report.
+
+    One renderer for ``steno settings show`` and the app's Settings screen, so
+    no two entries can disagree about the effective configuration. Values are
+    TOML-flavored so a line can be pasted into the file; defaults that aren't
+    literal values (an unset optional, a per-backend choice) read as a
+    parenthesized description instead."""
+    from stenograf.asr.biasing import DEFAULT_ALPHA
+    from stenograf.asr.registry import default_backend_name as asr_default
+    from stenograf.glossary import DEFAULT_THRESHOLD as GLOSSARY_THRESHOLD
+    from stenograf.notes.backend import default_backend_name as notes_default
+    from stenograf.notes.backend import settings_defaults as notes_defaults
+    from stenograf.notes.ollama import DEFAULT_URL
+    from stenograf.output import default_output_home
+    from stenograf.profiles import DEFAULT_THRESHOLD as REID_THRESHOLD
+    from stenograf.profiles import default_store_path
+    from stenograf.transcript import DEFAULT_FORMATS
+
+    # Per-backend notes defaults resolve against the *effective* backend, so the
+    # display matches what a notes run would actually use; keys the backend has
+    # no say over get a which-backend placeholder.
+    notes_backend = notes_default(settings.notes.backend)
+    per_backend = notes_defaults(notes_backend)
+
+    # (table, key, file value, effective default, env override) — one row each.
+    descriptors = [
+        ("transcript", "formats", settings.transcript.formats, DEFAULT_FORMATS, None),
+        ("vocab", "glossary_file", settings.vocab.glossary_file, "(none)", None),
+        ("vocab", "attendees", settings.vocab.attendees, "(none)", None),
+        (
+            "vocab",
+            "glossary_threshold",
+            settings.vocab.glossary_threshold,
+            GLOSSARY_THRESHOLD,
+            None,
+        ),
+        ("output", "dir", settings.output.dir, default_output_home(), None),
+        ("output", "record_audio", settings.output.record_audio, False, None),
+        ("speakers", "diarization", settings.speakers.diarization, False, None),
+        ("speakers", "reid_threshold", settings.speakers.reid_threshold, REID_THRESHOLD, None),
+        ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
+        ("asr", "backend", settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"),
+        ("asr", "provider", settings.asr.provider, "cpu", "STENOGRAF_ASR_PROVIDER"),
+        ("asr", "boost", settings.asr.boost, DEFAULT_ALPHA, None),
+        ("notes", "auto", settings.notes.auto, False, None),
+        ("notes", "backend", settings.notes.backend, notes_backend, "STENOGRAF_NOTES_BACKEND"),
+        (
+            "notes",
+            "model",
+            settings.notes.model,
+            per_backend.get("model", "(provenance label — none)"),
+            "STENOGRAF_NOTES_MODEL",
+        ),
+        ("notes", "command", settings.notes.command, "(none)", None),
+        (
+            "notes",
+            "timeout_s",
+            settings.notes.timeout_s,
+            per_backend.get("timeout_s", "(command backend only)"),
+            None,
+        ),
+        ("notes", "instructions", settings.notes.instructions, "(none)", None),
+        ("notes", "template", settings.notes.template, "(built-in)", None),
+        ("notes", "ollama_url", settings.notes.ollama_url, DEFAULT_URL, "OLLAMA_HOST"),
+        (
+            "notes",
+            "max_input_chars",
+            settings.notes.max_input_chars,
+            per_backend["max_input_chars"],
+            None,
+        ),
+        (
+            "notes",
+            "thinking",
+            settings.notes.thinking,
+            per_backend.get("thinking", "(mlx backend only)"),
+            None,
+        ),
+        ("notes.export", "dir", settings.notes.export_dir, "(off)", None),
+    ]
+
+    def pick(file_value: object, default: object, env_var: str | None) -> tuple[str, str]:
+        if env_var and (env_value := os.environ.get(env_var)):
+            return _fmt_setting(env_value), f"${env_var}"
+        if file_value is not None and file_value != ():
+            return _fmt_setting(file_value), "settings.toml"
+        return _fmt_setting(default), "default"
+
+    tables: dict[str, list[tuple[str, str, str]]] = {}
+    for table, key, file_value, default, env_var in descriptors:
+        tables.setdefault(table, []).append((key, *pick(file_value, default, env_var)))
+    return list(tables.items())
+
+
+def _fmt_setting(value: object) -> str:
+    """One effective value, TOML-flavored (bools lowercase, arrays bracketed)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, tuple):
+        return "[" + ", ".join(f'"{item}"' for item in value) + "]"
+    if isinstance(value, float):
+        return f"{value:g}"
+    return str(value)

@@ -207,7 +207,24 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]
+select = ["E", "F", "I", "UP", "B", "SIM", "TID251"]
+
+# The dependency arrow points one way: front-ends (cli/, gui/) import the
+# library, never the reverse. This is what keeps the module import graph
+# cycle-free and lets library modules hoist their imports to module scope.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"stenograf.cli".msg = "library code must not import the CLI front-end; move the logic into the library and let cli/ call it"
+"stenograf.gui".msg = "library code must not import the GUI front-end; move the logic into the library and let gui/ call it"
+
+[tool.ruff.lint.per-file-ignores]
+# The front-ends themselves, their entry point, and the tests may of course
+# import cli/gui; the ban is for library modules only.
+"src/stenograf/cli/**" = ["TID251"]
+"src/stenograf/gui/**" = ["TID251"]
+"src/stenograf/__main__.py" = ["TID251"]
+"tests/**" = ["TID251"]
+"eval/**" = ["TID251"]
+"scripts/**" = ["TID251"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,22 +1,23 @@
-"""Backend and capture-provider factory for the CLI: settings/env in, loaded objects out.
+"""Backend and capture-provider factory: settings/env in, loaded objects out.
 
 One place turns backend *names* into loaded backend objects with the
 committed defaults (parakeet, Silero VAD, sherpa+speakrs diarization) and
 builds the platform capture provider, so ``start``, ``transcribe``,
-``setup``, and ``profiles enroll`` can never disagree about selection,
-gating, or first-run downloads. Like :mod:`stenograf.view` this is
-CLI-support code — it reports progress via click and raises
-``click.ClickException`` for user errors; the pure selection seams it
-drives live in the library (:func:`stenograf.diarization.build_diarizer`,
-the ASR registry).
+``setup``, ``profiles enroll`` and the app can never disagree about
+selection, gating, or first-run downloads. User errors raise the library's
+own types — :class:`BackendUnavailableError` here,
+:class:`~stenograf.capture.base.CaptureUnavailableError` from the capture
+stack — and the CLI maps them to click errors at its command boundary; the
+pure selection seams live one layer down
+(:func:`stenograf.diarization.build_diarizer`, the ASR registry).
 
-The Qt app reuses these factories from inside a running GUI
-(:mod:`stenograf.flow`), where progress must not go through click — the
-process may own no usable stdio at all (a Windows ``pythonw`` launch, or the
-retired Textual TUI whose stdio proxy click probed to death with EBADF).
-Every announcing entry point therefore takes ``announce``: ``None`` keeps
-today's click-echoed CLI behaviour, a callable routes the same lines to the
-caller's sink (the meeting screen's status line).
+Both front-ends call these factories. The Qt app runs them inside a GUI,
+where progress must not go through click — the process may own no usable
+stdio at all (a Windows ``pythonw`` launch, or the retired Textual TUI whose
+stdio proxy click probed to death with EBADF). Every announcing entry point
+therefore takes ``announce``: ``None`` keeps the click-echoed CLI behaviour,
+a callable routes the same lines to the caller's sink (the meeting screen's
+status line).
 """
 
 from __future__ import annotations
@@ -31,6 +32,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     Announce = Callable[[str], None]
+
+
+class BackendUnavailableError(RuntimeError):
+    """The configured backend cannot run here: an unknown backend/provider
+    name, or a backend whose runtime dependencies this install lacks. The
+    message is user-facing and names the setting to change."""
 
 
 def _say(announce: Announce | None, message: str, *, warn: bool = False) -> None:
@@ -133,16 +140,17 @@ def load_backends(
 
     # The selection seam; a Linux backend registers alongside. Gate on the
     # spec's requires (as doctor and the model prefetch already do) so an
-    # unknown or uninstalled backend is a CLI error, not an import traceback.
+    # unknown or uninstalled backend is a clean user error, not an import
+    # traceback.
     name = default_backend_name(asr_backend)
     try:
         spec = get_spec(name)
         provider = validate_provider_name(default_provider_name(asr_provider))
     except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
+        raise BackendUnavailableError(str(exc)) from exc
     missing = [module for module in spec.requires if not installed(module)]
     if missing:
-        raise click.ClickException(
+        raise BackendUnavailableError(
             f"ASR backend {spec.label} is not installed here (missing: "
             f"{', '.join(missing)}) — reinstall stenograf, or select another backend "
             "via [asr] backend in settings.toml or STENOGRAF_ASR_BACKEND"
@@ -255,14 +263,13 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=N
             {ch: p for ch, p in sources.items() if ch in planned}, paced=paced
         )
 
+    from stenograf.capture.base import CaptureUnavailableError
+
     if sys.platform == "darwin":
-        from stenograf.capture.helper import HelperNotFoundError
         from stenograf.capture.macos import MacOSCaptureProvider
 
-        try:
-            return MacOSCaptureProvider(on_log=on_log)
-        except HelperNotFoundError as exc:
-            raise click.ClickException(str(exc)) from exc
+        # A missing helper raises HelperNotFoundError, a CaptureUnavailableError.
+        return MacOSCaptureProvider(on_log=on_log)
 
     if sys.platform.startswith("linux"):
         from stenograf.capture.linux import LinuxCaptureProvider, default_devices
@@ -274,7 +281,7 @@ def _base_provider(replay: str | None, plans, *, paced: bool = False, announce=N
 
         return _native_provider(WindowsCaptureProvider, default_devices, plans, announce, on_log)
 
-    raise click.ClickException(
+    raise CaptureUnavailableError(
         "live capture is supported on macOS, Linux, and Windows; here, transcribe "
         "a recorded file with `steno transcribe`, or use `steno start --replay`."
     )
@@ -288,14 +295,11 @@ def _native_provider(provider_cls, default_devices, plans, announce=None, on_log
     monitor-of-default-sink (Linux) / loopback-of-default-output (Windows)
     choice is invisible otherwise. macOS has no equivalent: its helper owns
     device selection.
-    """
-    from stenograf.capture.base import CaptureUnavailableError
 
-    try:
-        provider = provider_cls(on_log=on_log)
-        devices = default_devices({p.channel for p in plans})
-    except CaptureUnavailableError as exc:
-        raise click.ClickException(str(exc)) from exc
+    A broken audio stack raises CaptureUnavailableError from either call.
+    """
+    provider = provider_cls(on_log=on_log)
+    devices = default_devices({p.channel for p in plans})
     for channel, device in devices.items():
         _say(announce, f"capture: {channel.value} ← {device}")
     return provider

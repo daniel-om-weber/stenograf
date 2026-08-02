@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 from stenograf.paths import documents_dir
 
 if TYPE_CHECKING:
+    from stenograf.settings import Settings
     from stenograf.transcript import Transcript
 
 TRANSCRIPT_STEM = "transcript"
@@ -131,6 +132,68 @@ def write_transcript(
         atomic_write_text(path, FORMATS[fmt](transcript))
         paths.append(path)
     return paths
+
+
+class PersistOnce:
+    """Persist the finalized transcript exactly once, wherever that fires first.
+
+    Both front-ends hand one of these to their view/run so the transcript
+    reaches disk at the ``finalized`` event — a force-quit on the "done" screen,
+    or even mid-finalize, never loses the meeting. A first call that fails
+    leaves ``paths`` unset, so a later call retries and a raise there surfaces
+    normally; a second call after success is a no-op returning the
+    already-written paths.
+    """
+
+    def __init__(self, write: Callable[[Transcript], list[Path]]) -> None:
+        self._write = write
+        self.paths: list[Path] | None = None
+
+    def __call__(self, transcript: Transcript) -> list[Path]:
+        if self.paths is None:
+            self.paths = self._write(transcript)
+        return self.paths
+
+
+def prepare_output(
+    out: Path | None, created_at: datetime, settings: Settings, *, force: bool = False
+) -> tuple[Path, str, Path]:
+    """Resolve the directory this run's files land in.
+
+    Returns ``(out_dir, basename, audio_default)``. By default the meeting gets
+    a fresh date-named folder under the visible output home (``[output] dir``
+    in settings.toml, else ``Meetings`` in the user's documents folder — see
+    :func:`default_output_home`); an explicit ``out`` (the CLI's ``--out``)
+    uses that path itself as the meeting's folder. Either way the files inside
+    are plainly named — ``transcript.{fmt}``, ``audio.wav``.
+
+    File names inside a meeting folder are fixed, so pointing ``out`` at a
+    folder that already holds a transcript would silently replace that meeting;
+    raises :class:`FileExistsError` unless ``force`` says overwriting is the
+    point (a re-run over the same recording). The default path allocates a
+    fresh name and cannot collide; ``.partial`` checkpoints don't count —
+    resuming after a crash must not demand ``force``."""
+    from stenograf.transcript import FORMATS
+
+    if out is not None:
+        if not force:
+            existing = next(
+                (
+                    f"{TRANSCRIPT_STEM}.{ext}"
+                    for ext in FORMATS
+                    if (out / f"{TRANSCRIPT_STEM}.{ext}").exists()
+                ),
+                None,
+            )
+            if existing is not None:
+                raise FileExistsError(
+                    f"{out} already holds {existing} — pass --force to overwrite "
+                    "this meeting's files, or drop --out for a fresh folder"
+                )
+        out_dir = out
+    else:
+        out_dir = allocate_meeting_dir(settings.output.dir or default_output_home(), created_at)
+    return out_dir, TRANSCRIPT_STEM, out_dir / AUDIO_NAME
 
 
 def cleanup_checkpoints(out_dir: Path, basename: str) -> None:

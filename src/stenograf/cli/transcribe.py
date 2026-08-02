@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import click
 
@@ -21,19 +20,16 @@ from stenograf.cli.run import (
     _apply_no_diarization,
     _echo_glossary,
     _finish_run,
+    _library_errors,
     _load_reid,
     _notes_options,
-    _prepare_output,
     _reid_format_options,
     _resolve_diarization,
     _resolve_run_config,
     _vocab_options,
 )
 from stenograf.config import Language, MeetingProfile
-from stenograf.output import write_transcript
-
-if TYPE_CHECKING:
-    import numpy as np
+from stenograf.output import prepare_output, write_transcript
 
 
 @click.command()
@@ -123,6 +119,7 @@ if TYPE_CHECKING:
 @_reid_format_options
 @_vocab_options
 @_notes_options
+@_library_errors
 def transcribe(
     audio_file: Path,
     preset: str | None,
@@ -163,6 +160,7 @@ def transcribe(
     Use --out to name the folder yourself; --format also emits srt/vtt subtitles.
     """
     from stenograf.audio import SAMPLE_RATE, load_audio
+    from stenograf.pipeline import resolve_split_channels
 
     cfg = _resolve_run_config(
         formats=formats,
@@ -189,11 +187,13 @@ def transcribe(
     # Resolve (and overwrite-guard) the output folder before the transcription
     # work, so a refusal costs nothing — not minutes of ASR.
     created_at = datetime.now()
-    out_dir, basename, _ = _prepare_output(out, created_at, settings, force=force)
+    out_dir, basename, _ = prepare_output(out, created_at, settings, force=force)
 
     try:
-        split_pcms, correlation = _resolve_split_channels(audio_file, channels_mode)
-    except RuntimeError as exc:  # unreadable input (ffmpeg could not decode it)
+        split_pcms, correlation = resolve_split_channels(audio_file, channels_mode)
+    except (RuntimeError, ValueError) as exc:
+        # RuntimeError: unreadable input (ffmpeg could not decode it);
+        # ValueError: --channels split on non-2-channel audio.
         raise click.ClickException(str(exc)) from exc
     if split_pcms is not None and speakers is not None:
         raise click.ClickException(
@@ -233,6 +233,8 @@ def transcribe(
             + ("; --channels mix to downmix" if correlation is not None else "")
         )
         _echo_glossary(glossary_terms, attendee_names)
+        from stenograf.pipeline import transcribe_split_channels
+
         profile = MeetingProfile(
             language=given_language,
             local_speakers=local_speakers,
@@ -242,9 +244,10 @@ def transcribe(
             speaker_profile_store=profile_store,
             title=title,
         )
-        meeting_result, elapsed = _transcribe_split_channels(
+        meeting_result, elapsed = transcribe_split_channels(
             *split_pcms,
             profile=profile,
+            view=_echo_view(),
             use_reid=use_reid,
             reid_threshold=reid_threshold,
             glossary_threshold=glossary_threshold,
@@ -347,70 +350,8 @@ def transcribe(
     )
 
 
-def _resolve_split_channels(
-    audio_file: Path, mode: str
-) -> tuple[tuple[np.ndarray, np.ndarray] | None, float | None]:
-    """Decide mixed vs per-channel transcription for ``steno transcribe``.
-
-    Returns ``(pcms, correlation)``: ``pcms`` is the ``(left, right)`` float32
-    pair when the file should be transcribed as two voice channels, ``None``
-    for the classic mixed stream. ``correlation`` is the envelope correlation
-    whenever ``auto`` examined a 2-channel file (for the CLI to explain its
-    decision), ``None`` when no decision was needed or the split was forced.
-    """
-    from stenograf.audio import (
-        audio_channel_count,
-        channels_look_independent,
-        load_audio_channels,
-    )
-
-    count = audio_channel_count(audio_file)
-    if mode == "split" and count != 2:
-        raise click.ClickException(
-            f"--channels split needs 2-channel audio; {audio_file.name} has {count} channel(s)"
-        )
-    if count != 2 or mode == "mix":
-        return None, None
-    left, right = load_audio_channels(audio_file)
-    if mode == "split":
-        return (left, right), None
-    independent, correlation = channels_look_independent(left, right)
-    return ((left, right) if independent else None), correlation
-
-
-def _transcribe_split_channels(
-    left: np.ndarray,
-    right: np.ndarray,
-    *,
-    profile: MeetingProfile,
-    use_reid: bool,
-    reid_threshold: float | None,
-    glossary_threshold: float | None,
-    asr_backend: str | None = None,
-    asr_provider: str | None = None,
-    asr_boost: float | None = None,
-    profile_store: Path | None = None,
-    view=None,
-):
-    """Transcribe two voice channels through the meeting finalize.
-
-    This is the exact pipeline a live meeting runs on stop — per-channel ASR
-    and diarization with the channel's speaker count, cross-channel echo-text
-    dedup (armed conservatively: the recording's canceller state is unknown),
-    glossary, one interleaved Local-N/Remote-N transcript — just fed from a
-    file instead of a capture session. Returns ``(result, elapsed)``; the
-    :class:`~stenograf.session.MeetingResult` carries the per-channel speaker
-    counts for reporting, ``elapsed`` the processing seconds (clocked after
-    model load, so a first-run weight download never masquerades as
-    transcription speed).
-
-    ``view`` receives the finalize's per-channel status lines; ``None`` (the
-    CLI) echoes them to stdout. The Qt TranscribeScreen passes its own — a
-    click echo has no terminal to land on in a GUI process.
-    """
-    from stenograf.audio import to_int16
-    from stenograf.capture.base import AudioFrame, Channel
-    from stenograf.session import MeetingRecorder, SessionStore, plan_channels
+def _echo_view():
+    """The CLI's view for library calls: status to stdout, warnings to stderr."""
     from stenograf.view import LiveView
 
     class _StatusEcho(LiveView):
@@ -420,35 +361,4 @@ def _transcribe_split_channels(
         def error(self, message: str) -> None:
             click.echo(f"warning: {message}", err=True)
 
-    plans = plan_channels(profile)
-    asr, vad, diarizer = loaders.load_backends(
-        need_diarizer=any(p.num_speakers != 1 for p in plans),
-        asr_backend=asr_backend,
-        asr_provider=asr_provider,
-        glossary=profile.glossary,
-        attendee_names=profile.attendee_names,
-        boost=asr_boost,
-        # An injected view means a GUI owns the run — loader progress must
-        # follow the status lines, not click (loaders module docstring).
-        announce=None if view is None else view.status,
-    )
-    reid = _load_reid(
-        diarizer,
-        enabled=use_reid,
-        threshold=reid_threshold,
-        store=profile_store or profile.speaker_profile_store,
-    )
-    recorder = MeetingRecorder(
-        profile,
-        asr=asr,
-        vad=vad,
-        diarizer=diarizer,
-        reid=reid,
-        glossary_threshold=glossary_threshold,
-    )
-    store = SessionStore({Channel.MIC, Channel.SYSTEM})
-    store.append(AudioFrame(Channel.MIC, 0.0, to_int16(left)))
-    store.append(AudioFrame(Channel.SYSTEM, 0.0, to_int16(right)))
-    started = time.monotonic()
-    result = recorder.finalize(store, plans, view=view if view is not None else _StatusEcho())
-    return result, time.monotonic() - started
+    return _StatusEcho()

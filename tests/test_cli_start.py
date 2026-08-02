@@ -189,15 +189,19 @@ def test_resolve_flush_interval_defaults_are_mode_aware():
 
 
 def test_persist_once_writes_once_and_replays_paths():
+    from stenograf.output import PersistOnce
+
     sentinel = object()
     calls = []
-    persist = cli.start._PersistOnce(lambda t: calls.append(t) or [Path("t.md")])
+    persist = PersistOnce(lambda t: calls.append(t) or [Path("t.md")])
     assert persist(sentinel) == [Path("t.md")]
     assert persist(sentinel) == [Path("t.md")]  # second call replays, no rewrite
     assert calls == [sentinel]
 
 
 def test_persist_once_retries_after_a_failed_write():
+    from stenograf.output import PersistOnce
+
     attempts = []
 
     def flaky(transcript):
@@ -206,7 +210,7 @@ def test_persist_once_retries_after_a_failed_write():
             raise OSError("disk full")
         return [Path("t.md")]
 
-    persist = cli.start._PersistOnce(flaky)
+    persist = PersistOnce(flaky)
     with pytest.raises(OSError):
         persist(object())  # the event-time write fails...
     assert persist.paths is None  # ...and is not marked done
@@ -279,7 +283,7 @@ def test_start_generates_notes_through_the_finish_tail(tmp_path, monkeypatch):
         return [tmp_path / "notes.md"], MeetingNotes(title="T", body="S")
 
     monkeypatch.setattr(loaders, "load_backends", fake_load_backends)
-    monkeypatch.setattr("stenograf.cli.notes._generate_and_write_notes", fake_generate)
+    monkeypatch.setattr("stenograf.notes.run.generate_and_write_notes", fake_generate)
     mic = tmp_path / "mic.wav"
     write_wav(mic)
 

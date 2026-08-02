@@ -159,21 +159,18 @@ def test_prefetch_models_skips_asr_when_backend_deps_absent(monkeypatch, tmp_pat
 
 
 def test_load_backends_refuses_uninstalled_backend(monkeypatch):
-    """A selected backend whose runtime is absent must be a CLI error, not an
-    import traceback from deep inside ``asr.load()``."""
-    import click
-
+    """A selected backend whose runtime is absent must be a typed user error
+    (the CLI boundary maps it to a clean message), not an import traceback
+    from deep inside ``asr.load()``."""
     from stenograf import doctor
 
     monkeypatch.setattr(doctor, "installed", lambda module: False)
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
-    with pytest.raises(click.ClickException, match="parakeet-mlx is not installed"):
+    with pytest.raises(loaders.BackendUnavailableError, match="parakeet-mlx is not installed"):
         loaders.load_backends(need_diarizer=False)
 
 
 def test_load_backends_refuses_unknown_backend(monkeypatch):
-    import click
-
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "no-such-backend")
-    with pytest.raises(click.ClickException, match="unknown ASR backend"):
+    with pytest.raises(loaders.BackendUnavailableError, match="unknown ASR backend"):
         loaders.load_backends(need_diarizer=False)

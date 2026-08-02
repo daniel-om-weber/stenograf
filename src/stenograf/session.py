@@ -383,6 +383,18 @@ grey tail. ``LiveView.update`` (view.py) has this signature, so a view wires
 straight to the worker."""
 
 
+LIVE_FLUSH_INTERVAL_S = 15.0
+"""Default checkpoint cadence for a live run. A live checkpoint is
+zero-inference — it snapshots the captions the live pass already committed, a
+few KB of atomic file I/O — so it can afford to be tight (a crash loses
+seconds of text, not minutes)."""
+
+BATCH_FLUSH_INTERVAL_S = 180.0
+"""Default checkpoint cadence for a batch (no-live) run, which finalizes the
+new tail with VAD+ASR per checkpoint — sparse, to keep that mode's
+near-zero-power promise."""
+
+
 @dataclass(frozen=True)
 class CheckpointConfig:
     """Crash-checkpoint wiring.
@@ -394,7 +406,7 @@ class CheckpointConfig:
     """
 
     write: Callable[[Transcript], None]
-    interval: float = 180.0
+    interval: float = BATCH_FLUSH_INTERVAL_S
 
     @property
     def enabled(self) -> bool:

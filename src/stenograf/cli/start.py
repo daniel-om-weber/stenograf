@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,45 +13,43 @@ if TYPE_CHECKING:
     from stenograf.session import MeetingRecorder, MeetingResult
 
 from stenograf import loaders
-from stenograf.capture.base import CaptureHelperError
 from stenograf.cli.format import _MEETING_MAX_SPEAKERS, _report_speaker_counts
 from stenograf.cli.run import (
     _apply_no_diarization,
     _echo_glossary,
     _finish_run,
+    _library_errors,
     _load_reid,
     _notes_options,
-    _prepare_output,
     _reid_format_options,
     _resolve_diarization,
     _resolve_run_config,
     _vocab_options,
 )
 from stenograf.config import Language, MeetingProfile
-from stenograf.output import checkpoint_writer, cleanup_checkpoints, write_transcript
+from stenograf.output import (
+    PersistOnce,
+    checkpoint_writer,
+    cleanup_checkpoints,
+    prepare_output,
+    write_transcript,
+)
 from stenograf.transcript import Transcript
 
 # Sentinel for --record-audio given without a value (write next to the transcript).
 _RECORD_DEFAULT = "\0default"
 
-# --flush-interval defaults, sized to what one checkpoint costs per mode.
-_LIVE_FLUSH_INTERVAL_S = 15.0
-_BATCH_FLUSH_INTERVAL_S = 180.0
-
 
 def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
-    """The ``--flush-interval`` default is sized to what a checkpoint costs.
-
-    A live checkpoint is zero-inference — it snapshots the captions the live
-    pass already committed, a few KB of atomic file I/O — so it can afford to
-    be tight (a crash loses seconds of text, not minutes). A batch
-    (``--no-live``) checkpoint runs VAD+ASR over the new tail, so it stays
-    sparse to keep that mode's near-zero-power promise. An explicit value
-    (including 0 = disabled) wins in both modes.
+    """The ``--flush-interval`` default is sized to what a checkpoint costs —
+    the per-mode constants beside ``CheckpointConfig`` say how. An explicit
+    value (including 0 = disabled) wins in both modes.
     """
     if value is not None:
         return value
-    return _LIVE_FLUSH_INTERVAL_S if live else _BATCH_FLUSH_INTERVAL_S
+    from stenograf.session import BATCH_FLUSH_INTERVAL_S, LIVE_FLUSH_INTERVAL_S
+
+    return LIVE_FLUSH_INTERVAL_S if live else BATCH_FLUSH_INTERVAL_S
 
 
 @click.command()
@@ -207,6 +204,7 @@ def _resolve_flush_interval(value: float | None, *, live: bool) -> float:
     "from-scratch ASR pass for A/B comparison or paranoia.",
 )
 @_notes_options
+@_library_errors
 def start(
     preset: str | None,
     lang: str | None,
@@ -318,7 +316,7 @@ def start(
     # (or --out as the folder), holding transcript.{md,json,…} + optional
     # audio.wav — self-describing files, no index.
     created_at = datetime.now()
-    out_dir, basename, audio_default = _prepare_output(out, created_at, settings, force=force)
+    out_dir, basename, audio_default = prepare_output(out, created_at, settings, force=force)
 
     channels = ", ".join(p.channel.value for p in plans)
     stop_hint = f"stops after {max_seconds:g}s" if max_seconds else "press Ctrl-C to stop"
@@ -377,9 +375,12 @@ def start(
         cleanup_checkpoints(out_dir, basename)
         return paths
 
-    persist = _PersistOnce(_persist_files)
+    persist = PersistOnce(_persist_files)
 
     try:
+        # A capture transport that dies with nothing recorded raises
+        # CaptureHelperError (its FATAL detail already printed on inherited
+        # stderr); the _library_errors boundary reports it cleanly.
         result = _run_meeting(
             recorder,
             provider,
@@ -390,11 +391,6 @@ def start(
             flush_interval=flush_interval,
             max_seconds=max_seconds,
         )
-    except CaptureHelperError as exc:
-        # Capture died with nothing recorded (session.py refuses to publish an
-        # empty transcript): a real failure, not a traceback-worthy crash. The
-        # helper's FATAL detail already printed on inherited stderr.
-        raise click.ClickException(str(exc)) from exc
     finally:
         if tee is not None:
             tee.close()
@@ -508,25 +504,6 @@ def _run_meeting(
         max_seconds=max_seconds,
         provider_started=True,
     )
-
-
-class _PersistOnce:
-    """Persist the finalized transcript exactly once, wherever that fires first.
-
-    A holdover of the retired TUI shape, kept because the contract is still
-    right: a first call that fails leaves ``paths`` unset, so a later call
-    retries and a raise there surfaces as a normal CLI error; a second call
-    after success is a no-op returning the already-written paths.
-    """
-
-    def __init__(self, write: Callable[[Transcript], list[Path]]) -> None:
-        self._write = write
-        self.paths: list[Path] | None = None
-
-    def __call__(self, transcript: Transcript) -> list[Path]:
-        if self.paths is None:
-            self.paths = self._write(transcript)
-        return self.paths
 
 
 def _make_tee(record_audio: str | None, default_path: Path, plans):
