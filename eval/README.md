@@ -329,6 +329,48 @@ fold arm exactly on all ten loop channels — IS1009c's confusion drops
 the same operating points (DIR 88.2 % @ FAR 0, 94.1 % @ 3.4 %); only the
 FAR-0 *threshold* moved (0.609 → 0.809), which belongs to step 2.4's sweep.
 
+#### Overlap-clean embeddings, and the fold criterion they exposed (2026-08-06)
+
+`cluster_embeddings()` now excludes spans where another cluster is active
+before embedding (a fully-overlapped cluster falls back to its raw turns —
+absent embeddings would block naming, collapse and fold). The literature
+motive: overlap in the embedding measurably hurts (12.84 → 14.11 % EER), and
+frame-level identity inside overlap is near-chance.
+
+**The first matrix gate failed**, and the diagnosis changed the fold. Loop
+attribution fell 90.1 → 83.1 % and DIR@FAR0 88.2 → 66.7 %, all of it in
+channels where the k+1 fold had fused two large real clusters. On the cached
+k+1 turns the max-similarity pair had *never* been the semantically right
+pair — under overlap-included embeddings it merely happened to involve the
+tiny spare cluster, whose similarity was inflated by audio it shared with a
+real cluster, so the wrong fold cost single-digit seconds. Cleaning removed
+exactly that inflation, and the max pair became two large real speakers
+(ES2003b: 182 s + 485 s fused). The four-arm comparison on all ten loops:
+
+| fold criterion | raw embeddings | clean embeddings |
+|---|---|---|
+| most-similar pair | 90.1 % | 83.1 % |
+| smallest → most-similar partner | 90.1 % | **90.1 %** |
+
+So the shipped fold picks the *spare by duration* and only its partner by
+similarity — a wrong partner can never cost more than the spare's own speech
+— and that criterion is embedding-insensitive where max-pair was luck.
+IS1009c's +20.8 survives under it. The collapse discriminator re-measured
+*cleaner* with overlap-clean embeddings: split solos 0.73–0.98, synthesized
+2-speaker channels ≤ 0.39 (still 0/24 false collapses), loops ≤ 0.16;
+`COLLAPSE_SIMILARITY` stays 0.6, now nearer the solo edge so the
+unrecoverable direction (two real speakers merged) keeps the bigger margin.
+
+The second matrix gate passed: loop attribution back at 90.1 % mean
+(channel-identical to the offline clean/smallest arm), and the re-ID curve at
+the strict end is unchanged-to-better — DIR 88.2 % @ FAR 0 at threshold 0.605
+(baseline 0.609), FRR there 11.8 → 5.9 %. The loose-end ceiling dropped
+94.1 → 88.2 %: exactly one of 17 known trials, single-trial granularity. Both
+wrong-name trials sit on clusters from the two most confusion-heavy loops
+(ES2003d, IS1009b) — clusters the diarizer already mixed, a clustering
+problem (steps 4–5), not an embedding one. Re-judge when the trial set grows
+(the step-2.4 precondition).
+
 #### A boundary margin at word intersection is a no-op here (2026-08-06)
 
 The literature's ~0.1 s turn padding (TST-Bench +0.26 DIR) presumes an

@@ -145,11 +145,15 @@ word intersection explicitly last and not touched).
      shipped forms. "Bias the estimate up" needed no knob: the estimator
      already over-splits (est k ≥ true k on 30/30 measured channels); recovery
      is the mechanism.
-4. **Overlap-clean embeddings.** `cluster_embeddings()` currently slices by
-   turn times, overlap included. Exclude spans where ≥2 turns are active
-   (computable from the turn list alone) before embedding — including
-   overlap measurably *worsens* the embedding (12.84 → 14.11 % EER), and
-   frame-level identity in overlap is near-chance (35 %).
+4. **Overlap-clean embeddings — SHIPPED 2026-08-06**, and the gate that
+   failed on the way is the important part: cleaning broke the step-1.3 fold,
+   whose most-similar-pair criterion turned out to have been *luck* riding on
+   overlap-inflated similarity around the tiny spare cluster (first matrix
+   gate: 90.1 → 83.1 % attribution, DIR 88.2 → 66.7 %). The fold now picks
+   the spare by duration and only its partner by similarity — bounded damage,
+   embedding-insensitive, 90.1 % under both embedding types — and cleaning
+   stays, with the collapse band measured wider (2-speaker ≤ 0.39 vs solo
+   ≥ 0.73). Full story and the four-arm table: `eval/README.md`.
 5. **Minimum-audio gate for naming.** A cluster with < ~3 s of clean
    (non-overlap) speech is not matched against profiles — EER at 2 s is
    2.4× the full-duration figure, and ERes2Net-base specifically collapses

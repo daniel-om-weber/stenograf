@@ -20,8 +20,9 @@ from stenograf.audio import SAMPLE_RATE, l2_normalize, to_float32
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
 
 MIN_EMBED_SECONDS = 0.5
-"""Turns shorter than this are too brief for a reliable voice embedding; they are
-skipped when a cluster has any longer turn, and used only as a last resort."""
+"""Speech spans shorter than this are too brief for a reliable voice embedding;
+they are skipped when a cluster has any longer span, and used only as a last
+resort (see :func:`cluster_embeddings`)."""
 
 _MAX_THREADS = 8
 """sherpa defaults every model to a single ORT intra-op thread, which makes
@@ -146,27 +147,87 @@ def cluster_embeddings(
     Shared by every diarization backend that pairs its turns with sherpa's
     ``SpeakerEmbeddingExtractor`` (the ``embed`` callable) — re-ID voiceprints
     must come from one embedding model regardless of which backend produced
-    the turns. Slices shorter than :data:`MIN_EMBED_SECONDS` are skipped
-    unless they are all a cluster has; each embedding is L2-normalized,
+    the turns. Spans where a *different* cluster is active too are excluded
+    before embedding: overlapped audio measurably worsens the embedding
+    (12.84 → 14.11 % EER with overlap included, and frame-level identity in
+    overlap is near-chance — the research record in
+    ``eval/diarization-sota-2026.md``). Spans shorter than
+    :data:`MIN_EMBED_SECONDS` are skipped unless they are all a cluster has;
+    a cluster whose speech is entirely overlapped falls back to its raw turns
+    (a contaminated embedding still serves naming and the collapse/fold rules,
+    an absent one blocks them). Each embedding is L2-normalized,
     duration-weighted, and averaged, and the mean re-normalized. A cluster
     with no embeddable audio is omitted."""
     audio = to_float32(samples)
     by_cluster: dict[str, list[SpeakerTurn]] = {}
     for turn in turns:
         by_cluster.setdefault(turn.speaker, []).append(turn)
+    overlap = _overlap_spans(by_cluster)
 
     embeddings: dict[str, np.ndarray] = {}
     for speaker, cluster_turns in by_cluster.items():
-        long = [t for t in cluster_turns if t.end - t.start >= MIN_EMBED_SECONDS]
-        selected = long or cluster_turns  # fall back to short turns if that's all there is
+        raw = [(t.start, t.end) for t in cluster_turns]
+        spans = _subtract_spans(raw, overlap) or raw
+        long = [s for s in spans if s[1] - s[0] >= MIN_EMBED_SECONDS]
         vectors, weights = [], []
-        for turn in selected:
-            slice_ = audio[int(turn.start * SAMPLE_RATE) : int(turn.end * SAMPLE_RATE)]
-            vector = embed(slice_)
+        for start, end in long or spans:
+            vector = embed(audio[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)])
             if vector is not None:
                 vectors.append(vector)
-                weights.append(turn.end - turn.start)
+                weights.append(end - start)
         if vectors:
             mean = np.average(vectors, axis=0, weights=weights)
             embeddings[speaker] = l2_normalize(mean)
     return embeddings
+
+
+def _overlap_spans(by_cluster: dict[str, list[SpeakerTurn]]) -> list[tuple[float, float]]:
+    """Spans where at least two clusters speak at once, sorted and disjoint.
+
+    Each cluster's turns are unioned first, so a cluster overlapping itself
+    (back-to-back or re-emitted turns) never counts as overlapped speech."""
+    events: list[tuple[float, int]] = []
+    for cluster_turns in by_cluster.values():
+        merged: list[tuple[float, float]] = []
+        for t in sorted(cluster_turns, key=lambda t: t.start):
+            if merged and t.start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], t.end))
+            else:
+                merged.append((t.start, t.end))
+        for start, end in merged:
+            events += [(start, 1), (end, -1)]
+
+    events.sort()  # ends before starts at equal times: touching spans never overlap
+    spans: list[tuple[float, float]] = []
+    depth = 0
+    overlap_start = 0.0
+    for time_, delta in events:
+        was = depth
+        depth += delta
+        if was < 2 <= depth:
+            overlap_start = time_
+        elif was >= 2 > depth:
+            spans.append((overlap_start, time_))
+    return spans
+
+
+def _subtract_spans(
+    spans: list[tuple[float, float]], cuts: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """``spans`` minus ``cuts`` (both lists of (start, end); cuts sorted, disjoint)."""
+    result = []
+    for start, end in spans:
+        cursor = start
+        for cut_start, cut_end in cuts:
+            if cut_end <= cursor:
+                continue
+            if cut_start >= end:
+                break
+            if cut_start > cursor:
+                result.append((cursor, cut_start))
+            cursor = max(cursor, cut_end)
+            if cursor >= end:
+                break
+        if cursor < end:
+            result.append((cursor, end))
+    return result

@@ -218,12 +218,15 @@ def _attribute(
 COLLAPSE_SIMILARITY = 0.6
 """An estimated-count channel collapses to one speaker when every pair of its
 cluster embeddings is at least this similar. Measured 2026-08-06 on the corpus
-harness (``eval/README.md``): channels that really hold one voice but were
-split 2–3 ways sit at min pairwise cosine 0.74–0.98 (10/10 recovered), true
-two-speaker channels at 0.00–0.45 (0/24 falsely collapsed), larger groups at
-≤0.18 — 0.6 is the middle of the empty band. Only the everything-is-one-voice
-collapse is safe: merging individual similar pairs on a multi-speaker channel
-measurably destroys attribution (cross-speaker cluster means reach 0.95)."""
+harness with overlap-clean embeddings (``eval/README.md``): channels that
+really hold one voice but were split 2–3 ways sit at min pairwise cosine
+0.73–0.98 (10/10 recovered), true two-speaker channels at ≤0.39 (0/24 falsely
+collapsed), larger groups at ≤0.16. 0.6 sits in the empty band, deliberately
+nearer its solo edge: the false collapse (two real speakers merged) is the
+unrecoverable failure, so it gets the larger margin. Only the
+everything-is-one-voice collapse is safe at all: merging individual similar
+pairs on a multi-speaker channel measurably destroys attribution
+(cross-speaker cluster means reach 0.95)."""
 
 
 def collapse_single_voice(
@@ -255,7 +258,8 @@ def fold_excess_clusters(
     embeddings: dict[str, np.ndarray],
     num_speakers: int,
 ) -> tuple[list[SpeakerTurn], dict[str, np.ndarray]]:
-    """Fold the most-similar cluster pairs until ``num_speakers`` remain.
+    """Fold the smallest cluster into its most-similar partner until
+    ``num_speakers`` remain.
 
     A known-count channel is diarized at one cluster *over* the stated count,
     then folded back here: the spare cluster gives the clustering room to keep
@@ -263,11 +267,16 @@ def fold_excess_clusters(
     (measured 2026-08-06 on the corpus harness: +2.3 pts mean word attribution,
     one channel +20.8, worst channel −0.3 — ``eval/README.md``), and the fold
     returns exactly the count the user stated, so no phantom speaker appears.
-    Each fold merges the two clusters with the highest embedding cosine into
-    the one with more speech, its embedding replaced by their duration-weighted
-    mean. Clusters without an embedding cannot be folded; if too few clusters
-    have one, the remainder is returned unfolded (real backends always embed —
-    see ``DiarizationResult.embeddings``).
+    The spare is identified by *duration* — the smallest cluster — and only its
+    partner by similarity, so a wrong partner choice can never cost more than
+    the spare's own speech. Folding the globally most-similar pair instead
+    measured 7 pts worse with overlap-clean embeddings (2026-08-06): the true
+    pairing is rarely the max pair, and what made max-pair look right before
+    was overlap-inflated similarity around the tiny spare — luck, not
+    mechanism. The merged cluster keeps the longer side's label; its embedding
+    is the duration-weighted mean. Clusters without an embedding cannot be
+    folded; if too few clusters have one, the remainder is returned unfolded
+    (real backends always embed — see ``DiarizationResult.embeddings``).
     """
     turns = list(turns)
     embeddings = dict(embeddings)
@@ -278,10 +287,14 @@ def fold_excess_clusters(
         embedded = [c for c in durations if c in embeddings]
         if len(embedded) < 2:
             return turns, embeddings
-        _, a, b = max(
-            (float(embeddings[x] @ embeddings[y]), x, y) for x, y in combinations(embedded, 2)
+        spare = min(embedded, key=lambda c: durations[c])
+        partner = max(
+            (c for c in embedded if c != spare),
+            key=lambda c: float(embeddings[c] @ embeddings[spare]),
         )
-        keep, fold = (a, b) if durations[a] >= durations[b] else (b, a)
+        keep, fold = (
+            (partner, spare) if durations[partner] >= durations[spare] else (spare, partner)
+        )
         turns = [replace(t, speaker=keep) if t.speaker == fold else t for t in turns]
         merged = embeddings[keep] * durations[keep] + embeddings[fold] * durations[fold]
         embeddings[keep] = l2_normalize(merged)

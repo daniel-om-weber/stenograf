@@ -120,6 +120,61 @@ def test_short_only_cluster_falls_back_to_its_short_turns():
     assert np.linalg.norm(result.embeddings["S0"]) == pytest.approx(1.0, abs=1e-6)
 
 
+def test_overlap_with_another_cluster_is_excluded():
+    # S0 speaks 0–2 and 3–5; S1 speaks 1–2 (inside S0's first turn). S0's
+    # first embeddable span shrinks to 0–1, so its weight is 1 against 2 for
+    # the clean 3–5 span; with overlap included both would weigh 2 and the
+    # mean would sit at 45°.
+    d = _wired(
+        [_seg(0, 0.0, 2.0), _seg(0, 3.0, 5.0), _seg(1, 1.0, 2.0)],
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    )
+    result = d.diarize_with_embeddings(np.ones(6 * SAMPLE_RATE, dtype=np.int16))
+    expected = np.array([1.0, 2.0, 0.0]) / np.sqrt(5.0)
+    assert result.embeddings["S0"] == pytest.approx(expected, abs=1e-6)
+
+
+def test_fully_overlapped_cluster_falls_back_to_raw_turns():
+    # S1 speaks only while S0 does: no clean audio at all. It still gets an
+    # embedding (from its raw, contaminated turn) — an absent one would block
+    # naming, the collapse and the fold.
+    d = _wired(
+        [_seg(0, 0.0, 3.0), _seg(1, 1.0, 2.0)],
+        [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+    )
+    result = d.diarize_with_embeddings(np.ones(3 * SAMPLE_RATE, dtype=np.int16))
+    assert set(result.embeddings) == {"S0", "S1"}
+
+
+def test_overlap_spans_ignore_self_overlap_and_touching_turns():
+    from stenograf.diarization.base import SpeakerTurn
+    from stenograf.diarization.sherpa import _overlap_spans
+
+    def turns(speaker, *spans):
+        return [SpeakerTurn(speaker, s, e) for s, e in spans]
+
+    # A cluster overlapping itself is one voice, not overlapped speech.
+    assert _overlap_spans({"S0": turns("S0", (0.0, 2.0), (1.0, 3.0))}) == []
+    # Touching turns of different clusters share no time.
+    assert _overlap_spans({"S0": turns("S0", (0.0, 1.0)), "S1": turns("S1", (1.0, 2.0))}) == []
+    # A genuine cross-cluster overlap, exactly the shared interval.
+    assert _overlap_spans(
+        {"S0": turns("S0", (0.0, 2.0)), "S1": turns("S1", (1.0, 3.0))}
+    ) == [(1.0, 2.0)]
+
+
+def test_subtract_spans_splits_and_clips():
+    from stenograf.diarization.sherpa import _subtract_spans
+
+    assert _subtract_spans([(0.0, 5.0)], [(1.0, 2.0), (3.0, 4.0)]) == [
+        (0.0, 1.0),
+        (2.0, 3.0),
+        (4.0, 5.0),
+    ]
+    assert _subtract_spans([(1.0, 3.0)], [(0.0, 2.0)]) == [(2.0, 3.0)]
+    assert _subtract_spans([(1.0, 3.0)], [(0.0, 4.0)]) == []
+
+
 def test_l2_normalize_guards_the_zero_vector():
     zero = l2_normalize(np.zeros(3, dtype=np.float32))
     assert np.all(zero == 0.0) and not np.any(np.isnan(zero))  # no div-by-zero / NaN

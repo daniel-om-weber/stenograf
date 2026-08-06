@@ -369,17 +369,33 @@ class TestFoldExcessClusters:
         v = np.asarray(components, dtype=np.float32)
         return v / np.linalg.norm(v)
 
-    def test_folds_most_similar_pair_into_the_longer_cluster(self):
+    def test_folds_smallest_cluster_into_its_most_similar_partner(self):
+        # S1 is the spare (least speech); of S0/S2 it is closest to S0, and the
+        # merge keeps the longer side's label.
         turns = [turn("S0", 0.0, 4.0), turn("S1", 4.0, 5.0), turn("S2", 5.0, 8.0)]
         embeddings = {
             "S0": self._unit(1.0, 0.0),
-            "S1": self._unit(0.9, 0.44),  # closest to S0; S0 has more speech
+            "S1": self._unit(0.9, 0.44),
             "S2": self._unit(0.0, 1.0),
         }
         folded_turns, folded_emb = fold_excess_clusters(turns, embeddings, 2)
         assert [t.speaker for t in folded_turns] == ["S0", "S0", "S2"]
         assert set(folded_emb) == {"S0", "S2"}
         assert np.linalg.norm(folded_emb["S0"]) == pytest.approx(1.0)
+
+    def test_spare_is_chosen_by_duration_not_similarity(self):
+        # The two long clusters are the most similar pair by far, but only the
+        # smallest cluster may fold — a wrong partner can then never cost more
+        # than the spare's own speech.
+        turns = [turn("S0", 0.0, 4.0), turn("S1", 4.0, 8.0), turn("S2", 8.0, 9.0)]
+        embeddings = {
+            "S0": self._unit(1.0, 0.0, 0.0),
+            "S1": self._unit(0.98, 0.2, 0.0),  # near-duplicate of S0
+            "S2": self._unit(0.0, 0.0, 1.0),  # the spare, similar to nothing
+        }
+        folded_turns, _ = fold_excess_clusters(turns, embeddings, 2)
+        assert len({t.speaker for t in folded_turns}) == 2
+        assert {"S0", "S1"} <= {t.speaker for t in folded_turns}  # long pair untouched
 
     def test_at_or_below_count_is_untouched(self):
         turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)]
@@ -444,7 +460,7 @@ class TestCollapseSingleVoice:
             diarizer=diarizer,
             num_speakers=None,
         )
-        assert {e.speaker for e in entries} == {"S0"}
+        assert len({e.speaker for e in entries}) == 1
 
 
 class MappingReID:

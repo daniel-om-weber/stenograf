@@ -112,8 +112,15 @@ def _pairwise(embeddings: dict[str, np.ndarray]) -> list[float]:
     ]
 
 
-def _est_result(channel, estimator) -> tuple[list[Turn], dict[str, np.ndarray]]:
-    """Estimate-mode turns + cluster embeddings, cached under ``ami-est/``."""
+def _est_result(channel, estimator, embed) -> tuple[list[Turn], dict[str, np.ndarray]]:
+    """Estimate-mode turns + cluster embeddings, cached under ``ami-est/``.
+
+    The two caches invalidate independently: deleting only ``.emb.json`` (an
+    embedding-computation change) re-embeds the cached turns without re-running
+    the estimator, so the turns stay fixed across embedding experiments."""
+    from stenograf.diarization.base import SpeakerTurn
+    from stenograf.diarization.sherpa import cluster_embeddings
+
     rttm_path = EST_DIR / f"{channel.id}.rttm"
     emb_path = EST_DIR / f"{channel.id}.emb.json"
     if rttm_path.exists() and emb_path.exists():
@@ -122,14 +129,23 @@ def _est_result(channel, estimator) -> tuple[list[Turn], dict[str, np.ndarray]]:
             for k, v in json.loads(emb_path.read_text()).items()
         }
         return parse_rttm(rttm_path), embeddings
-    result = estimator.diarize_with_embeddings(read_pcm16(channel.wav_path), None)
-    turns = [Turn(t.speaker, t.start, t.end) for t in result.turns]
-    EST_DIR.mkdir(parents=True, exist_ok=True)
-    write_rttm(rttm_path, turns, channel.id)
+    if rttm_path.exists():
+        turns = parse_rttm(rttm_path)
+        embeddings = cluster_embeddings(
+            [SpeakerTurn(t.speaker, t.start, t.end) for t in turns],
+            read_pcm16(channel.wav_path),
+            embed,
+        )
+    else:
+        result = estimator.diarize_with_embeddings(read_pcm16(channel.wav_path), None)
+        turns = [Turn(t.speaker, t.start, t.end) for t in result.turns]
+        embeddings = result.embeddings
+        EST_DIR.mkdir(parents=True, exist_ok=True)
+        write_rttm(rttm_path, turns, channel.id)
     emb_path.write_text(
-        json.dumps({k: [float(x) for x in v] for k, v in result.embeddings.items()})
+        json.dumps({k: [float(x) for x in v] for k, v in embeddings.items()})
     )
-    return turns, result.embeddings
+    return turns, embeddings
 
 
 def main() -> int:
@@ -159,7 +175,7 @@ def main() -> int:
             continue
         ref = parse_rttm(channel.ref_path)
         words = _load_word_times(words_path)
-        turns, embeddings = _est_result(channel, estimator)
+        turns, embeddings = _est_result(channel, estimator, sherpa.embed)
         gallery = galleries.get(channel.group) if channel.session != ami.ENROLL_SESSION else None
 
         durations = {c: sum(t.end - t.start for t in turns if t.speaker == c) for c in embeddings}
