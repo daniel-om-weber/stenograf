@@ -30,6 +30,7 @@ import threading
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
+from dataclasses import replace as dc_replace
 from difflib import SequenceMatcher
 
 import numpy as np
@@ -49,7 +50,7 @@ from stenograf.config import (
     ResolvedParameters,
     resolve_value,
 )
-from stenograf.diarization.base import Diarizer
+from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD
 from stenograf.live import StreamingUpdate, WindowedLiveDecoder
 from stenograf.pipeline import (
@@ -216,11 +217,12 @@ class MeetingResult:
     reference never arrived (see :func:`_reference_gap`); ``None`` = no
     canceller was observed."""
     speaker_embeddings: dict[str, np.ndarray] = field(default_factory=dict)
-    """Each diarized speaker's voice embedding under the label the transcript
-    shows (``Local-N``/``Remote-N`` or a matched profile name) — what a later
-    "this speaker is …" correction enrolls from (``steno profiles assign``).
-    Empty when no channel was diarized: a solo channel has no cluster
-    embedding."""
+    """Each speaker's voice embedding under the label the transcript shows
+    (``Local-N``/``Remote-N`` or a matched profile name) — what a later "this
+    speaker is …" correction enrolls from (``steno profiles assign``).
+    Diarized channels contribute per-cluster embeddings; a solo channel
+    contributes one over its transcribed speech. Empty when the meeting ran
+    without its speaker machinery (the diarization switch off)."""
 
 
 def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
@@ -1026,16 +1028,25 @@ class MeetingRecorder:
             note = ", reusing live decodes" if reused is not None else ""
             view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)}{note})")
             diarizer = None if plan.num_speakers == 1 else self.diarizer
+            # A solo channel skips the diarizer (nothing to separate) but not
+            # the voice: with the meeting's speaker machinery on it still gets
+            # one embedding over its transcribed speech, so a 1:1 counterpart
+            # is named and `steno profiles assign` has something to enroll from.
+            solo_voice = plan.num_speakers == 1 and self.diarizer is not None
             # Audio is read only by a re-decode (no live words to reuse) or by
-            # a diarization pass over actual speech; the common single-speaker
-            # reuse path regroups the words alone. Don't concatenate a
-            # full-meeting buffer it would just discard.
-            needs_audio = reused is None or (diarizer is not None and bool(reused))
+            # an embedding/diarization pass over actual speech; the plain
+            # single-speaker reuse path regroups the words alone. Don't
+            # concatenate a full-meeting buffer it would just discard.
+            needs_audio = reused is None or (
+                (diarizer is not None or solo_voice) and bool(reused)
+            )
             samples = store.samples(plan.channel) if needs_audio else np.zeros(0, np.float32)
             embedded: dict[str, np.ndarray] = {}
             raw = self._finalize_channel_safe(
                 samples, diarizer, plan, view, reused_words=reused, on_embeddings=embedded.update
             )
+            if solo_voice and raw:
+                raw, embedded = self._name_solo_channel(samples, raw, view, plan)
             labeled = relabel_speakers(raw, plan.label_template)
             mapping = raw_label_map(raw, plan.label_template)
             speaker_embeddings.update(
@@ -1111,6 +1122,36 @@ class MeetingRecorder:
             ),
             on_language=view.language,
         )
+
+    def _name_solo_channel(
+        self,
+        samples: np.ndarray,
+        entries: list[TranscriptEntry],
+        view: LiveView,
+        plan: ChannelPlan,
+    ) -> tuple[list[TranscriptEntry], dict[str, np.ndarray]]:
+        """One voice embedding for a single-speaker channel, re-ID applied.
+
+        The embedding covers the transcript's own speech spans (no
+        segmentation — the whole channel is one stated speaker), and a profile
+        match renames the channel exactly like a matched cluster. A failure
+        costs the voice, never the text (mirrors ``_finalize_channel_safe``).
+        """
+        label = entries[0].speaker
+        turns = [SpeakerTurn(label, e.start, e.end) for e in entries]
+        try:
+            assert self.diarizer is not None  # guarded by the caller
+            embedding = self.diarizer.channel_embedding(samples, turns)
+        except Exception as exc:  # noqa: BLE001 — the transcript must survive
+            view.error(f"{plan.channel}: voice embedding failed ({exc}); speaker not matched")
+            return entries, {}
+        if embedding is None:
+            return entries, {}
+        names = self.reid.resolve({label: embedding}) if self.reid is not None else {}
+        if label in names:
+            name = names[label]
+            return [dc_replace(e, speaker=name) for e in entries], {name: embedding}
+        return entries, {label: embedding}
 
     def _finalize_channel_safe(
         self,

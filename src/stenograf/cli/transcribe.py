@@ -209,9 +209,10 @@ def transcribe(
             "--local/--remote apply to split voice channels only; this run "
             "transcribes one mixed stream (--channels split to force splitting)"
         )
-    if not _resolve_diarization(
+    diarize = _resolve_diarization(
         diarization_flag, settings.speakers.diarization, speakers, local_speakers, remote_speakers
-    ):
+    )
+    if not diarize:
         if (speakers or 0) > 1:
             raise click.UsageError("--no-diarization conflicts with a speaker count above 1")
         if diarization_flag is None:  # off without an explicit flag — say so, a flag user knows
@@ -247,6 +248,7 @@ def transcribe(
             attendee_names=attendee_names,
             speaker_profile_store=profile_store,
             title=title,
+            diarization=diarize,
         )
         meeting_result, elapsed = transcribe_split_channels(
             *split_pcms,

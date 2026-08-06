@@ -56,12 +56,14 @@ keeping several meetings' worth of channel and style variety to average
 over."""
 
 MEETING_VOICEPRINTS_NAME = "voiceprints.json"
-"""Per-meeting sidecar in the meeting folder: each diarized speaker's voice
-embedding under the label the transcript shows. What makes ``steno profiles
-assign`` possible after the audio is gone — the correction's enrollment
-material, measured as good as a clean sample (``eval/README.md``,
-2026-08-06). Only diarized channels appear: a solo channel never computes an
-embedding, so its speaker enrolls via ``steno profiles enroll`` instead."""
+"""Per-meeting sidecar in the meeting folder: each speaker's voice embedding
+under the label the transcript shows. What makes ``steno profiles assign``
+possible after the audio is gone — the correction's enrollment material,
+measured as good as a clean sample (``eval/README.md``, 2026-08-06). Written
+whenever the meeting's speaker machinery ran (the diarization switch):
+diarized channels contribute per-cluster embeddings, solo channels one over
+their transcribed speech — so a 1:1 counterpart is assignable too. With the
+switch off there is no sidecar; enroll from a sample instead."""
 
 
 @dataclass(frozen=True, eq=False)

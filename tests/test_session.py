@@ -383,6 +383,57 @@ class TestMeetingRecorder:
         assert set(result.speaker_embeddings) == {"Remote-1"}
         np.testing.assert_allclose(result.speaker_embeddings["Remote-1"], [1.0, 0.0])
 
+    def test_solo_channel_is_named_from_the_profile_store(self):
+        # A stated 1:1 channel never diarizes, but with the speaker machinery
+        # on (diarizer present) it gets one voice embedding over its speech —
+        # matched against the store, so the counterpart is named automatically.
+        model = "eres2net-voxceleb-16k.onnx"
+        store = ProfileStore(
+            profiles=[
+                SpeakerProfile(
+                    "Anna", model, (MeetingEmbedding(np.array([1.0, 0.0], np.float32)),)
+                )
+            ]
+        )
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = EmbeddingDiarizer([], {"S0": np.array([1.0, 0.0], np.float32)})
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=1, diarization=True),
+            asr=FakeASR(),
+            diarizer=diarizer,
+            reid=SpeakerReID(store, model),
+        )
+        result = recorder.run(provider)
+        assert diarizer.channel_embed_calls == 1
+        assert diarizer.diarize_calls == diarizer.embed_calls == 0  # never diarized
+        assert {e.speaker for e in result.transcript.entries} == {"Anna"}
+        assert set(result.speaker_embeddings) == {"Anna"}
+
+    def test_solo_channel_without_a_match_keeps_its_label_and_voice(self):
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = EmbeddingDiarizer([], {"S0": np.array([1.0, 0.0], np.float32)})
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=1, diarization=True),
+            asr=FakeASR(),
+            diarizer=diarizer,
+        )
+        result = recorder.run(provider)
+        assert {e.speaker for e in result.transcript.entries} == {"Remote-1"}
+        assert set(result.speaker_embeddings) == {"Remote-1"}  # assignable later
+
+    def test_solo_channel_without_machinery_has_no_voice(self):
+        # Diarization switch off → no diarizer loaded → no embedding computed.
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=1), asr=FakeASR()
+        )
+        result = recorder.run(provider)
+        assert {e.speaker for e in result.transcript.entries} == {"Remote-1"}
+        assert result.speaker_embeddings == {}
+
     def test_no_reid_configured_keeps_channel_labels(self):
         # Default (no re-ID) path is unchanged: raw clusters template to Remote-N.
         pcm = np.ones(SAMPLE_RATE, dtype=np.int16)

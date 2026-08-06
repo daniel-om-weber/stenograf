@@ -209,12 +209,21 @@ one-shot act.
    the flow's: an impure cluster enrolls an impure profile (IS1009a fused
    FIO084 into FIO087's cluster → 0.789 leak, later false match at 0.860 —
    no threshold fixes it; steps 4–5 own the confusion, `eval/README.md` has
-   the probe), and a fused-away speaker has no cluster to assign. Scope:
-   diarized channels only — a solo channel (`num_speakers=1`, e.g. either
-   side of a 1:1 call) never computes an embedding, so its speakers enroll
-   via `steno profiles enroll`; extend the sidecar to solo channels (one
-   embedding over the channel's speech) only if corrections there prove
-   wanted enough to pay an extractor pass per meeting.
+   the probe), and a fused-away speaker has no cluster to assign.
+   **Solo channels included 2026-08-07, gated by the meeting's diarization
+   switch** (Daniel's call: the switch decides). The counts alone cannot
+   express "1:1 with the switch on" — diarization-off also collapses to
+   count 1 — so `MeetingProfile.diarization` now carries the switch and the
+   speaker machinery loads from it. A solo channel still never diarizes
+   (nothing to separate): it gets *one* embedding over its transcribed
+   speech (`Diarizer.channel_embedding`), which re-ID matches like any
+   cluster — a 1:1 counterpart is named automatically after one assign, and
+   both sides land in the sidecar. Evidence is the matrix's own mic trials
+   (solo channels by construction): 6/6 known named at 0.935–0.970, all 10
+   strangers ≤ 0.258 — a far wider margin than cluster naming; span choice
+   (segmentation vs ASR spans) moved a solo embedding by ≤ 0.001 cosine in
+   the rename-once run. Switch off keeps the zero-cost path: no models, no
+   embeddings, no sidecar.
 3. **Gated automatic updates, anchored.** An auto-matched cluster may add its
    embedding to the profile only above a high-confidence bar (score margin
    above threshold + step-1.5 duration gate); the original user-confirmed

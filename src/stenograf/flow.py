@@ -234,6 +234,7 @@ def resolve_meeting_request(
             glossary=glossary_terms,
             attendee_names=attendee_names,
             title=title,
+            diarization=diarize,
         )
     except ValueError as exc:  # e.g. both sources switched off
         raise MeetingRequestError(str(exc)) from exc
@@ -366,7 +367,7 @@ class MeetingRun:
                 tee = AudioTee(self.audio_path, {p.channel for p in plans})
             view.status("recording · loading models…")
             asr, vad, diarizer = loaders.load_backends(
-                need_diarizer=any(p.num_speakers != 1 for p in plans),
+                need_diarizer=profile.diarizes,
                 asr_backend=settings.asr.backend,
                 asr_ep=settings.asr.ep,
                 glossary=profile.glossary,
@@ -721,7 +722,7 @@ def assign_speaker(
     if voiceprints is None:
         raise ValueError(
             f"{meeting_dir} has no {MEETING_VOICEPRINTS_NAME} — the meeting predates "
-            "speaker assignment or had no diarized speakers; enroll from a voice "
+            "speaker assignment or ran with diarization off; enroll from a voice "
             "sample instead (steno profiles enroll)"
         )
     if label not in voiceprints.speakers:

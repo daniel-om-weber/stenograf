@@ -92,3 +92,25 @@ def test_resolve_value_zero_is_a_real_value_not_absent():
     # A listen-only channel (0 local speakers) is an explicit 0, not "unspecified".
     assert resolve_value(0, None) == ResolvedValue(0, Provenance.EXPLICIT)
     assert resolve_value(None, 0) == ResolvedValue(0, Provenance.DETECTED)
+
+
+def test_diarizes_inferred_from_counts():
+    # None counts = estimate = machinery; all-1 counts = off; >1 = on.
+    assert MeetingProfile().diarizes
+    assert MeetingProfile(local_speakers=1, remote_speakers=3).diarizes
+    assert not MeetingProfile(local_speakers=1, remote_speakers=1).diarizes
+    assert not MeetingProfile(local_speakers=1, remote_speakers=0).diarizes
+
+
+def test_diarization_switch_beats_the_counts_for_a_stated_1_to_1():
+    # The one case the counts cannot express: 1:1 with the switch on still
+    # wants voice embeddings (naming + `steno profiles assign`).
+    assert MeetingProfile(local_speakers=1, remote_speakers=1, diarization=True).diarizes
+    assert not MeetingProfile(local_speakers=1, remote_speakers=1, diarization=False).diarizes
+
+
+def test_diarization_off_conflicts_with_a_diarizing_count():
+    with pytest.raises(ValueError):
+        MeetingProfile(local_speakers=1, remote_speakers=3, diarization=False)
+    with pytest.raises(ValueError):
+        MeetingProfile(diarization=False)  # None counts = estimate, needs the machinery

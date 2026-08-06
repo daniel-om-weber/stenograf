@@ -265,6 +265,7 @@ def start(
             attendee_names=cfg.attendee_names,
             speaker_profile_store=profile_store,
             title=title,
+            diarization=diarize,
         )
     except ValueError as exc:  # e.g. --local 0 --remote 0 — report cleanly, not a traceback
         raise click.ClickException(str(exc)) from exc

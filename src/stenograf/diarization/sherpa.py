@@ -109,6 +109,13 @@ class SherpaOnnxDiarizer(Diarizer):
             turns=turns, embeddings=cluster_embeddings(turns, samples, self.embed)
         )
 
+    def channel_embedding(
+        self, samples: np.ndarray, turns: list[SpeakerTurn]
+    ) -> np.ndarray | None:
+        if not turns:
+            return None
+        return cluster_embeddings(turns, samples, self.embed).get(turns[0].speaker)
+
     def embed(self, audio: np.ndarray) -> np.ndarray | None:
         """L2-normalized voice embedding of a mono 16 kHz float32 slice, or None
         when the slice is empty or the extractor cannot form an embedding."""

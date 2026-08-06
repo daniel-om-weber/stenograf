@@ -55,3 +55,16 @@ class Diarizer(ABC):
         :meth:`diarize` and returns no embeddings. A backend that can embed
         overrides this (see :class:`~stenograf.diarization.sherpa.SherpaOnnxDiarizer`)."""
         return DiarizationResult(self.diarize(samples, num_speakers), {})
+
+    def channel_embedding(
+        self, samples: np.ndarray, turns: list[SpeakerTurn]
+    ) -> np.ndarray | None:
+        """One voice embedding over a single-speaker channel's speech ``turns``.
+
+        A solo channel never diarizes — one stated speaker has nothing to
+        separate — but a meeting with speaker identity on still needs its
+        voice, for re-ID naming and for post-meeting enrollment. No
+        segmentation runs: the turns are the transcript's own speech spans.
+        ``None`` when the backend cannot embed (the default) or the audio
+        yields no embeddable span."""
+        return None

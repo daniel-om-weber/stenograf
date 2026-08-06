@@ -107,6 +107,11 @@ class SpeakrsCliDiarizer(Diarizer):
             turns=turns, embeddings=cluster_embeddings(turns, samples, self._sherpa.embed)
         )
 
+    def channel_embedding(
+        self, samples: np.ndarray, turns: list[SpeakerTurn]
+    ) -> np.ndarray | None:
+        return self._sherpa.channel_embedding(samples, turns)
+
     def _run_helper(self, samples: np.ndarray) -> list[SpeakerTurn]:
         command = self._command or [str(find_stenodiar())]
         pcm = to_int16(samples).tobytes()

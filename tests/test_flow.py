@@ -42,6 +42,19 @@ class TestMeetingRequest:
         )
         assert (plain.profile.local_speakers, plain.profile.remote_speakers) == (1, 1)
 
+    def test_the_switch_survives_a_stated_1_to_1(self):
+        # Counts 1/1 with the switch on: the counts alone read as "machinery
+        # off", so the profile must carry the switch itself — a 1:1 call still
+        # embeds each channel's voice for naming and assignment.
+        request = resolve_meeting_request(
+            mic=True, system=True, diarize=True, local_speakers=1, remote_speakers=1
+        )
+        assert request.profile.diarizes
+        off = resolve_meeting_request(
+            mic=True, system=True, diarize=False, local_speakers=None, remote_speakers=None
+        )
+        assert not off.profile.diarizes
+
     def test_a_source_switched_off_is_zero_speakers(self):
         request = resolve_meeting_request(mic=True, system=False, diarize=True)
         assert request.profile.remote_speakers == 0

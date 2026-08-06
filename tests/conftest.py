@@ -191,6 +191,7 @@ class EmbeddingDiarizer(Diarizer):
         self.embeddings = embeddings
         self.diarize_calls = 0
         self.embed_calls = 0
+        self.channel_embed_calls = 0
 
     def diarize(self, samples, num_speakers=None):
         self.diarize_calls += 1
@@ -199,6 +200,12 @@ class EmbeddingDiarizer(Diarizer):
     def diarize_with_embeddings(self, samples, num_speakers=None):
         self.embed_calls += 1
         return DiarizationResult(turns=self.turns, embeddings=self.embeddings)
+
+    def channel_embedding(self, samples, turns):
+        self.channel_embed_calls += 1
+        if not turns:
+            return None
+        return self.embeddings.get(turns[0].speaker)
 
 
 class EnrollmentDiarizer(Diarizer):

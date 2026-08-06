@@ -662,7 +662,7 @@ def transcribe_split_channels(
 
     plans = plan_channels(profile)
     asr, vad, diarizer = loaders.load_backends(
-        need_diarizer=any(p.num_speakers != 1 for p in plans),
+        need_diarizer=profile.diarizes,
         asr_backend=asr_backend,
         asr_ep=asr_ep,
         glossary=profile.glossary,

@@ -94,6 +94,16 @@ class MeetingProfile:
     title: str | None = None
     """Human-readable meeting title. Fed to the notes prompt and the combined-note
     export filename; ``None`` = untitled."""
+    diarization: bool | None = None
+    """The meeting's "tell speakers apart" switch, carried explicitly because the
+    counts alone cannot express one case: a stated 1:1 call (every count 1) with
+    the switch *on* still wants the speaker machinery — its channels never
+    diarize (nothing to separate) but each gets a voice embedding, so the
+    counterpart is named from the profile store and `steno profiles assign` has
+    something to enroll from. ``None`` infers the switch from the counts (any
+    planned channel estimated or above one speaker), which is every caller that
+    predates the field; ``False`` beside such a count is contradictory and
+    rejected."""
 
     def __post_init__(self) -> None:
         for name in ("local_speakers", "remote_speakers"):
@@ -102,6 +112,8 @@ class MeetingProfile:
                 raise ValueError(f"{name} must be between 0 and 8, got {count}")
         if self.local_speakers == 0 and self.remote_speakers == 0:
             raise ValueError("a meeting needs at least one speaker")
+        if self.diarization is False and self._counts_imply_diarization():
+            raise ValueError("diarization=False conflicts with an estimated or >1 speaker count")
         # Normalize the free-form fields so the profile stays hashable/serializable
         # regardless of what the caller passed (a list of terms, a str path).
         object.__setattr__(self, "glossary", tuple(self.glossary))
@@ -112,6 +124,19 @@ class MeetingProfile:
             # Collapse a blank/whitespace-only title to the single "untitled" form
             # so an empty string and ``None`` don't read as two different states.
             object.__setattr__(self, "title", self.title.strip() or None)
+
+    def _counts_imply_diarization(self) -> bool:
+        return any(
+            count is None or count > 1 for count in (self.local_speakers, self.remote_speakers)
+        )
+
+    @property
+    def diarizes(self) -> bool:
+        """Whether this meeting runs the speaker machinery (diarizer, embeddings,
+        re-ID): the explicit switch, else what the counts imply."""
+        if self.diarization is not None:
+            return self.diarization
+        return self._counts_imply_diarization()
 
     @property
     def mode(self) -> MeetingMode | None:
