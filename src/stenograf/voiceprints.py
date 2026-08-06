@@ -158,8 +158,8 @@ class ProfileStore:
         """Best profile for ``embedding`` under ``model`` with cosine ≥ threshold.
 
         Returns ``(profile, score)`` or ``None`` if nothing clears the bar.
-        Considers only same-model profiles; :class:`SpeakerReID` layers the
-        one-cluster-to-one-profile constraint on top for a whole run.
+        Considers only same-model profiles; :class:`SpeakerReID` applies this
+        per cluster for a whole run.
         """
         threshold = self.threshold if threshold is None else threshold
         vector = l2_normalize(np.asarray(embedding, dtype=np.float32))
@@ -221,11 +221,16 @@ class SpeakerReID:
 
     Given the per-cluster mean embeddings from ``diarize_with_embeddings``, returns
     a mapping ``cluster label → profile name`` for the clusters that match a stored
-    profile. The matching is **one-to-one**: two clusters the diarizer kept apart
-    are two distinct speakers, so they can never collapse onto the same profile —
-    the highest-scoring pairs are assigned first (greedy), and a profile or cluster
-    already claimed is skipped. Clusters with no embedding or no over-threshold
-    match are simply absent from the result; the caller keeps its own label (the
+    profile. Every cluster independently takes its best over-threshold profile, so
+    several clusters may resolve to the same name — that **is** the over-split
+    recovery (merge-at-naming): a speaker the diarizer split in two is made whole
+    by the profile both halves match. The one-to-one constraint this replaces
+    measured strictly worse on the corpus harness (2026-08-06, `eval/README.md`):
+    it left every profiled split unrecovered and forced an over-split cluster onto
+    a *wrong* profile when the right one was already claimed, while its apparent
+    stranger protection was incidental — the threshold, not exclusivity, is the
+    false-accept control. Clusters with no embedding or no over-threshold match
+    are simply absent from the result; the caller keeps its own label (the
     channel-coarse ``Local-N``/``Remote-M`` template) for those.
     """
 
@@ -241,27 +246,11 @@ class SpeakerReID:
         self.threshold = store.threshold if threshold is None else threshold
 
     def resolve(self, embeddings: Mapping[str, np.ndarray]) -> dict[str, str]:
-        profiles = self.store.for_model(self.model)
-        if not profiles or not embeddings:
-            return {}
-        units = {
-            cluster: l2_normalize(np.asarray(v, dtype=np.float32))
-            for cluster, v in embeddings.items()
-        }
-        scored = [
-            (score, cluster, p.name)
-            for cluster, vec in units.items()
-            for p in profiles
-            if (score := float(p.embedding @ vec)) >= self.threshold
-        ]
-        scored.sort(key=lambda t: t[0], reverse=True)
         mapping: dict[str, str] = {}
-        claimed: set[str] = set()
-        for _score, cluster, name in scored:
-            if cluster in mapping or name in claimed:
-                continue
-            mapping[cluster] = name
-            claimed.add(name)
+        for cluster, vector in embeddings.items():
+            best = self.store.match(vector, self.model, threshold=self.threshold)
+            if best is not None:
+                mapping[cluster] = best[0].name
         return mapping
 
 

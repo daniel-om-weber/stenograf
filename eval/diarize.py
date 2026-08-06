@@ -111,12 +111,15 @@ def run_ami(channel_ids: set[str] | None = None) -> None:
     spans), so the mic hypothesis is those entry spans, and its re-ID embedding
     is computed from them the way a count>1 cluster's would be. What that
     bypass costs against a diarizer that *is* run on a solo channel is
-    ``solo_arms.py``."""
+    ``solo_arms.py``. Known-count channels likewise mirror the shipped path:
+    diarized at k+1 and folded back (``pipeline.fold_excess_clusters``), so the
+    hypotheses, embeddings and re-ID trials all reflect what a user gets."""
     import time
 
     import ami
 
     from stenograf.diarization.sherpa import cluster_embeddings
+    from stenograf.pipeline import fold_excess_clusters
 
     channels = [c for c in ami.load_channels() if channel_ids is None or c.id in channel_ids]
     if not channels:
@@ -133,7 +136,12 @@ def run_ami(channel_ids: set[str] | None = None) -> None:
         started = time.monotonic()
         pcm = read_pcm16(channel.wav_path)
         solo = channel.num_speakers == 1
-        result = None if solo else diarizer.diarize_with_embeddings(pcm, channel.num_speakers)
+        turns: list[SpeakerTurn] = []
+        embeddings = {}
+        if not solo:
+            result = diarizer.diarize_with_embeddings(pcm, channel.num_speakers + 1)
+            folded = fold_excess_clusters(result.turns, result.embeddings, channel.num_speakers)
+            turns, embeddings = list(folded[0]), folded[1]
 
         if not asr_loaded:
             # After the diarization peak, so the resident MLX weights are not
@@ -146,10 +154,10 @@ def run_ami(channel_ids: set[str] | None = None) -> None:
             asr=asr,
             language=Language("en"),
             vad=vad,
-            diarizer=None if result is None else _FrozenDiarizer(result.turns),
+            diarizer=None if solo else _FrozenDiarizer(turns),
             num_speakers=channel.num_speakers,
         )
-        if result is None:
+        if solo:
             # Solo hypothesis activity = decoded word spans merged with the same
             # gap rule the references use — entry spans bridge every internal
             # pause (measured +7.7 pts false alarm on ES2003a.mic), raw word
@@ -159,9 +167,6 @@ def run_ami(channel_ids: set[str] | None = None) -> None:
             )
             turns = [SpeakerTurn("S0", s, e) for s, e in spans]
             embeddings = cluster_embeddings(turns, pcm, diarizer.embed)
-        else:
-            turns = result.turns
-            embeddings = result.embeddings
 
         write_rttm(
             out_dir / f"{channel.id}.rttm",

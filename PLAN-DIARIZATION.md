@@ -117,21 +117,34 @@ word intersection explicitly last and not touched).
    every margin, ≤0.5 % of words moving at all, and padded *turns* worsen DER
    on 8/10 channels (`eval/README.md`). Re-open trigger: an intersection rule
    that no longer assigns every word.
-3. **Over-clustering bias + merge-at-naming.** Where the count is estimated
-   (auto-count channels), bias the estimate up rather than down; where known,
-   test k and k+1. After matching, clusters that hit the *same* profile above
-   threshold merge back to one speaker. Over-clustering measured +0.67 DIR
-   over balanced and under-clustering −2.04; splits are recoverable at the
-   naming stage, merges are not. Also relevant to the known far-field
-   over-splitting complaint in PLAN.md: the fix for that is this merge step,
-   not a lower cluster count.
-   Step 1's own measurement raises the stakes and exposes a hole: an estimated
-   solo channel splits 2–3 ways on 10/10 corpus channels (−22 pts word
-   attribution), and merge-at-naming recovers that **only for a speaker who
-   has a voice profile**. What an unprofiled solo speaker gets back is
-   unanswered — decide it here, with the estimator's own confidence or a
-   single-cluster-dominance test as the candidates, and measure it on
-   `solo_arms.py`'s est arm.
+3. **Over-clustering bias + merge-at-naming — SHIPPED 2026-08-06, all three
+   halves measured** (`eval/split_recovery.py`, `eval/kplus1.py`,
+   `eval/collapse_probe.py`; numbers in `eval/README.md`):
+   - **Merge-at-naming**: `SpeakerReID.resolve` is many-to-one — the
+     exclusivity constraint measured strictly worse everywhere (blocked every
+     profiled split recovery, and *forced* an over-split cluster onto a wrong
+     profile when the right one was claimed). Recovers estimate-split profiled
+     speakers to 100 % word attribution on 6/6 channels; the threshold, not
+     exclusivity, is the false-accept control (one stranger named in twelve
+     known-count namings at 0.5 — step 2.4's territory).
+   - **Unprofiled recovery** = `collapse_single_voice`: an estimated channel
+     whose clusters are ALL mutually ≥ 0.6 similar is one voice. The
+     discriminator gap is empty in [0.45, 0.74]: split solo channels 0.74–0.98
+     (10/10 recovered to 100 %), synthesized true-2-speaker channels 0.00–0.45
+     (0/24 falsely collapsed), larger groups ≤ 0.18. The plan's other
+     candidates are dead: estimator confidence does not exist (stenodiar emits
+     turns only), dominance does not separate (46 % occurs on both sides), and
+     pairwise self-merge without the all-pairs gate is catastrophic
+     (cross-speaker cluster means reach 0.95; one loop chain-merged 7→1,
+     93 → 44 %).
+   - **Known counts** run at k+1 and fold the most-similar cluster pair back
+     (`fold_excess_clusters`): +2.3 pts mean word attribution, one channel
+     +20.8 (exact-k had fused two voices), worst channel −0.3, and the user
+     always sees exactly the count they stated. Raw k+1 (phantom speaker) and
+     naming-only recovery (wrong merges, −1.3 on IS1009d) are declined as
+     shipped forms. "Bias the estimate up" needed no knob: the estimator
+     already over-splits (est k ≥ true k on 30/30 measured channels); recovery
+     is the mechanism.
 4. **Overlap-clean embeddings.** `cluster_embeddings()` currently slices by
    turn times, overlap included. Exclude spans where ≥2 turns are active
    (computable from the turn list alone) before embedding — including

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from conftest import EmbeddingDiarizer, FakeASR, FakeDiarizer, GermanASR, RaisingDiarizer
 
 from stenograf.asr.base import Segment, Word
@@ -6,8 +7,10 @@ from stenograf.audio import SAMPLE_RATE
 from stenograf.config import Language, MeetingProfile, Provenance
 from stenograf.diarization.base import SpeakerTurn
 from stenograf.pipeline import (
+    collapse_single_voice,
     finalize_channel,
     finalize_file,
+    fold_excess_clusters,
     group_words,
     merge_words_turns,
     relabel_speakers,
@@ -252,14 +255,16 @@ class TestFinalizeChannel:
         assert entries[0].speaker == "S0"
         assert entries[0].text == "wort"
 
-    def test_diarizer_receives_speaker_count_and_labels_entries(self):
+    def test_diarizer_receives_one_over_the_stated_count(self):
+        # A known count is requested at k+1; fold_excess_clusters returns the
+        # stated k afterwards, so the extra cluster never reaches the user.
         asr = FakeASR()
         diarizer = FakeDiarizer([turn("S1", 0.0, 2.0)])
         samples = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
         entries = finalize_channel(
             samples, asr=asr, language=None, diarizer=diarizer, num_speakers=3
         )
-        assert diarizer.seen_num_speakers == 3
+        assert diarizer.seen_num_speakers == 4
         assert entries[0].speaker == "S1"
 
     def test_num_speakers_one_skips_diarization(self):
@@ -293,7 +298,7 @@ class TestFinalizeChannelReuse:
             precomputed_words=words,
         )
         assert asr.calls == []  # no re-decode — the whole point of reuse
-        assert diarizer.seen_num_speakers == 2  # diarization still runs
+        assert diarizer.seen_num_speakers == 3  # diarization still runs (at k+1)
         assert [e.text for e in entries] == ["hallo welt"]
         assert entries[0].speaker == "S1"
 
@@ -359,6 +364,89 @@ class TestFinalizeChannelReuse:
         assert entries[0].speaker == "S1"
 
 
+class TestFoldExcessClusters:
+    def _unit(self, *components: float) -> np.ndarray:
+        v = np.asarray(components, dtype=np.float32)
+        return v / np.linalg.norm(v)
+
+    def test_folds_most_similar_pair_into_the_longer_cluster(self):
+        turns = [turn("S0", 0.0, 4.0), turn("S1", 4.0, 5.0), turn("S2", 5.0, 8.0)]
+        embeddings = {
+            "S0": self._unit(1.0, 0.0),
+            "S1": self._unit(0.9, 0.44),  # closest to S0; S0 has more speech
+            "S2": self._unit(0.0, 1.0),
+        }
+        folded_turns, folded_emb = fold_excess_clusters(turns, embeddings, 2)
+        assert [t.speaker for t in folded_turns] == ["S0", "S0", "S2"]
+        assert set(folded_emb) == {"S0", "S2"}
+        assert np.linalg.norm(folded_emb["S0"]) == pytest.approx(1.0)
+
+    def test_at_or_below_count_is_untouched(self):
+        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)]
+        embeddings = {"S0": self._unit(1.0, 0.0), "S1": self._unit(0.0, 1.0)}
+        folded_turns, folded_emb = fold_excess_clusters(turns, embeddings, 2)
+        assert folded_turns == turns
+        assert folded_emb == embeddings
+
+    def test_folds_repeatedly_down_to_count(self):
+        turns = [turn(f"S{i}", float(i), float(i + 1)) for i in range(4)]
+        embeddings = {f"S{i}": self._unit(1.0, 0.01 * i) for i in range(4)}
+        folded_turns, _ = fold_excess_clusters(turns, embeddings, 1)
+        assert len({t.speaker for t in folded_turns}) == 1
+
+    def test_unembedded_clusters_cannot_fold(self):
+        # One embedded cluster among three: no pair to compare, so the excess
+        # stays — better an extra label than an arbitrary merge.
+        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0), turn("S2", 2.0, 3.0)]
+        folded_turns, _ = fold_excess_clusters(turns, {"S0": self._unit(1.0, 0.0)}, 2)
+        assert [t.speaker for t in folded_turns] == ["S0", "S1", "S2"]
+
+
+class TestCollapseSingleVoice:
+    def _unit(self, *components: float) -> np.ndarray:
+        v = np.asarray(components, dtype=np.float32)
+        return v / np.linalg.norm(v)
+
+    def test_mutually_similar_clusters_collapse_to_one(self):
+        turns = [turn("S0", 0.0, 3.0), turn("S1", 3.0, 4.0), turn("S0", 4.0, 6.0)]
+        embeddings = {"S0": self._unit(1.0, 0.1), "S1": self._unit(1.0, 0.3)}  # cosine ~0.98
+        collapsed_turns, collapsed_emb = collapse_single_voice(turns, embeddings)
+        assert len({t.speaker for t in collapsed_turns}) == 1
+        assert len(collapsed_emb) == 1
+
+    def test_one_distant_pair_blocks_the_collapse(self):
+        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0), turn("S2", 2.0, 3.0)]
+        embeddings = {
+            "S0": self._unit(1.0, 0.1),
+            "S1": self._unit(1.0, 0.3),
+            "S2": self._unit(0.0, 1.0),  # a genuinely different voice
+        }
+        collapsed_turns, collapsed_emb = collapse_single_voice(turns, embeddings)
+        assert collapsed_turns == turns
+        assert collapsed_emb == embeddings
+
+    def test_unembedded_cluster_blocks_the_collapse(self):
+        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)]
+        collapsed_turns, _ = collapse_single_voice(turns, {"S0": self._unit(1.0, 0.0)})
+        assert collapsed_turns == turns
+
+    def test_estimated_count_channel_collapses_in_finalize(self):
+        # The estimator split one voice into two clusters; num_speakers=None
+        # (nobody stated a count) triggers the collapse and one speaker remains.
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)],
+            {"S0": self._unit(1.0, 0.1), "S1": self._unit(1.0, 0.3)},
+        )
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=None,
+        )
+        assert {e.speaker for e in entries} == {"S0"}
+
+
 class MappingReID:
     """A fake SpeakerResolver: relabels clusters by a fixed lookup."""
 
@@ -410,7 +498,9 @@ class TestFinalizeChannelReID:
         )
         assert entries[0].speaker == "S0"
 
-    def test_no_reid_uses_plain_diarize(self):
+    def test_no_reid_still_takes_embeddings_path(self):
+        # Even without re-ID the known-count path needs per-cluster embeddings:
+        # they are what folds the k+1 request back to the stated count.
         diarizer = EmbeddingDiarizer([turn("S0", 0.0, 2.0)], {})
         finalize_channel(
             self._samples(),
@@ -419,8 +509,8 @@ class TestFinalizeChannelReID:
             diarizer=diarizer,
             num_speakers=2,
         )
-        assert diarizer.embed_calls == 0
-        assert diarizer.diarize_calls == 1
+        assert diarizer.embed_calls == 1
+        assert diarizer.diarize_calls == 0
 
     def test_reid_ignored_without_diarization(self):
         # num_speakers=1 → no diarization → re-ID never runs (nothing to resolve).

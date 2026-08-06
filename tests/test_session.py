@@ -284,8 +284,9 @@ class TestMeetingRecorder:
         assert provider.stopped
         speakers = {e.speaker for e in transcript.entries}
         assert speakers == {"Local-1", "Remote-1"}
-        # System channel was diarized with the known remote count; mic was not.
-        assert diarizer.seen_num_speakers == 2
+        # System channel was diarized one over the known remote count (fold
+        # headroom — pipeline.fold_excess_clusters); mic was not diarized.
+        assert diarizer.seen_num_speakers == 3
 
     def test_provider_started_is_not_started_a_second_time(self):
         # start.py/flow.py begin capture before the models load (frames buffer

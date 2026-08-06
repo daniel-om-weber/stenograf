@@ -523,24 +523,19 @@ def load_channels() -> list[Channel]:
 # -- re-ID trials ----------------------------------------------------------
 
 
-def build_trials() -> None:
-    """Enroll galleries from each group's session ``a`` raw headsets, score
-    every later cluster against them, write ``out/reid/trials.json``.
+def build_galleries(embed) -> dict[str, dict[str, np.ndarray]]:
+    """Per-group enrollment galleries from session ``a`` raw headsets.
 
     Enrollment slices the participant's *reference* turns from their own
-    headset (the clean solo signal our rename-once flow would capture); trial
-    embeddings are the diarizer's own cluster means from ``diarize.py --ami``.
-    Clusters from the other group and from ICSI are stranger trials by
-    construction."""
-    from reid_score import Trial, save_trials
-
+    headset (the clean solo signal our rename-once flow would capture); the
+    alphabetically-last participant stays unenrolled, so every later cluster
+    of theirs is a stranger trial by construction. ``embed`` is the production
+    embedding callable (``SherpaOnnxDiarizer.embed``)."""
     from stenograf.diarization.base import SpeakerTurn
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer, cluster_embeddings
+    from stenograf.diarization.sherpa import cluster_embeddings
 
     annotations = RAW_DIR / "annotations"
     meetings_map = parse_meetings_xml(annotations / "corpusResources" / "meetings.xml")
-    diarizer = SherpaOnnxDiarizer()
-
     galleries: dict[str, dict[str, np.ndarray]] = {}
     for group in AMI_GROUPS:
         meeting = group + ENROLL_SESSION
@@ -548,17 +543,28 @@ def build_trials() -> None:
             name: (agent, headset) for agent, (headset, name) in meetings_map[meeting].items()
         }
         gallery: dict[str, np.ndarray] = {}
-        for name in sorted(by_name)[:-1]:  # last stays unenrolled → stranger trials
+        for name in sorted(by_name)[:-1]:
             agent, headset = by_name[name]
             spans = merge_spans(
                 parse_words_xml(annotations / "words" / f"{meeting}.{agent}.words.xml")
             )
             pcm = read_pcm16(RAW_DIR / meeting / f"{meeting}.Headset-{headset}.wav")
             turns = [SpeakerTurn(name, s, e) for s, e in spans]
-            embedded = cluster_embeddings(turns, pcm, diarizer.embed)
+            embedded = cluster_embeddings(turns, pcm, embed)
             gallery[name] = embedded[name]
         galleries[group] = gallery
         print(f"[{group}] enrolled {sorted(gallery)} from session {ENROLL_SESSION}")
+    return galleries
+
+
+def build_trials() -> None:
+    """Enroll galleries (:func:`build_galleries`), score every later cluster
+    against them, write ``out/reid/trials.json``."""
+    from reid_score import Trial, save_trials
+
+    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+
+    galleries = build_galleries(SherpaOnnxDiarizer().embed)
 
     hyp_dir = OUT_DIR / "diar" / "ami"
     trials: list[Trial] = []

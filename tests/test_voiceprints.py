@@ -3,7 +3,7 @@
 Pure unit tests on synthetic unit vectors — no models, no audio. The real
 embedding path (``diarize_with_embeddings``) is covered by
 ``test_diarization_sherpa.py``; here we test the store, the model-bound scoping,
-the cosine threshold, persistence, and the one-to-one cluster→profile matching.
+the cosine threshold, persistence, and merge-at-naming cluster→profile matching.
 """
 
 from __future__ import annotations
@@ -175,14 +175,12 @@ class TestSpeakerReID:
         mapping = reid.resolve({"S0": DANIEL, "S1": CARL})
         assert mapping == {"S0": "Daniel"}
 
-    def test_matching_is_one_to_one(self):
-        # Two clusters both closest to Daniel: only the better one may take him;
-        # the other cannot collapse onto the same profile.
+    def test_split_speaker_merges_at_naming(self):
+        # Two clusters both over threshold on Daniel: both take his name — an
+        # over-split speaker is made whole by the profile, not kept apart.
         reid = SpeakerReID(self._store(), MODEL)
         mapping = reid.resolve({"S0": DANIEL, "S1": DANIEL_AGAIN})
-        assert list(mapping.values()).count("Daniel") == 1
-        assert mapping.get("S0") == "Daniel"  # the exact match wins the tie-break
-        assert "S1" not in mapping  # loser stays a raw cluster
+        assert mapping == {"S0": "Daniel", "S1": "Daniel"}
 
     def test_empty_when_no_profiles_for_model(self):
         reid = SpeakerReID(self._store(), OTHER_MODEL)  # store has none under this model

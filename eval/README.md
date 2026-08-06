@@ -279,9 +279,55 @@ on those numbers, not skipped.
 channels come back as 2–3 speakers and word attribution falls to 77.7 % mean
 (45.6 % worst) — one person's monologue chopped across "Speaker 1/2/3". That
 is the cost of *not* stating a count, it is the far-field over-splitting
-complaint measured on the local channel, and it is what
-`PLAN-DIARIZATION.md`'s merge-at-naming is aimed at — with the caveat that
-merge-at-naming can only recover a speaker who has a voice profile.
+complaint measured on the local channel, and it is what the shipped recovery
+pair — merge-at-naming for profiled speakers, `collapse_single_voice` for
+everyone else — closes (the split-recovery section below). The arms here
+measure the raw estimator; the pipeline no longer passes its splits through.
+
+#### Split recovery: merge-at-naming, the collapse rule, and k+1-fold (2026-08-06)
+
+Three measurements behind the shipped over-split recovery
+(`PLAN-DIARIZATION.md` step 1.3), all on estimate-mode or k+1 diarization of
+the corpus channels with word times reused from the matrix:
+
+**`split_recovery.py`** — recovery arms + the discriminator. Estimating splits
+every solo channel 2–3 ways; the arms measure what gets it back. One-to-one
+resolve recovers *nothing* (by construction: one cluster keeps the profile,
+the rest stay split) and once *forced a wrong name* — the over-split cluster's
+true profile was claimed, so greedy exclusivity handed it the next-best wrong
+one. Many-to-one resolve (merge-at-naming, now shipped) recovers all six
+profiled solo channels to 100 % word attribution and never regresses a loop
+(+0–2.1 pts there). The discriminator stats decide the unprofiled case: min
+pairwise cluster-embedding similarity is 0.74–0.98 on split solo channels vs
+≤ 0.18 on the 3–7-speaker loops, while dominance share overlaps (46 % on both
+sides) and unrestricted pairwise self-merge is catastrophic on loops
+(cross-speaker cluster means reach 0.95 cosine; IS1009b.loop chain-merged
+7 → 1, 93.2 → 44.3 %). Only the all-pairs-similar → collapse-to-one form
+survives.
+
+**`collapse_probe.py`** — the falsification test for that collapse on the case
+the corpus lacks: genuinely-2-speaker channels (production's usual remote
+channel). All loop-participant pairs per AMI meeting, masked and mixed exactly
+like the loop channels (24 channels): min sim 0.00–0.45, **0/24 falsely
+collapse**. The empty band [0.45, 0.74] puts `pipeline.COLLAPSE_SIMILARITY`
+at 0.6, mid-gap.
+
+**`kplus1.py`** — known counts diarized one over the stated k. Raw k+1 is a
+wash on 8/10 loops but +20.8 pts on IS1009c (exact-k clustering had fused two
+voices) and +2.6 on Bmr025, with losses bounded at −0.4 — the measured shape
+of "splits are recoverable, merges are not". Folding the most-similar cluster
+pair back (`pipeline.fold_excess_clusters`, now the shipped path) keeps the
+win: mean 87.8 → 90.1 %, worst −0.3, output always exactly the stated count
+(no phantom speaker), profiles not required. The fold did *not* re-fuse
+IS1009c's separated voices (its max-sim pair was elsewhere, 0.45). Recovery
+via naming alone is declined as a shipped form: it needs profiles and folded
+wrongly once (IS1009d, −1.3).
+
+The re-baselined matrix (same day, folded pipeline end to end) reproduces the
+fold arm exactly on all ten loop channels — IS1009c's confusion drops
+24.9 → 6.2 % DER — and the re-ID trials, now built from folded clusters, hold
+the same operating points (DIR 88.2 % @ FAR 0, 94.1 % @ 3.4 %); only the
+FAR-0 *threshold* moved (0.609 → 0.809), which belongs to step 2.4's sweep.
 
 #### A boundary margin at word intersection is a no-op here (2026-08-06)
 

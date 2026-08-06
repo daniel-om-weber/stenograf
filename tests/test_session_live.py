@@ -837,7 +837,7 @@ class TestTwoChannelLive:
         transcript = recorder.run(provider, live=True).transcript
         assert asr.calls == 2  # one live decode per channel window; finalize added none
         assert diarizer.samples_len == 6 * SAMPLE_RATE  # the whole channel, not a window
-        assert diarizer.num_speakers == 2
+        assert diarizer.num_speakers == 3  # the stated 2 plus fold headroom
         assert [e.speaker for e in transcript.entries] == ["Local-1", "Remote-1", "Remote-2"]
 
     def test_echo_backstop_still_applies_to_reused_live_words(self):

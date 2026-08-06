@@ -12,6 +12,7 @@ import time
 from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import replace
+from itertools import combinations
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from stenograf.view import LiveView
 
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.audio import SAMPLE_RATE, sample_index
+from stenograf.audio import SAMPLE_RATE, l2_normalize, sample_index
 from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
 from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
@@ -74,11 +75,13 @@ def finalize_channel(
     ``diarizer=None`` or ``num_speakers=1`` attributes everything to ``S0``.
     ``on_progress`` is called as ``on_progress(stage: str, done: int, total: int)``.
 
-    With ``reid`` given (and diarization running), the diarizer additionally emits
-    a per-cluster voice embedding and ``reid`` maps matched clusters to persistent
-    speaker-profile names; those entries carry the profile name instead of ``S<n>``
-    (cross-meeting re-ID). Unmatched clusters keep their ``S<n>`` label
-    for the caller to template.
+    Diarization always runs with per-cluster voice embeddings: a known count is
+    requested one high and folded back (:func:`fold_excess_clusters`), an
+    estimated one may collapse to a single voice (:func:`collapse_single_voice`).
+    With ``reid`` given, matched clusters carry persistent speaker-profile names
+    instead of ``S<n>`` (cross-meeting re-ID) — several clusters resolving to the
+    same profile is the over-split recovery, not an error. Unmatched clusters
+    keep their ``S<n>`` label for the caller to template.
 
     ``precomputed_words`` skips the VAD+ASR stage entirely: the words (absolute
     session times) come from the live window pass, whose decodes are
@@ -196,19 +199,94 @@ def _attribute(
 
     if on_progress is not None:
         on_progress(STAGE_DIARIZATION, 0, 1)
-    if reid is not None:
-        result = diarizer.diarize_with_embeddings(samples, num_speakers)
-        turns = result.turns
-        names = reid.resolve(result.embeddings)
+    requested = num_speakers if num_speakers is None else num_speakers + 1
+    result = diarizer.diarize_with_embeddings(samples, requested)
+    turns, embeddings = result.turns, result.embeddings
+    if num_speakers is not None:
+        turns, embeddings = fold_excess_clusters(turns, embeddings, num_speakers)
     else:
-        turns = diarizer.diarize(samples, num_speakers)
-        names = {}
+        turns, embeddings = collapse_single_voice(turns, embeddings)
+    names = reid.resolve(embeddings) if reid is not None else {}
     entries = merge_words_turns(words, turns)
     if names:
         entries = [
             replace(e, speaker=names[e.speaker]) if e.speaker in names else e for e in entries
         ]
     return entries
+
+
+COLLAPSE_SIMILARITY = 0.6
+"""An estimated-count channel collapses to one speaker when every pair of its
+cluster embeddings is at least this similar. Measured 2026-08-06 on the corpus
+harness (``eval/README.md``): channels that really hold one voice but were
+split 2–3 ways sit at min pairwise cosine 0.74–0.98 (10/10 recovered), true
+two-speaker channels at 0.00–0.45 (0/24 falsely collapsed), larger groups at
+≤0.18 — 0.6 is the middle of the empty band. Only the everything-is-one-voice
+collapse is safe: merging individual similar pairs on a multi-speaker channel
+measurably destroys attribution (cross-speaker cluster means reach 0.95)."""
+
+
+def collapse_single_voice(
+    turns: list[SpeakerTurn],
+    embeddings: dict[str, np.ndarray],
+) -> tuple[list[SpeakerTurn], dict[str, np.ndarray]]:
+    """Undo an estimator's split of a single voice into several "speakers".
+
+    Count estimation splits a genuinely single-speaker channel 2–3 ways on
+    every corpus channel measured (a monologue chopped across "Speaker 1/2/3",
+    −22 pts word attribution — the cost of nobody stating a count). When *all*
+    clusters are mutually at least :data:`COLLAPSE_SIMILARITY` similar, they
+    are one voice: everything folds to one cluster. Any cluster without an
+    embedding, or any pair under the bar, leaves the result untouched.
+    """
+    labels = {t.speaker for t in turns}
+    if len(labels) < 2 or not labels <= embeddings.keys():
+        return turns, embeddings
+    if any(
+        float(embeddings[a] @ embeddings[b]) < COLLAPSE_SIMILARITY
+        for a, b in combinations(sorted(labels), 2)
+    ):
+        return turns, embeddings
+    return fold_excess_clusters(turns, embeddings, 1)
+
+
+def fold_excess_clusters(
+    turns: list[SpeakerTurn],
+    embeddings: dict[str, np.ndarray],
+    num_speakers: int,
+) -> tuple[list[SpeakerTurn], dict[str, np.ndarray]]:
+    """Fold the most-similar cluster pairs until ``num_speakers`` remain.
+
+    A known-count channel is diarized at one cluster *over* the stated count,
+    then folded back here: the spare cluster gives the clustering room to keep
+    two genuinely different voices apart that an exact-count run would fuse
+    (measured 2026-08-06 on the corpus harness: +2.3 pts mean word attribution,
+    one channel +20.8, worst channel −0.3 — ``eval/README.md``), and the fold
+    returns exactly the count the user stated, so no phantom speaker appears.
+    Each fold merges the two clusters with the highest embedding cosine into
+    the one with more speech, its embedding replaced by their duration-weighted
+    mean. Clusters without an embedding cannot be folded; if too few clusters
+    have one, the remainder is returned unfolded (real backends always embed —
+    see ``DiarizationResult.embeddings``).
+    """
+    turns = list(turns)
+    embeddings = dict(embeddings)
+    while len({t.speaker for t in turns}) > num_speakers:
+        durations: dict[str, float] = {}
+        for t in turns:
+            durations[t.speaker] = durations.get(t.speaker, 0.0) + (t.end - t.start)
+        embedded = [c for c in durations if c in embeddings]
+        if len(embedded) < 2:
+            return turns, embeddings
+        _, a, b = max(
+            (float(embeddings[x] @ embeddings[y]), x, y) for x, y in combinations(embedded, 2)
+        )
+        keep, fold = (a, b) if durations[a] >= durations[b] else (b, a)
+        turns = [replace(t, speaker=keep) if t.speaker == fold else t for t in turns]
+        merged = embeddings[keep] * durations[keep] + embeddings[fold] * durations[fold]
+        embeddings[keep] = l2_normalize(merged)
+        del embeddings[fold]
+    return turns, embeddings
 
 
 def assemble_transcript(

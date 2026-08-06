@@ -87,12 +87,24 @@ def profiles_enroll(
 
     samples = load_audio(audio_file)
     diarizer = loaders.load_diarizer()
-    result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers)
-    if not result.embeddings:
+    if speakers > 1:
+        # Mirror the meeting path: diarize one over the stated count and fold
+        # back (pipeline.fold_excess_clusters), so a fused cluster cannot
+        # poison the enrollment. A single-voice clip stays at exact count —
+        # there is nothing to separate, and a short clip forced to two
+        # clusters is a failure mode this command never had.
+        from stenograf.pipeline import fold_excess_clusters
+
+        result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers + 1)
+        turns, embeddings = fold_excess_clusters(result.turns, result.embeddings, speakers)
+    else:
+        result = diarizer.diarize_with_embeddings(samples, num_speakers=1)
+        turns, embeddings = result.turns, result.embeddings
+    if not embeddings:
         raise click.ClickException(
             f"no embeddable speech found in {audio_file.name}; is it silent or too short?"
         )
-    embedding = _choose_cluster(result.embeddings, result.turns, cluster)
+    embedding = _choose_cluster(embeddings, turns, cluster)
 
     model = assets.SPEAKER_EMBEDDING.name
     store = ProfileStore.load()
