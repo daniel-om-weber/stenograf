@@ -215,24 +215,32 @@ def main() -> int:
     from common import OUT_DIR, REFS_DIR
 
     diar_dir = OUT_DIR / "diar"
-    refs = sorted(p for p in REFS_DIR.glob("*.rttm") if not p.name.endswith(".draft.rttm"))
+    # Hand-labelled refs sit at the top of refs/; corpus-built ones (eval/ami.py)
+    # in refs/ami/, mirrored under out/diar/ami/.
+    refs = sorted(
+        p
+        for pattern in ("*.rttm", "ami/*.rttm")
+        for p in REFS_DIR.glob(pattern)
+        if not p.name.endswith(".draft.rttm")
+    )
     if not refs:
         print(
             "no reference RTTMs in eval/refs/*.rttm yet — hand-label speaker turns "
             "first (see eval/README.md 'Diarization scoring'); bootstrap a draft with "
-            "`eval/diarize.py --bootstrap`",
+            "`eval/diarize.py --bootstrap`, or build corpus refs with `eval/ami.py fetch`",
             file=sys.stderr,
         )
         return 1
 
     der_rows, attr_rows = [], []
     for ref_path in refs:
-        seg = ref_path.stem
+        rel = ref_path.relative_to(REFS_DIR)
+        seg = str(rel.with_suffix(""))
         ref = parse_rttm(ref_path)
-        hyp_path = diar_dir / f"{seg}.rttm"
+        hyp_path = diar_dir / rel
         if hyp_path.exists():
             der_rows.append(score_der(ref, parse_rttm(hyp_path)).as_row(seg))
-        words_path = diar_dir / f"{seg}.words.json"
+        words_path = hyp_path.with_name(hyp_path.name.removesuffix(".rttm") + ".words.json")
         if words_path.exists():
             attr_rows.append(score_attribution(_load_words(words_path), ref).as_row(seg))
 

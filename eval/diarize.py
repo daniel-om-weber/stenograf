@@ -22,6 +22,12 @@ Usage::
     uv run eval/diarize.py --segments de-1,de-2  # a subset
     uv run eval/diarize.py --num-speakers 3      # force the count (default: estimate)
     uv run eval/diarize.py --bootstrap           # seed refs/<id>.draft.rttm
+    uv run eval/diarize.py --ami                 # the AMI/ICSI channels (eval/ami.py)
+
+The AMI mode covers the corpus channels ``eval/ami.py fetch`` built: per-channel
+known speaker counts (the production topology's signal), plus a per-cluster
+embedding file for the re-ID trials. Each channel is diarized once —
+``finalize_channel`` gets the turns back through a frozen diarizer.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from rttm import Turn, write_rttm
 from stenograf import assets
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.config import Language
+from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.diarization.sherpa import SherpaOnnxDiarizer
 from stenograf.pipeline import finalize_channel
 from stenograf.vad import SileroVAD
@@ -81,6 +88,100 @@ def _words_json(entries) -> dict:
     return {"words": words}
 
 
+class _FrozenDiarizer(Diarizer):
+    """Replays one precomputed result so ``finalize_channel`` does not diarize
+    the same audio a second time."""
+
+    def __init__(self, turns: list[SpeakerTurn]) -> None:
+        self._turns = turns
+
+    def diarize(self, samples, num_speakers=None) -> list[SpeakerTurn]:
+        return self._turns
+
+
+def run_ami(channel_ids: set[str] | None = None) -> None:
+    """Diarize + finalize every corpus channel; write hypotheses for both scorers.
+
+    Per channel into ``out/diar/ami/``: ``<id>.rttm`` (DER), ``<id>.words.json``
+    (word attribution), ``<id>.emb.json`` (cluster embeddings for the re-ID
+    trials). Speaker counts are the known per-channel truth.
+
+    Count-1 channels take the production path: ``finalize_channel`` never runs
+    the diarizer for ``num_speakers=1`` (everything is ``S0`` on VAD/segment
+    spans), so the mic hypothesis is those entry spans, and its re-ID embedding
+    is computed from them the way a count>1 cluster's would be. Running sherpa
+    with ``num_clusters=1`` instead is not an option anyway: it dies on a native
+    bus error for audio ≳19 min (15 min fine; count=2 on the same full file
+    fine; sherpa-onnx 1.12.40, 2026-08-06)."""
+    import time
+
+    import ami
+
+    from stenograf.diarization.sherpa import cluster_embeddings
+
+    channels = [c for c in ami.load_channels() if channel_ids is None or c.id in channel_ids]
+    if not channels:
+        raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
+
+    diarizer = SherpaOnnxDiarizer()
+    asr = ParakeetMLXBackend()
+    asr_loaded = False
+    vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
+    out_dir = OUT_DIR / "diar" / "ami"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for channel in channels:
+        started = time.monotonic()
+        pcm = read_pcm16(channel.wav_path)
+        solo = channel.num_speakers == 1
+        result = None if solo else diarizer.diarize_with_embeddings(pcm, channel.num_speakers)
+
+        if not asr_loaded:
+            # After the diarization peak: sherpa needs ~30 GB on a dense long
+            # channel, and the resident MLX weights were the margin that got
+            # Bed009.loop's process killed while Bmr021.loop survived.
+            asr.load()
+            asr_loaded = True
+        entries = finalize_channel(
+            pcm,
+            asr=asr,
+            language=Language("en"),
+            vad=vad,
+            diarizer=None if result is None else _FrozenDiarizer(result.turns),
+            num_speakers=channel.num_speakers,
+        )
+        if result is None:
+            # Solo hypothesis activity = decoded word spans merged with the same
+            # gap rule the references use — entry spans bridge every internal
+            # pause (measured +7.7 pts false alarm on ES2003a.mic), raw word
+            # spans count natural word gaps as missed (+10.4 pts).
+            spans = ami.merge_spans(
+                [(w.start, w.end) for e in entries for w in e.words], ami.MERGE_GAP_S
+            )
+            turns = [SpeakerTurn("S0", s, e) for s, e in spans]
+            embeddings = cluster_embeddings(turns, pcm, diarizer.embed)
+        else:
+            turns = result.turns
+            embeddings = result.embeddings
+
+        write_rttm(
+            out_dir / f"{channel.id}.rttm",
+            [Turn(t.speaker, t.start, t.end) for t in turns],
+            channel.id,
+        )
+        (out_dir / f"{channel.id}.emb.json").write_text(
+            json.dumps({k: [float(x) for x in v] for k, v in embeddings.items()})
+        )
+        (out_dir / f"{channel.id}.words.json").write_text(
+            json.dumps(_words_json(entries), ensure_ascii=False, indent=2)
+        )
+        print(
+            f"[{channel.id}] {len(turns)} turns, "
+            f"{sum(len(e.words) or 1 for e in entries)} words, "
+            f"{time.monotonic() - started:.0f}s"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--segments", help="comma-separated segment ids (default: all)")
@@ -97,7 +198,16 @@ def main() -> int:
         action="store_true",
         help="skip the stenodiar helper even if built (measure the sherpa baseline)",
     )
+    parser.add_argument(
+        "--ami",
+        action="store_true",
+        help="run the AMI/ICSI corpus channels instead of the manifest segments",
+    )
     args = parser.parse_args()
+
+    if args.ami:
+        run_ami(set(args.segments.split(",")) if args.segments else None)
+        return 0
 
     wanted = set(args.segments.split(",")) if args.segments else None
     segments = [
