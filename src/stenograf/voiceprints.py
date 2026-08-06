@@ -55,6 +55,14 @@ the oldest meeting first. Bounds the store's growth and match cost while
 keeping several meetings' worth of channel and style variety to average
 over."""
 
+MEETING_VOICEPRINTS_NAME = "voiceprints.json"
+"""Per-meeting sidecar in the meeting folder: each diarized speaker's voice
+embedding under the label the transcript shows. What makes ``steno profiles
+assign`` possible after the audio is gone — the correction's enrollment
+material, measured as good as a clean sample (``eval/README.md``,
+2026-08-06). Only diarized channels appear: a solo channel never computes an
+embedding, so its speaker enrolls via ``steno profiles enroll`` instead."""
+
 
 @dataclass(frozen=True, eq=False)
 class MeetingEmbedding:
@@ -242,6 +250,19 @@ class ProfileStore:
         self._replace(profile, updated)
         return updated
 
+    def assign(
+        self, name: str, embedding: np.ndarray, model: str, *, date: str | None = None
+    ) -> tuple[SpeakerProfile, bool]:
+        """Enroll ``name`` from ``embedding``, or reinforce the existing profile.
+
+        The store operation behind "this speaker is NAME": one gesture must
+        work whether NAME is new or already enrolled, so the caller never has
+        to know. Returns ``(profile, created)``."""
+        existing = self.get(name, model)
+        if existing is None:
+            return self.enroll(name, embedding, model, date=date), True
+        return self.reinforce(existing, embedding, date=date), False
+
     def rename(self, profile: SpeakerProfile, new_name: str) -> SpeakerProfile:
         """Rename a profile (the "name this unmatched speaker" action)."""
         if new_name != profile.name and self.get(new_name, profile.embedding_model) is not None:
@@ -306,3 +327,48 @@ class SpeakerReID:
 
 def default_store_path() -> Path:
     return data_dir() / "profiles.json"
+
+
+@dataclass(frozen=True)
+class MeetingVoiceprints:
+    """One meeting's :data:`MEETING_VOICEPRINTS_NAME` sidecar, loaded."""
+
+    embedding_model: str
+    date: str | None
+    speakers: dict[str, np.ndarray]
+
+
+def write_meeting_voiceprints(
+    out_dir: Path, speakers: Mapping[str, np.ndarray], model: str, *, date: str | None
+) -> Path:
+    """Write the meeting's speaker embeddings next to its transcript (atomic)."""
+    path = out_dir / MEETING_VOICEPRINTS_NAME
+    payload = json.dumps(
+        {
+            "embedding_model": model,
+            "date": date,
+            "speakers": {
+                label: [float(x) for x in vector] for label, vector in speakers.items()
+            },
+        },
+        ensure_ascii=False,
+    )
+    atomic_write_text(path, payload)
+    return path
+
+
+def load_meeting_voiceprints(meeting_dir: Path) -> MeetingVoiceprints | None:
+    """The meeting folder's voiceprints, or ``None`` when the meeting has none
+    (pre-sidecar meetings, and meetings without a diarized channel)."""
+    path = meeting_dir / MEETING_VOICEPRINTS_NAME
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return MeetingVoiceprints(
+        embedding_model=data["embedding_model"],
+        date=data.get("date"),
+        speakers={
+            label: l2_normalize(np.asarray(vector, dtype=np.float32))
+            for label, vector in data["speakers"].items()
+        },
+    )

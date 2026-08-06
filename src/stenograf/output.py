@@ -12,6 +12,8 @@ override — holding plainly named files::
         transcript.partial.*               # crash checkpoint, removed on success
         transcript.notes.md                # the `steno notes` sibling
         audio.opus                         # only with --record-audio
+        voiceprints.json                   # diarized speakers' embeddings, for
+                                           # `steno profiles assign`
 
 The filesystem *is* the index: the folder name carries the date, the exported
 note's filename carries the title, listing is Finder/``ls``, deleting is ``rm``.

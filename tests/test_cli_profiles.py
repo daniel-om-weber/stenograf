@@ -135,3 +135,56 @@ def test_transcribe_reid_relabels_enrolled_speaker(tmp_path, monkeypatch):
     assert "re-ID:" not in no_reid.output
     md = (tmp_path / "transcript.md").read_text()
     assert "Daniel" not in md and "Speaker 1" in md
+
+
+def _assignable_meeting(tmp_path):
+    import numpy as np
+
+    from stenograf import assets
+    from stenograf.config import MeetingProfile
+    from stenograf.output import write_transcript
+    from stenograf.transcript import Transcript, TranscriptEntry
+    from stenograf.voiceprints import write_meeting_voiceprints
+
+    mdir = tmp_path / "meeting-20260801-120000"
+    transcript = Transcript(
+        language=None,
+        profile=MeetingProfile(),
+        entries=[TranscriptEntry(speaker="Remote-1", text="hallo", start=0.0, end=1.0)],
+    )
+    write_transcript(transcript, mdir, "transcript")
+    write_meeting_voiceprints(
+        mdir,
+        {"Remote-1": np.array([1.0, 0.0, 0.0], np.float32)},
+        assets.SPEAKER_EMBEDDING.name,
+        date="2026-08-01",
+    )
+    return mdir
+
+
+def test_profiles_assign_enrolls_from_the_meeting(tmp_path):
+    mdir = _assignable_meeting(tmp_path)
+    result = CliRunner().invoke(cli.main, ["profiles", "assign", "Remote-1", "Anna", str(mdir)])
+    assert result.exit_code == 0, result.output
+    assert "enrolled 'Anna'" in result.output
+    assert "renamed 'Remote-1'" in result.output
+
+    listing = CliRunner().invoke(cli.main, ["profiles", "list"])
+    assert "Anna" in listing.output
+
+    again = CliRunner().invoke(cli.main, ["profiles", "assign", "Anna", "Anna", str(mdir)])
+    assert again.exit_code == 0, again.output
+    assert "reinforced 'Anna' (2 sample(s))" in again.output
+
+
+def test_profiles_assign_needs_a_meeting_or_last(tmp_path):
+    result = CliRunner().invoke(cli.main, ["profiles", "assign", "Remote-1", "Anna"])
+    assert result.exit_code != 0
+    assert "--last" in result.output
+
+
+def test_profiles_assign_unknown_label_lists_speakers(tmp_path):
+    mdir = _assignable_meeting(tmp_path)
+    result = CliRunner().invoke(cli.main, ["profiles", "assign", "Remote-9", "Anna", str(mdir)])
+    assert result.exit_code != 0
+    assert "Remote-1" in result.output

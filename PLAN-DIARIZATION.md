@@ -193,13 +193,28 @@ one-shot act.
    first stored embedding. Threshold semantics unchanged (max-over-gallery vs
    threshold — margin-to-second-best is unvalidated in the speaker
    literature; not adopting it).
-2. **Rename-once online enrollment.** When the user corrects/assigns a
-   speaker name for a meeting (already possible via profile naming), the
-   corrected cluster's embedding from *that meeting's audio* is added to the
-   profile — measured as the single biggest available win (−52.7 % speaker
-   error on AMI from at most one correction per speaker), and enrollment
-   from the meeting's own channel beats any clean sample (channel match
-   +18 % rel; conversational style vs read speech 5×).
+2. **Rename-once online enrollment — SHIPPED 2026-08-06, gated on
+   `eval/rename_once.py`.** Every diarized meeting now writes a
+   `voiceprints.json` sidecar (each speaker's cluster embedding under the
+   label the transcript shows), and `steno profiles assign LABEL NAME
+   (MEETING|--last)` turns one correction into everything at once: the
+   embedding joins NAME's profile (enroll-or-reinforce, dated by the
+   meeting), the transcript files are rewritten with the name, and the
+   sidecar follows. The gate measured the research claims in sign on our
+   stack: at equal enrollment coverage, cluster enrollment matches the
+   clean-headset arm at every practical operating point and *beats* it on
+   2 s trials (DIR@FAR≤5 85.7 % vs 78.6 %); reinforcement on top of a clean
+   enrollment is never worse and better at 2 s FAR-0 (82.4 % vs 76.5 %). The
+   two measured costs are both the *enrollment meeting's diarization*, not
+   the flow's: an impure cluster enrolls an impure profile (IS1009a fused
+   FIO084 into FIO087's cluster → 0.789 leak, later false match at 0.860 —
+   no threshold fixes it; steps 4–5 own the confusion, `eval/README.md` has
+   the probe), and a fused-away speaker has no cluster to assign. Scope:
+   diarized channels only — a solo channel (`num_speakers=1`, e.g. either
+   side of a 1:1 call) never computes an embedding, so its speakers enroll
+   via `steno profiles enroll`; extend the sidecar to solo channels (one
+   embedding over the channel's speech) only if corrections there prove
+   wanted enough to pay an extractor pass per meeting.
 3. **Gated automatic updates, anchored.** An auto-matched cluster may add its
    embedding to the profile only above a high-confidence bar (score margin
    above threshold + step-1.5 duration gate); the original user-confirmed

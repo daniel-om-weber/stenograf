@@ -151,6 +151,55 @@ def _choose_cluster(
     )
 
 
+@profiles.command("assign")
+@click.argument("label")
+@click.argument("name")
+@click.argument(
+    "meeting",
+    required=False,
+    type=click.Path(exists=True, path_type=Path),
+)
+@click.option(
+    "--last",
+    is_flag=True,
+    help="Use the newest meeting folder in the output home.",
+)
+def profiles_assign(label: str, name: str, meeting: Path | None, last: bool) -> None:
+    """Name speaker LABEL of a meeting as NAME, and enroll that voice.
+
+    LABEL is a speaker as the meeting's transcript shows it (``Remote-1``,
+    ``Local-2``, or a wrongly matched profile name); MEETING is the meeting
+    folder or its transcript.json (or ``--last`` for the newest). The
+    speaker's voice from that meeting joins NAME's profile — created if new —
+    so future meetings name the voice automatically, and the transcript files
+    are rewritten with the name. One correction per person is enough.
+    """
+    from stenograf.flow import assign_speaker
+
+    if last == (meeting is not None):
+        raise click.UsageError("give either a MEETING path or --last")
+    if meeting is None:
+        from stenograf.output import latest_meeting_dir, output_home
+        from stenograf.settings import load_settings
+
+        home = output_home(load_settings())
+        meeting = latest_meeting_dir(home)
+        if meeting is None:
+            raise click.ClickException(f"no finished meetings in {home}")
+        click.echo(f"meeting: {meeting}")  # say which one --last picked
+    try:
+        result = assign_speaker(meeting, label, name)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    verb = "enrolled" if result.created else "reinforced"
+    click.echo(f"{verb} {result.name!r} ({result.samples} sample(s))")
+    if result.rewritten:
+        click.echo(
+            f"renamed {label!r} → {result.name!r} in "
+            + ", ".join(p.name for p in result.rewritten)
+        )
+
+
 @profiles.command("rename")
 @click.argument("old")
 @click.argument("new")

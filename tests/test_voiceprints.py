@@ -261,3 +261,51 @@ class TestSpeakerReID:
 
 def test_default_threshold_matches_plan():
     assert DEFAULT_THRESHOLD == 0.5
+
+
+class TestAssign:
+    """Enroll-or-reinforce: the store operation behind `steno profiles assign`."""
+
+    def test_new_name_enrolls(self):
+        store = ProfileStore(profiles=[])
+        p, created = store.assign("Anna", ANNA, MODEL, date="2026-08-06")
+        assert created
+        assert p.embeddings[0].date == "2026-08-06"
+        assert store.get("Anna", MODEL) is p
+
+    def test_existing_name_reinforces(self):
+        store = ProfileStore(profiles=[])
+        store.assign("Anna", ANNA, MODEL, date="2026-08-01")
+        p, created = store.assign("Anna", ANNA, MODEL, date="2026-08-06")
+        assert not created
+        assert len(p.embeddings) == 2
+
+    def test_scoped_to_the_embedding_model(self):
+        store = ProfileStore(profiles=[profile("Anna", OTHER_MODEL, ANNA)])
+        p, created = store.assign("Anna", ANNA, MODEL)
+        assert created  # the other-model profile is a different vector space
+        assert len(store.profiles()) == 2
+
+
+class TestMeetingVoiceprints:
+    """The per-meeting sidecar `steno profiles assign` reads."""
+
+    def test_roundtrip_normalized(self, tmp_path):
+        from stenograf.voiceprints import (
+            load_meeting_voiceprints,
+            write_meeting_voiceprints,
+        )
+
+        speakers = {"Remote-1": np.array([3.0, 4.0], np.float32), "Daniel": DANIEL}
+        write_meeting_voiceprints(tmp_path, speakers, MODEL, date="2026-08-06")
+        loaded = load_meeting_voiceprints(tmp_path)
+        assert loaded is not None
+        assert loaded.embedding_model == MODEL
+        assert loaded.date == "2026-08-06"
+        assert set(loaded.speakers) == {"Remote-1", "Daniel"}
+        np.testing.assert_allclose(loaded.speakers["Remote-1"], [0.6, 0.8])
+
+    def test_missing_sidecar_is_none(self, tmp_path):
+        from stenograf.voiceprints import load_meeting_voiceprints
+
+        assert load_meeting_voiceprints(tmp_path) is None

@@ -345,6 +345,44 @@ class TestMeetingRecorder:
         transcript = recorder.run(provider).transcript
         assert {e.speaker for e in transcript.entries} == {"Daniel"}
 
+    def test_result_carries_embeddings_under_display_labels(self):
+        # The meeting voiceprints (`steno profiles assign`) must be keyed the
+        # way the transcript reads: the channel template for unmatched
+        # clusters, the profile name for matched ones.
+        model = "eres2net-voxceleb-16k.onnx"
+        store = ProfileStore(
+            profiles=[
+                SpeakerProfile(
+                    "Daniel", model, (MeetingEmbedding(np.array([1.0, 0.0], np.float32)),)
+                )
+            ]
+        )
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        diarizer = EmbeddingDiarizer(
+            [SpeakerTurn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0], np.float32)}
+        )
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=2),
+            asr=FakeASR(),
+            diarizer=diarizer,
+            reid=SpeakerReID(store, model),
+        )
+        result = recorder.run(provider)
+        assert set(result.speaker_embeddings) == {"Daniel"}
+
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=2),
+            asr=FakeASR(),
+            diarizer=EmbeddingDiarizer(
+                [SpeakerTurn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0], np.float32)}
+            ),
+        )
+        result = recorder.run(provider)
+        assert set(result.speaker_embeddings) == {"Remote-1"}
+        np.testing.assert_allclose(result.speaker_embeddings["Remote-1"], [1.0, 0.0])
+
     def test_no_reid_configured_keeps_channel_labels(self):
         # Default (no re-ID) path is unchanged: raw clusters template to Remote-N.
         pcm = np.ones(SAMPLE_RATE, dtype=np.int16)

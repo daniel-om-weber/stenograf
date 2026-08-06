@@ -5,9 +5,11 @@ they are tested here once, directly, rather than through a screen. The
 screens' own tests then only have to prove they call this correctly.
 """
 
+import numpy as np
 import pytest
 from conftest import write_settings
 
+from stenograf import flow
 from stenograf.asr.base import Word
 from stenograf.captions import (
     IDLE_FLUSH_S,
@@ -428,3 +430,79 @@ class TestCaptionStream:
         stream.clear()
         assert stream.tails() == []
         assert lines == []  # the finalize swap replaces it, it is not logged
+
+
+class TestAssignSpeaker:
+    """The rename-once loop: name a meeting speaker, enroll the voice."""
+
+    MODEL = "eres2net-voxceleb-16k.onnx"
+
+    def _meeting(self, tmp_path, speakers=None):
+        from stenograf.config import MeetingProfile
+        from stenograf.output import write_transcript
+        from stenograf.transcript import Transcript, TranscriptEntry
+        from stenograf.voiceprints import write_meeting_voiceprints
+
+        mdir = tmp_path / "meeting-20260801-120000"
+        transcript = Transcript(
+            language=None,
+            profile=MeetingProfile(),
+            entries=[
+                TranscriptEntry(speaker="Remote-1", text="hallo", start=0.0, end=1.0),
+                TranscriptEntry(speaker="Local-1", text="hi", start=1.5, end=2.0),
+            ],
+        )
+        write_transcript(transcript, mdir, "transcript")
+        if speakers is None:
+            speakers = {"Remote-1": np.array([1.0, 0.0], np.float32)}
+        write_meeting_voiceprints(mdir, speakers, self.MODEL, date="2026-08-01")
+        return mdir
+
+    def test_assign_enrolls_and_rewrites_the_transcript(self, tmp_path):
+        from stenograf.output import load_transcript
+        from stenograf.voiceprints import ProfileStore, load_meeting_voiceprints
+
+        mdir = self._meeting(tmp_path)
+        store_path = tmp_path / "profiles.json"
+        result = flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path)
+        assert result.created and result.samples == 1 and result.name == "Anna"
+
+        stored = ProfileStore.load(store_path).get("Anna", self.MODEL)
+        assert stored is not None
+        assert stored.embeddings[0].date == "2026-08-01"  # the meeting's date
+
+        transcript, _, _ = load_transcript(mdir)
+        assert {e.speaker for e in transcript.entries} == {"Anna", "Local-1"}
+        assert "Anna" in (mdir / "transcript.md").read_text(encoding="utf-8")
+        sidecar = load_meeting_voiceprints(mdir)
+        assert set(sidecar.speakers) == {"Anna"}  # follows the transcript
+
+    def test_assign_reinforces_an_existing_profile(self, tmp_path):
+        from stenograf.voiceprints import ProfileStore
+
+        mdir = self._meeting(tmp_path)
+        store_path = tmp_path / "profiles.json"
+        store = ProfileStore(store_path)
+        store.enroll("Anna", np.array([0.0, 1.0], np.float32), self.MODEL, date="2026-07-01")
+        store.save()
+        result = flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path)
+        assert not result.created and result.samples == 2
+
+    def test_confirming_an_automatch_reinforces_without_rewrite(self, tmp_path):
+        mdir = self._meeting(tmp_path, {"Anna": np.array([1.0, 0.0], np.float32)})
+        store_path = tmp_path / "profiles.json"
+        result = flow.assign_speaker(mdir, "Anna", "Anna", store_path=store_path)
+        assert result.created and result.rewritten == []
+
+    def test_unknown_label_names_the_available_ones(self, tmp_path):
+        mdir = self._meeting(tmp_path)
+        with pytest.raises(ValueError, match="Remote-1"):
+            flow.assign_speaker(mdir, "Remote-9", "Anna", store_path=tmp_path / "p.json")
+
+    def test_a_meeting_without_a_sidecar_says_so(self, tmp_path):
+        from stenograf.voiceprints import MEETING_VOICEPRINTS_NAME
+
+        mdir = self._meeting(tmp_path)
+        (mdir / MEETING_VOICEPRINTS_NAME).unlink()
+        with pytest.raises(ValueError, match="profiles enroll"):
+            flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=tmp_path / "p.json")

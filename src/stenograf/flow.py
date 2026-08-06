@@ -68,7 +68,9 @@ from stenograf.view import CallbackView, LiveView
 from stenograf.vocab import collect_terms
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
+
+    import numpy as np
 
     from stenograf.session import MeetingResult
 
@@ -465,6 +467,9 @@ class MeetingRun:
             # Usually persisted already, at the finalized event (PersistOnce
             # replays); a view that skipped the event writes here.
             paths = self.persist(transcript)
+            persist_voiceprints(
+                self.out_dir, result.speaker_embeddings, self.created_at, view.error
+            )
             self.elapsed = time.monotonic() - started
             view.status(
                 f"wrote {', '.join(p.name for p in paths)} → {self.out_dir} "
@@ -492,6 +497,34 @@ class MeetingRun:
                 # them is a terminal. Each says how to leave in its own footer.
                 view.status("saved")
         return transcript
+
+
+def persist_voiceprints(
+    out_dir: Path,
+    speakers: Mapping[str, np.ndarray],
+    created_at: datetime,
+    on_error: Callable[[str], None],
+) -> None:
+    """Write the meeting's speaker-embedding sidecar, if any channel diarized.
+
+    Runs after the transcript is persisted and must never outrank it: a
+    failure (disk full is the realistic one) costs the assign gesture for this
+    meeting, not the meeting — reported through ``on_error`` and swallowed."""
+    if not speakers:
+        return
+    from stenograf import assets
+    from stenograf.voiceprints import write_meeting_voiceprints
+
+    try:
+        write_meeting_voiceprints(
+            out_dir,
+            speakers,
+            assets.SPEAKER_EMBEDDING.name,
+            date=created_at.date().isoformat(),
+        )
+    except OSError as exc:
+        on_error(f"speaker voiceprints not saved ({exc}); `steno profiles assign` "
+                 "will not work for this meeting")
 
 
 def _report_lost_reference(result: MeetingResult, view: LiveView) -> None:
@@ -557,7 +590,8 @@ def transcribe_recording(
     Blocking; meant for a worker thread. Every failure raises."""
     settings = load_settings()
     glossary_terms, attendee_names = collect_terms((), None, (), vocab=settings.vocab)
-    out_dir = output.allocate_meeting_dir(output.output_home(settings), datetime.now())
+    created_at = datetime.now()
+    out_dir = output.allocate_meeting_dir(output.output_home(settings), created_at)
     write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)
 
     split_pcms, _correlation = resolve_split_channels(audio_file, "auto")
@@ -590,6 +624,7 @@ def transcribe_recording(
             profile_store=settings.speakers.profile_store,
         )
         transcript = result.transcript
+        speaker_embeddings: dict[str, np.ndarray] = dict(result.speaker_embeddings)
     else:
         samples = load_audio(audio_file)
         duration = len(samples) / SAMPLE_RATE
@@ -618,6 +653,7 @@ def transcribe_recording(
             elif stage == STAGE_DIARIZATION:
                 on_status("diarizing…")
 
+        speaker_embeddings = {}
         transcript = finalize_file(
             samples,
             profile=profile,
@@ -628,11 +664,105 @@ def transcribe_recording(
             reid=reid,
             glossary_threshold=settings.vocab.glossary_threshold,
             on_progress=progress,
+            on_embeddings=speaker_embeddings.update,
         )
         elapsed = time.monotonic() - started
 
     paths = output.write_transcript(transcript, out_dir, output.TRANSCRIPT_STEM, write_formats)
+    persist_voiceprints(
+        out_dir, speaker_embeddings, created_at, lambda m: on_status(f"warning: {m}")
+    )
     return TranscribeResult(paths=paths, out_dir=out_dir, duration=duration, elapsed=elapsed)
+
+
+@dataclass(frozen=True)
+class AssignResult:
+    """What one "this speaker is NAME" correction did (:func:`assign_speaker`)."""
+
+    meeting_dir: Path
+    name: str
+    created: bool
+    """A new profile was enrolled (``False`` = an existing one was reinforced)."""
+    samples: int
+    """Embeddings now on the profile."""
+    rewritten: list[Path]
+    """Transcript files rewritten with the name (empty when LABEL == NAME —
+    confirming an auto-match reinforces the profile without touching files)."""
+
+
+def assign_speaker(
+    target: Path, label: str, name: str, *, store_path: Path | None = None
+) -> AssignResult:
+    """Name a meeting's speaker and enroll that voice — the rename-once loop.
+
+    ``target`` is a meeting folder or its ``transcript.json``; ``label`` a
+    speaker as its transcript shows it (``Remote-1``, ``Local-2``, or a
+    mis-matched profile name). The label's voice embedding from the meeting's
+    own sidecar joins ``name``'s profile — created if new, reinforced
+    otherwise; measured as good as enrolling from a clean sample, and better
+    on short clusters (``eval/README.md``, 2026-08-06) — and the meeting's
+    transcript files are rewritten so the correction is visible where the
+    user saw the wrong name. One correction per colleague is the whole
+    enrollment chore: later meetings name the voice automatically.
+
+    Raises :class:`ValueError` with a user-facing message for every way this
+    can fail (no transcript, no sidecar, unknown label)."""
+    from stenograf.transcript import FORMATS
+    from stenograf.voiceprints import (
+        MEETING_VOICEPRINTS_NAME,
+        ProfileStore,
+        load_meeting_voiceprints,
+        write_meeting_voiceprints,
+    )
+
+    transcript, json_path, _ = output.load_transcript(target)
+    meeting_dir = json_path.parent
+    voiceprints = load_meeting_voiceprints(meeting_dir)
+    if voiceprints is None:
+        raise ValueError(
+            f"{meeting_dir} has no {MEETING_VOICEPRINTS_NAME} — the meeting predates "
+            "speaker assignment or had no diarized speakers; enroll from a voice "
+            "sample instead (steno profiles enroll)"
+        )
+    if label not in voiceprints.speakers:
+        known = ", ".join(sorted(voiceprints.speakers)) or "none"
+        raise ValueError(
+            f"no speaker {label!r} in {meeting_dir.name}; speakers with a stored "
+            f"voiceprint: {known}"
+        )
+
+    store = ProfileStore.load(store_path)
+    profile, created = store.assign(
+        name, voiceprints.speakers[label], voiceprints.embedding_model, date=voiceprints.date
+    )
+    store.save()
+
+    rewritten: list[Path] = []
+    if label != name:
+        entries = [
+            dataclasses.replace(e, speaker=name) if e.speaker == label else e
+            for e in transcript.entries
+        ]
+        updated = dataclasses.replace(transcript, entries=entries)
+        for fmt, render in FORMATS.items():
+            path = meeting_dir / f"{output.TRANSCRIPT_STEM}.{fmt}"
+            if path.is_file():
+                output.atomic_write_text(path, render(updated))
+                rewritten.append(path)
+        # The sidecar follows the transcript, so the next assign sees the
+        # labels the user now reads (and this one is not repeatable by accident).
+        speakers = dict(voiceprints.speakers)
+        speakers[name] = speakers.pop(label)
+        write_meeting_voiceprints(
+            meeting_dir, speakers, voiceprints.embedding_model, date=voiceprints.date
+        )
+    return AssignResult(
+        meeting_dir=meeting_dir,
+        name=profile.name,
+        created=created,
+        samples=len(profile.embeddings),
+        rewritten=rewritten,
+    )
 
 
 def settings_report(preset: str | None = None) -> tuple[list[str], bool]:

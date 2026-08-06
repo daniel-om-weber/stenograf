@@ -29,7 +29,7 @@ import signal
 import threading
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 import numpy as np
@@ -57,6 +57,7 @@ from stenograf.pipeline import (
     assemble_transcript,
     finalize_channel,
     group_words,
+    raw_label_map,
     relabel_speakers,
 )
 from stenograf.transcript import Transcript, TranscriptEntry
@@ -214,6 +215,12 @@ class MeetingResult:
     """Seconds the canceller cancelled against silence because the far-end
     reference never arrived (see :func:`_reference_gap`); ``None`` = no
     canceller was observed."""
+    speaker_embeddings: dict[str, np.ndarray] = field(default_factory=dict)
+    """Each diarized speaker's voice embedding under the label the transcript
+    shows (``Local-N``/``Remote-N`` or a matched profile name) — what a later
+    "this speaker is …" correction enrolls from (``steno profiles assign``).
+    Empty when no channel was diarized: a solo channel has no cluster
+    embedding."""
 
 
 def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
@@ -1011,6 +1018,7 @@ class MeetingRecorder:
         view = view or LiveView()  # the bare base class is the null view
         by_channel: dict[Channel, list[TranscriptEntry]] = {}
         counts: list[SpeakerCount] = []
+        speaker_embeddings: dict[str, np.ndarray] = {}
         for plan in plans:
             if plan.channel not in store.channels():
                 continue
@@ -1024,8 +1032,15 @@ class MeetingRecorder:
             # full-meeting buffer it would just discard.
             needs_audio = reused is None or (diarizer is not None and bool(reused))
             samples = store.samples(plan.channel) if needs_audio else np.zeros(0, np.float32)
-            raw = self._finalize_channel_safe(samples, diarizer, plan, view, reused_words=reused)
+            embedded: dict[str, np.ndarray] = {}
+            raw = self._finalize_channel_safe(
+                samples, diarizer, plan, view, reused_words=reused, on_embeddings=embedded.update
+            )
             labeled = relabel_speakers(raw, plan.label_template)
+            mapping = raw_label_map(raw, plan.label_template)
+            speaker_embeddings.update(
+                {mapping.get(label, label): v for label, v in embedded.items()}
+            )
             detected = len({e.speaker for e in labeled})
             counts.append(SpeakerCount(plan.channel, plan.num_speakers, detected))
             if plan.num_speakers is None:
@@ -1037,6 +1052,7 @@ class MeetingRecorder:
             speaker_counts=counts,
             dropped_echo_lines=dropped,
             reference_gap_s=reference_gap_s,
+            speaker_embeddings=speaker_embeddings,
         )
 
     def _apply_echo_backstop(
@@ -1104,6 +1120,7 @@ class MeetingRecorder:
         view: LiveView,
         *,
         reused_words: tuple[Word, ...] | None = None,
+        on_embeddings: Callable[[dict[str, np.ndarray]], None] | None = None,
     ) -> list[TranscriptEntry]:
         """Finalize one channel, never letting its failure lose another channel.
 
@@ -1123,6 +1140,7 @@ class MeetingRecorder:
                 num_speakers=plan.num_speakers,
                 reid=self.reid,
                 precomputed_words=reused_words,
+                on_embeddings=on_embeddings,
             )
         except Exception as exc:  # noqa: BLE001 — resilience across channels is the point
             if diarizer is None:

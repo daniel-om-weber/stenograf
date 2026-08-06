@@ -5,10 +5,14 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
-from stenograf import loaders
+if TYPE_CHECKING:
+    import numpy as np
+
+from stenograf import flow, loaders
 from stenograf.cli.format import (
     _FILE_MAX_SPEAKERS,
     _MEETING_MAX_SPEAKERS,
@@ -257,6 +261,7 @@ def transcribe(
             profile_store=reid_store,
         )
         transcript = meeting_result.transcript
+        speaker_embeddings: dict[str, np.ndarray] = dict(meeting_result.speaker_embeddings)
     else:
         from stenograf.pipeline import STAGE_ASR, STAGE_DIARIZATION, finalize_file
 
@@ -292,6 +297,7 @@ def transcribe(
 
         # The settings-derived store path stays off this profile too (see above);
         # the library assembles the whole transcript, the CLI only reports.
+        speaker_embeddings = {}
         transcript = finalize_file(
             samples,
             profile=MeetingProfile(
@@ -308,6 +314,7 @@ def transcribe(
             reid=reid,
             glossary_threshold=glossary_threshold,
             on_progress=progress,
+            on_embeddings=speaker_embeddings.update,
         )
         elapsed = time.monotonic() - started
 
@@ -317,6 +324,9 @@ def transcribe(
         click.echo(f"language: detected {language.value}")
 
     paths = write_transcript(transcript, out_dir, basename, write_formats)
+    flow.persist_voiceprints(
+        out_dir, speaker_embeddings, created_at, lambda m: click.echo(f"warning: {m}")
+    )
     speed = duration / elapsed if elapsed else 0.0
     if meeting_result is not None:
         _report_speaker_counts(meeting_result.speaker_counts)

@@ -68,12 +68,17 @@ def finalize_channel(
     num_speakers: int | None = None,
     reid: SpeakerResolver | None = None,
     on_progress: ProgressCallback | None = None,
+    on_embeddings: Callable[[dict[str, np.ndarray]], None] | None = None,
     precomputed_words: tuple[Word, ...] | None = None,
 ) -> list[TranscriptEntry]:
     """Transcribe one channel; returns entries with raw ``S<n>`` speaker labels.
 
     ``diarizer=None`` or ``num_speakers=1`` attributes everything to ``S0``.
     ``on_progress`` is called as ``on_progress(stage: str, done: int, total: int)``.
+    ``on_embeddings`` receives the diarized clusters' voice embeddings under
+    the same labels the returned entries carry — the enrollment material for
+    "this speaker is …" corrections after the meeting. Never called when no
+    diarizer ran: a solo channel has no cluster embedding.
 
     Diarization always runs with per-cluster voice embeddings: a known count is
     requested one high and folded back (:func:`fold_excess_clusters`), an
@@ -112,6 +117,7 @@ def finalize_channel(
         num_speakers=num_speakers,
         reid=reid,
         on_progress=on_progress,
+        on_embeddings=on_embeddings,
     )
 
 
@@ -181,6 +187,7 @@ def _attribute(
     num_speakers: int | None,
     reid: SpeakerResolver | None,
     on_progress: ProgressCallback | None,
+    on_embeddings: Callable[[dict[str, np.ndarray]], None] | None = None,
 ) -> list[TranscriptEntry]:
     """Diarize the channel and merge the decoded words with the speaker turns."""
     if not words and segments:
@@ -212,7 +219,44 @@ def _attribute(
         entries = [
             replace(e, speaker=names[e.speaker]) if e.speaker in names else e for e in entries
         ]
+    if on_embeddings is not None:
+        # Only labels the entries carry: a cluster that attracted no words is
+        # invisible in the transcript, so it must not appear in the meeting's
+        # voiceprint sidecar either (and would leak an untemplated raw label).
+        visible = {e.speaker for e in entries}
+        on_embeddings(
+            {
+                label: vector
+                for label, vector in _entry_embeddings(turns, embeddings, names).items()
+                if label in visible
+            }
+        )
     return entries
+
+
+def _entry_embeddings(
+    turns: list[SpeakerTurn],
+    embeddings: dict[str, np.ndarray],
+    names: dict[str, str],
+) -> dict[str, np.ndarray]:
+    """Cluster embeddings under the labels the entries carry.
+
+    Several clusters resolving to one profile name (merge-at-naming) merge to
+    their duration-weighted mean — the same rule :func:`fold_excess_clusters`
+    uses for a merged cluster's embedding."""
+    durations: dict[str, float] = {}
+    for t in turns:
+        durations[t.speaker] = durations.get(t.speaker, 0.0) + (t.end - t.start)
+    sums: dict[str, np.ndarray] = {}
+    for cluster, vector in embeddings.items():
+        label = names.get(cluster, cluster)
+        weighted = vector * durations.get(cluster, 0.0)
+        sums[label] = sums[label] + weighted if label in sums else weighted
+    return {
+        label: l2_normalize(total)
+        for label, total in sums.items()
+        if float(np.linalg.norm(total)) > 0.0
+    }
 
 
 COLLAPSE_SIMILARITY = 0.6
@@ -354,6 +398,7 @@ def finalize_file(
     reid: SpeakerResolver | None = None,
     glossary_threshold: float | None = None,
     on_progress: ProgressCallback | None = None,
+    on_embeddings: Callable[[dict[str, np.ndarray]], None] | None = None,
 ) -> Transcript:
     """One mixed audio stream → a finished transcript (``steno transcribe``).
 
@@ -366,18 +411,22 @@ def finalize_file(
     ``"audio"`` channel. ``profile.language`` is the *given*
     language (``None`` = detect); the returned transcript carries the resolved
     one."""
-    entries = relabel_speakers(
-        finalize_channel(
-            samples,
-            asr=asr,
-            language=profile.language,
-            vad=vad,
-            diarizer=diarizer,
-            num_speakers=num_speakers,
-            reid=reid,
-            on_progress=on_progress,
-        )
+    captured: dict[str, np.ndarray] = {}
+    raw = finalize_channel(
+        samples,
+        asr=asr,
+        language=profile.language,
+        vad=vad,
+        diarizer=diarizer,
+        num_speakers=num_speakers,
+        reid=reid,
+        on_progress=on_progress,
+        on_embeddings=captured.update if on_embeddings is not None else None,
     )
+    mapping = raw_label_map(raw, "Speaker {n}")
+    entries = [replace(e, speaker=mapping.get(e.speaker, e.speaker)) for e in raw]
+    if on_embeddings is not None and captured:
+        on_embeddings({mapping.get(label, label): v for label, v in captured.items()})
     detected = len({e.speaker for e in entries})
     return assemble_transcript(
         entries,
@@ -653,13 +702,16 @@ def relabel_speakers(
     appearance. Labels that are not raw cluster labels — a speaker-profile name
     assigned by re-ID — are already final and pass through unchanged (so a
     matched "Daniel" is not renumbered into ``Local-1``)."""
+    mapping = raw_label_map(entries, template)
+    return [replace(e, speaker=mapping.get(e.speaker, e.speaker)) for e in entries]
+
+
+def raw_label_map(entries: list[TranscriptEntry], template: str) -> dict[str, str]:
+    """The raw-``S<n>``-to-display-name mapping :func:`relabel_speakers` applies,
+    exposed so a channel's cluster embeddings can be relabeled in lockstep with
+    its entries (the meeting voiceprints must carry the labels the user reads)."""
     mapping: dict[str, str] = {}
-    result = []
     for entry in entries:
-        label = entry.speaker
-        if _RAW_CLUSTER.fullmatch(label):
-            if label not in mapping:
-                mapping[label] = template.format(n=len(mapping) + 1)
-            label = mapping[label]
-        result.append(replace(entry, speaker=label))
-    return result
+        if _RAW_CLUSTER.fullmatch(entry.speaker) and entry.speaker not in mapping:
+            mapping[entry.speaker] = template.format(n=len(mapping) + 1)
+    return mapping

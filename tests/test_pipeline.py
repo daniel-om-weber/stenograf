@@ -571,3 +571,117 @@ class TestFinalizeFile:
         assert transcript.language is Language.ENGLISH
         assert transcript.parameters.language.provenance is Provenance.EXPLICIT
         assert transcript.parameters.speakers["audio"].provenance is Provenance.EXPLICIT
+
+
+class TestOnEmbeddings:
+    """finalize_channel's embeddings out-channel: the enrollment material for
+    `steno profiles assign` must carry the labels the entries carry."""
+
+    def _samples(self):
+        return np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
+
+    def test_labels_match_entries_named_and_raw(self):
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 1.0), turn("S1", 1.2, 2.0)],
+            {
+                "S0": np.array([1.0, 0.0], np.float32),
+                "S1": np.array([0.0, 1.0], np.float32),
+            },
+        )
+        captured: dict[str, np.ndarray] = {}
+        entries = finalize_channel(
+            self._samples(),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+            reid=MappingReID({"S0": "Daniel"}),
+            precomputed_words=(word("hallo", 0.2, 0.6), word("welt", 1.4, 1.8)),
+            on_embeddings=captured.update,
+        )
+        assert set(captured) == {e.speaker for e in entries} == {"Daniel", "S1"}
+        np.testing.assert_allclose(captured["Daniel"], [1.0, 0.0])
+        np.testing.assert_allclose(captured["S1"], [0.0, 1.0])
+
+    def test_a_cluster_without_words_stays_out_of_the_sidecar(self):
+        # FakeASR decodes one word (midpoint in S0): cluster S1 is invisible in
+        # the transcript, so its embedding must not surface as an assignable label.
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 1.0), turn("S1", 1.2, 2.0)],
+            {
+                "S0": np.array([1.0, 0.0], np.float32),
+                "S1": np.array([0.0, 1.0], np.float32),
+            },
+        )
+        captured: dict[str, np.ndarray] = {}
+        entries = finalize_channel(
+            self._samples(),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+            on_embeddings=captured.update,
+        )
+        assert {e.speaker for e in entries} == {"S0"}
+        assert set(captured) == {"S0"}
+
+    def test_merge_at_naming_merges_by_duration(self):
+        # Two clusters resolving to one profile merge like fold_excess_clusters
+        # merges: duration-weighted mean, re-normalized. S0 speaks 3 s, S1 1 s.
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 3.0), turn("S1", 4.0, 5.0)],
+            {
+                "S0": np.array([1.0, 0.0], np.float32),
+                "S1": np.array([0.0, 1.0], np.float32),
+            },
+        )
+        captured: dict[str, np.ndarray] = {}
+        finalize_channel(
+            np.zeros(SAMPLE_RATE * 5, dtype=np.float32),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=2,
+            reid=MappingReID({"S0": "Daniel", "S1": "Daniel"}),
+            precomputed_words=(word("hallo", 0.2, 0.6), word("welt", 4.4, 4.8)),
+            on_embeddings=captured.update,
+        )
+        assert set(captured) == {"Daniel"}
+        expected = np.array([3.0, 1.0]) / np.hypot(3.0, 1.0)
+        np.testing.assert_allclose(captured["Daniel"], expected, rtol=1e-6)
+
+    def test_never_called_without_diarization(self):
+        called = []
+        entries = finalize_channel(
+            self._samples(),
+            asr=FakeASR(),
+            language=None,
+            diarizer=EmbeddingDiarizer([turn("S0", 0.0, 2.0)], {}),
+            num_speakers=1,
+            on_embeddings=lambda e: called.append(e),
+        )
+        assert entries and not called
+
+    def test_finalize_file_relabels_embedding_keys(self):
+        # The sidecar must show "Speaker N", not raw S<n> — the labels the
+        # user reads in a file transcription.
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 1.0), turn("S1", 1.2, 2.0)],
+            {
+                "S0": np.array([1.0, 0.0], np.float32),
+                "S1": np.array([0.0, 1.0], np.float32),
+            },
+        )
+        captured: dict[str, np.ndarray] = {}
+        transcript = finalize_file(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            profile=MeetingProfile(),
+            asr=FakeASR(),
+            diarizer=diarizer,
+            num_speakers=2,
+            on_embeddings=captured.update,
+        )
+        assert set(captured) == {e.speaker for e in transcript.entries} <= {
+            "Speaker 1",
+            "Speaker 2",
+        }
