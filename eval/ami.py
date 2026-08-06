@@ -13,9 +13,10 @@ Corpus facts this module is built on (verified against the mirror 2026-08-06):
 - Identity resolves ONLY through ``meetings.xml``'s ``global_name``; agent
   letters permute between sessions in some series and ``segments/@channel``
   reproduces transcriber errors the audio doesn't have.
-- ES2003 + IS1009: same 4 participants across all four sessions and zero
-  entries in the corpus data-problems table (ES2002/IS1000 have documented
-  headset faults and dropouts; ES2004d has dropouts).
+- ES2003 + ES2007 + IS1009 + TS3010: same 4 participants across all four
+  sessions and zero entries in the corpus data-problems table
+  (ES2002/IS1000 have documented headset faults and dropouts; ES2004d has
+  dropouts; see the ``AMI_GROUPS`` docstring for the 2026-08-07 vetting).
 - ICSI close-talk channels are NIST SPHERE with embedded shorten — ffmpeg
   decodes them natively, no sph2pipe. The channel↔speaker map and the only
   reliable ICSI timing layer (utterance segments) both live in the ``.mrt``
@@ -29,7 +30,7 @@ vocal sounds excluded) merged per speaker across gaps ≤ ``MERGE_GAP_S`` — th
 RT smoothing convention; our DER numbers are comparable only to our own
 (``PLAN-DIARIZATION.md``'s calibration note).
 
-Commands (downloads ~2.5 GB into ``eval/audio/ami/raw/`` on first use)::
+Commands (downloads ~6.3 GB into ``eval/audio/ami/raw/`` on first use)::
 
     uv run --group eval eval/ami.py fetch   # download + build channels & refs
     uv run --group eval eval/ami.py run     # fetch, diarize, score DER + naming
@@ -59,10 +60,33 @@ MIRROR = "https://groups.inf.ed.ac.uk/ami"
 AMI_ANNOTATIONS_ZIP = "ami_public_manual_1.6.2.zip"
 ICSI_TRANSCRIPTS_ZIP = "ICSI_original_transcripts.zip"
 
-AMI_GROUPS = {"ES2003": "abcd", "IS1009": "abcd"}
-ICSI_MEETINGS = ("Bmr021", "Bmr025")
-"""Bmr025 (33 min, 8 close-talk participants) over Bed009 (54 min, 7): a
-larger group in fewer minutes is the better large-group condition."""
+AMI_GROUPS = {"ES2003": "abcd", "ES2007": "abcd", "IS1009": "abcd", "TS3010": "abcd"}
+"""Four series, each the same four participants across sessions a–d. ES2007
+and TS3010 joined 2026-08-07 after a full vetting pass: zero corpus
+data-problems entries, all 16 headset channels live, zero clipped samples in
+a 72 s/channel level probe — and TS3010 adds the third recording site (TNO;
+audio hardware identical to Edinburgh's, its known caveats are video-only).
+The probe also measured what the problems table does not list: Idiap
+candidates IS1004/IS1006 ship with clipped headset samples (up to 263 per
+million; site-wide ~20 dB hotter gain), so they were dropped despite clean
+table entries. ES2002/IS1000 stay out (documented headset faults)."""
+ICSI_GROUP = "Bmr"
+ICSI_SESSIONS = {"a": "Bmr021", "b": "Bmr024", "c": "Bmr025", "d": "Bmr030"}
+"""The ICSI Bmr series is one recurring group (the Meeting Recorder project's
+own weekly meeting), so it carries re-ID sessions exactly like an AMI series —
+mapped onto session letters in meeting order so every ``session``-based
+convention (enroll on "a", trial on the rest) applies unchanged. Picked from
+the whole series parsed 2026-08-07 (29 meetings): Bmr024 has all five
+Bmr021-enrollable regulars (fe008, me001, me011, me018, mn014) plus three
+natural strangers (fe016, me013, me051) and the convention stranger mn017 in
+one meeting; Bmr025 (33 min, 8 close-talk) is the large-group condition (over
+Bed009 54 min/7); Bmr030 (26 min) is the shortest clean option and the
+small-group condition — its speaker set is a subset of Bmr024's, so its value
+is recurrence, not new voices. Bmr012 is the one Bmr meeting with a shared
+close-talk channel — rejected, per-speaker audio does not exist there. ICSI
+attendance churns between meetings, so later sessions carry *natural*
+strangers on top of the alphabetically-last convention — the stranger source
+AMI's fixed foursomes cannot provide."""
 
 MERGE_GAP_S = 0.3
 """Same-speaker word/utterance spans closer than this merge into one turn (the
@@ -313,6 +337,18 @@ class MrtMeeting:
     """participant → utterance spans (only participants with a channel)."""
 
 
+def icsi_speakers(mrt: MrtMeeting) -> dict[str, str]:
+    """participant → channel, restricted to participants with transcribed
+    speech — THE ICSI speaker universe. Every convention that slices it
+    (mic wearer = first sorted name, enrollment = ``sorted()[:-1]``) must go
+    through here so fetch, galleries, and ``participants`` cannot disagree."""
+    return {
+        who: chan
+        for who, chan in sorted(mrt.participant_channels.items())
+        if mrt.segments.get(who)
+    }
+
+
 def parse_mrt(path: Path) -> MrtMeeting:
     root = ElementTree.parse(path).getroot()
     channel_files = {
@@ -432,8 +468,11 @@ def _build_meeting(
     """Write mic/loop WAVs + refs for one meeting.
 
     ``speakers`` maps global name → (headset wav, merged speech spans). The mic
-    participant is the alphabetically-first name — deterministic, and the same
-    person across a group's sessions since the participant set is identical."""
+    participant is the alphabetically-first name of *this meeting* —
+    deterministic, and constant across an AMI group's sessions (identical
+    foursome), but not across Bmr sessions, whose attendance churns (fe008
+    wears the mic in a–c, me001 in d). Nothing downstream may assume one mic
+    wearer per group; identity always resolves through the reference RTTM."""
     mic_name = sorted(speakers)[0]
     others = {n: v for n, v in speakers.items() if n != mic_name}
 
@@ -473,28 +512,27 @@ def fetch() -> list[Channel]:
             meeting = group + session
             speakers: dict[str, tuple[Path, list[tuple[float, float]]]] = {}
             for agent, (headset, name) in meetings_map[meeting].items():
-                wav = _ami_headset(meeting, headset)
                 spans = parse_words_xml(annotations / "words" / f"{meeting}.{agent}.words.xml")
+                if not spans:
+                    continue  # keep the speaker universe = ICSI's (spans required)
+                wav = _ami_headset(meeting, headset)
                 speakers[name] = (wav, merge_spans(spans))
             channels += _build_meeting(meeting, group, session, speakers)
             print(f"[{meeting}] {len(speakers)} speakers → mic + loop")
 
-    for meeting in ICSI_MEETINGS:
+    for session, meeting in ICSI_SESSIONS.items():
         mrt = parse_mrt(_icsi_mrt(meeting))
         speakers = {}
-        for who, chan in mrt.participant_channels.items():
-            spans = mrt.segments.get(who)
-            if not spans:
-                continue  # a close-talk participant with no transcribed speech
+        for who, chan in icsi_speakers(mrt).items():
             wav = _icsi_channel_wav(meeting, mrt.channel_files[chan])
-            speakers[who] = (wav, merge_spans(spans))
+            speakers[who] = (wav, merge_spans(mrt.segments[who]))
         shared = len(mrt.participant_channels) - len(set(mrt.participant_channels.values()))
         if shared:
             raise RuntimeError(
                 f"{meeting}: {shared} participants share a close-talk channel; "
                 "pick a different ICSI meeting (channel audio is not per-speaker there)"
             )
-        channels += _build_meeting(meeting, None, None, speakers)
+        channels += _build_meeting(meeting, ICSI_GROUP, session, speakers)
         print(f"[{meeting}] {len(speakers)} speakers → mic + loop")
 
     CHANNELS_MANIFEST.write_text(
@@ -529,39 +567,89 @@ def build_galleries(embed, session: str = ENROLL_SESSION) -> dict[str, dict[str,
     Enrollment slices the participant's *reference* turns from their own
     headset (the clean solo signal our rename-once flow would capture); the
     alphabetically-last participant stays unenrolled, so every later cluster
-    of theirs is a stranger trial by construction. ``embed`` is the production
-    embedding callable (``SherpaOnnxDiarizer.embed``). ``session`` defaults to
-    the trial convention's enrollment session; multi-meeting profile
-    experiments enroll further sessions (``eval/store_v2.py``)."""
+    of theirs is a stranger trial by construction — and the Bmr group adds
+    *natural* strangers on top, participants who simply were not at the
+    enrollment meeting. ``embed`` is the production embedding callable
+    (``SherpaOnnxDiarizer.embed``). ``session`` defaults to the trial
+    convention's enrollment session; multi-meeting profile experiments enroll
+    further sessions (``eval/store_v2.py``)."""
     from stenograf.diarization.base import SpeakerTurn
     from stenograf.diarization.sherpa import cluster_embeddings
 
     annotations = RAW_DIR / "annotations"
     meetings_map = parse_meetings_xml(annotations / "corpusResources" / "meetings.xml")
     galleries: dict[str, dict[str, np.ndarray]] = {}
-    for group in AMI_GROUPS:
-        meeting = group + session
-        by_name = {
-            name: (agent, headset) for agent, (headset, name) in meetings_map[meeting].items()
-        }
+
+    def enroll(group: str, sources: dict[str, tuple[Path, list[tuple[float, float]]]]) -> None:
         gallery: dict[str, np.ndarray] = {}
-        for name in sorted(by_name)[:-1]:
-            agent, headset = by_name[name]
-            spans = merge_spans(
-                parse_words_xml(annotations / "words" / f"{meeting}.{agent}.words.xml")
-            )
-            pcm = read_pcm16(RAW_DIR / meeting / f"{meeting}.Headset-{headset}.wav")
+        for name in sorted(sources)[:-1]:
+            wav, spans = sources[name]
             turns = [SpeakerTurn(name, s, e) for s, e in spans]
-            embedded = cluster_embeddings(turns, pcm, embed)
-            gallery[name] = embedded[name]
+            gallery[name] = cluster_embeddings(turns, read_pcm16(wav), embed)[name]
         galleries[group] = gallery
         print(f"[{group}] enrolled {sorted(gallery)} from session {session}")
+
+    for group in AMI_GROUPS:
+        meeting = group + session
+        enroll(
+            group,
+            {
+                name: (
+                    RAW_DIR / meeting / f"{meeting}.Headset-{headset}.wav",
+                    merge_spans(
+                        parse_words_xml(annotations / "words" / f"{meeting}.{agent}.words.xml")
+                    ),
+                )
+                for agent, (headset, name) in meetings_map[meeting].items()
+            },
+        )
+
+    meeting = ICSI_SESSIONS[session]
+    mrt = parse_mrt(_icsi_mrt(meeting))
+    enroll(
+        ICSI_GROUP,
+        {
+            who: (
+                (RAW_DIR / meeting / mrt.channel_files[chan]).with_suffix(".wav"),
+                merge_spans(mrt.segments[who]),
+            )
+            for who, chan in icsi_speakers(mrt).items()
+        },
+    )
     return galleries
 
 
+def participants(group: str, session: str) -> list[str]:
+    """One meeting's speaker universe: every name with per-speaker audio and
+    reference spans — the set enrollment conventions slice (``[:-1]``). The
+    AMI branch trusts ``meetings.xml`` without re-parsing words files (all 64
+    are non-empty, checked 2026-08-07; ``fetch`` enforces the same universe)."""
+    if group in AMI_GROUPS:
+        meetings_map = parse_meetings_xml(
+            RAW_DIR / "annotations" / "corpusResources" / "meetings.xml"
+        )
+        return sorted(name for _, name in meetings_map[group + session].values())
+    return list(icsi_speakers(parse_mrt(_icsi_mrt(ICSI_SESSIONS[session]))))
+
+
 def build_trials() -> None:
-    """Enroll galleries (:func:`build_galleries`), score every later cluster
-    against them, write ``out/reid/trials.json``."""
+    """Enroll galleries (:func:`build_galleries`), score every later cluster,
+    write ``out/reid/trials.json`` + ``trials-crossgroup.json``.
+
+    Two stranger populations, kept in separate files on purpose (2026-08-07):
+    a cluster scored against its OWN group's gallery models the product's hard
+    case — an unenrolled voice in your own meeting — and is the headline
+    (``trials.json``). Scoring the same cluster against the *other* groups'
+    galleries manufactures easy negatives (different room, corpus, language
+    even) whose count scales with the number of groups; pooled, they dilute
+    the FAR denominator until ``dir_at_far`` can spend the whole false-accept
+    budget on hard strangers (measured at 5 galleries: 280 easy vs 20 hard
+    negatives in one pool — FAR ≤ 5 % would tolerate 15 hard accepts where the
+    2-gallery harness tolerated 2). Cross-group scores stay valuable as the
+    big-store diagnostic — how often does *anyone else's* profile clear the
+    bar for an arbitrary foreign cluster — so they land in
+    ``trials-crossgroup.json`` (name-prefixed per gallery, every trial a
+    stranger by construction) and are reported separately."""
     from reid_score import Trial, save_trials
 
     from stenograf.diarization.sherpa import SherpaOnnxDiarizer
@@ -570,6 +658,7 @@ def build_trials() -> None:
 
     hyp_dir = OUT_DIR / "diar" / "ami"
     trials: list[Trial] = []
+    cross: list[Trial] = []
     for channel in load_channels():
         if channel.session == ENROLL_SESSION:
             continue  # enrollment source is never a trial
@@ -586,15 +675,26 @@ def build_trials() -> None:
         for cluster, vector in embeddings.items():
             cluster_turns = [t for t in hyp if t.speaker == cluster]
             true = dominant_speaker(cluster_turns, ref)
-            for group, gallery in galleries.items():
-                scores = {name: float(vector @ emb) for name, emb in gallery.items()}
-                trials.append(Trial(f"{group}:{channel.id}/{cluster}", true, scores))
+            own = galleries.get(channel.group) or {}
+            if own:
+                scores = {name: float(vector @ emb) for name, emb in own.items()}
+                trials.append(Trial(f"{channel.group}:{channel.id}/{cluster}", true, scores))
+            foreign = {
+                f"{group}:{name}": float(vector @ emb)
+                for group, gallery in galleries.items()
+                if group != channel.group
+                for name, emb in gallery.items()
+            }
+            if foreign:
+                cross.append(Trial(f"cross:{channel.id}/{cluster}", true, foreign))
 
     save_trials(OUT_DIR / "reid" / "trials.json", trials)
+    save_trials(OUT_DIR / "reid" / "trials-crossgroup.json", cross)
     known = sum(1 for t in trials if t.known)
     print(
-        f"{len(trials)} trials ({known} known, {len(trials) - known} unknown) "
-        "→ out/reid/trials.json"
+        f"{len(trials)} same-group trials ({known} known, {len(trials) - known} unknown) "
+        f"→ out/reid/trials.json; {len(cross)} cross-group stranger trials "
+        "→ out/reid/trials-crossgroup.json"
     )
 
 

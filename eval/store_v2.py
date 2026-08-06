@@ -7,12 +7,12 @@ literature's verdict that score averaging beats embedding averaging
 embeddings" rule is retracted for modern embeddings). This measures that
 choice on the step-0 harness before it ships.
 
-Setup: enroll each AMI group's participants from sessions **a and b** (each
-session's reference spans on the raw headset — two independent meetings per
-speaker); trials are the cached known-count matrix clusters of sessions **c
-and d** plus the ICSI channels (strangers to every gallery), scored against
-both groups exactly like ``ami.py trials``. Arms differ only in how the two
-enrollments make one profile score:
+Setup: enroll each group's participants from sessions **a and b** (each
+session's reference spans on the participant's own raw close-talk channel —
+two independent meetings per speaker; Bmr included since 2026-08-07, names
+enrollable in both sessions only); trials are the cached known-count matrix
+clusters of sessions **c and d**, scored against every group's gallery. Arms
+differ only in how the two enrollments make one profile score:
 
 - ``single a`` / ``single b`` — one-meeting profiles (today's store after one
   enrollment; the two arms bound enrollment-session luck).
@@ -42,7 +42,7 @@ from rttm import parse_rttm
 
 HYP_DIR = OUT_DIR / "diar" / "ami"
 ENROLL_SESSIONS = ("a", "b")
-TRIAL_SESSIONS = (None, "c", "d")  # None = ICSI (stranger-only)
+TRIAL_SESSIONS = ("c", "d")
 
 
 def arm_scores(
@@ -108,10 +108,14 @@ def main() -> int:
 
     embed = SherpaOnnxDiarizer().embed
     galleries = [ami.build_galleries(embed, session) for session in ENROLL_SESSIONS]
-    # group → name → (embedding_a, embedding_b)
+    # group → name → (embedding_a, embedding_b). Restricted to names enrollable
+    # in BOTH sessions: guaranteed for AMI's fixed foursomes, data-dependent for
+    # Bmr (attendance churns; today a∩b covers all five session-a enrollables).
     enrollments = {
         group: {
-            name: [g[group][name] for g in galleries] for name in galleries[0][group]
+            name: [g[group][name] for g in galleries]
+            for name in galleries[0][group]
+            if all(name in g[group] for g in galleries)
         }
         for group in galleries[0]
     }

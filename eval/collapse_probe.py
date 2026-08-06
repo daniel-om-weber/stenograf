@@ -6,9 +6,11 @@ solo channels have min pairwise cluster similarity 0.74–0.98, the corpus loops
 sims reach 0.95 there, so a genuinely-two-speaker channel (the common remote
 channel in production) might have ALL clusters mutually over the bar and
 collapse into one "speaker". This probe synthesizes what the corpus lacks:
-every pair of loop participants per AMI meeting, masked with the meeting's own
-crosstalk gate and mixed exactly like the loop channels (8 meetings × 3 pairs
-= 24 channels), then estimate-mode diarization + the collapse test on each.
+every pair of loop participants per meeting of the two groups the recorded
+verdict measured (ES2003 + IS1009, 8 meetings × 3 pairs = 24 channels; the
+2026-08-07 groups don't silently join a closed measurement — re-decide the
+probe set if it ever re-runs for a new verdict), then estimate-mode
+diarization + the collapse test on each.
 
 The verdict is the false-collapse count. DER (est turns vs collapsed turns,
 against the pair's reference spans) prices what a false collapse costs.
@@ -40,7 +42,8 @@ def main() -> int:
     estimator = _build_diarizer(sherpa_only=False)
 
     rows = []
-    for group, sessions in ami.AMI_GROUPS.items():
+    probe_groups = {g: s for g, s in ami.AMI_GROUPS.items() if g in ("ES2003", "IS1009")}
+    for group, sessions in probe_groups.items():
         for session in sessions:
             meeting = group + session
             speakers: dict[str, tuple[np.ndarray, list[tuple[float, float]]]] = {}

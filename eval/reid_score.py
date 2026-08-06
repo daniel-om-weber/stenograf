@@ -185,6 +185,28 @@ def report(trials: list[Trial]) -> str:
     return "\n".join(lines)
 
 
+def crossgroup_section(trials: list[Trial], cross: list[Trial]) -> str:
+    """FAR of the cross-group stranger trials at the headline operating
+    thresholds — the big-store diagnostic (every trial a stranger to a foreign
+    gallery by construction; see ``ami.build_trials`` for why they are not
+    pooled into the headline curve)."""
+    lines = [
+        f"### Cross-group strangers ({len(cross)} trials, diagnostic)",
+        "",
+        "| Operating point (from same-group curve) | Threshold | cross-group FAR |",
+        "|---|---|---|",
+    ]
+    for target in FAR_TARGETS:
+        point = dir_at_far(trials, target)
+        if point is None:
+            continue
+        far = operating_point(cross, point.threshold).far
+        lines.append(f"| DIR @ FAR≤{target:.1%} | {point.threshold:.3f} | {far:.1%} |")
+    top = max((t.top[1] for t in cross), default=float("nan"))
+    lines += ["", f"Highest cross-group stranger score: {top:.3f}", ""]
+    return "\n".join(lines)
+
+
 def main() -> int:
     from common import OUT_DIR
 
@@ -197,6 +219,9 @@ def main() -> int:
         print("trials file is empty", file=sys.stderr)
         return 1
     text = report(trials)
+    cross_path = OUT_DIR / "reid" / "trials-crossgroup.json"
+    if cross_path.exists() and (cross := load_trials(cross_path)):
+        text += "\n" + crossgroup_section(trials, cross)
     print(text)
     out = OUT_DIR / "reid-report.md"
     out.write_text(text + "\n")

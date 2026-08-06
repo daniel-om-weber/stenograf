@@ -27,11 +27,11 @@ before any of its updates, as production resolves a meeting. Policies:
 - ``oracle``  — append only correctly-named clusters: the upper bound any
   gate could reach.
 
-Evaluation is held out: session **d** + ICSI clusters (never update material)
-scored against each policy's final store, full-duration plus 3 s / 2 s
-truncation — the short-cluster regime where `store_v2.py` measured
-multi-meeting profiles as insurance, i.e. where auto-updates would earn their
-keep. The known poisoning seed is in the update material by construction:
+Evaluation is held out: session **d** clusters (never update material) scored
+against each policy's final store, full-duration plus 3 s / 2 s truncation —
+the short-cluster regime where `store_v2.py` measured multi-meeting profiles
+as insurance, i.e. where auto-updates would earn their keep. The known
+poisoning seed is in the update material by construction:
 IS1009's quiet FIO084 has no session-a cluster (fused away → unenrolled) and
 their later clusters pull toward the impure FIO087 profile at up to 0.860
 (`rename_once.py`), scores no margin gate survives.
@@ -55,7 +55,7 @@ from rttm import parse_rttm
 HYP_DIR = OUT_DIR / "diar" / "ami"
 ENROLL_SESSION = "a"
 UPDATE_SESSIONS = ("b", "c")
-EVAL_SESSIONS = (None, "d")  # None = ICSI (stranger-only)
+EVAL_SESSIONS = ("d",)
 
 
 @dataclass(frozen=True)
@@ -235,13 +235,11 @@ def main() -> int:
 
     # Rename-once enrollment, restricted to the trial convention's enrollable
     # names (alphabetically-last participant stays a stranger).
-    meetings_map = ami.parse_meetings_xml(
-        ami.RAW_DIR / "annotations" / "corpusResources" / "meetings.xml"
-    )
     enrolled = cluster_galleries(enroll_channels)
+    groups = [*ami.AMI_GROUPS, ami.ICSI_GROUP]
     initial: dict[str, Gallery] = {}
-    for group in ami.AMI_GROUPS:
-        names = sorted(n for _, n in meetings_map[group + ENROLL_SESSION].values())
+    for group in groups:
+        names = ami.participants(group, ENROLL_SESSION)
         found = enrolled.get(group, {})
         initial[group] = {n: found[n] for n in names[:-1] if n in found}
 
@@ -254,7 +252,7 @@ def main() -> int:
             ),
         )
         for session in UPDATE_SESSIONS
-        for group in ami.AMI_GROUPS
+        for group in groups
     ]
     galleries, summary, wrong, audit = simulate(update_meetings, initial, DEFAULT_THRESHOLD)
 
@@ -276,7 +274,7 @@ def main() -> int:
         "",
         f"Enrollment: session-{ENROLL_SESSION} clusters; updates replay sessions "
         f"{'+'.join(UPDATE_SESSIONS)} at threshold {DEFAULT_THRESHOLD:g}; held-out "
-        f"evaluation: session d + ICSI ({total} trials, {known} known).",
+        f"evaluation: session d ({total} trials, {known} known).",
         "",
         "### Updates applied",
         "",

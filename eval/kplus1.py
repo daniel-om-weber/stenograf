@@ -11,7 +11,7 @@ on the same profile take one name) as the recovery. Arms:
 - ``k+1``      — one extra cluster, no recovery (what an unprofiled channel
   would read).
 - ``k+1 name`` — the extra cluster merged back where a profile catches it
-  (AMI sessions b–d; ICSI has no galleries and session ``a`` enrolls them).
+  (sessions b–d of every group, Bmr included; session ``a`` enrolls).
 
 Word times come from the matrix hypotheses; k+1 turns and embeddings are
 cached under ``out/diar/ami-k1/``. Run ``eval/ami.py run`` first.

@@ -14,9 +14,12 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
 
 from ami import (  # noqa: E402
+    ICSI_SESSIONS,
+    MrtMeeting,
     apply_mask,
     crosstalk_masks,
     dominant_speaker,
+    icsi_speakers,
     merge_spans,
     mix_pcm,
     parse_meetings_xml,
@@ -187,3 +190,23 @@ class TestParsers:
         # mn055 has no close-talk channel → excluded from map and segments
         assert mrt.participant_channels == {"me011": "chan0", "fe008": "chan3"}
         assert mrt.segments == {"me011": [(0.53, 1.43)], "fe008": [(2.0, 3.0)]}
+
+
+class TestIcsiConventions:
+    def test_session_letters_follow_meeting_order(self):
+        # The letter remap only preserves "enroll on a, trial on the rest" if
+        # letter order equals meeting order.
+        meetings = list(ICSI_SESSIONS.values())
+        assert list(ICSI_SESSIONS) == sorted(ICSI_SESSIONS)
+        assert meetings == sorted(meetings)
+
+    def test_icsi_speakers_is_the_single_universe(self):
+        # A close-talk participant with no transcribed speech is not a speaker;
+        # sorted order fixes the mic wearer ([0]) and the convention stranger
+        # ([-1]) for every consumer at once.
+        mrt = MrtMeeting(
+            channel_files={"chan0": "chan0.sph", "chan1": "chan1.sph", "chan2": "chan2.sph"},
+            participant_channels={"me011": "chan0", "fe008": "chan1", "mn017": "chan2"},
+            segments={"me011": [(0.0, 1.0)], "mn017": [(2.0, 3.0)]},
+        )
+        assert icsi_speakers(mrt) == {"me011": "chan0", "mn017": "chan2"}

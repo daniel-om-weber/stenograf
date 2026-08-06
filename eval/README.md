@@ -233,12 +233,16 @@ gitignored (private content).
 ### The corpus harness (AMI/ICSI, no hand labels)
 
 The `PLAN-DIARIZATION.md` step-0 harness sidesteps hand-labelling: `ami.py`
-downloads AMI (ES2003 + IS1009) and ICSI (Bmr021 + Bmr025) headset channels
-and synthesizes stenograf's topology per meeting — one participant's headset
-is the **mic** channel, the other N−1 mixed are the **loopback** — with
-references built from the human annotations under corpus-global speaker names
-(`eval/refs/ami/`, generated, still gitignored). The whole matrix is one
-command:
+downloads per-speaker headset audio for five recurring groups — AMI ES2003,
+ES2007, IS1009, TS3010 (all three recording sites; ES2007/TS3010 joined
+2026-08-07 after a vetting pass that also *measured* clipping the corpus
+data-problems table doesn't list — `AMI_GROUPS` docstring) and the ICSI Bmr
+series as a fifth group with real attendance churn (Bmr021/024/025/030 mapped
+onto session letters; `ICSI_SESSIONS` docstring) — and synthesizes
+stenograf's topology per meeting: one participant's headset is the **mic**
+channel, the other N−1 mixed are the **loopback**, references from the human
+annotations under corpus-global speaker names (`eval/refs/ami/`, generated,
+still gitignored). The whole matrix (40 channels) is one command:
 
 ```sh
 uv run --group eval eval/ami.py run   # fetch → diarize → DER + naming reports
@@ -246,12 +250,39 @@ uv run --group eval eval/ami.py run   # fetch → diarize → DER + naming repor
 
 which chains `diarize.py --ami` (known per-channel counts; also writes each
 cluster's embedding), `der.py` (now also covering `refs/ami/`), the re-ID
-trial builder (`ami.py trials`: enroll each group's session *a* from raw
-headsets, alphabetically-last participant left out as the stranger), and
-`reid_score.py` — DIR @ FAR with the FAR/FRR curve, unit-tested in
-`tests/test_eval_reid.py`; parsing/mixing math in `tests/test_eval_ami.py`.
-Corpus facts (URL patterns, identity mapping traps, format gotchas) are in
-`ami.py`'s docstrings; calibration caveats in `PLAN-DIARIZATION.md` step 0.
+trial builder (`ami.py trials`: enroll each group's session *a*,
+alphabetically-last participant left out as the stranger; Bmr adds natural
+strangers — attendees absent from Bmr021), and `reid_score.py` — DIR @ FAR
+with the FAR/FRR curve, unit-tested in `tests/test_eval_reid.py`;
+parsing/mixing math in `tests/test_eval_ami.py`. Corpus facts (URL patterns,
+identity mapping traps, format gotchas) are in `ami.py`'s docstrings;
+calibration caveats in `PLAN-DIARIZATION.md` step 0.
+
+**Trial convention (2026-08-07): the headline pool is same-group only.** A
+cluster scores against its *own* group's gallery (`out/reid/trials.json`) —
+an unenrolled voice in your own meeting, the product's hard case. Scoring
+every cluster against every foreign gallery manufactures easy negatives whose
+count scales with the group count and dilutes the FAR denominator (measured
+at five galleries: 280 easy vs 20 hard negatives pooled — FAR ≤ 5 % would
+tolerate 15 hard accepts where the 2-gallery harness tolerated 2, silently
+lowering any threshold picked from the curve). Cross-group scores live on as
+a separate big-store diagnostic (`trials-crossgroup.json`, reported at the
+headline thresholds). Numbers recorded before this date pooled both
+populations and are not comparable to their successors.
+
+**Grown-harness baseline (2026-08-07, 41.8 min matrix, gate ≤ 1 h):** 70
+same-group trials (53 known, 17 strangers — FAR granularity 5.9 %). DIR
+**88.7 % @ FAR 0 %** (threshold 0.605); DIR flat at 88.7 % from threshold
+0.322 up while FAR falls 41.2 → 0 %; the known-trial ceiling is 92.5 % (4/53
+top-scored by a wrong profile at any threshold — clustering confusion, not
+threshold territory). At the shipped 0.5 default, hard-stranger FAR is
+**11.8 %** — the first direct evidence the default is too permissive (step
+2.4's input). Cross-group diagnostic: highest foreign score 0.531, FAR 0 % at
+every headline threshold. DER/word-attribution: mic channels 100 %
+attribution (20/20); new-group loops in the established character (ES2007
+94.0–96.9 %, TS3010 68.9–98.8 % with one short confusion-heavy session —
+target material like IS1009); ES2003 b/c reproduce the 2026-08-06 baseline
+(4.9/5.8 % DER vs 4.8/5.8 %).
 
 #### Why a single-speaker channel never sees the diarizer (2026-08-06)
 

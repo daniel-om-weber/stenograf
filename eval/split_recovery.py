@@ -20,9 +20,10 @@ without hurting the multi-speaker channels. A final section measures
 merge-at-naming's stranger risk on the *known-count* loop clusters, where
 every loop contains one unenrolled participant.
 
-AMI sessions b–d have enrolled galleries (session ``a`` is the enrollment
-source and is excluded from the re-ID arms); ICSI channels have no profiles at
-all — they are the unprofiled case by construction. Word times are read back
+Sessions b–d of every group have enrolled galleries (session ``a`` is the
+enrollment source and is excluded from the re-ID arms; Bmr enrolls from
+Bmr021 since 2026-08-07 — its unenrolled attendees are the unprofiled case,
+alongside each group's convention stranger). Word times are read back
 from the matrix's hypotheses (run ``eval/ami.py run`` first); estimate-mode
 turns and embeddings are cached under ``out/diar/ami-est/``.
 

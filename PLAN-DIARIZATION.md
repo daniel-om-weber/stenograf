@@ -36,7 +36,8 @@ one-command matrix), `eval/diarize.py --ami` (the real per-channel pipeline,
 known counts, cluster embeddings), `eval/reid_score.py` (DIR @ FAR + the
 FAR/FRR curve, pure and unit-tested), and `eval/der.py` now scoring
 `refs/ami/`. One command re-runs everything:
-`uv run --group eval eval/ami.py run` — **22.2 min** full matrix (gate ≤1 h).
+`uv run --group eval eval/ami.py run` — 22.2 min at the original 20 channels;
+**41.8 min** since the 2026-08-07 growth (gate ≤1 h).
 Subset: AMI ES2003 + IS1009, sessions a–d (the plan's ES2002/IS1000 examples
 both carry documented audio faults — dataproblems table), ICSI Bmr021 +
 Bmr025 (8 close-talk speakers). Full tables land in `eval/out/diar-report.md`
@@ -88,6 +89,24 @@ Building it surfaced three measured facts, each recorded where it bites:
 Calibration note: published AMI numbers in the research doc are family-A
 (0 s collar); our der.py is family-B (0.25 s). Only compare our numbers to
 our numbers — the harness exists for deltas, not leaderboard placement.
+
+**Grown 2026-08-07 (the "grow trials" prerequisite for 2.4):** five groups,
+40 channels, 41.8-min matrix (gate ≤ 1 h holds). ES2007 + TS3010 joined after
+a vetting pass (all three AMI sites now covered; the pass also *measured*
+clipping in table-clean IS1004/IS1006 — declined; `AMI_GROUPS` docstring),
+and the ICSI Bmr series became a real re-ID group — Bmr021 enrolls,
+Bmr024/025/030 carry recurrence plus *natural* strangers (attendance churn),
+mapped onto session letters so every session-a convention holds
+(`ICSI_SESSIONS` docstring). Growing the pool surfaced a scoring flaw the
+2026-08-06 baseline hid: pooling cross-group trials dilutes FAR with easy
+negatives that scale with group count, so the headline is now **same-group
+trials only** (70: 53 known, 17 hard strangers — honest stranger count 3×
+the old 6, granularity 5.9 %) with cross-group kept as a separate big-store
+diagnostic. New baseline: DIR **88.7 % @ FAR 0 %** (threshold 0.605), known
+ceiling 92.5 % (4/53 wrong-profile confusions no threshold reaches), and at
+the shipped 0.5 default hard-stranger FAR is **11.8 %** — the default is
+measured too permissive; 2.4 fixes it. Pre-2026-08-07 naming numbers pooled
+both populations and are not comparable to successors (`eval/README.md`).
 
 ## Step 1 — policy fixes in the current pipeline (no new models)
 
