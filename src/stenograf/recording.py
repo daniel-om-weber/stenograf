@@ -39,6 +39,7 @@ import queue
 import struct
 import subprocess
 import threading
+import time
 import wave
 from collections import deque
 from pathlib import Path
@@ -62,9 +63,15 @@ _PCM = 1  # WAV format tag
 # default whose evidence lives in eval/README.md "Stored-audio codec".
 _OPUS_BITRATE_PER_CHANNEL = 32_000
 
-# An encoder that has not accepted this much PCM is treated as wedged (full
-# disk, dead mount) and killed, so the capture thread never blocks on it.
+# An encoder whose pipe has accepted nothing for this long, with data queued,
+# is wedged (full disk, dead mount) and killed. Progress-based, not
+# queue-depth-based: a producer burst must never kill a healthy encoder.
 _WEDGE_SECONDS = 10
+
+# If the queue backs up this far the writer itself is stuck (a hung mount in
+# the fallback open); new blocks are dropped so capture stays live and memory
+# stays bounded.
+_DROP_SECONDS = 60
 
 # Stereo layout is fixed so recordings are always mic-left / system-right.
 _CHANNEL_ORDER = (Channel.MIC, Channel.SYSTEM)
@@ -154,14 +161,20 @@ class _WavSink:
 class _OpusSink:
     """Interleaved int16 PCM into the bundled ffmpeg, encoding Ogg Opus.
 
-    The capture thread only enqueues; a writer thread feeds the encoder, so a
-    blocking pipe can never stall capture. On any encoder failure — spawn
-    error, death, or a queue backed up past the wedge bound — the sink
-    degrades to a :class:`_WavSink` at ``<target>.wav`` (the name is appended,
-    never substituted, so an unrelated sibling ``.wav`` is safe) and every
-    later block goes there. Blocks already queued for the dead encoder are
-    dropped rather than replayed: the fallback's timeline starts at the
-    switch, and out-of-order PCM would corrupt it.
+    The capture thread only enqueues (and, once degraded, appends to the
+    already-open WAV fallback); the writer thread owns the encoder pipe and is
+    the only place a fallback is *opened*, so a hung filesystem can wedge only
+    the writer, never capture. On any encoder failure — spawn error, death, or
+    no pipe progress for the wedge window — the sink degrades to a
+    :class:`_WavSink` at ``<target>.wav`` (the name is appended, never
+    substituted, so an unrelated sibling ``.wav`` is safe) and every later
+    block goes there. Blocks already queued for the dead encoder are dropped
+    rather than replayed: the fallback's timeline starts at the switch, and
+    out-of-order PCM would corrupt it.
+
+    ``_proc`` stays set after degradation so :meth:`close` can reap it —
+    "encoder is live" is ``_fallback is None and error is None``, never
+    ``_proc is not None``.
     """
 
     def __init__(self, path: Path, nchannels: int) -> None:
@@ -174,7 +187,9 @@ class _OpusSink:
         self._lock = threading.Lock()
         self._queue: queue.Queue[bytes | None] = queue.Queue()
         self._queued = 0  # bytes handed to the writer thread, not yet written
-        self._wedge_bytes = _WEDGE_SECONDS * SAMPLE_RATE * nchannels * _BYTES_PER_SAMPLE
+        self._last_progress = time.monotonic()
+        self._closing = False
+        self._drop_bytes = _DROP_SECONDS * SAMPLE_RATE * nchannels * _BYTES_PER_SAMPLE
         self._writer: threading.Thread | None = None
         try:
             # get_ffmpeg_exe() raises RuntimeError when no binary exists —
@@ -213,32 +228,42 @@ class _OpusSink:
                 stderr=subprocess.DEVNULL,
             )
         except (OSError, RuntimeError) as exc:
-            with self._lock:
-                self._engage_fallback_locked(exc)
+            self._engage_fallback(exc)  # pre-capture, so blocking open is fine
             return
         self._writer = threading.Thread(target=self._pump, name="opus-tee", daemon=True)
         self._writer.start()
 
     def write(self, block: bytes) -> None:
         with self._lock:
-            if self._fallback is None and self.error is None and self._queued > self._wedge_bytes:
-                if self._proc is not None:
-                    self._proc.kill()  # unblocks the writer's pipe write too
-                self._engage_fallback_locked(OSError("encoder stopped accepting audio"))
-            if self._fallback is not None:
-                self._fallback.write(block)
-                return
-            if self.error is not None:
-                return  # encoder AND fallback failed; drop, reported at close
-            self._queued += len(block)
-        self._queue.put(block)
+            fallback = self._fallback
+            if fallback is None:
+                if self.error is not None:
+                    return  # encoder AND fallback failed; drop, reported at close
+                stalled = (
+                    self._queued > 0
+                    and time.monotonic() - self._last_progress > _WEDGE_SECONDS
+                )
+                if stalled and self._proc is not None:
+                    # No pipe progress for the whole window: the encoder is
+                    # wedged. Kill it — the writer's blocked write fails and
+                    # engages the fallback. Repeat kills of a dead process are
+                    # no-ops.
+                    self._proc.kill()
+                if self._queued > self._drop_bytes:
+                    return  # the fallback open itself is stuck: drop, stay live
+                self._queued += len(block)
+        if fallback is None:
+            self._queue.put(block)
+        else:
+            fallback.write(block)  # an OSError here is AudioTee's to guard
 
     def close(self) -> None:
+        self._closing = True
         if self._writer is not None:
             self._queue.put(None)
             # A healthy encoder drains the queue ≫ realtime, so a long join
             # means it is wedged: kill to unblock the writer's pipe write.
-            self._writer.join(timeout=30)
+            self._writer.join(timeout=10)
             if self._writer.is_alive() and self._proc is not None:
                 self._proc.kill()
                 self._writer.join(timeout=10)
@@ -250,43 +275,61 @@ class _OpusSink:
                 self._proc.wait()
             self._proc = None
         with self._lock:
-            if self._fallback is not None:
-                self._fallback.close()
-            if self._fallback is not None or self.error is not None:
-                # The abandoned target may hold Ogg headers but no audio —
-                # delete it rather than advertise an empty recording.
-                with contextlib.suppress(OSError):
-                    if self._path.stat().st_size < 1024:
-                        self._path.unlink()
+            fallback = self._fallback
+        if fallback is not None:
+            with contextlib.suppress(OSError):
+                fallback.close()
+        if fallback is not None or self.error is not None:
+            # The abandoned target may hold Ogg headers but no audio — delete
+            # it rather than advertise an empty recording.
+            with contextlib.suppress(OSError):
+                if self._path.stat().st_size < 1024:
+                    self._path.unlink()
 
     def _pump(self) -> None:
         proc = self._proc
         assert proc is not None and proc.stdin is not None
+        dead = False
         while (block := self._queue.get()) is not None:
-            with self._lock:
-                dead = self._fallback is not None or self.error is not None
+            wrote = False
             if not dead:
                 try:
                     proc.stdin.write(block)
+                    wrote = True
                 except (OSError, ValueError) as exc:  # broken pipe: encoder died
-                    with self._lock:
-                        if self._fallback is None and self.error is None:
-                            self._engage_fallback_locked(exc)
+                    dead = True
+                    # This block's slot in the timeline is already lost to the
+                    # pipe, so it is dropped, not replayed into the fallback.
+                    self._engage_fallback(exc)
             with self._lock:
                 self._queued -= len(block)
+                if wrote:
+                    self._last_progress = time.monotonic()
         with contextlib.suppress(OSError, ValueError):
             proc.stdin.close()  # EOF lets a live encoder finalize the file
 
-    def _engage_fallback_locked(self, cause: BaseException) -> None:
-        """Open the ``.wav`` continuation; on a second failure record it instead."""
+    def _engage_fallback(self, cause: BaseException) -> None:
+        """Open the ``.wav`` continuation; on a second failure record it instead.
+
+        Runs on the writer thread (or in ``__init__`` before capture is wired)
+        and opens the file OUTSIDE the lock: a hung mount here must wedge only
+        this thread — capture keeps enqueuing until the drop bound and the tee
+        stays responsive.
+        """
+        if self._closing:
+            with self._lock:
+                self.error = f"opus encoder died while finishing ({cause}); tail lost"
+            return
         target = self._path.with_name(self._path.name + ".wav")
         try:
             fallback = _WavSink(target, self._nchannels)
         except OSError as exc:
-            self.error = f"opus encoder failed ({cause}); wav fallback failed ({exc})"
+            with self._lock:
+                self.error = f"opus encoder failed ({cause}); wav fallback failed ({exc})"
             return
-        self._fallback = fallback
-        self.fallback_path = target
+        with self._lock:
+            self._fallback = fallback
+            self.fallback_path = target
 
 
 class AudioTee:
@@ -305,6 +348,7 @@ class AudioTee:
         self._nchannels = len(self._channels)
         self._pending = {ch: _PendingChannel() for ch in self._channels}
         self._path = Path(path)
+        self._error: str | None = None
         self._sink: _WavSink | _OpusSink
         if self._path.suffix.lower() == ".wav":
             self._sink = _WavSink(self._path, self._nchannels)
@@ -322,7 +366,9 @@ class AudioTee:
 
     @property
     def error(self) -> str | None:
-        """Why no recording exists, when both the encoder and its fallback failed."""
+        """Why the recording stopped mid-meeting, if it did."""
+        if self._error is not None:
+            return self._error
         return self._sink.error if isinstance(self._sink, _OpusSink) else None
 
     def add(self, frame: AudioFrame) -> None:
@@ -337,19 +383,34 @@ class AudioTee:
         """Flush the remaining tail, padding shorter channels with silence."""
         longest = max((p.available for p in self._pending.values()), default=0)
         self._drain(longest, pad=True)
-        self._sink.close()
+        if self._error is None:  # a failed sink was already closed in _drain
+            try:
+                self._sink.close()
+            except OSError as exc:
+                self._error = str(exc)
 
     def _drain(self, count: int, *, pad: bool = False) -> None:
         if count <= 0:
             return
+        # Always consume the pending buffers, even once the sink is dead —
+        # they would otherwise grow for the rest of the meeting.
         columns = [self._pending[ch].take(count, pad=pad) for ch in self._channels]
+        if self._error is not None:
+            return
         if self._nchannels == 1:
             block = columns[0]
         else:
             block = np.empty(count * self._nchannels, dtype=np.int16)
             for i, column in enumerate(columns):
                 block[i :: self._nchannels] = column
-        self._sink.write(block.tobytes())
+        try:
+            self._sink.write(block.tobytes())
+        except OSError as exc:
+            # A recording must never end the meeting: a full disk under either
+            # sink stops the recording, not the capture (reported at close).
+            self._error = str(exc)
+            with contextlib.suppress(OSError):
+                self._sink.close()
 
 
 class _PendingChannel(GapPaddedBuffer):

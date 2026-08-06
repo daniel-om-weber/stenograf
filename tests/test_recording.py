@@ -290,13 +290,18 @@ class _WedgedEncoder:
 def test_wedged_encoder_never_blocks_the_capture_thread(tmp_path, monkeypatch):
     # CaptureLoop's contract: nothing on the capture thread may stall. A
     # wedged encoder must be killed and the tee must keep accepting frames.
+    # Wedge = no pipe progress for the window; the test shrinks the window.
+    monkeypatch.setattr(recording, "_WEDGE_SECONDS", 0.2)
     monkeypatch.setattr(recording.subprocess, "Popen", lambda *a, **k: _WedgedEncoder())
     tee = AudioTee(tmp_path / "audio.opus", {Channel.MIC})
     start = time.monotonic()
-    seconds = recording._WEDGE_SECONDS + 3
-    for i in range(seconds):
-        tee.add(frame(Channel.MIC, float(i), tone()))
-    tee.add(frame(Channel.MIC, float(seconds), np.array([42, 43], dtype=np.int16)))
+    tee.add(frame(Channel.MIC, 0.0, tone()))  # the writer blocks on this one
+    time.sleep(0.3)  # exceed the progress window
+    tee.add(frame(Channel.MIC, 1.0, tone()))  # detects the stall, kills
+    deadline = time.monotonic() + 5
+    while tee.fallback_path is None and time.monotonic() < deadline:
+        time.sleep(0.01)  # the writer notices the kill and engages
+    tee.add(frame(Channel.MIC, 2.0, np.array([42, 43], dtype=np.int16)))
     tee.close()
     elapsed = time.monotonic() - start
 
@@ -304,6 +309,29 @@ def test_wedged_encoder_never_blocks_the_capture_thread(tmp_path, monkeypatch):
     assert tee.fallback_path == tmp_path / "audio.opus.wav"
     _, data = read_wav(tee.fallback_path)
     assert data[-2:].tolist() == [42, 43]  # post-switch audio survives
+
+
+def test_disk_full_stops_the_recording_not_the_meeting(tmp_path, monkeypatch):
+    # ENOSPC mid-recording (the WAV path, which fills a disk fastest) must
+    # neither escape add() — that would end the capture loop — nor close().
+    real_write = recording._WavSink.write
+    state = {"writes": 0}
+
+    def failing_write(self: recording._WavSink, block: bytes) -> None:
+        state["writes"] += 1
+        if state["writes"] > 1:
+            raise OSError(28, "No space left on device")
+        real_write(self, block)
+
+    monkeypatch.setattr(recording._WavSink, "write", failing_write)
+    tee = AudioTee(tmp_path / "rec.wav", {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, np.array([1, 2], dtype=np.int16)))
+    tee.add(frame(Channel.MIC, 2 / SAMPLE_RATE, np.array([3, 4], dtype=np.int16)))
+    tee.add(frame(Channel.MIC, 4 / SAMPLE_RATE, np.array([5, 6], dtype=np.int16)))
+    tee.close()  # must not raise
+
+    assert tee.error is not None
+    assert "space" in tee.error
 
 
 def test_read_channels_round_trips_stereo(tmp_path):
