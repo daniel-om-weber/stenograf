@@ -442,6 +442,47 @@ EER, `PLAN-DIARIZATION.md` step 2.1) plus measured never-worse; single-entry
 profiles score identically under both, so the shipped matrix operating points
 are unchanged by construction.
 
+#### Rename-once enrollment: the meeting's own cluster, measured (2026-08-06)
+
+`rename_once.py` gates `PLAN-DIARIZATION.md` step 2.2 — enrolling a speaker
+from the diarized cluster the user just corrected, instead of demanding a
+clean sample. Arms differ only in what session *a* enrolls (trials identical:
+all 76 matrix clusters of sessions b–d + ICSI, full-duration plus 3 s/2 s
+truncation): `headset` = reference spans on the raw headset (the trial
+convention), `clusters` = the session-a matrix cluster embeddings mapped to
+speakers by reference majority (exactly what `steno profiles assign` stores),
+`both` = one profile holding both (enroll-then-assign), and `headset ∩` =
+headset restricted to cluster-covered names — the control that separates
+enrollment *source* from enrollment *coverage*.
+
+At equal coverage, cluster enrollment matches clean-headset enrollment at
+every practical operating point (identical EER 92.9 %/6.5 %/7.1 % at full
+duration, DIR@FAR≤5 % equal at full and 3 s) and **beats it on 2 s trials**
+(85.7 % vs 78.6 % DIR@FAR≤5, EER likewise) — the research record's
+channel-match claim (+18 % rel) reproduces in sign on our stack. Reinforcing
+an existing profile (`both`) is never worse than the clean enrollment alone
+and better at 2 s (DIR@FAR0 82.4 % vs 76.5 %). Two costs, both measured and
+both owned by the *enrollment meeting's diarization*, not by the flow:
+
+- **An impure cluster enrolls an impure profile.** IS1009a's known-count
+  clustering fused quiet FIO084 into FIO087's cluster; the resulting profile
+  leaks 0.789 cosine to FIO084's clean headset (every clean profile's
+  off-diagonal is ≤ 0.344) and pulls FIO084's later clusters to a false
+  "FIO087" at up to 0.860 — which is what pushes the cluster arm's strict
+  FAR-0 point down (78.6 % vs 92.9 % for `headset ∩`; FAR ≤ 5 % and EER are
+  unaffected). No threshold fixes an impure enrollment; the confusion is
+  IS1009's known clustering problem (steps 4–5), and the leak table in the
+  report is the probe to re-run after those steps.
+- **A fused-away speaker is unassignable from that meeting** (FIO084 has no
+  majority cluster on IS1009a — 1 of 6 enrollable names). The coverage hole,
+  not the embedding source, is most of the naive headset-vs-clusters gap:
+  the same hole cut into the headset arm moves its top stranger score
+  0.597 → 0.692.
+
+Step 2.2 ships on these numbers: enroll-or-reinforce from the corrected
+cluster, with the impure-enrollment caveat recorded here rather than gated —
+the failing case is exactly the meeting whose transcript was already wrong.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
