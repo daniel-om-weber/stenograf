@@ -553,6 +553,38 @@ triggers: steps 4–5 fix the IS1009-class clustering confusion — every wrong
 update is downstream of it, so re-run this harness then — or a grown trial
 set that can resolve sub-20-pt benefits.
 
+#### The operating threshold: 0.5 → 0.62, picked from measured curves (2026-08-07)
+
+`threshold_pick.py` closes `PLAN-DIARIZATION.md` step 2.4 on the grown
+same-group harness, sweeping candidates over *both* enrollment arms (clean
+headset = the matrix trials; session-a cluster enrollment = what `steno
+profiles assign` stores) at full duration and 3 s / 2 s truncation, plus the
+solo-channel margins. What decides it:
+
+- **At 0.5 the store names strangers**: 11.8 % hard-stranger FAR on the
+  headset arm, 25 % on the cluster arm. DIR is flat from 0.322 to the FAR0
+  point in both arms, so the FAR was pure loss.
+- **0.62 rejects every non-pathological stranger in every arm and regime**
+  (clean strangers top out at 0.597, cluster-arm clean strangers at 0.505;
+  the 2 s cluster-arm FAR0-strict point is exactly 0.620) at zero
+  full-duration DIR cost (headset 88.7 %, cluster 90.0 %, same as 0.5) and
+  with solo/1:1 naming untouched (known solos score 0.870–0.970). It keeps a
+  0.023 margin over the nearest clean stranger where 0.60 kept 0.003.
+- **What survives above 0.62 is not threshold territory**: the IS1009
+  impure-enrollment leak (a fused enrollment cluster attracting its absorbed
+  speaker at 0.860/0.681/0.622). Strict FAR0 on the cluster arm would need
+  0.866 and cost 26 pts DIR. That residue is clustering confusion (steps
+  4–5); re-run this script after them.
+- **The measured cost sits in truncated regimes** (cluster arm 2 s: DIR
+  42 → 30 %) — artificial for the shipped k+1-fold path, which leaves no
+  sub-3.2 s clusters; real only for estimate-mode short clusters, where the
+  one recorded sub-5 s correct naming (0.669) still clears 0.62.
+
+Shipped as `DEFAULT_THRESHOLD = 0.62` (`voiceprints.py`, curve numbers in its
+docstring). Step 1.5's re-open trigger (an operating point below ~0.4) did
+not fire; AS-Norm/QMF stay un-adopted — the residual FAR is a purity problem,
+not a calibration problem.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

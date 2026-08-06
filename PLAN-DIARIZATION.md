@@ -259,16 +259,24 @@ one-shot act.
    triggers: steps 4–5 fix the clustering confusion behind all three wrong
    updates (re-run the harness then), or a trial set that can resolve
    sub-20-pt (single-trial) benefits.
-4. **Threshold, measured at last.** Sweep the FAR/FRR curve on the step-0
-   re-ID harness and pick the operating point (bias: strangers must not be
-   named — low FAR, accept more "unknown"). Today's flat 0.5 matches no
-   published operating point; verification defaults cluster at raw cosine
-   0.25–0.40 and sherpa's identification default is 0.6, and no toolkit
-   publishes threshold and error rate together — ours will be the measured
-   exception. `DEFAULT_THRESHOLD`'s docstring gets the curve's numbers.
-   AS-Norm/QMF are *not* adopted in this step: AS-Norm measurably hurt
-   strong models in open-set; a duration-aware QMF is a step-5 candidate
-   only if the measured curve is unsatisfying.
+4. **Threshold — SHIPPED 2026-08-07, 0.5 → 0.62, measured on both enrollment
+   arms** (`eval/threshold_pick.py`; curves in `eval/README.md`). The old 0.5
+   accepted 11.8 % of hard strangers (headset arm) and 25 % (cluster arm);
+   0.62 is the smallest threshold rejecting every *non-pathological* stranger
+   in both arms at every measured duration (clean strangers top out at 0.597
+   — 0.62 keeps a 0.023 margin where 0.60 kept 0.003; cluster-arm clean
+   strangers at 0.505), at zero full-duration DIR cost (88.7 % headset /
+   90.0 % cluster, identical to 0.5) and solo/1:1 margins untouched (known
+   solos 0.870–0.970). What remains above 0.62 is only the IS1009
+   impure-enrollment leak (0.860/0.681/0.622) — diarization confusion that
+   no threshold fixes (FAR0 on that arm would cost 26 pts DIR), owned by
+   steps 4–5; re-run `threshold_pick.py` after them. The measured cost lives
+   in truncated regimes (cluster arm at 2 s: DIR 42 → 30 % vs 0.5) — mostly
+   artificial for the shipped k+1-fold path (no sub-3.2 s clusters), real
+   only for estimate-mode short clusters. Step 1.5's re-open trigger (<0.4)
+   did not fire. AS-Norm/QMF stay un-adopted: the curve is satisfying —
+   the residual FAR is not a calibration problem, it is a clustering purity
+   problem.
 
 ## Step 3 — embedding model upgrade
 

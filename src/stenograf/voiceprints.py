@@ -39,13 +39,18 @@ from stenograf.audio import l2_normalize
 from stenograf.output import atomic_write_text
 from stenograf.paths import data_dir
 
-DEFAULT_THRESHOLD = 0.5
-"""Cosine similarity at or above which a cluster is deemed the same speaker as a
-stored profile. ~0.5 is the starting point for the shipped eres2net
-embedding; the corpus harness brackets it (first measured FAR/FRR curve
-2026-08-06, ``eval/out/reid-report.md``) and the operating point is picked from
-that curve in a later step. Override per run with ``--reid-threshold``
-(``steno start``/``transcribe``)."""
+DEFAULT_THRESHOLD = 0.62
+"""Cosine similarity at or above which a cluster is deemed the same speaker as
+a stored profile. Picked from measured curves (2026-08-07, five-group corpus
+harness, `eval/threshold_pick.py`): the smallest threshold rejecting every
+non-pathological stranger in BOTH enrollment arms at every measured duration —
+clean-sample strangers top out at 0.597 (the old 0.5 accepted 11.8 % of them),
+cluster-enrollment strangers at 0.505, and full-duration DIR is flat here
+(88.7 % headset / 90 % cluster arm, identical to 0.5). Known solo/1:1 matches
+score 0.870+, far above. What sits above 0.62 is only the impure-enrollment
+leak (a fused cluster's profile attracting its absorbed speaker at up to
+0.860) — a diarization-confusion problem no threshold fixes. Override per run
+with ``--reid-threshold`` (``steno start``/``transcribe``)."""
 
 _STORE_VERSION = 2
 
