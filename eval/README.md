@@ -418,6 +418,30 @@ already does the gate's only useful job. The result is threshold-dependent —
 re-measure if step 2.4's sweep lands the operating point below ~0.4, where
 the short-stranger maxima live.
 
+#### Multi-meeting profiles: score averaging measured before shipping (2026-08-06)
+
+`store_v2.py` gates the profile store's move from one running mean to a
+per-meeting embedding set matched by mean cosine (`PLAN-DIARIZATION.md`
+step 2.1). Enrollment from AMI sessions a **and** b, trials from the cached
+matrix clusters of c–d + ICSI (60 trials, 11 known — one known trial = 9.1
+pts, so only large effects can register). Five arms on identical trials:
+single-a, single-b, v1's running mean `l2(a+b)`, mean cosine (v2), max cosine
+(control).
+
+At full trial duration every arm is identical (DIR 90.9 % at FAR 0 *and*
+FAR ≤ 5 %; the same one known trial fails everywhere). The arms separate only
+where matching is hard — trials truncated to 2 s of clean audio: **single-a
+collapses to 81.8 % DIR@FAR0 while both combined-mean forms hold 90.9 %**, and
+max-cosine collapses with it (81.8 % — max rides the single worst gallery
+member). So multi-meeting enrollment is measured insurance against one
+enrollment being wrong for a hard cluster, the mean beats the max, and score
+vs embedding averaging stays within single-trial noise here (score-avg's 3 s
+EER point is one trial better: FAR 4.1 %/FRR 0 vs 6.1 %/9.1 %). Score
+averaging ships on the research record's at-scale numbers (2.05 % vs 2.85 %
+EER, `PLAN-DIARIZATION.md` step 2.1) plus measured never-worse; single-entry
+profiles score identically under both, so the shipped matrix operating points
+are unchanged by construction.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

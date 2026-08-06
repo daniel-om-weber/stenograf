@@ -39,11 +39,12 @@ def profiles_list() -> None:
     active_model = assets.SPEAKER_EMBEDDING.name
     click.echo(f"speaker profiles ({default_store_path()}):")
     for p in sorted(all_profiles, key=lambda p: (p.embedding_model, p.name.lower())):
-        noun = "sample" if p.samples == 1 else "samples"
+        count = len(p.embeddings)
+        noun = "sample" if count == 1 else "samples"
         # A profile made under a different embedding model can never match a
         # cluster from the current one — flag it so the count is not misleading.
         tag = "" if p.embedding_model == active_model else "  [inactive: other embedding model]"
-        click.echo(f"  {p.name}  ({p.samples} {noun}){tag}")
+        click.echo(f"  {p.name}  ({count} {noun}){tag}")
 
 
 @profiles.command("enroll")
@@ -116,7 +117,7 @@ def profiles_enroll(
             )
         updated = store.reinforce(existing, embedding)
         store.save()
-        click.echo(f"reinforced {name!r} ({updated.samples} samples)")
+        click.echo(f"reinforced {name!r} ({len(updated.embeddings)} samples)")
         return
     if existing is not None:
         raise click.ClickException(

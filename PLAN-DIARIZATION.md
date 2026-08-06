@@ -176,15 +176,23 @@ The research indicts all three quiet assumptions in today's re-ID design:
 the single mean embedding, the flat 0.5 threshold, and enrollment as a
 one-shot act.
 
-1. **Per-meeting embeddings, score averaging.** `_STORE_VERSION` 2: a profile
-   holds up to N (start: 8, LRU by meeting date) per-meeting embeddings
-   instead of one running mean. Match score = mean cosine against the stored
-   set (score averaging measured 2.05 % vs 2.85 % EER for embedding
-   averaging on identical data; the i-vector-era "average the embeddings"
-   rule is explicitly retracted for modern embeddings). Migration: a v1
-   profile's mean becomes its first stored embedding. Threshold semantics
-   unchanged (max-over-gallery vs threshold — margin-to-second-best is
-   unvalidated in the speaker literature; not adopting it).
+1. **Per-meeting embeddings, score averaging — SHIPPED 2026-08-06, gated on
+   `eval/store_v2.py`.** `_STORE_VERSION` 2: a profile holds up to 8
+   per-meeting embeddings (oldest meeting date evicted beyond the cap,
+   undated v1 migrations first) instead of one running mean; match score =
+   mean cosine against the stored set (score averaging measured 2.05 % vs
+   2.85 % EER for embedding averaging on identical data; the i-vector-era
+   "average the embeddings" rule is explicitly retracted for modern
+   embeddings). The harness gate (a+b enrollment, c–d+ICSI trials): all arms
+   tie at full duration (11 known trials — single-trial granularity), but at
+   2 s of clean trial audio a single enrollment collapses 90.9 → 81.8 %
+   DIR@FAR0 while both combined-mean forms hold 90.9 %, and max-cosine
+   collapses with the single — multi-meeting mean is measured insurance;
+   score-vs-embedding averaging is within noise locally and ships on the
+   literature (`eval/README.md`). Migration: a v1 profile's mean becomes its
+   first stored embedding. Threshold semantics unchanged (max-over-gallery vs
+   threshold — margin-to-second-best is unvalidated in the speaker
+   literature; not adopting it).
 2. **Rename-once online enrollment.** When the user corrects/assigns a
    speaker name for a meeting (already possible via profile naming), the
    corrected cluster's embedding from *that meeting's audio* is added to the

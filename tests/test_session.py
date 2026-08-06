@@ -31,7 +31,7 @@ from stenograf.session import (
     resolve_parameters,
 )
 from stenograf.transcript import TranscriptEntry
-from stenograf.voiceprints import ProfileStore, SpeakerProfile, SpeakerReID
+from stenograf.voiceprints import MeetingEmbedding, ProfileStore, SpeakerProfile, SpeakerReID
 
 
 def frame(channel: Channel, timestamp: float, samples: np.ndarray) -> AudioFrame:
@@ -324,7 +324,11 @@ class TestMeetingRecorder:
         # an unmatched cluster still gets the template label.
         model = "eres2net-voxceleb-16k.onnx"
         store = ProfileStore(
-            profiles=[SpeakerProfile("Daniel", model, np.array([1.0, 0.0], np.float32))]
+            profiles=[
+                SpeakerProfile(
+                    "Daniel", model, (MeetingEmbedding(np.array([1.0, 0.0], np.float32)),)
+                )
+            ]
         )
         reid = SpeakerReID(store, model)
         pcm = np.ones(SAMPLE_RATE, dtype=np.int16)

@@ -3,16 +3,21 @@
 Pure unit tests on synthetic unit vectors — no models, no audio. The real
 embedding path (``diarize_with_embeddings``) is covered by
 ``test_diarization_sherpa.py``; here we test the store, the model-bound scoping,
-the cosine threshold, persistence, and merge-at-naming cluster→profile matching.
+the cosine threshold, persistence (v1 migration included), and
+merge-at-naming cluster→profile matching.
 """
 
 from __future__ import annotations
+
+import json
 
 import numpy as np
 import pytest
 
 from stenograf.voiceprints import (
     DEFAULT_THRESHOLD,
+    MAX_EMBEDDINGS,
+    MeetingEmbedding,
     ProfileStore,
     SpeakerProfile,
     SpeakerReID,
@@ -33,6 +38,11 @@ def unit(*components: float) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
+def profile(name: str, model: str, *vectors: np.ndarray) -> SpeakerProfile:
+    """A profile holding one entry per given (already-normalized) vector."""
+    return SpeakerProfile(name, model, tuple(MeetingEmbedding(v) for v in vectors))
+
+
 # A small orthonormal-ish basis: near-parallel vectors match, orthogonal ones don't.
 DANIEL = unit(1.0, 0.0, 0.0)
 DANIEL_AGAIN = unit(0.97, 0.24, 0.0)  # cosine ~0.97 with DANIEL
@@ -42,62 +52,85 @@ CARL = unit(0.0, 0.0, 1.0)
 
 class TestSpeakerProfile:
     def test_similarity_is_cosine_and_normalizes_inputs(self):
-        p = SpeakerProfile("Daniel", MODEL, DANIEL)
+        p = profile("Daniel", MODEL, DANIEL)
         assert p.similarity(vec(5.0, 0.0, 0.0)) == pytest.approx(1.0)  # scale-invariant
         assert p.similarity(ANNA) == pytest.approx(0.0, abs=1e-6)
+
+    def test_similarity_averages_scores_over_the_stored_set(self):
+        # Score averaging: the mean of the per-meeting cosines, NOT the cosine
+        # against a mean vector — DANIEL and ANNA average to 0.5 toward DANIEL.
+        p = profile("Daniel", MODEL, DANIEL, ANNA)
+        assert p.similarity(DANIEL) == pytest.approx(0.5, abs=1e-6)
 
 
 class TestProfileStore:
     def test_enroll_normalizes_and_matches_itself(self):
         store = ProfileStore(profiles=[])
         store.enroll("Daniel", vec(3.0, 0.0, 0.0), MODEL)  # unnormalized input
-        (profile,) = store.for_model(MODEL)
-        assert np.linalg.norm(profile.embedding) == pytest.approx(1.0)
+        (enrolled,) = store.for_model(MODEL)
+        (entry,) = enrolled.embeddings
+        assert np.linalg.norm(entry.vector) == pytest.approx(1.0)
+        assert entry.date is not None  # stamped with the meeting date (today)
         matched = store.match(DANIEL, MODEL)
         assert matched is not None and matched[0].name == "Daniel"
 
     def test_no_match_below_threshold(self):
-        store = ProfileStore(profiles=[SpeakerProfile("Daniel", MODEL, DANIEL)])
+        store = ProfileStore(profiles=[profile("Daniel", MODEL, DANIEL)])
         assert store.match(ANNA, MODEL) is None  # cosine 0 < 0.5
 
     def test_match_is_model_scoped(self):
         # A vector only compares against profiles from the *same* embedding model,
         # even if the raw numbers would match perfectly.
-        store = ProfileStore(profiles=[SpeakerProfile("Daniel", OTHER_MODEL, DANIEL)])
+        store = ProfileStore(profiles=[profile("Daniel", OTHER_MODEL, DANIEL)])
         assert store.match(DANIEL, MODEL) is None
         assert store.match(DANIEL, OTHER_MODEL) is not None
 
     def test_match_returns_best_of_several(self):
         store = ProfileStore(
             profiles=[
-                SpeakerProfile("Daniel", MODEL, DANIEL),
-                SpeakerProfile("Anna", MODEL, ANNA),
+                profile("Daniel", MODEL, DANIEL),
+                profile("Anna", MODEL, ANNA),
             ]
         )
         result = store.match(unit(0.9, 0.4, 0.0), MODEL)
         assert result is not None
-        profile, score = result
-        assert profile.name == "Daniel"
+        matched, score = result
+        assert matched.name == "Daniel"
         assert 0.5 <= score <= 1.0
 
     def test_enroll_rejects_duplicate_name_per_model(self):
-        store = ProfileStore(profiles=[SpeakerProfile("Daniel", MODEL, DANIEL)])
+        store = ProfileStore(profiles=[profile("Daniel", MODEL, DANIEL)])
         with pytest.raises(ValueError):
             store.enroll("Daniel", ANNA, MODEL)
         # Same name under a different model is fine (disjoint namespaces).
         store.enroll("Daniel", ANNA, OTHER_MODEL)
 
-    def test_reinforce_blends_toward_new_observation(self):
+    def test_reinforce_appends_a_meeting_embedding(self):
         store = ProfileStore(profiles=[])
         p = store.enroll("Daniel", DANIEL, MODEL)
         before = p.similarity(DANIEL_AGAIN)
         updated = store.reinforce(p, DANIEL_AGAIN)
-        assert updated.samples == 2
-        assert np.linalg.norm(updated.embedding) == pytest.approx(1.0)
-        # The mean moved toward the new sample, so similarity to it went up.
+        assert len(updated.embeddings) == 2
+        # The stored set now contains the new sample, so its score went up.
         assert updated.similarity(DANIEL_AGAIN) > before
         # The store now holds the updated profile, not the original.
-        assert store.for_model(MODEL)[0].samples == 2
+        assert len(store.for_model(MODEL)[0].embeddings) == 2
+
+    def test_reinforce_evicts_the_oldest_meeting_beyond_the_cap(self):
+        store = ProfileStore(profiles=[])
+        p = store.enroll("Daniel", DANIEL, MODEL, date="2026-01-01")
+        for i in range(MAX_EMBEDDINGS):
+            p = store.reinforce(p, DANIEL_AGAIN, date=f"2026-02-{i + 1:02d}")
+        assert len(p.embeddings) == MAX_EMBEDDINGS
+        assert all(e.date != "2026-01-01" for e in p.embeddings)  # oldest evicted
+
+    def test_reinforce_evicts_undated_migrations_first(self):
+        # A v1-migrated entry (date None) goes before any dated meeting.
+        p = SpeakerProfile("Daniel", MODEL, (MeetingEmbedding(DANIEL, date=None),))
+        store = ProfileStore(profiles=[p])
+        for i in range(MAX_EMBEDDINGS):
+            p = store.reinforce(p, DANIEL_AGAIN, date=f"2026-02-{i + 1:02d}")
+        assert all(e.date is not None for e in p.embeddings)
 
     def test_rename_and_remove(self):
         store = ProfileStore(profiles=[])
@@ -120,15 +153,45 @@ class TestPersistence:
     def test_roundtrip_preserves_profiles(self, tmp_path):
         path = tmp_path / "profiles.json"
         store = ProfileStore(path)
-        store.enroll("Daniel", DANIEL, MODEL)
-        store.enroll("Anna", ANNA, MODEL, samples=3)
+        daniel = store.enroll("Daniel", DANIEL, MODEL, date="2026-08-01")
+        store.reinforce(daniel, DANIEL_AGAIN, date="2026-08-06")
+        store.enroll("Anna", ANNA, MODEL)
         store.save()
 
         loaded = ProfileStore.load(path)
         names = {p.name: p for p in loaded.for_model(MODEL)}
         assert set(names) == {"Daniel", "Anna"}
-        assert names["Anna"].samples == 3
-        assert names["Daniel"].similarity(DANIEL) == pytest.approx(1.0)
+        assert [e.date for e in names["Daniel"].embeddings] == ["2026-08-01", "2026-08-06"]
+        assert names["Anna"].similarity(ANNA) == pytest.approx(1.0)
+
+    def test_v1_store_migrates_on_load(self, tmp_path):
+        # A v1 file holds one running-mean "embedding" per profile; it becomes
+        # the profile's first stored entry (undated) and matching still works.
+        path = tmp_path / "profiles.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "profiles": [
+                        {
+                            "name": "Daniel",
+                            "embedding_model": MODEL,
+                            "embedding": [float(x) for x in DANIEL],
+                            "samples": 3,
+                        }
+                    ],
+                }
+            )
+        )
+        store = ProfileStore.load(path)
+        (migrated,) = store.for_model(MODEL)
+        assert [e.date for e in migrated.embeddings] == [None]
+        matched = store.match(DANIEL_AGAIN, MODEL)
+        assert matched is not None and matched[0].name == "Daniel"
+        store.save()  # persists in the v2 shape
+        saved = json.loads(path.read_text())
+        assert saved["version"] == 2
+        assert "embeddings" in saved["profiles"][0]
 
     def test_missing_file_is_empty_store(self, tmp_path):
         store = ProfileStore.load(tmp_path / "absent.json")
@@ -159,8 +222,8 @@ class TestSpeakerReID:
     def _store(self) -> ProfileStore:
         return ProfileStore(
             profiles=[
-                SpeakerProfile("Daniel", MODEL, DANIEL),
-                SpeakerProfile("Anna", MODEL, ANNA),
+                profile("Daniel", MODEL, DANIEL),
+                profile("Anna", MODEL, ANNA),
             ]
         )
 

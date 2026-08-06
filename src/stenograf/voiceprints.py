@@ -1,6 +1,6 @@
 """Cross-meeting speaker re-identification: a local profile store + cosine match.
 
-A speaker *profile* is a named mean voice embedding saved across meetings, so a
+A speaker *profile* is a named set of per-meeting voice embeddings, so a
 cluster the diarizer finds in this meeting can be matched to "Daniel" enrolled
 from an earlier one. The diarizer only
 labels voices *within* one run (``S0``/``S1``…); the profile store is what carries
@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from datetime import date as _date
 from pathlib import Path
 
 import numpy as np
@@ -41,53 +42,87 @@ from stenograf.paths import data_dir
 DEFAULT_THRESHOLD = 0.5
 """Cosine similarity at or above which a cluster is deemed the same speaker as a
 stored profile. ~0.5 is the starting point for the shipped eres2net
-embedding. It stays at this default rather than being empirically tuned: tuning
-needs the hand-labelled 0d reference data, which is not being produced. Override
-per run with ``--reid-threshold`` (``steno start``/``transcribe``)."""
+embedding; the corpus harness brackets it (first measured FAR/FRR curve
+2026-08-06, ``eval/out/reid-report.md``) and the operating point is picked from
+that curve in a later step. Override per run with ``--reid-threshold``
+(``steno start``/``transcribe``)."""
 
-_STORE_VERSION = 1
+_STORE_VERSION = 2
+
+MAX_EMBEDDINGS = 8
+"""Per-meeting embeddings a profile retains; adding one beyond the cap evicts
+the oldest meeting first. Bounds the store's growth and match cost while
+keeping several meetings' worth of channel and style variety to average
+over."""
+
+
+@dataclass(frozen=True, eq=False)
+class MeetingEmbedding:
+    """One meeting's voice embedding: a unit-norm vector and the meeting date.
+
+    The date (ISO ``YYYY-MM-DD``; ``None`` for embeddings migrated from a v1
+    store) orders eviction when a profile exceeds :data:`MAX_EMBEDDINGS`.
+    """
+
+    vector: np.ndarray  # float32, L2-normalized
+    date: str | None = None
 
 
 # eq=False: the default field-wise __eq__/__hash__ a frozen dataclass generates
-# both break on the ``embedding`` ndarray field — ``==`` raises "truth value of an
+# both break on ndarray fields — ``==`` raises "truth value of an
 # array is ambiguous" and ``hash`` raises "unhashable type: ndarray". Identity
 # semantics are what the store actually uses (``remove``/``_replace`` match by
 # ``is``, names are unique per model), and they keep a profile safe to put in a set
 # or dict key.
 @dataclass(frozen=True, eq=False)
 class SpeakerProfile:
-    """A named voice, identified by a unit-norm mean embedding under one model.
-
-    ``samples`` counts how many enrolments were averaged into ``embedding`` so the
-    mean can be extended incrementally (:meth:`ProfileStore.reinforce`) without
-    re-reading past audio.
+    """A named voice: up to :data:`MAX_EMBEDDINGS` per-meeting embeddings under
+    one model, matched by *score averaging* — the mean cosine against the
+    stored set — rather than by collapsing the set to a mean vector. Modern
+    speaker embeddings measurably lose accuracy when averaged into one vector
+    (the i-vector-era rule is retracted; 2.05 % vs 2.85 % EER for score vs
+    embedding averaging in the research record, ``PLAN-DIARIZATION.md``); on
+    our own harness the two are within single-trial noise, so the store keeps
+    the form the literature favors and later steps need — per-meeting entries
+    are what rename-once enrollment appends to and what gated updates can
+    evict without poisoning a mean.
     """
 
     name: str
     embedding_model: str
-    embedding: np.ndarray  # float32, L2-normalized
-    samples: int = 1
+    embeddings: tuple[MeetingEmbedding, ...]
 
     def similarity(self, embedding: np.ndarray) -> float:
-        """Cosine similarity to another embedding (both treated as unit vectors)."""
+        """Mean cosine similarity against the stored per-meeting embeddings."""
         other = l2_normalize(np.asarray(embedding, dtype=np.float32))
-        return float(l2_normalize(self.embedding) @ other)
+        return float(np.mean([float(e.vector @ other) for e in self.embeddings]))
 
     def _to_json(self) -> dict:
         return {
             "name": self.name,
             "embedding_model": self.embedding_model,
-            "embedding": [float(x) for x in self.embedding],
-            "samples": self.samples,
+            "embeddings": [
+                {"vector": [float(x) for x in e.vector], "date": e.date}
+                for e in self.embeddings
+            ],
         }
 
     @staticmethod
     def _from_json(data: Mapping) -> SpeakerProfile:
+        if "embedding" in data:  # v1: one running mean becomes the first entry
+            entries = [{"vector": data["embedding"], "date": None}]
+        else:
+            entries = data["embeddings"]
         return SpeakerProfile(
             name=data["name"],
             embedding_model=data["embedding_model"],
-            embedding=l2_normalize(np.asarray(data["embedding"], dtype=np.float32)),
-            samples=int(data.get("samples", 1)),
+            embeddings=tuple(
+                MeetingEmbedding(
+                    vector=l2_normalize(np.asarray(e["vector"], dtype=np.float32)),
+                    date=e.get("date"),
+                )
+                for e in entries
+            ),
         )
 
 
@@ -162,10 +197,9 @@ class ProfileStore:
         per cluster for a whole run.
         """
         threshold = self.threshold if threshold is None else threshold
-        vector = l2_normalize(np.asarray(embedding, dtype=np.float32))
         best: tuple[SpeakerProfile, float] | None = None
         for profile in self.for_model(model):
-            score = float(profile.embedding @ vector)
+            score = profile.similarity(embedding)
             if score >= threshold and (best is None or score > best[1]):
                 best = (profile, score)
         return best
@@ -173,29 +207,38 @@ class ProfileStore:
     # ---- writes -----------------------------------------------------------
 
     def enroll(
-        self, name: str, embedding: np.ndarray, model: str, *, samples: int = 1
+        self, name: str, embedding: np.ndarray, model: str, *, date: str | None = None
     ) -> SpeakerProfile:
-        """Add a new profile. Names are unique per model (a name is a person)."""
+        """Add a new profile from one meeting's embedding. Names are unique per
+        model (a name is a person); ``date`` is the meeting's ISO date (today
+        when omitted)."""
         if self.get(name, model) is not None:
             raise ValueError(f"a profile named {name!r} already exists for model {model!r}")
         profile = SpeakerProfile(
             name=name,
             embedding_model=model,
-            embedding=l2_normalize(np.asarray(embedding, dtype=np.float32)),
-            samples=samples,
+            embeddings=(_entry(embedding, date),),
         )
         self._profiles.append(profile)
         return profile
 
-    def reinforce(self, profile: SpeakerProfile, embedding: np.ndarray) -> SpeakerProfile:
-        """Fold a new observation into ``profile``'s mean (sample-weighted).
+    def reinforce(
+        self, profile: SpeakerProfile, embedding: np.ndarray, *, date: str | None = None
+    ) -> SpeakerProfile:
+        """Add another meeting's embedding to ``profile``'s stored set.
 
         Lets a re-matched cluster strengthen an existing profile over meetings
-        without retaining any past audio. Returns the updated profile (the store
-        is mutated in place)."""
-        vector = l2_normalize(np.asarray(embedding, dtype=np.float32))
-        blended = l2_normalize(profile.embedding * profile.samples + vector)
-        updated = replace(profile, embedding=blended, samples=profile.samples + 1)
+        without retaining any past audio. Beyond :data:`MAX_EMBEDDINGS` the
+        oldest-dated entry is evicted (undated v1 migrations first). Returns
+        the updated profile (the store is mutated in place)."""
+        entries = [*profile.embeddings, _entry(embedding, date)]
+        if len(entries) > MAX_EMBEDDINGS:
+            oldest = min(
+                range(len(entries)),
+                key=lambda i: (entries[i].date is not None, entries[i].date or "", i),
+            )
+            del entries[oldest]
+        updated = replace(profile, embeddings=tuple(entries))
         self._replace(profile, updated)
         return updated
 
@@ -214,6 +257,13 @@ class ProfileStore:
 
     def _replace(self, old: SpeakerProfile, new: SpeakerProfile) -> None:
         self._profiles = [new if p is old else p for p in self._profiles]
+
+
+def _entry(embedding: np.ndarray, date: str | None) -> MeetingEmbedding:
+    return MeetingEmbedding(
+        vector=l2_normalize(np.asarray(embedding, dtype=np.float32)),
+        date=date if date is not None else _date.today().isoformat(),
+    )
 
 
 class SpeakerReID:

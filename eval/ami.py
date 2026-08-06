@@ -523,14 +523,16 @@ def load_channels() -> list[Channel]:
 # -- re-ID trials ----------------------------------------------------------
 
 
-def build_galleries(embed) -> dict[str, dict[str, np.ndarray]]:
-    """Per-group enrollment galleries from session ``a`` raw headsets.
+def build_galleries(embed, session: str = ENROLL_SESSION) -> dict[str, dict[str, np.ndarray]]:
+    """Per-group enrollment galleries from one session's raw headsets.
 
     Enrollment slices the participant's *reference* turns from their own
     headset (the clean solo signal our rename-once flow would capture); the
     alphabetically-last participant stays unenrolled, so every later cluster
     of theirs is a stranger trial by construction. ``embed`` is the production
-    embedding callable (``SherpaOnnxDiarizer.embed``)."""
+    embedding callable (``SherpaOnnxDiarizer.embed``). ``session`` defaults to
+    the trial convention's enrollment session; multi-meeting profile
+    experiments enroll further sessions (``eval/store_v2.py``)."""
     from stenograf.diarization.base import SpeakerTurn
     from stenograf.diarization.sherpa import cluster_embeddings
 
@@ -538,7 +540,7 @@ def build_galleries(embed) -> dict[str, dict[str, np.ndarray]]:
     meetings_map = parse_meetings_xml(annotations / "corpusResources" / "meetings.xml")
     galleries: dict[str, dict[str, np.ndarray]] = {}
     for group in AMI_GROUPS:
-        meeting = group + ENROLL_SESSION
+        meeting = group + session
         by_name = {
             name: (agent, headset) for agent, (headset, name) in meetings_map[meeting].items()
         }
@@ -553,7 +555,7 @@ def build_galleries(embed) -> dict[str, dict[str, np.ndarray]]:
             embedded = cluster_embeddings(turns, pcm, embed)
             gallery[name] = embedded[name]
         galleries[group] = gallery
-        print(f"[{group}] enrolled {sorted(gallery)} from session {ENROLL_SESSION}")
+        print(f"[{group}] enrolled {sorted(gallery)} from session {session}")
     return galleries
 
 
