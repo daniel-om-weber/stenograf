@@ -388,6 +388,36 @@ Padding the *output* turns is no better — DER of padded turns worsens on 8 of
 Bmr021) — so the pad earns no place anywhere in the pipeline. Declined in
 `PLAN-DIARIZATION.md` step 1.2 on these numbers.
 
+#### A minimum-duration gate on naming has nothing to gate (2026-08-06)
+
+The literature's short-turn cliff (EER at 2 s ≈ 2.4× full-duration;
+ERes2Net-base 3.28 % @ 2 s) motivated barring clusters with < ~3 s of clean
+speech from profile matching. `naming_gate.py` measured the proposal three
+ways, and the cliff is real but lands entirely on the *miss* axis:
+
+- **Truncation sweep** (every matrix cluster's clean audio cut to 1–8 s,
+  production embedding, session-a galleries): known speakers' top-correct
+  score falls 0.90 (full) → 0.63 (3 s) → 0.40 (1 s), so DIR@FAR0 drops
+  88.2 → 41.2 %. But strangers' top scores *barely move* — max 0.37 at 2 s,
+  0.34 at 3 s across 59 stranger trials per arm — so at the shipped 0.5
+  threshold FAR is 0.0 % in every truncated arm. A short cluster fails to be
+  named; it does not get falsely named. The one false accept in the whole
+  table is a *full-duration* cluster (0.594).
+- **Shipped known-count path**: the k+1-fold leaves no small clusters (min
+  clean duration 3.2 s over all matrix clusters); a 3 s gate gates zero
+  trials, and 5 s moves no operating point.
+- **Estimate mode** (collapsed clusters, threshold 0.5): 22 clusters get
+  named; the only one under 5 s clean is named *correctly* (3.4 s, 0.669),
+  while both wrong namings sit at 9.5 s and 75.1 s — clustering confusion the
+  steps-4/5 work owns, unreachable by any duration cutoff. A 5 s gate:
+  0 wrong namings prevented, 1 correct naming lost (and its merge-at-naming
+  recovery with it).
+
+Declined in `PLAN-DIARIZATION.md` step 1.5 on these numbers: the threshold
+already does the gate's only useful job. The result is threshold-dependent —
+re-measure if step 2.4's sweep lands the operating point below ~0.4, where
+the short-stranger maxima live.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

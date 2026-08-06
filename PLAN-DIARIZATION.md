@@ -154,11 +154,19 @@ word intersection explicitly last and not touched).
    embedding-insensitive, 90.1 % under both embedding types — and cleaning
    stays, with the collapse band measured wider (2-speaker ≤ 0.39 vs solo
    ≥ 0.73). Full story and the four-arm table: `eval/README.md`.
-5. **Minimum-audio gate for naming.** A cluster with < ~3 s of clean
-   (non-overlap) speech is not matched against profiles — EER at 2 s is
-   2.4× the full-duration figure, and ERes2Net-base specifically collapses
-   on short turns (3.28 % @ 2 s). Short clusters keep their local S-label
-   (and are candidates for the step-1.3 merge instead).
+5. **Minimum-audio gate for naming — DECLINED 2026-08-06, measured.** The
+   short-turn cliff is real on our stack (`eval/naming_gate.py`: known
+   speakers' top-correct score 0.90 full → 0.40 at 1 s of clean speech) but
+   it lands entirely on the miss axis: strangers' scores stay ≤ 0.37 at every
+   truncated duration, so the 0.5 threshold already rejects what the gate
+   would gate (FAR 0.0 % in every short arm). The shipped k+1-fold leaves no
+   sub-3.2 s clusters to gate, and in estimate mode the only sub-5 s cluster
+   that reaches naming is named correctly while both wrong namings are long
+   (9.5 s / 75.1 s — clustering confusion, steps 4–5's territory). A gate
+   would have prevented nothing and cost one correct naming plus its
+   merge-at-naming recovery (`eval/README.md`). Re-open trigger: step 2.4's
+   sweep picks an operating threshold below ~0.4, where short-stranger
+   maxima live.
 6. **Docstring fix — DONE** (312c0a2): `diarization/sherpa.py` says ERes2Net
    and points at `assets.SPEAKER_EMBEDDING` for the CAM++ rejection.
 
