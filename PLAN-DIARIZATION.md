@@ -70,13 +70,20 @@ Building it surfaced three measured facts, each recorded where it bites:
   dominance + own-speech-level hysteresis) is what makes the topology honest.
   Three simpler gate designs each failed a *measured* way — the docstrings
   carry the numbers; don't re-simplify without re-running them.
-- **sherpa's `process()` needs ~30 GB** on one dense 35–55-min channel,
-  thread-count-independent; the matrix isolates each loop channel in its own
-  process. Extra evidence for step 4's owned loop.
-- **sherpa segfaults at `num_clusters=1`** beyond ≈15 min of audio
-  (sherpa-onnx 1.12.40). Solo channels take the production count-1 path (no
-  diarizer), so step 1.1's diarizer-on-solo comparison arm can only ever run
-  on ≤15-min slices.
+- **sherpa's `process()` needed ~31 GB** on one dense 38-min channel,
+  thread-count-independent — a leak, not an algorithm. `SpeakerEmbeddingExtractor`
+  retained ~21 MB per call at fixed input shape, unbounded and below the
+  extractor object (a fresh extractor per call reclaimed nothing, and the same
+  ONNX graph under plain onnxruntime held flat), so no in-process workaround
+  existed. Fixed upstream: the 1.13.4 floor holds that channel at 5.4 GB with
+  byte-identical turns. The matrix still isolates each loop channel in its own
+  process — it costs nothing and bounds the next one.
+- **The `num_clusters=1` length limit is gone.** A crash at ≈15 min on
+  sherpa-onnx 1.12.40 looked like a segfault; on 1.13.4 both full-length mic
+  channels (ES2003c 37.6 min, Bmr021 36.9 min) diarize at count 1 cleanly
+  (4.5 / 2.8 GB, 2026-08-06), and 1.12.40 itself survives 20 min — so it was
+  most likely the leak failing an allocation, not a distinct bug. Step 1.1's
+  diarizer-on-solo comparison arm runs on whole channels.
 
 Calibration note: published AMI numbers in the research doc are family-A
 (0 s collar); our der.py is family-B (0.25 s). Only compare our numbers to

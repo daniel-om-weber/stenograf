@@ -61,10 +61,8 @@ ICSI_TRANSCRIPTS_ZIP = "ICSI_original_transcripts.zip"
 
 AMI_GROUPS = {"ES2003": "abcd", "IS1009": "abcd"}
 ICSI_MEETINGS = ("Bmr021", "Bmr025")
-"""Bmr025 (33 min, 8 close-talk participants) replaced Bed009 (54 min, 7):
-sherpa's ~30 GB diarization peak on a dense 54-min channel got the run killed
-even in a dedicated process, and Bmr025's larger group in fewer minutes is the
-better large-group condition anyway."""
+"""Bmr025 (33 min, 8 close-talk participants) over Bed009 (54 min, 7): a
+larger group in fewer minutes is the better large-group condition."""
 
 MERGE_GAP_S = 0.3
 """Same-speaker word/utterance spans closer than this merge into one turn (the
@@ -599,11 +597,11 @@ def run(channel_ids: set[str] | None = None) -> int:
     """fetch → diarize+finalize every channel → DER + word attribution → re-ID.
 
     Every heavy stage runs as a child process, and each loop channel gets its
-    own: sherpa diarization of one dense ~40-min channel peaks at ~31 GB RSS
-    (measured on ES2003c.loop 2026-08-06, thread-count-independent — evidence
-    for the owned loop + 3 s stride in ``PLAN-DIARIZATION.md`` step 4), and
-    stacked peaks got the run SIGKILLed three times. Memory now dies with each
-    channel's process. Mic channels never diarize, so they share one child."""
+    own: a dense ~40-min channel runs near 10 GB RSS with its ASR pass in the
+    same process (observed 2026-08-06), and stacked peaks got the run SIGKILLed
+    three times back when sherpa's embedding leak made that ~31 GB. Memory dies
+    with each channel's process. Mic channels never diarize, so they share one
+    child."""
     started = time.monotonic()
     eval_dir = Path(__file__).parent
 

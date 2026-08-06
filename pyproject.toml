@@ -27,13 +27,17 @@ dependencies = [
     "click>=8.1",
     "numpy>=1.26",
     # Silero VAD + speaker diarization (ONNX/CPU — works on every platform).
-    # 1.13.x macOS wheels are broken: they link libonnxruntime dynamically
-    # but don't bundle it (dlopen fails on import).
-    "sherpa-onnx>=1.12.40,<1.13",
-    # sherpa-onnx's dependency on -core (which carries libonnxruntime) is
-    # declared inconsistently between its sdist and wheels; uv resolves from
-    # the sdist and would omit it, so declare it ourselves.
-    "sherpa-onnx-core>=1.12.40,<1.13",
+    # The 1.13.4 floor is a memory leak, not a feature: 1.12.x retains ~21 MB
+    # per SpeakerEmbeddingExtractor call (measured 2026-08-06 — unbounded, and
+    # below the extractor object, so no in-process workaround exists), which
+    # put one 38-min meeting channel at ~31 GB RSS and killed long finalizes.
+    # 1.13.4 holds that channel at 5.4 GB with byte-identical turns.
+    "sherpa-onnx>=1.13.4,<1.14",
+    # sherpa-onnx's dependency on -core (which carries libonnxruntime) has been
+    # declared inconsistently between its sdist and wheels; uv resolving from
+    # the sdist would omit it and macOS import dies in dlopen, so declare it
+    # ourselves rather than trusting whichever form uv picks.
+    "sherpa-onnx-core>=1.13.4,<1.14",
     # Default ASR backend (PLAN.md Phase 0 verdict); MLX is Apple-Silicon-only.
     "parakeet-mlx>=0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Cross-platform ASR backend (Phase 5): the same Parakeet-TDT-v3, fp32 ONNX
