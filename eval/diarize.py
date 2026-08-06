@@ -109,10 +109,9 @@ def run_ami(channel_ids: set[str] | None = None) -> None:
     Count-1 channels take the production path: ``finalize_channel`` never runs
     the diarizer for ``num_speakers=1`` (everything is ``S0`` on VAD/segment
     spans), so the mic hypothesis is those entry spans, and its re-ID embedding
-    is computed from them the way a count>1 cluster's would be. Running sherpa
-    with ``num_clusters=1`` instead is not an option anyway: it dies on a native
-    bus error for audio ≳19 min (15 min fine; count=2 on the same full file
-    fine; sherpa-onnx 1.12.40, 2026-08-06)."""
+    is computed from them the way a count>1 cluster's would be. What that
+    bypass costs against a diarizer that *is* run on a solo channel is
+    ``solo_arms.py``."""
     import time
 
     import ami
@@ -137,9 +136,9 @@ def run_ami(channel_ids: set[str] | None = None) -> None:
         result = None if solo else diarizer.diarize_with_embeddings(pcm, channel.num_speakers)
 
         if not asr_loaded:
-            # After the diarization peak: sherpa needs ~30 GB on a dense long
-            # channel, and the resident MLX weights were the margin that got
-            # Bed009.loop's process killed while Bmr021.loop survived.
+            # After the diarization peak, so the resident MLX weights are not
+            # stacked on top of it — that margin is what decided which loop
+            # channel's process got killed back when sherpa leaked.
             asr.load()
             asr_loaded = True
         entries = finalize_channel(

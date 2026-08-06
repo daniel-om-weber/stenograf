@@ -95,12 +95,19 @@ Each lands separately, gated on its own harness delta. Ordered by expected
 size (the error analyses: boundary miss > cluster granularity > everything;
 word intersection explicitly last and not touched).
 
-1. **Solo channel bypass.** When the resolved per-channel speaker count is 1,
-   do not run the diarizer on that channel: VAD spans + the single fixed
-   label. Even 1-speaker audio costs 1.5–4.7 % DER through a diarizer;
-   VAD-only can only be better, and it removes an entire failure mode from
-   the common headset case. (One path: this replaces diarization for count=1,
-   not a fallback around it.)
+1. **Solo channel bypass — ALREADY SHIPPED, and now measured 2026-08-06.**
+   `finalize_channel` has never run a diarizer at `num_speakers=1`; the
+   entries are the ASR/VAD spans under one label. `eval/solo_arms.py` scores
+   it against the arms it replaces on all ten single-speaker channels
+   (`eval/README.md`). The premise written here was wrong in both directions
+   and the conclusion survives anyway: VAD-only is **not** better on DER
+   (24.8 % vs 11.4 % for the diarizer at k=1) — but word attribution, the
+   thing the user reads, is 100 % in both arms on every channel, so the DER
+   gap is speech the transcript never contains. Diarizing a solo channel is
+   declined on those numbers. The measurement's real payload is the third
+   arm: **estimating the count on a solo channel splits it 2–3 ways on 10/10
+   channels**, costing 22 pts of word attribution (worst 54). That is a live
+   user-facing failure whenever nobody states a count — see 3.
 2. **Boundary margin.** Pad diarization turn onsets/offsets by ~0.1 s
    (clamped at neighbors) before word intersection. Missed speech from
    boundary imprecision (~350 ms average across systems) is the dominant
@@ -114,6 +121,13 @@ word intersection explicitly last and not touched).
    naming stage, merges are not. Also relevant to the known far-field
    over-splitting complaint in PLAN.md: the fix for that is this merge step,
    not a lower cluster count.
+   Step 1's own measurement raises the stakes and exposes a hole: an estimated
+   solo channel splits 2–3 ways on 10/10 corpus channels (−22 pts word
+   attribution), and merge-at-naming recovers that **only for a speaker who
+   has a voice profile**. What an unprofiled solo speaker gets back is
+   unanswered — decide it here, with the estimator's own confidence or a
+   single-cluster-dominance test as the candidates, and measure it on
+   `solo_arms.py`'s est arm.
 4. **Overlap-clean embeddings.** `cluster_embeddings()` currently slices by
    turn times, overlap included. Exclude spans where ≥2 turns are active
    (computable from the turn list alone) before embedding — including

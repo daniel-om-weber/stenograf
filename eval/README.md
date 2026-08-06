@@ -233,7 +233,7 @@ gitignored (private content).
 ### The corpus harness (AMI/ICSI, no hand labels)
 
 The `PLAN-DIARIZATION.md` step-0 harness sidesteps hand-labelling: `ami.py`
-downloads AMI (ES2003 + IS1009) and ICSI (Bmr021 + Bed009) headset channels
+downloads AMI (ES2003 + IS1009) and ICSI (Bmr021 + Bmr025) headset channels
 and synthesizes stenograf's topology per meeting — one participant's headset
 is the **mic** channel, the other N−1 mixed are the **loopback** — with
 references built from the human annotations under corpus-global speaker names
@@ -252,6 +252,36 @@ headsets, alphabetically-last participant left out as the stranger), and
 `tests/test_eval_reid.py`; parsing/mixing math in `tests/test_eval_ami.py`.
 Corpus facts (URL patterns, identity mapping traps, format gotchas) are in
 `ami.py`'s docstrings; calibration caveats in `PLAN-DIARIZATION.md` step 0.
+
+#### Why a single-speaker channel never sees the diarizer (2026-08-06)
+
+`finalize_channel` labels everything `S0` when the channel's speaker count is
+1. `solo_arms.py` scores that against the two arms it replaces, on all ten
+single-speaker corpus channels (`out/diar-solo-arms.md`):
+
+| arm | DER | word attribution | clusters |
+|---|---|---|---|
+| shipped (no diarizer) | 24.8 % | **100 %** | 1 |
+| diarizer forced to one cluster | 11.4 % | **100 %** | 1 |
+| diarizer estimating the count | 30.5 % | 77.7 % | 2–3 |
+
+Two things follow, and only one of them is the obvious one.
+
+**Running the diarizer at k=1 halves DER and changes nothing the user reads.**
+Word attribution is 100 % in both arms on all ten channels, because with one
+speaker every attribution is trivially right. The 13-point DER gap is speech
+the segmentation model marks and the transcript never contains — backchannels
+and soft tails the ASR path does not decode — so it buys a better activity
+score for ~105 s of diarization per channel and no better transcript. Declined
+on those numbers, not skipped.
+
+**Estimating the count on a solo channel splits it, every time.** All ten
+channels come back as 2–3 speakers and word attribution falls to 77.7 % mean
+(45.6 % worst) — one person's monologue chopped across "Speaker 1/2/3". That
+is the cost of *not* stating a count, it is the far-field over-splitting
+complaint measured on the local channel, and it is what
+`PLAN-DIARIZATION.md`'s merge-at-naming is aimed at — with the caveat that
+merge-at-naming can only recover a speaker who has a voice profile.
 
 ## Echo cancellation
 
