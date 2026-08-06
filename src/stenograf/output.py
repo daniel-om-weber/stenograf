@@ -11,7 +11,7 @@ override — holding plainly named files::
         transcript.md / .json / .txt / …   # the finalize output (--format)
         transcript.partial.*               # crash checkpoint, removed on success
         transcript.notes.md                # the `steno notes` sibling
-        audio.wav                          # only with --record-audio
+        audio.opus                         # only with --record-audio
 
 The filesystem *is* the index: the folder name carries the date, the exported
 note's filename carries the title, listing is Finder/``ls``, deleting is ``rm``.
@@ -38,8 +38,8 @@ if TYPE_CHECKING:
 TRANSCRIPT_STEM = "transcript"
 """Basename (without extension) of the transcript files in a meeting dir."""
 
-AUDIO_NAME = "audio.wav"
-"""Name of the opt-in ``--record-audio`` WAV inside a meeting dir."""
+AUDIO_NAME = "audio.opus"
+"""Name of the opt-in ``--record-audio`` recording inside a meeting dir."""
 
 CHECKPOINT_FORMATS = ("md", "json", "txt")
 """Crash checkpoints render these (no subtitles — pointless for a partial
@@ -170,7 +170,7 @@ def prepare_output(
     in settings.toml, else ``Meetings`` in the user's documents folder — see
     :func:`default_output_home`); an explicit ``out`` (the CLI's ``--out``)
     uses that path itself as the meeting's folder. Either way the files inside
-    are plainly named — ``transcript.{fmt}``, ``audio.wav``.
+    are plainly named — ``transcript.{fmt}``, ``audio.opus``.
 
     File names inside a meeting folder are fixed, so pointing ``out`` at a
     folder that already holds a transcript would silently replace that meeting;

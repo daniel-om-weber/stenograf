@@ -178,7 +178,7 @@ steno start --title "Weekly sync"   # name the meeting (notes + export use it)
 steno start --flush-interval 60     # crash-checkpoint the captions every 60s
 steno start --no-aec                # disable echo cancellation (headphones)
 steno start --diarization           # separate speakers within each channel (off by default)
-steno start --record-audio          # opt in to keeping a WAV (off by default)
+steno start --record-audio          # opt in to keeping the audio (off by default)
 steno start --max-seconds 3600      # stop capture automatically after an hour
 steno start --replay mic.wav        # dev: drive the live pass from a file
 ```
@@ -213,7 +213,7 @@ it on Linux (`~/Dokumente/Meetings` on a German one):
 ~/Documents/Meetings/meeting-20260710-091500/
     transcript.md / .json / .txt        # the transcript (--format adds srt/vtt)
     transcript.notes.md                 # if you generated notes
-    audio.wav                           # only with --record-audio
+    audio.opus                          # only with --record-audio
 ```
 
 That's it — there is no separate library or index to manage. Browse with
@@ -222,8 +222,9 @@ Finder or `ls`, read with anything that opens markdown, delete with `rm`.
 location with `[output] dir` in settings.toml, or give one
 run its own folder with `--out DIR` (files land directly in it; if DIR already
 holds a transcript, stenograf refuses to replace it unless you add `--force`).
-Audio is stored only when you passed `--record-audio`; without it a meeting
-folder holds text alone.
+Audio is stored only when you passed `--record-audio` (Ogg Opus, roughly
+14 MB per meeting hour; pass a `.wav` PATH instead for raw PCM); without it a
+meeting folder holds text alone.
 
 ## Meeting notes (LLM summaries)
 

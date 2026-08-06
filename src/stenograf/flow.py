@@ -48,7 +48,7 @@ from stenograf.pipeline import (
     resolve_split_channels,
     transcribe_split_channels,
 )
-from stenograf.recording import WavTee
+from stenograf.recording import AudioTee
 from stenograf.session import (
     LIVE_FLUSH_INTERVAL_S,
     CheckpointConfig,
@@ -88,8 +88,8 @@ class MeetingRequest:
 
     ``settings`` rides along so the run uses the exact values in force when the
     user pressed Start — not whatever the file says seconds later.
-    ``record_audio`` is the CLI's ``--record-audio``: keep the raw capture as
-    the meeting folder's ``audio.wav`` (or :attr:`RunOptions.audio_path`)."""
+    ``record_audio`` is the CLI's ``--record-audio``: keep the captured audio
+    as the meeting folder's ``audio.opus`` (or :attr:`RunOptions.audio_path`)."""
 
     profile: MeetingProfile
     settings: Settings
@@ -134,7 +134,7 @@ class RunOptions:
     formats: tuple[str, ...] | None = None
     """Transcript formats to write; ``None`` = ``[transcript] formats``."""
     audio_path: Path | None = None
-    """Where ``record_audio`` writes; ``None`` = ``audio.wav`` in the folder."""
+    """Where ``record_audio`` writes; ``None`` = ``audio.opus`` in the folder."""
     notes_backend: str | None = None
     notes_model: str | None = None
     notes_instructions: Path | None = None
@@ -361,7 +361,7 @@ class MeetingRun:
             if self.request.record_audio:
                 # The tee is this run's first write, so it creates the folder.
                 self.audio_path.parent.mkdir(parents=True, exist_ok=True)
-                tee = WavTee(self.audio_path, {p.channel for p in plans})
+                tee = AudioTee(self.audio_path, {p.channel for p in plans})
             view.status("recording · loading models…")
             asr, vad, diarizer = loaders.load_backends(
                 need_diarizer=any(p.num_speakers != 1 for p in plans),
@@ -431,8 +431,14 @@ class MeetingRun:
             )
         finally:
             if tee is not None:
-                tee.close()  # flush + finalize the WAV header even on a dying run
-                view.status(f"recorded audio: {tee.path}")
+                tee.close()  # flush + finalize the recording even on a dying run
+                if tee.fallback_path is not None:
+                    view.status(
+                        f"recorded audio: {tee.path} — the Opus encoder died "
+                        f"mid-meeting; the remainder is in {tee.fallback_path.name}"
+                    )
+                else:
+                    view.status(f"recorded audio: {tee.path}")
         self.result = result
         _report_lost_reference(result, view)
         transcript = result.transcript

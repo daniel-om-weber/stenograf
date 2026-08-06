@@ -148,7 +148,7 @@ Panel {
 
         checked: page.screen.state.recordAudio
         label: "Keep the audio recording"
-        hint: "Writes audio.wav next to the transcript."
+        hint: "Writes audio.opus next to the transcript."
     }
 
     Toggle {

@@ -230,6 +230,29 @@ uv run eval/der.py                                 # → eval/out/diar-report.md
 real stenograf backends. Everything under `eval/refs/` and `eval/out/` stays
 gitignored (private content).
 
+### The corpus harness (AMI/ICSI, no hand labels)
+
+The `PLAN-DIARIZATION.md` step-0 harness sidesteps hand-labelling: `ami.py`
+downloads AMI (ES2003 + IS1009) and ICSI (Bmr021 + Bed009) headset channels
+and synthesizes stenograf's topology per meeting — one participant's headset
+is the **mic** channel, the other N−1 mixed are the **loopback** — with
+references built from the human annotations under corpus-global speaker names
+(`eval/refs/ami/`, generated, still gitignored). The whole matrix is one
+command:
+
+```sh
+uv run --group eval eval/ami.py run   # fetch → diarize → DER + naming reports
+```
+
+which chains `diarize.py --ami` (known per-channel counts; also writes each
+cluster's embedding), `der.py` (now also covering `refs/ami/`), the re-ID
+trial builder (`ami.py trials`: enroll each group's session *a* from raw
+headsets, alphabetically-last participant left out as the stranger), and
+`reid_score.py` — DIR @ FAR with the FAR/FRR curve, unit-tested in
+`tests/test_eval_reid.py`; parsing/mixing math in `tests/test_eval_ami.py`.
+Corpus facts (URL patterns, identity mapping traps, format gotchas) are in
+`ami.py`'s docstrings; calibration caveats in `PLAN-DIARIZATION.md` step 0.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
@@ -491,6 +514,46 @@ Sweeps run on a **pinned 500-utterance subsample** (the full grid is 5–10 h of
 decoding); only the winning config is re-run over the full test set, and every table
 states which it was. Hypotheses are cached per config, so an interrupted sweep only
 costs the configs it had not reached.
+
+## Stored-audio codec (2026-08-06)
+
+`--record-audio` writes **Ogg Opus at 32 kbps per channel** (≈14 MB/h/channel
+vs 115 MB/h WAV, 59 MB/h FLAC). Chosen from a literature survey plus a
+listening ladder Daniel judged by ear (`eval/out/opus-ladder/`, gitignored;
+rebuild = ffmpeg `-c:a libopus` over any manifest WAV). The load-bearing
+measurements, all on clean/curated corpora — none on post-AEC meeting audio:
+
+- **ASR**: Opus WER penalty on LibriSpeech (SpeechBrain conformer) is
+  +0.06 pt at 12 kbps, +1.07 at 6 (NoLACE, arXiv:2309.14521 Table 1).
+  GigaSpeech ships this exact config (Opus 32 kbps, 16 kHz mono) and measured
+  train-on-wav/eval-on-opus at +0.1–0.2 pt over 10 k hours (arXiv:2106.06909
+  Table 3). Codec artifacts are also in-distribution for Parakeet v3: ~660 k
+  of its ~670 k training hours are Granary = YouTube-derived Opus/AAC, and
+  Common Voice is 48 kbps MP3 — an argument from provenance, not a vendor
+  claim.
+- **Speaker embeddings bind tighter than ASR**: ECAPA/CAM++/ERes2Net EER on
+  VoxCeleb1-O is ~clean at 24 kbps (+0.24 pt), cliffs between 12 and 6 kbps
+  (1.44 → 6.38 %), worse on hard pairs (arXiv:2509.02771). So the floor is
+  the embedding one, not the WER one. Never below 12 kbps; never resample to
+  8 kHz (costs more than any codec — Ferro Filho, Interspeech 2025).
+- **libopus band-limits to 6 kHz below its ~10 kbps mode switch** (measured
+  2026-08-06 on our bundled ffmpeg by band-energy comparison; the "narrowband
+  at 4 kHz" claim in arXiv:2509.02771 did not reproduce).
+- **Crash safety** (measured 2026-08-06): SIGKILL of the streaming encoder
+  after 60 s of piped PCM left a file that decodes to 55.0 s — Ogg pages are
+  self-delimiting; only the encoder's buffer is lost. Matches the WAV tee's
+  patched-header behavior. Encode runs ~150× realtime (49-min channel in
+  20 s), so live encoding costs <1 % CPU.
+- Above ~96 kbps lossy is pointless: Opus 128 kbps measured *larger* than
+  FLAC on the ladder clips.
+
+**Unmeasured, deliberately left open**: (a) transcript divergence on our own
+corpus — `retranscribe_compare.py --old-dir` with an uncompressed-decode arm
+vs an Opus-ladder arm would resolve it far below 0.1 WER pt (noise floor
+−27 words/10.5 k); (b) DER vs bitrate for our diarizer via `der.py` — no
+published curve exists for any off-the-shelf pipeline; (c) codec × noise
+interaction on far-field audio (the one crossed study, SVeritas
+arXiv:2509.17091, suggests multiplicative, but its codec tables are defective).
 
 ## Side quests
 

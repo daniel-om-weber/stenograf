@@ -112,9 +112,10 @@ _RECORD_DEFAULT = "\0default"
     flag_value=_RECORD_DEFAULT,
     default=None,
     metavar="[PATH]",
-    help="Also save the raw captured audio to a WAV (mic left, system right). "
-    "Off by default (unless [output] record_audio is set) — audio otherwise never "
-    "touches disk. Give a PATH or omit it to write <transcript>.wav.",
+    help="Also save the captured audio (mic left, system right; Ogg Opus at "
+    "32 kbps per channel, a .wav PATH keeps raw PCM instead). Off by default "
+    "(unless [output] record_audio is set) — audio otherwise never touches "
+    "disk. Give a PATH or omit it for the meeting folder's audio.opus.",
 )
 @click.option(
     "--no-record-audio",
@@ -271,11 +272,11 @@ def start(
     click.echo(f"profile: language={profile.language or 'auto'} mode={mode}")
 
     # A bare --record-audio wins; absent one, [output] record_audio makes the
-    # meeting folder's audio.wav the standing default. --no-record-audio is the
+    # meeting folder's audio.opus the standing default. --no-record-audio is the
     # per-run opt-out of that default (the two are rejected together up top).
     if not no_record_audio and record_audio is None and cfg.settings.output.record_audio:
         record_audio = _RECORD_DEFAULT
-    audio_path = None  # None → the meeting folder's audio.wav
+    audio_path = None  # None → the meeting folder's audio.opus
     if record_audio is not None and record_audio != _RECORD_DEFAULT:
         audio_path = Path(record_audio)
 
@@ -311,7 +312,7 @@ def start(
     )
     # Every meeting gets its own date-named folder in the visible output home
     # (or --out as the folder), holding transcript.{md,json,…} + optional
-    # audio.wav — self-describing files, no index. An --out collision raises
+    # audio.opus — self-describing files, no index. An --out collision raises
     # here; the _library_errors boundary reports it cleanly.
     run = MeetingRun(request, options=options)
 
@@ -339,7 +340,7 @@ def start(
             )
     if request.record_audio:
         click.secho(
-            f"● RECORDING AUDIO to {run.audio_path} — raw audio is being written to disk",
+            f"● RECORDING AUDIO to {run.audio_path} — the meeting audio is being written to disk",
             fg="red",
             bold=True,
         )

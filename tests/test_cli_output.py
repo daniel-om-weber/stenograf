@@ -125,7 +125,7 @@ def test_record_audio_lands_in_the_meeting_folder(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
 
     (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
-    assert (meeting_dir / "audio.wav").exists()
+    assert (meeting_dir / "audio.opus").exists()
 
 
 def test_output_record_audio_setting_keeps_audio_without_a_flag(tmp_path, monkeypatch):
@@ -134,7 +134,7 @@ def test_output_record_audio_setting_keeps_audio_without_a_flag(tmp_path, monkey
     assert result.exit_code == 0, result.output
 
     (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
-    assert (meeting_dir / "audio.wav").exists()
+    assert (meeting_dir / "audio.opus").exists()
 
 
 def test_no_record_audio_opts_out_of_the_standing_default(tmp_path, monkeypatch):
@@ -143,7 +143,7 @@ def test_no_record_audio_opts_out_of_the_standing_default(tmp_path, monkeypatch)
     assert result.exit_code == 0, result.output
 
     (meeting_dir,) = (tmp_path / "meetings-home").iterdir()
-    assert not (meeting_dir / "audio.wav").exists()
+    assert not (meeting_dir / "audio.opus").exists()
 
 
 def test_record_audio_and_no_record_audio_conflict(tmp_path, monkeypatch):

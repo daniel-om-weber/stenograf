@@ -97,7 +97,7 @@ SETTINGS_TEMPLATE = """\
 #                                          # documents folder, which is localised
 #                                          # on Linux (~/Dokumente/Meetings).
 #                                          # `steno settings show` prints it
-# record_audio = false                     # true = keep audio.wav (raw capture)
+# record_audio = false                     # true = keep audio.opus (the capture)
 #                                          # in every meeting folder, like a bare
 #                                          # --record-audio
 
@@ -177,8 +177,8 @@ class OutputSettings:
     :func:`stenograf.output.default_output_home`).
     Not one meeting's dir — ``--out`` is that — but the folder of folders."""
     record_audio: bool | None = None
-    """``True`` keeps the raw captured audio as each meeting folder's
-    ``audio.wav``, exactly as a bare ``--record-audio`` does. Unset (``None``)
+    """``True`` keeps the captured audio as each meeting folder's
+    ``audio.opus``, exactly as a bare ``--record-audio`` does. Unset (``None``)
     or ``False`` = off, the built-in default: audio never touches disk. A
     ``--record-audio PATH`` still redirects a single run to another file."""
 

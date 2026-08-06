@@ -398,7 +398,7 @@ class TestMeetingScreen:
                 "remote": -1,
                 "language": "auto",
                 "title": "",
-                "recordAudio": True,  # keep audio.wav
+                "recordAudio": True,  # keep audio.opus
                 "notes": False,
             }
         )
@@ -412,7 +412,7 @@ class TestMeetingScreen:
         transcripts = list(home_dir.glob("*/transcript.md"))
         assert len(transcripts) == 1
         assert "wort" in transcripts[0].read_text(encoding="utf-8")
-        audio = transcripts[0].parent / "audio.wav"
+        audio = transcripts[0].parent / "audio.opus"
         assert audio.exists() and audio.stat().st_size > 44
         # Loader progress must reach the view, never click: a GUI has no stdio,
         # and on Windows click.echo dies probing its proxy. `callable(...)` would

@@ -62,7 +62,7 @@ from stenograf.capture.base import (
     Channel,
     GapPaddedBuffer,
 )
-from stenograf.recording import WavTee
+from stenograf.recording import AudioTee
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -323,9 +323,9 @@ class AecDump:
 
     def __init__(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        self._mic = WavTee(directory / "mic.wav", {Channel.MIC})
-        self._lpb = WavTee(directory / "lpb.wav", {Channel.SYSTEM})
-        self._enh = WavTee(directory / "enh.wav", {Channel.MIC})
+        self._mic = AudioTee(directory / "mic.wav", {Channel.MIC})
+        self._lpb = AudioTee(directory / "lpb.wav", {Channel.SYSTEM})
+        self._enh = AudioTee(directory / "enh.wav", {Channel.MIC})
 
     def add_input(self, frame: AudioFrame) -> None:
         (self._mic if frame.channel is Channel.MIC else self._lpb).add(frame)
