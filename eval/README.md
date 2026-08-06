@@ -483,6 +483,45 @@ Step 2.2 ships on these numbers: enroll-or-reinforce from the corrected
 cluster, with the impure-enrollment caveat recorded here rather than gated —
 the failing case is exactly the meeting whose transcript was already wrong.
 
+#### Automatic profile updates: measured, declined (2026-08-07)
+
+`auto_update.py` closes `PLAN-DIARIZATION.md` step 2.3 — may an auto-matched
+cluster reinforce its matched profile without a user correction? The deployed
+loop is replayed on the harness: rename-once enrollment from session a,
+sessions b+c resolved at the shipped 0.5 threshold with each policy deciding
+which named clusters append their embedding, then naming evaluated on
+held-out session d + ICSI (44 trials, 5 known — single-trial granularity is
+20 pts, so only large effects can register). Policies: no-update baseline,
+ungated, score margin (.10/.20 above threshold), margin + 5 s minimum clean
+duration, and an oracle that appends only correctly-named clusters — the
+upper bound of any gate.
+
+- **The benefit is invisible where it matters.** Even the oracle ties the
+  baseline at every held-out full-duration and 3 s operating point (DIR@FAR0
+  80.0 % in all six arms). The sole separation in the whole table is one
+  2 s-truncated trial at the shipped threshold (20 % vs 0 % DIR for
+  margin .20/oracle) — an artificial regime, and one trial.
+- **The poison passes every implementable gate.** All three wrong updates are
+  IS1009's FIO084 — the fused-away, unenrolled quiet speaker — absorbed into
+  FIE088/FIO087 profiles at scores 0.609–0.860, top-minus-second gaps up to
+  0.855 (*higher* than most correct updates' gaps), and 40–721 s of clean
+  speech (the wrong clusters are among the longest, as `naming_gate.py`
+  already measured for wrong namings). Absolute score, relative margin, and
+  duration cutoffs all admit them; only the oracle doesn't. The attractor is
+  the impure FIO087 enrollment (`rename_once.py`'s known problem) —
+  diarization confusion, which no store-side statistic can see.
+- **Absorption blurs rather than breaks at this scale.** The one baseline
+  stranger accept (FIO084's session-d cluster → FIO087, 0.622) *drops* to
+  0.531 under updates — mean-cosine dilution — but known-trial thresholds
+  fall in parallel and the EER point's FAR doubles (5.1 → 10.3 %). Score
+  distributions converge; no operating point improves.
+
+Declined in `PLAN-DIARIZATION.md` step 2.3 on these numbers: profile growth
+stays user-confirmed (rename-once assign, measured never-worse). Re-open
+triggers: steps 4–5 fix the IS1009-class clustering confusion — every wrong
+update is downstream of it, so re-run this harness then — or a grown trial
+set that can resolve sub-20-pt benefits.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

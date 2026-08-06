@@ -224,12 +224,22 @@ one-shot act.
    (segmentation vs ASR spans) moved a solo embedding by ≤ 0.001 cosine in
    the rename-once run. Switch off keeps the zero-cost path: no models, no
    embeddings, no sidecar.
-3. **Gated automatic updates, anchored.** An auto-matched cluster may add its
-   embedding to the profile only above a high-confidence bar (score margin
-   above threshold + step-1.5 duration gate); the original user-confirmed
-   enrollment is never evicted. Ungated iterative updates measured *below*
-   the no-update baseline (memory poisoning) — silent drift into a
-   colleague's voice is the one unrecoverable failure here.
+3. **Gated automatic updates — DECLINED 2026-08-07, measured**
+   (`eval/auto_update.py`; numbers in `eval/README.md`). The research's
+   poisoning warning reproduces on our stack as *ungateability*: replaying
+   sessions b+c through the deployed loop absorbs three wrong updates — all
+   IS1009's fused-away FIO084 pulled into colleagues' profiles — at scores
+   0.609–0.860, top-minus-second gaps up to 0.855, and 40–721 s of clean
+   speech, above every implementable bar (score margin, second-best margin,
+   duration; the wrong clusters are among the *longest*). Meanwhile the
+   oracle upper bound (append only correct namings) ties the no-update
+   baseline at every held-out full-duration and 3 s operating point: nothing
+   measurable to gain, unfilterable poison to absorb. Profile growth stays
+   user-confirmed (step 2.2's assign); the never-evict anchor is moot with no
+   automatic path, since every stored embedding is user-confirmed. Re-open
+   triggers: steps 4–5 fix the clustering confusion behind all three wrong
+   updates (re-run the harness then), or a trial set that can resolve
+   sub-20-pt (single-trial) benefits.
 4. **Threshold, measured at last.** Sweep the FAR/FRR curve on the step-0
    re-ID harness and pick the operating point (bias: strangers must not be
    named — low FAR, accept more "unknown"). Today's flat 0.5 matches no
