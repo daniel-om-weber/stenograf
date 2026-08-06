@@ -222,9 +222,9 @@ Finder or `ls`, read with anything that opens markdown, delete with `rm`.
 location with `[output] dir` in settings.toml, or give one
 run its own folder with `--out DIR` (files land directly in it; if DIR already
 holds a transcript, stenograf refuses to replace it unless you add `--force`).
-Audio is stored only when you passed `--record-audio` (Ogg Opus, roughly
-14 MB per meeting hour; pass a `.wav` PATH instead for raw PCM); without it a
-meeting folder holds text alone.
+Audio is stored only when you passed `--record-audio` (Ogg Opus; measured
+~34 MB per hour for a stereo mic+system meeting, ~6–14 MB mono; pass a `.wav`
+PATH instead for raw PCM); without it a meeting folder holds text alone.
 
 ## Meeting notes (LLM summaries)
 

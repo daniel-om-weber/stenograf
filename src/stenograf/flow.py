@@ -432,10 +432,17 @@ class MeetingRun:
         finally:
             if tee is not None:
                 tee.close()  # flush + finalize the recording even on a dying run
-                if tee.fallback_path is not None:
+                if tee.error is not None:
+                    view.status(f"audio recording FAILED: {tee.error}")
+                elif tee.fallback_path is not None and tee.path.exists():
                     view.status(
                         f"recorded audio: {tee.path} — the Opus encoder died "
                         f"mid-meeting; the remainder is in {tee.fallback_path.name}"
+                    )
+                elif tee.fallback_path is not None:
+                    view.status(
+                        f"recorded audio: {tee.fallback_path} — the Opus encoder "
+                        f"failed, so this recording is a WAV"
                     )
                 else:
                     view.status(f"recorded audio: {tee.path}")

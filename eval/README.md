@@ -517,8 +517,11 @@ costs the configs it had not reached.
 
 ## Stored-audio codec (2026-08-06)
 
-`--record-audio` writes **Ogg Opus at 32 kbps per channel** (≈14 MB/h/channel
-vs 115 MB/h WAV, 59 MB/h FLAC). Chosen from a literature survey plus a
+`--record-audio` writes **Ogg Opus at 32 kbps per channel** (nominal
+≈14 MB/h/channel vs 115 MB/h WAV, 59 MB/h FLAC; the real default — joint
+stereo at 64k nominal — measured 34 MB/h on a 10-min mic+system pair, libopus
+VBR overshooting to 76 kbps, where two mono encodes of the same pair total
+19 MB/h — 2026-08-06 adversarial review). Chosen from a literature survey plus a
 listening ladder Daniel judged by ear (`eval/out/opus-ladder/`, gitignored;
 rebuild = ffmpeg `-c:a libopus` over any manifest WAV). The load-bearing
 measurements, all on clean/curated corpora — none on post-AEC meeting audio:
@@ -539,11 +542,13 @@ measurements, all on clean/curated corpora — none on post-AEC meeting audio:
 - **libopus band-limits to 6 kHz below its ~10 kbps mode switch** (measured
   2026-08-06 on our bundled ffmpeg by band-energy comparison; the "narrowband
   at 4 kHz" claim in arXiv:2509.02771 did not reproduce).
-- **Crash safety** (measured 2026-08-06): SIGKILL of the streaming encoder
-  after 60 s of piped PCM left a file that decodes to 55.0 s — Ogg pages are
-  self-delimiting; only the encoder's buffer is lost. Matches the WAV tee's
-  patched-header behavior. Encode runs ~150× realtime (49-min channel in
-  20 s), so live encoding costs <1 % CPU.
+- **Crash safety** (measured 2026-08-06, corrected same day by adversarial
+  review): ffmpeg buffers output in 256 KB blocks, so WITHOUT
+  `-flush_packets 1` a SIGKILL loses everything since the last block boundary
+  — 5/10/20/30 s recordings all died at 0 bytes, undecodable. WITH the flag
+  (shipped) the same kill leaves a readable file missing 2–5 s, matching the
+  WAV sink's patched-header contract. Encode runs ~150× realtime (49-min
+  channel in 20 s), so live encoding costs <1 % CPU.
 - Above ~96 kbps lossy is pointless: Opus 128 kbps measured *larger* than
   FLAC on the ladder clips.
 
