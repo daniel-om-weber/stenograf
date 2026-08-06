@@ -108,11 +108,15 @@ word intersection explicitly last and not touched).
    arm: **estimating the count on a solo channel splits it 2–3 ways on 10/10
    channels**, costing 22 pts of word attribution (worst 54). That is a live
    user-facing failure whenever nobody states a count — see 3.
-2. **Boundary margin.** Pad diarization turn onsets/offsets by ~0.1 s
-   (clamped at neighbors) before word intersection. Missed speech from
-   boundary imprecision (~350 ms average across systems) is the dominant
-   error everywhere; TST-Bench measured +0.26 DIR for exactly this margin,
-   and 0.25/0.5 s progressively worse — sweep 0.05–0.25 s on the harness.
+2. **Boundary margin — DECLINED 2026-08-06, measured and explained.** The
+   TST-Bench +0.26 DIR presumes an intersection that loses words falling
+   outside every turn; ours snaps them to the nearest turn, which already
+   splits each gap at its center — a point no symmetric clamped pad can move.
+   The sweep (`eval/margin_sweep.py`, 0.05–0.25 s, ten loop channels) measured
+   the residue: mean word attribution 87.77 % unpadded vs 87.74–87.77 % at
+   every margin, ≤0.5 % of words moving at all, and padded *turns* worsen DER
+   on 8/10 channels (`eval/README.md`). Re-open trigger: an intersection rule
+   that no longer assigns every word.
 3. **Over-clustering bias + merge-at-naming.** Where the count is estimated
    (auto-count channels), bias the estimate up rather than down; where known,
    test k and k+1. After matching, clusters that hit the *same* profile above
@@ -138,9 +142,8 @@ word intersection explicitly last and not touched).
    2.4× the full-duration figure, and ERes2Net-base specifically collapses
    on short turns (3.28 % @ 2 s). Short clusters keep their local S-label
    (and are candidates for the step-1.3 merge instead).
-6. **Docstring fix** (immediate, no gate): `diarization/sherpa.py` says
-   "CAM++ embeddings"; `assets.py` ships ERes2Net and records why CAM++ was
-   rejected. Say what ships.
+6. **Docstring fix — DONE** (312c0a2): `diarization/sherpa.py` says ERes2Net
+   and points at `assets.SPEAKER_EMBEDDING` for the CAM++ rejection.
 
 ## Step 2 — profile store v2 + the enrollment loop
 

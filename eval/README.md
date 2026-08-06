@@ -283,6 +283,23 @@ complaint measured on the local channel, and it is what
 `PLAN-DIARIZATION.md`'s merge-at-naming is aimed at — with the caveat that
 merge-at-naming can only recover a speaker who has a voice profile.
 
+#### A boundary margin at word intersection is a no-op here (2026-08-06)
+
+The literature's ~0.1 s turn padding (TST-Bench +0.26 DIR) presumes an
+intersection that drops or misplaces words outside every turn. Ours cannot:
+`merge_words_turns` snaps an uncovered word to the *nearest* turn, which
+already splits every inter-turn gap at its center, and a symmetric pad clamped
+at neighbors provably cannot move a center split — the only leak is
+largest-overlap decisions where turns genuinely overlap. `margin_sweep.py`
+(cached matrix turns + word times, real merge, margins 0.05–0.25 s, ten loop
+channels) confirms it: mean attribution 87.77 % at margin 0 and 87.74–87.77 %
+everywhere else; at the widest margin only 172 of 32 879 words move at all,
+best single channel +0.27 pts, worst −0.33 pts, no margin consistently signed.
+Padding the *output* turns is no better — DER of padded turns worsens on 8 of
+10 channels (IS1009a +10.5 pts at 0.25 s; best improvement −0.9 pts,
+Bmr021) — so the pad earns no place anywhere in the pipeline. Declined in
+`PLAN-DIARIZATION.md` step 1.2 on these numbers.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
