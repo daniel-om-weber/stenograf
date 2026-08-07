@@ -84,7 +84,7 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         embedding_model: Path | None = None,
         *,
         clustering_threshold: float = 0.5,
-        cluster_method: str = "complete",
+        cluster_method: str = "ward",
         progress: assets.ProgressHook | None = None,
     ) -> None:
         super().__init__(
@@ -151,6 +151,24 @@ class OwnDiarizer(SherpaOnnxDiarizer):
             active = labels[0][: n // RF_SHIFT + 1]
             return _to_turns(active.astype(np.int64), np.sum(active, axis=1))
 
+        pairs, vectors = self._pair_embeddings(audio, labels)
+        if not pairs:
+            return []
+        clusters = _cluster(
+            np.stack(vectors), self._threshold, num_speakers, self._cluster_method
+        )
+        return self._assemble(n, labels, pairs, clusters)
+
+    def _assemble(
+        self,
+        n: int,
+        labels: list[np.ndarray],
+        pairs: list[tuple[int, int]],
+        clusters: np.ndarray,
+    ) -> list[SpeakerTurn]:
+        """Clustered (chunk, speaker) pairs → output turns (votes, top-k,
+        times). Split from :meth:`diarize` so eval can freeze a channel's
+        segmentation + embeddings once and swap partitioners cheaply."""
         num_frames = (WINDOW + (len(labels) - 1) * SHIFT) // RF_SHIFT + 1
         starts = [int(i * SHIFT / RF_SHIFT + 0.5) for i in range(len(labels))]
 
@@ -162,13 +180,6 @@ class OwnDiarizer(SherpaOnnxDiarizer):
             count[start : start + FRAMES] += np.sum(chunk, axis=1)
             weight[start : start + FRAMES] += 1.0
         speakers_per_frame = (count / (weight + 1e-12) + 0.5).astype(np.int64)
-
-        pairs, vectors = self._pair_embeddings(audio, labels)
-        if not pairs:
-            return []
-        clusters = _cluster(
-            np.stack(vectors), self._threshold, num_speakers, self._cluster_method
-        )
 
         # Vote accumulation on the global grid: each clustered (chunk, local
         # speaker)'s active frames vote for its cluster (spec §1.7).
@@ -228,9 +239,10 @@ class OwnDiarizer(SherpaOnnxDiarizer):
                     continue
                 vector = self.embed(np.concatenate(slices))
                 # embed() can hand back the zero vector on degenerate audio
-                # (l2_normalize passes it through); zero-norm rows would go NaN
-                # under normalization, where the reference keeps them zero.
-                if vector is not None and not np.any(np.isnan(vector)) and np.any(vector):
+                # (l2_normalize passes it through), and an extractor NaN/inf
+                # must not reach the affinity math; the reference drops NaN
+                # embeddings too.
+                if vector is not None and np.all(np.isfinite(vector)) and np.any(vector):
                     pairs.append((chunk_index, speaker))
                     vectors.append(vector)
         return pairs, vectors
@@ -244,13 +256,20 @@ def _cluster(
 ) -> np.ndarray:
     """Cluster (chunk, speaker) embeddings into global speakers.
 
-    ``method`` picks the known-count partitioner: ``complete`` /``average``
-    are AHC linkages on cosine distance (complete is the reference's choice,
-    average is BUT VBx's AHC-init choice), ``nmesc`` is spectral clustering on
-    the NME-binarized affinity (:func:`_nmesc`). Threshold mode (no count)
-    always uses the reference's complete-linkage cut — first merge height ≥
-    ``threshold``, a cosine DISTANCE (spec §1.6) — because production never
-    calls it (count estimation belongs to stenodiar/speakrs)."""
+    ``method`` picks the known-count partitioner: ``complete``/``average`` are
+    AHC linkages on cosine distance (complete is the reference's choice,
+    average is BUT VBx's AHC-init choice), ``centroid``/``ward`` are geometric
+    linkages on Euclidean over unit vectors (pyannote 3.1 ships centroid), and
+    ``nmesc`` is spectral clustering on the NME-binarized affinity
+    (:func:`_nmesc`). Ward is the shipped known-count default (2026-08-07:
+    mean loop DER 16.5 → 13.2 % with the gated fold, worst per-channel
+    regression +0.5 pt across 40 channels — ``eval/README.md``).
+    Threshold mode (no count) always uses the reference's
+    complete-linkage cut — first merge height ≥ ``threshold``, a cosine
+    DISTANCE (spec §1.6). Threshold mode is REACHABLE in production — an
+    install without stenodiar (manylinux_2_28, source builds without Rust)
+    estimates counts right here — so a partitioner decision covers both
+    branches; they must not quietly fork (2026-08-07 review)."""
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
 
@@ -263,10 +282,21 @@ def _cluster(
     normalized = vectors / np.maximum(norms, 1e-10)  # zero rows stay zero (Eigen semantics)
     if num_speakers is not None and num_speakers > 0 and method == "nmesc":
         return _nmesc(normalized, min(num_speakers, n))
-    distance = np.clip(1.0 - normalized @ normalized.T, 0.0, None)
-    np.fill_diagonal(distance, 0.0)
     linkage_method = method if num_speakers is not None and num_speakers > 0 else "complete"
-    tree = linkage(squareform(distance, checks=False), method=linkage_method)
+    if linkage_method in ("centroid", "ward"):
+        # Geometric linkages need raw observations. On unit vectors Euclidean
+        # DISTANCE is monotone in cosine distance (pyannote 3.1's own
+        # configuration); the merge criteria are still their own — ward's adds
+        # a cluster-size penalty with no cosine analogue.
+        tree = linkage(normalized.astype(np.float64), method=linkage_method, metric="euclidean")
+    else:
+        # Inputs are gated finite; macOS Accelerate raises spurious FP flags
+        # on every clean float32 GEMM (measured 2026-08-07: all three flags on
+        # provably-clean unit vectors), so the flags mean nothing here.
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            distance = np.clip(1.0 - normalized @ normalized.T, 0.0, None)
+        np.fill_diagonal(distance, 0.0)
+        tree = linkage(squareform(distance, checks=False), method=linkage_method)
     if num_speakers is not None and num_speakers > 0:
         flat = fcluster(tree, t=min(num_speakers, n), criterion="maxclust")
     else:
@@ -298,7 +328,8 @@ def _nmesc(normalized: np.ndarray, k: int) -> np.ndarray:
     n = len(normalized)
     if n <= k:
         return np.arange(n, dtype=np.int64)
-    affinity = normalized @ normalized.T
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        affinity = normalized @ normalized.T  # gated-finite inputs; Accelerate flag noise
     best: tuple[float, np.ndarray] | None = None
     for ratio in _NMESC_P_RATIOS:
         p = min(n - 1, max(2, round(ratio * n)))

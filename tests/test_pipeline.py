@@ -383,19 +383,37 @@ class TestFoldExcessClusters:
         assert set(folded_emb) == {"S0", "S2"}
         assert np.linalg.norm(folded_emb["S0"]) == pytest.approx(1.0)
 
-    def test_spare_is_chosen_by_duration_not_similarity(self):
-        # The two long clusters are the most similar pair by far, but only the
-        # smallest cluster may fold — a wrong partner can then never cost more
-        # than the spare's own speech.
+    def test_pair_below_gate_falls_to_duration_spare(self):
+        # Similar-but-below-the-gate long clusters stay apart: only the
+        # smallest cluster may fold, so a wrong partner can never cost more
+        # than the spare's own speech (cross-speaker fold pairs measured
+        # ≤0.697, 2026-08-07 — the gate sits above every one of them).
         turns = [turn("S0", 0.0, 4.0), turn("S1", 4.0, 8.0), turn("S2", 8.0, 9.0)]
         embeddings = {
             "S0": self._unit(1.0, 0.0, 0.0),
-            "S1": self._unit(0.98, 0.2, 0.0),  # near-duplicate of S0
+            "S1": self._unit(0.7, 0.714, 0.0),  # cosine 0.7 to S0: under the gate
             "S2": self._unit(0.0, 0.0, 1.0),  # the spare, similar to nothing
         }
         folded_turns, _ = fold_excess_clusters(turns, embeddings, 2)
         assert len({t.speaker for t in folded_turns}) == 2
         assert {"S0", "S1"} <= {t.speaker for t in folded_turns}  # long pair untouched
+
+    def test_pair_above_gate_merges_as_one_voice(self):
+        # At or above FOLD_PAIR_SIMILARITY the max pair IS one voice the
+        # partitioner split (needed repairs measured 0.846–0.923, cross pairs
+        # ≤0.697, 2026-08-07); the duration spare cannot repair a split of the
+        # largest cluster. Supersedes the 2026-08-06 duration-only rule, which
+        # was measured on complete-linkage clusters where the spare is junk.
+        # S0 outlasts S1 so the surviving label is pinned, not a tie-break.
+        turns = [turn("S0", 0.0, 5.0), turn("S1", 5.0, 9.0), turn("S2", 9.0, 10.0)]
+        embeddings = {
+            "S0": self._unit(1.0, 0.0, 0.0),
+            "S1": self._unit(0.98, 0.2, 0.0),  # near-duplicate of S0
+            "S2": self._unit(0.0, 0.0, 1.0),  # a real third voice, kept
+        }
+        folded_turns, folded_emb = fold_excess_clusters(turns, embeddings, 2)
+        assert {t.speaker for t in folded_turns} == {"S0", "S2"}  # split halves merged
+        assert np.linalg.norm(folded_emb["S0"]) == pytest.approx(1.0)
 
     def test_at_or_below_count_is_untouched(self):
         turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)]

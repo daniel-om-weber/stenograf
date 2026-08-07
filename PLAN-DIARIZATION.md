@@ -329,19 +329,27 @@ channels, where tiny embedding deltas (our stream concatenates audio, sherpa
 concatenates feature frames) flip discrete merges — the same fragility
 Phase B exists to fix, not a systematic bias.
 
-**Phase B — clustering upgrade, candidates REVISED on the spec's findings.**
-The planned VBx is *not shippable as assumed*: BUT's model files carry no
-license, pyannote community-1's PLDA (CC-BY-4.0) is fit to a different
-embedding and cannot accept ours, no Fa/Fb/loopP was ever published for
-PLDA-free cosine embeddings, and the one paper solving exactly that
-(SphereVBx-PF) withheld its values and its code (spec §3). Permissive
-candidates, measured on the harness against the Phase-A AHC baseline:
-**NME-SC** (auto-tuning spectral clustering, Apache-2.0, no threshold),
-**BUT's `twoGMMcalib_lin` adaptive AHC threshold** (~15 lines, no PLDA), and
-**pyannote's small-cluster reassignment** (min-cluster-size floor — also the
-stride speedup's published rescue). Heavy fallback if none beats AHC:
-two-covariance PLDA trained on VoxCeleb2 via WeSpeaker's Apache-2.0 trainer,
-then stock VBx with the AMI recipe as the sweep origin.
+**Phase B — clustering + fold SHIPPED 2026-08-07: ward linkage with the
+similarity-gated fold** (`OwnDiarizer` default `ward`;
+`pipeline.FOLD_PAIR_SIMILARITY = 0.8` in `fold_excess_clusters`). Loop DER
+16.5 → 13.2 %, attribution 91.3 → 94.8 %, enrolled speakers >50 % misnamed
+5 → 1 of 35, worst per-channel regression +0.5 pt; the full evidence chain
+(partitioner sweep, fold matrix, gate audit, k=2 duo channels, by-reference
+naming) and both adversarial reviews are in `eval/README.md`. The decisive
+finding: **the partitioner and the fold rule are one decision** — the
+duration-spare fold was co-tuned to complete-linkage clusters and both
+manufactured ward's only bad regression (Bmr025 +21.3, a split dominant
+talker the smallest-cluster rule cannot repair) and discarded 2.6 pts of
+ward's oracle-fold bound. Declined with numbers: VBx-as-assumed (no
+shippable model/PLDA — spec §3), NME-SC (criterion inversion, structural
+failure on ES2007d; best-fold 14.4 % vs 13.2), centroid (linkage inversions
+degenerate maxclust: 54.3 %), average (40.5 %), ungated max-pair (24.7 % on
+complete), ward@k (17.6 %, the split persists without the spare), the 0.6
+gate (4 cross-speaker admissions, caught by the fold-gate audit). Heavy
+fallback (two-covariance PLDA via WeSpeaker + stock VBx) stays recorded,
+re-open trigger = a Phase-B-style residual the gate audit can't explain.
+
+Remaining in this step:
 
 - **Stride 3 s** — measured 8.5× segmentation speedup at ≈0 DER cost for ≤5
   speakers (with the min-cluster-size floor uncapped-1 %, which recovers the
@@ -349,14 +357,16 @@ then stock VBx with the AMI recipe as the sweep origin.
   ~8 min to ~1–2 min per meeting hour — the budget that makes step 5
   affordable. Per-chunk embedding (mask at stat-pooling) needs ONNX surgery
   on the extractor and is deferred until stride alone proves insufficient.
-- The step-1 policies (overlap exclusion, margins) become first-class in our
-  own loop instead of post-processing sherpa's output.
-
-Gate (unchanged in spirit): a Phase-B candidate must beat Phase-A AHC by a
-visible margin on the harness. The sherpa diarization pipeline dependency is
-then dropped on non-mac platforms (the extractor stays); the old path is
-deleted, not kept as a fallback. macOS (stenodiar/speakrs, community-1
-CoreML) is untouched by this step.
+  The frozen-artifact harness (`eval/loop_freeze.py` + `loop_arm.py`)
+  measures a stride arm with one new freeze pass, no ASR.
+- **The production swap off-mac**: `OwnDiarizer` has no production caller
+  yet — `build_diarizer` still constructs sherpa. Swap, drop the sherpa
+  diarization pipeline dependency on non-mac (the extractor stays), delete
+  the old path; the step-1 policies (overlap exclusion, margins) ride along
+  as first-class loop behavior. macOS (stenodiar/speakrs, community-1
+  CoreML) untouched — but the gated fold already ships everywhere, measured
+  outcome-identical on complete/sherpa clusters (worst cross pair 0.595 vs
+  gate 0.8).
 
 ## Step 5 — the DiariZen gate (the only model that beats everything above)
 

@@ -475,27 +475,54 @@ def _build_meeting(
     wearer per group; identity always resolves through the reference RTTM."""
     mic_name = sorted(speakers)[0]
     others = {n: v for n, v in speakers.items() if n != mic_name}
+    # The duo channel is the k=2 room: the two most-talkative non-mic speakers
+    # mixed like the loop. k=2 folding (3→2) had zero harness evidence while
+    # being exactly where a similarity-gated fold could delete a participant
+    # (2026-08-07 review); talk time picks the pair deterministically without
+    # favoring easy voices. Duo channels are opt-in (``load_channels``) so the
+    # shipped mic/loop matrices and trials are untouched.
+    duo = dict(
+        sorted(
+            others.items(), key=lambda kv: (-sum(e - s for s, e in kv[1][1]), kv[0])
+        )[:2]
+    )
 
     channels = [
         Channel(f"{meeting}.mic", group, session, 1),
         Channel(f"{meeting}.loop", group, session, len(others)),
+        Channel(f"{meeting}.duo", group, session, len(duo)),
     ]
-    mic, loop = channels
+    mic, loop, duo_channel = channels
     AMI_REFS_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not (mic.wav_path.exists() and loop.wav_path.exists()):
+    # Only channels whose wav is missing are written: frozen artifacts and
+    # cached matrices are keyed by channel id, so an added channel *kind* must
+    # never re-mix existing wavs (byte-stability of a re-mix is determinism
+    # luck, not a guarantee — 2026-08-07 review).
+    missing = [c for c in channels if not c.wav_path.exists()]
+    if missing:
         names = sorted(speakers)
         pcms = [read_pcm16(speakers[n][0]) for n in names]
         masks = dict(zip(names, crosstalk_masks(pcms), strict=True))
         by_name = dict(zip(names, pcms, strict=True))
-        _write_wav(mic.wav_path, apply_mask(by_name[mic_name], masks[mic_name]))
-        _write_wav(loop.wav_path, mix_pcm(apply_mask(by_name[n], masks[n]) for n in others))
+        mixes = {
+            mic.id: lambda: apply_mask(by_name[mic_name], masks[mic_name]),
+            loop.id: lambda: mix_pcm(apply_mask(by_name[n], masks[n]) for n in others),
+            duo_channel.id: lambda: mix_pcm(apply_mask(by_name[n], masks[n]) for n in duo),
+        }
+        for c in missing:
+            _write_wav(c.wav_path, mixes[c.id]())
 
     write_rttm(mic.ref_path, [Turn(mic_name, s, e) for s, e in speakers[mic_name][1]], mic.id)
     write_rttm(
         loop.ref_path,
         [Turn(name, s, e) for name, (_, spans) in others.items() for s, e in spans],
         loop.id,
+    )
+    write_rttm(
+        duo_channel.ref_path,
+        [Turn(name, s, e) for name, (_, spans) in duo.items() for s, e in spans],
+        duo_channel.id,
     )
     return channels
 
@@ -553,9 +580,14 @@ def fetch() -> list[Channel]:
     return channels
 
 
-def load_channels() -> list[Channel]:
+def load_channels(include_duo: bool = False) -> list[Channel]:
+    """Manifest channels; ``.duo`` synthetic k=2 rooms only on request — every
+    shipped matrix, trial set and gallery is defined over mic+loop."""
     entries = json.loads(CHANNELS_MANIFEST.read_text())
-    return [Channel(**e) for e in entries]
+    channels = [Channel(**e) for e in entries]
+    if include_duo:
+        return channels
+    return [c for c in channels if not c.id.endswith(".duo")]
 
 
 # -- re-ID trials ----------------------------------------------------------

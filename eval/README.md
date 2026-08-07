@@ -627,6 +627,65 @@ DIR 91.5 % vs 88.7 % — is real but pays 5.8 DER points and the short-turn
 collapse for it. Declined; ERes2Net-base stays. The recorded leads (EN
 eres2net-large self-export, ReDimNet2) carry their triggers in the plan.
 
+#### The known-count partitioner and the fold are one decision (2026-08-07)
+
+Step 4 Phase B's verdict, shaped by two adversarial reviews whose blocking
+findings each changed the answer. Shipped: **ward linkage**
+(`OwnDiarizer` default) **plus the similarity-gated fold**
+(`pipeline.FOLD_PAIR_SIMILARITY = 0.8` in `fold_excess_clusters`). Headline,
+40 channels, known-count k+1: loop DER **16.5 → 13.2 %** (confusion
+5.6 → 2.2 %), word attribution **91.3 → 94.8 %**, by-reference naming
+own-name **80.0 → 84.0 %** time-weighted / **68.1 → 76.1 %** macro,
+enrolled speakers >50 % misnamed **5 → 1** of 35. Worst per-channel DER
+regression **+0.5 pt** (6 wins / 0 losses >0.5 pt, sign test p = 0.031;
+every leave-one-group-out stays ahead). The evidence chain, all on the
+frozen-artifact harness (`loop_freeze.py` + `loop_arm.py`, whose `--check`
+parity gate byte-reproduced the full production matrix before any candidate
+was trusted):
+
+- **Partitioner sweep** (`linkage_sweep.py`, `out/diar-linkage-sweep.md`):
+  ward 15.3 % raw-k+1 mean vs complete 16.9; **centroid declined with
+  mechanism** — 142–213 linkage inversions per channel degenerate scipy's
+  maxclust cut into one giant cluster + singletons (54.3 % mean); nmesc
+  declined earlier (criterion inversion on Bmr021, structural failure on
+  ES2007d — `cluster_ab.py`).
+- **The fold is not neutral** (`fold_sweep.py`, `out/diar-fold-sweep.md`):
+  the duration-spare fold (2026-08-06, co-tuned to complete clusters where
+  the spare is junk) discards ward's advantage — under ward the spare is
+  half a dominant talker (Bmr025: me011's 12.5 min split 6.6 + 5.6; the
+  smallest-cluster rule can't repair a split of the *largest*, +21.3 pts).
+  Oracle fold bounds: ward 12.4 % vs realized 15.0. Ungated max-pair stays
+  declined: 24.7 % on complete. **ward@k (no spare) falsified**: 17.6 %
+  mean, and the split persists at k (36.4 % Bmr025).
+- **The gate** (`fold_gate_audit.py`, `out/diar-fold-gate-audit.md`): at
+  every k+1→k fold step across 40 loop+duo channels × complete+ward,
+  cross-speaker max pairs reach **0.697**; the merges the gate exists to
+  admit (split dominant talkers) sit at **0.846–0.923**. The first candidate
+  gate (0.6, reused from `COLLAPSE_SIMILARITY`) admitted 4 cross-speaker
+  merges — review-caught: that constant's measurement (min-over-pairs,
+  estimate-mode) does not transfer. 0.8 sits in the empty band, larger
+  margin to the unrecoverable side; DER flat 0.45–0.80 (review's sweep).
+- **k=2 rooms** (synthetic `.duo` channels, `ami.py`, opt-in): gated fold ≡
+  duration fold on all 20 duos × both partitioners — the
+  participant-deletion scenario never fires; ward also wins duos
+  (11.4 vs 12.8 % mean).
+- **Naming per reference speaker** (`naming_byref.py`,
+  `out/diar-naming-byref.md`): per-cluster DIR/FAR is not comparable across
+  partitioners (trial sets are partitioner-dependent — review finding), so
+  denominators here are reference speech time, identical across arms.
+- **Production parity**: the shipped `fold_excess_clusters` byte-matches the
+  measured ward arm (`ami-loop-ward-sv08`) through the harness, and on
+  complete clusters changes no turn or word on any of 40 channels (emb.json
+  floats differ ≤1.9e-8 — ONNX extraction jitter in the emb caches, no merge
+  decision moved). macOS/sherpa path: measured unchanged, worst cross pair
+  0.595 vs gate 0.8.
+
+Supersession made explicit: `test_spare_is_chosen_by_duration_not_similarity`
+(2026-08-06's duration-only rule) is replaced by the below-gate/above-gate
+pair in `tests/test_pipeline.py`; `COLLAPSE_SIMILARITY`'s docstring now
+scopes its 0.95 cross-speaker figure to estimate-mode collapse, a different
+regime from the fold gate.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

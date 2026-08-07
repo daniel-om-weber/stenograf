@@ -238,7 +238,7 @@ def main() -> int:
     parser.add_argument(
         "--cluster",
         default="complete",
-        help="--own-loop only: clustering method (complete | average | nmesc)",
+        help="--own-loop only: clustering method (complete | average | ward | nmesc)",
     )
     args = parser.parse_args()
 
