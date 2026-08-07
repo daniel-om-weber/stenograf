@@ -43,11 +43,56 @@ def turn_diff(a, b) -> float:
     return float(np.mean([abs(x.start - y.start) + abs(x.end - y.end) for x, y in pairs]))
 
 
+class _SherpaReference:
+    """sherpa's ``OfflineSpeakerDiarization`` invoked directly from the
+    installed package — production deleted its wrapper (the owned loop is the
+    one path since 2026-08-07), but the parity gate must stay re-runnable
+    against the original reference implementation."""
+
+    def __init__(self) -> None:
+        self._pipeline = None
+        self._num_clusters = -1
+
+    def diarize(self, samples, num_speakers):
+        import sherpa_onnx
+
+        from stenograf import assets
+        from stenograf.audio import to_float32
+        from stenograf.diarization.base import SpeakerTurn
+        from stenograf.diarization.sherpa import _num_threads
+
+        if self._pipeline is None or self._num_clusters != num_speakers:
+            config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
+                segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+                    pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
+                        model=str(assets.fetch(assets.PYANNOTE_SEGMENTATION))
+                    ),
+                    num_threads=_num_threads(),
+                ),
+                embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                    model=str(assets.fetch(assets.SPEAKER_EMBEDDING)),
+                    num_threads=_num_threads(),
+                ),
+                clustering=sherpa_onnx.FastClusteringConfig(
+                    num_clusters=num_speakers, threshold=0.5
+                ),
+            )
+            if self._pipeline is None:
+                self._pipeline = sherpa_onnx.OfflineSpeakerDiarization(config)
+            else:
+                self._pipeline.set_config(config)  # models stay loaded
+            self._num_clusters = num_speakers
+        result = self._pipeline.process(to_float32(samples))
+        return [
+            SpeakerTurn(speaker=f"S{seg.speaker}", start=seg.start, end=seg.end)
+            for seg in result.sort_by_start_time()
+        ]
+
+
 def main() -> int:
     import ami
 
     from stenograf.diarization.loop import OwnDiarizer
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--segments", help="comma-separated channel ids (default: all loops)")
@@ -63,8 +108,8 @@ def main() -> int:
         print("no loop channels — run `eval/ami.py fetch` first", file=sys.stderr)
         return 1
 
-    sherpa = SherpaOnnxDiarizer()
-    own = OwnDiarizer()
+    sherpa = _SherpaReference()
+    own = OwnDiarizer(cluster_method="complete")  # parity is against the reference loop
     rows = [
         "| channel | sherpa DER | own DER | Δ | sherpa turns | own turns "
         "| boundary drift | sherpa s | own s |",

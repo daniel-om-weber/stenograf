@@ -94,6 +94,34 @@ class TestAssemblyRules:
         assert _to_turns(active, active.sum(axis=1)) == []
 
 
+class _FakeSession:
+    """Segmentation-session stub: fixed logits for one padded chunk."""
+
+    def __init__(self, logits: np.ndarray) -> None:
+        self._logits = logits
+
+    def run(self, outputs, feeds):
+        return (self._logits[None],)
+
+
+def test_single_chunk_ignores_count_and_returns_powerset_speakers():
+    # ≤10 s of audio is one padded chunk: the three local powerset speakers
+    # ARE the output — no clustering, no embeddings, and num_speakers is
+    # ignored (spec §1.8; sherpa's HandleOneChunkSpecialCase behaves
+    # identically, verified against the installed package 2026-08-07).
+    # Production reaches this through `profiles enroll` short clips.
+    from stenograf.diarization.loop import FRAMES, OwnDiarizer
+
+    logits = np.zeros((FRAMES, 7), dtype=np.float32)
+    logits[:80, 1] = 5.0  # local speaker 0 active ~1.35 s; class 0 elsewhere
+    d = OwnDiarizer()
+    d._session = _FakeSession(logits)
+    audio = np.zeros(6 * 16_000, dtype=np.float32)
+    outputs = [d.diarize(audio, k) for k in (None, 1, 2)]
+    assert outputs[0] == outputs[1] == outputs[2]
+    assert [t.speaker for t in outputs[0]] == ["S0"]
+
+
 def test_powerset_rows_are_pyannote_order():
     assert _POWERSET.shape == (7, 3)
     cardinality = _POWERSET.sum(axis=1)

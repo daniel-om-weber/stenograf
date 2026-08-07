@@ -100,13 +100,13 @@ def main() -> int:
     from common import read_pcm16
     from naming_gate import embed_spans, load_clusters, truncate_spans
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
     if not HYP_DIR.exists():
         print("cached matrix outputs missing — run `eval/ami.py run` first", file=sys.stderr)
         return 1
 
-    embed = SherpaOnnxDiarizer().embed
+    embed = OwnDiarizer().embed
     galleries = [ami.build_galleries(embed, session) for session in ENROLL_SESSIONS]
     # group → name → (embedding_a, embedding_b). Restricted to names enrollable
     # in BOTH sessions: guaranteed for AMI's fixed foursomes, data-dependent for

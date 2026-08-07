@@ -54,10 +54,10 @@ def _overlap(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> floa
 def main() -> int:
     import ami
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
     from stenograf.voiceprints import DEFAULT_THRESHOLD
 
-    embed = SherpaOnnxDiarizer().embed
+    embed = OwnDiarizer().embed
     galleries = ami.build_galleries(embed)
     channels = [
         c

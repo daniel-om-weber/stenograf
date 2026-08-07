@@ -2,10 +2,11 @@
 
 speakrs reimplements the pyannote community-1 pipeline (segmentation →
 embeddings → PLDA → VBx clustering) in Rust; VBx is what makes its *automatic*
-speaker-count estimation trustworthy, where sherpa's threshold clustering finds
-13–25 "speakers" in a 3-person meeting (measured 2026-07-10 on the eval
-segments). It exposes no way to force a known count, so this backend covers
-exactly the estimate case and delegates known counts to the sherpa backend —
+speaker-count estimation trustworthy, where reference threshold clustering
+finds 13–25 "speakers" in a 3-person meeting (measured 2026-07-10 on the eval
+segments; the owned loop's threshold mode measures within 0.5 pt of that,
+2026-08-07). It exposes no way to force a known count, so this backend covers
+exactly the estimate case and delegates known counts to the owned loop —
 whose accuracy with an explicit count was never the problem.
 
 Audio is piped to the helper as raw PCM (meeting audio never touches disk) and
@@ -77,7 +78,8 @@ def find_stenodiar() -> Path:
 
 
 class SpeakrsCliDiarizer(Diarizer):
-    """Estimate-mode diarization through stenodiar, known counts through sherpa.
+    """Estimate-mode diarization through stenodiar, known counts through the
+    owned loop.
 
     ``command`` overrides the helper argv prefix (tests point it at a fake);
     production locates the real binary via :func:`find_stenodiar`.
@@ -85,18 +87,18 @@ class SpeakrsCliDiarizer(Diarizer):
 
     def __init__(
         self,
-        sherpa: SherpaOnnxDiarizer,
+        loop: SherpaOnnxDiarizer,
         *,
         command: list[str] | None = None,
         mode: str = DEFAULT_MODE,
     ) -> None:
-        self._sherpa = sherpa
+        self._loop = loop
         self._command = command
         self._mode = mode
 
     def diarize(self, samples: np.ndarray, num_speakers: int | None = None) -> list[SpeakerTurn]:
         if num_speakers is not None:
-            return self._sherpa.diarize(samples, num_speakers)
+            return self._loop.diarize(samples, num_speakers)
         return self._run_helper(samples)
 
     def diarize_with_embeddings(
@@ -104,13 +106,13 @@ class SpeakrsCliDiarizer(Diarizer):
     ) -> DiarizationResult:
         turns = self.diarize(samples, num_speakers)
         return DiarizationResult(
-            turns=turns, embeddings=cluster_embeddings(turns, samples, self._sherpa.embed)
+            turns=turns, embeddings=cluster_embeddings(turns, samples, self._loop.embed)
         )
 
     def channel_embedding(
         self, samples: np.ndarray, turns: list[SpeakerTurn]
     ) -> np.ndarray | None:
-        return self._sherpa.channel_embedding(samples, turns)
+        return self._loop.channel_embedding(samples, turns)
 
     def _run_helper(self, samples: np.ndarray) -> list[SpeakerTurn]:
         command = self._command or [str(find_stenodiar())]

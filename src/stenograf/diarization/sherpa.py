@@ -1,11 +1,14 @@
-"""Speaker diarization via sherpa-onnx (pyannote segmentation-3.0 + ERes2Net
-embeddings, ONNX/CPU; see assets.SPEAKER_EMBEDDING for why not CAM++).
+"""The sherpa-onnx-backed embedding base for every diarization backend.
 
-This is the cross-platform baseline diarizer. The accuracy target is
-the pyannote community-1 pipeline; the macOS-native port of that (speakrs /
-FluidAudio — both libraries, so a thin wrapper binary is needed) replaces
-this on Mac in a later step, behind the same ``Diarizer`` interface.
-"""
+Holds the ``SpeakerEmbeddingExtractor`` (ERes2Net; see
+assets.SPEAKER_EMBEDDING for why not CAM++) and :func:`cluster_embeddings` —
+re-ID voiceprints must come from one embedding model regardless of which
+backend produced the turns. The diarization loop itself is
+:class:`~stenograf.diarization.loop.OwnDiarizer`, which subclasses this for
+that one embedding path; sherpa's ``OfflineSpeakerDiarization`` monolith is
+not called anywhere (one path — its reference semantics live on in
+``eval/diarization-loop-spec.md`` and the parity gate ``eval/loop_parity.py``
+constructs it directly from the installed package)."""
 
 from __future__ import annotations
 
@@ -37,6 +40,10 @@ def _num_threads() -> int:
 
 
 class SherpaOnnxDiarizer(Diarizer):
+    """Extractor, per-cluster embeddings and re-ID plumbing; ``diarize`` is
+    the subclass's (abstract here — construct
+    :class:`~stenograf.diarization.loop.OwnDiarizer`, not this)."""
+
     def __init__(
         self,
         segmentation_model: Path | None = None,
@@ -49,50 +56,7 @@ class SherpaOnnxDiarizer(Diarizer):
         self._embedding_model = embedding_model
         self._threshold = clustering_threshold
         self._progress = progress
-        self._pipeline = None
-        self._num_clusters = -1
         self._extractor = None  # lazy SpeakerEmbeddingExtractor for re-ID
-
-    def _build(self, num_clusters: int) -> None:
-        import sherpa_onnx
-
-        segmentation = self._segmentation_model or assets.fetch(
-            assets.PYANNOTE_SEGMENTATION, self._progress
-        )
-        embedding = self._embedding_model or assets.fetch(assets.SPEAKER_EMBEDDING, self._progress)
-        config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
-            segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
-                pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
-                    model=str(segmentation)
-                ),
-                num_threads=_num_threads(),
-            ),
-            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-                model=str(embedding), num_threads=_num_threads()
-            ),
-            clustering=sherpa_onnx.FastClusteringConfig(
-                num_clusters=num_clusters, threshold=self._threshold
-            ),
-        )
-        if self._pipeline is None:
-            self._pipeline = sherpa_onnx.OfflineSpeakerDiarization(config)
-        else:
-            # Reuse the loaded ONNX models; only clustering changes per run.
-            self._pipeline.set_config(config)
-        self._num_clusters = num_clusters
-
-    def diarize(self, samples: np.ndarray, num_speakers: int | None = None) -> list[SpeakerTurn]:
-        num_clusters = num_speakers if num_speakers is not None else -1
-        if self._pipeline is None or self._num_clusters != num_clusters:
-            self._build(num_clusters)
-        pipeline = self._pipeline
-        assert pipeline is not None  # _build() sets it or raises
-
-        result = pipeline.process(to_float32(samples))
-        return [
-            SpeakerTurn(speaker=f"S{seg.speaker}", start=seg.start, end=seg.end)
-            for seg in result.sort_by_start_time()
-        ]
 
     def diarize_with_embeddings(
         self, samples: np.ndarray, num_speakers: int | None = None

@@ -71,7 +71,7 @@ def main() -> int:
 
     import ami
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
     wanted = set(args.segments.split(",")) if args.segments else None
     channels = [
@@ -82,7 +82,7 @@ def main() -> int:
     if not channels:
         raise SystemExit("no multi-speaker corpus channels — run `eval/ami.py fetch` first")
 
-    diarizer = SherpaOnnxDiarizer()
+    diarizer = OwnDiarizer()
     galleries = ami.build_galleries(diarizer.embed)
     hyp_dir = OUT_DIR / "diar" / "ami"
 

@@ -172,7 +172,7 @@ def naming_trials(out_dir: Path, embed) -> dict[float | None, list[Trial]]:
 
 
 def main() -> int:
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tags", help="comma-separated candidate tags (default: all)")
@@ -194,7 +194,7 @@ def main() -> int:
     for tag, model in arms.items():
         out_dir = ensure_matrix(tag, model)
         der, attr, mic_attr = matrix_scores(out_dir)
-        embed = SherpaOnnxDiarizer(embedding_model=model).embed
+        embed = OwnDiarizer(embedding_model=model).embed
         trials = naming_trials(out_dir, embed)
         strict = {b: dir_at_far(trials[b], 0.0) for b in BUDGETS}
         eer = eer_point(trials[None])

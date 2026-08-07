@@ -686,6 +686,23 @@ pair in `tests/test_pipeline.py`; `COLLAPSE_SIMILARITY`'s docstring now
 scopes its 0.95 cross-speaker figure to estimate-mode collapse, a different
 regime from the fold gate.
 
+#### The swap: OwnDiarizer is production, everywhere (2026-08-07)
+
+`build_diarizer` constructs the owned loop on every platform (the numbers
+above were measured on macOS, so the win ships there too); stenodiar/speakrs
+keeps the estimate seat, sherpa-onnx stays for the embedding extractor, and
+sherpa's `OfflineSpeakerDiarization` is called nowhere — `loop_parity.py`
+constructs it directly from the installed package so the parity gate remains
+re-runnable against the true reference. The stenodiar-less estimate fallback
+is the loop's threshold mode (reference complete-linkage cut) — measured,
+not asserted (2026-08-07 review): it diverges from sherpa's estimate mode at
+turn level (5–12 % less emitted speech) yet lands within 0.5 pt DER on four
+AMI channels, both over-splitting a 3-speaker channel into 66–105 clusters,
+so the swap neither fixes nor worsens the degraded path stenodiar exists to
+replace. Real-backend
+structural coverage: `tests/test_diarization_loop_real.py` (gated on cached
+models + eval audio).
+
 #### Stride stays at 1 s: the speedup is paid in naming purity (2026-08-07)
 
 `OwnDiarizer(shift=…)` is the knob the owned loop unlocked; strides 2 s and

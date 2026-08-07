@@ -11,7 +11,7 @@ dominated by ``cluster_embeddings`` (the spans depend on the arm's turns, so
 they cannot be frozen) — minutes, not the matrix's ~40.
 
 ``--check ami-loop`` byte-compares the produced files against the baseline:
-the parity gate that the frozen path reproduces ``diarize.py --own-loop``
+the parity gate that the frozen path reproduces ``diarize.py --ami``
 before any candidate arm is trusted.
 
 Run::

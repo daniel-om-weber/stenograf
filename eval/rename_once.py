@@ -125,13 +125,13 @@ def main() -> int:
     import ami
     from naming_gate import embed_spans, load_clusters, truncate_spans
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
     if not HYP_DIR.exists():
         print("cached matrix outputs missing — run `eval/ami.py run` first", file=sys.stderr)
         return 1
 
-    embed = SherpaOnnxDiarizer().embed
+    embed = OwnDiarizer().embed
     headset = ami.build_galleries(embed, ENROLL_SESSION)
     enroll_channels = [c for c in ami.load_channels() if c.session == ENROLL_SESSION]
     clusters_a = cluster_galleries(enroll_channels)

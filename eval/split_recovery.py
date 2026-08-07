@@ -27,7 +27,7 @@ alongside each group's convention stranger). Word times are read back
 from the matrix's hypotheses (run ``eval/ami.py run`` first); estimate-mode
 turns and embeddings are cached under ``out/diar/ami-est/``.
 
-    uv run --group eval eval/split_recovery.py [--sherpa-only]
+    uv run --group eval eval/split_recovery.py [--no-helper]
 """
 
 from __future__ import annotations
@@ -152,19 +152,19 @@ def _est_result(channel, estimator, embed) -> tuple[list[Turn], dict[str, np.nda
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--sherpa-only",
+        "--no-helper",
         action="store_true",
-        help="estimate with sherpa even if the stenodiar helper is built",
+        help="estimate with the loop threshold cut even if stenodiar is built",
     )
     args = parser.parse_args()
 
     import ami
     from diarize import _build_diarizer
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
-    sherpa = SherpaOnnxDiarizer()
-    estimator = _build_diarizer(sherpa_only=args.sherpa_only)
+    sherpa = OwnDiarizer()
+    estimator = _build_diarizer(no_helper=args.no_helper)
     galleries = ami.build_galleries(sherpa.embed)
     hyp_dir = OUT_DIR / "diar" / "ami"
 

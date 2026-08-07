@@ -4,7 +4,7 @@
 piece production actually exercises (estimate mode belongs to stenodiar), and
 the harness's residual error is concentrated in cluster *confusion* (IS1009,
 TS3010a/c/d — impure clusters that also poison naming and enrollment). Each
-arm is a full 40-channel own-loop matrix (`diarize.py --own-loop --cluster
+arm is a full 40-channel own-loop matrix (`diarize.py --ami --cluster
 <m>`); this scores them: loop DER decomposed (the confusion component is the
 target), word attribution, mic attribution, and same-group naming trials
 under the shipped galleries (identical across arms — only the partitions
@@ -61,7 +61,7 @@ ward's losses) — a focus table that only shows a candidate's wins misleads
 def main() -> int:
     import ami
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
     from stenograf.voiceprints import DEFAULT_THRESHOLD
 
     channels = ami.load_channels()
@@ -75,7 +75,7 @@ def main() -> int:
         print(f"incomplete arms (first: {missing[0]}) — run the arm matrices", file=sys.stderr)
         return 1
 
-    embed = SherpaOnnxDiarizer().embed
+    embed = OwnDiarizer().embed
     summary = [
         "| arm | loop DER | miss | FA | confusion | loop attribution | mic attribution "
         f"| DIR@FAR0 full (thr) | DIR/FAR/FRR @{DEFAULT_THRESHOLD:g} |",

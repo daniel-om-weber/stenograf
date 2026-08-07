@@ -8,8 +8,8 @@ corpus channel:
 - ``k1``  — the same diarizer forced to one cluster.
 - ``est`` — the diarizer left to estimate the count, which is what a user who
   never states a count gets. On a machine with the stenodiar helper this is
-  speakrs' estimator (the shipped estimate path); ``--sherpa-only`` measures
-  sherpa's instead, the estimate path off macOS.
+  speakrs' estimator (the shipped estimate path); ``--no-helper`` measures
+  the loop threshold cut instead, the stenodiar-less estimate path.
 
 Word times are read back from the matrix's own hypotheses, so no arm re-runs
 ASR — only the diarization and the word→turn merge are recomputed, which is
@@ -57,16 +57,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--segments", help="comma-separated channel ids (default: every solo one)")
     parser.add_argument(
-        "--sherpa-only",
+        "--no-helper",
         action="store_true",
-        help="estimate with sherpa even if the stenodiar helper is built",
+        help="estimate with the loop threshold cut even if stenodiar is built",
     )
     args = parser.parse_args()
 
     import ami
     from diarize import _build_diarizer
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
     wanted = set(args.segments.split(",")) if args.segments else None
     channels = [
@@ -78,8 +78,8 @@ def main() -> int:
         raise SystemExit("no solo corpus channels — run `eval/ami.py fetch` first")
 
     hyp_dir = OUT_DIR / "diar" / "ami"
-    sherpa = SherpaOnnxDiarizer()
-    estimator = _build_diarizer(sherpa_only=args.sherpa_only)
+    sherpa = OwnDiarizer()
+    estimator = _build_diarizer(no_helper=args.no_helper)
     estimator_name = type(estimator).__name__
 
     rows: list[tuple[str, dict[str, tuple[DiarizationScore, AttributionScore, int]]]] = []

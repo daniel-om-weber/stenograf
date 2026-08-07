@@ -39,7 +39,7 @@ def main() -> int:
     probe_dir.mkdir(parents=True, exist_ok=True)
     annotations = ami.RAW_DIR / "annotations"
     meetings_map = ami.parse_meetings_xml(annotations / "corpusResources" / "meetings.xml")
-    estimator = _build_diarizer(sherpa_only=False)
+    estimator = _build_diarizer()
 
     rows = []
     probe_groups = {g: s for g, s in ami.AMI_GROUPS.items() if g in ("ES2003", "IS1009")}

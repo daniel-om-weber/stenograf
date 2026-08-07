@@ -44,29 +44,30 @@ from stenograf import assets
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.config import Language
 from stenograf.diarization.base import Diarizer, SpeakerTurn
-from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+from stenograf.diarization.loop import OwnDiarizer
 from stenograf.pipeline import finalize_channel
 from stenograf.vad import SileroVAD
 
 
-def _build_diarizer(*, sherpa_only: bool):
-    """The production stack (stenodiar for estimated counts when built) unless
-    ``--sherpa-only`` pins the baseline — mirrors ``cli._load_diarizer``."""
+def _build_diarizer(*, no_helper: bool = False):
+    """The production stack (stenodiar for estimated counts when built) —
+    mirrors ``build_diarizer``. ``no_helper`` pins the stenodiar-less install
+    (the owned loop's threshold estimate mode)."""
     from stenograf.diarization.speakrs import (
         DiarizerHelperNotFoundError,
         SpeakrsCliDiarizer,
         find_stenodiar,
     )
 
-    sherpa = SherpaOnnxDiarizer()
-    if sherpa_only:
-        return sherpa
+    own = OwnDiarizer()
+    if no_helper:
+        return own
     try:
         find_stenodiar()
     except DiarizerHelperNotFoundError:
-        print("stenodiar not built — falling back to sherpa estimate mode", file=sys.stderr)
-        return sherpa
-    return SpeakrsCliDiarizer(sherpa)
+        print("stenodiar not built — threshold estimate mode", file=sys.stderr)
+        return own
+    return SpeakrsCliDiarizer(own)
 
 
 def _words_json(entries) -> dict:
@@ -105,8 +106,7 @@ def run_ami(
     *,
     embedding: Path | None = None,
     out_name: str = "ami",
-    own_loop: bool = False,
-    cluster_method: str = "complete",
+    cluster_method: str = "ward",
 ) -> None:
     """Diarize + finalize every corpus channel; write hypotheses for both scorers.
 
@@ -133,12 +133,7 @@ def run_ami(
     if not channels:
         raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
 
-    if own_loop:
-        from stenograf.diarization.loop import OwnDiarizer
-
-        diarizer = OwnDiarizer(embedding_model=embedding, cluster_method=cluster_method)
-    else:
-        diarizer = SherpaOnnxDiarizer(embedding_model=embedding)
+    diarizer = OwnDiarizer(embedding_model=embedding, cluster_method=cluster_method)
     asr = ParakeetMLXBackend()
     asr_loaded = False
     vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
@@ -211,11 +206,6 @@ def main() -> int:
         help="write diarizer turns to refs/<id>.draft.rttm to hand-correct, not hypotheses",
     )
     parser.add_argument(
-        "--sherpa-only",
-        action="store_true",
-        help="skip the stenodiar helper even if built (measure the sherpa baseline)",
-    )
-    parser.add_argument(
         "--ami",
         action="store_true",
         help="run the AMI/ICSI corpus channels instead of the manifest segments",
@@ -231,14 +221,9 @@ def main() -> int:
         help="--ami only: output dir under out/diar/ (keeps candidate runs off the baseline)",
     )
     parser.add_argument(
-        "--own-loop",
-        action="store_true",
-        help="--ami only: diarize with stenograf's owned loop instead of sherpa's",
-    )
-    parser.add_argument(
         "--cluster",
-        default="complete",
-        help="--own-loop only: clustering method (complete | average | ward | nmesc)",
+        default="ward",
+        help="--ami only: clustering method (complete | average | ward | nmesc)",
     )
     args = parser.parse_args()
 
@@ -247,7 +232,6 @@ def main() -> int:
             set(args.segments.split(",")) if args.segments else None,
             embedding=args.embedding,
             out_name=args.out_name,
-            own_loop=args.own_loop,
             cluster_method=args.cluster,
         )
         return 0
@@ -260,7 +244,7 @@ def main() -> int:
         print("no extracted segments — run eval/extract.py first", file=sys.stderr)
         return 1
 
-    diarizer = _build_diarizer(sherpa_only=args.sherpa_only)
+    diarizer = _build_diarizer()
     asr = vad = None
     if not args.bootstrap:  # the transcript (word attribution) is only needed for hypotheses
         asr = ParakeetMLXBackend()

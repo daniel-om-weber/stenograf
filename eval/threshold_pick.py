@@ -74,7 +74,7 @@ def main() -> int:
     from naming_gate import Cluster, embed_spans, load_clusters, truncate_spans
     from rename_once import cluster_galleries
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
     trials_path = OUT_DIR / "reid" / "trials.json"
     if not trials_path.exists():
@@ -97,7 +97,7 @@ def main() -> int:
         if (found := enrolled.get(group)) is not None
     }
 
-    embed = SherpaOnnxDiarizer().embed
+    embed = OwnDiarizer().embed
     by_channel: dict[str, list[Cluster]] = {}
     for cluster in load_clusters(HYP_DIR, trial_channels):
         by_channel.setdefault(cluster.channel_id, []).append(cluster)

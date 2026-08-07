@@ -602,7 +602,7 @@ def build_galleries(embed, session: str = ENROLL_SESSION) -> dict[str, dict[str,
     of theirs is a stranger trial by construction — and the Bmr group adds
     *natural* strangers on top, participants who simply were not at the
     enrollment meeting. ``embed`` is the production embedding callable
-    (``SherpaOnnxDiarizer.embed``). ``session`` defaults to the trial
+    (``OwnDiarizer.embed``). ``session`` defaults to the trial
     convention's enrollment session; multi-meeting profile experiments enroll
     further sessions (``eval/store_v2.py``)."""
     from stenograf.diarization.base import SpeakerTurn
@@ -684,9 +684,9 @@ def build_trials() -> None:
     stranger by construction) and are reported separately."""
     from reid_score import Trial, save_trials
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
-    galleries = build_galleries(SherpaOnnxDiarizer().embed)
+    galleries = build_galleries(OwnDiarizer().embed)
 
     hyp_dir = OUT_DIR / "diar" / "ami"
     trials: list[Trial] = []

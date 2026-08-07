@@ -362,16 +362,23 @@ stat-pooling, attacks the contamination mechanism), and any stride change
 re-runs the threshold calibration as part of its gate. `OwnDiarizer(shift=…)`
 stays a parameter; the default is the reference 1 s.
 
-Remaining in this step:
-
-- **The production swap off-mac**: `OwnDiarizer` has no production caller
-  yet — `build_diarizer` still constructs sherpa. Swap, drop the sherpa
-  diarization pipeline dependency on non-mac (the extractor stays), delete
-  the old path; the step-1 policies (overlap exclusion, margins) ride along
-  as first-class loop behavior. macOS (stenodiar/speakrs, community-1
-  CoreML) untouched — but the gated fold already ships everywhere, measured
-  outcome-identical on complete/sherpa clusters (worst cross pair 0.595 vs
-  gate 0.8).
+**The production swap SHIPPED 2026-08-07 — step 4 is COMPLETE.**
+`build_diarizer` constructs `OwnDiarizer` (every platform — the harness that
+measured ward+gated-fold ran on this Mac, so scoping the win off-mac would
+have declined a measured improvement for no reason); stenodiar/speakrs keeps
+the estimate seat unchanged (`SpeakrsCliDiarizer` wraps the owned loop). The
+old path is DELETED, not kept: sherpa's `OfflineSpeakerDiarization` monolith
+is called nowhere in production — `sherpa.py` is now the embedding base
+(extractor + `cluster_embeddings` + re-ID plumbing) that `OwnDiarizer`
+subclasses, and sherpa-onnx stays a dependency for exactly that. The
+stenodiar-less estimate fallback is the loop's threshold mode (reference
+complete cut, documented in `_cluster`). The parity gate stays re-runnable:
+`eval/loop_parity.py` constructs the reference from the installed sherpa
+package directly. Real-backend coverage moved with the swap
+(`tests/test_diarization_loop_real.py`; the unit aggregation tests drive
+`cluster_embeddings` through the real `embed` with a fake extractor).
+Deferred per-chunk embedding (mask at stat-pooling) stays recorded above as
+the stride re-open's first move.
 
 ## Step 5 — the DiariZen gate (the only model that beats everything above)
 

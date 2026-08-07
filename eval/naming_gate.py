@@ -311,7 +311,7 @@ def section_c(channels, galleries, embed) -> list[str]:
 def main() -> int:
     import ami
 
-    from stenograf.diarization.sherpa import SherpaOnnxDiarizer
+    from stenograf.diarization.loop import OwnDiarizer
 
     trials_path = OUT_DIR / "reid" / "trials.json"
     if not trials_path.exists() or not HYP_DIR.exists():
@@ -319,7 +319,7 @@ def main() -> int:
         return 1
     channels = [c for c in ami.load_channels() if c.session != ami.ENROLL_SESSION]
 
-    embed = SherpaOnnxDiarizer().embed
+    embed = OwnDiarizer().embed
     galleries = ami.build_galleries(embed)
     clusters = load_clusters(HYP_DIR, channels)
 
