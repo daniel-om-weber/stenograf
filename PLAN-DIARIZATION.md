@@ -278,24 +278,37 @@ one-shot act.
    the residual FAR is not a calibration problem, it is a clustering purity
    problem.
 
-## Step 3 — embedding model upgrade
+## Step 3 — embedding model upgrade — DECLINED 2026-08-07, both candidates measured
 
-Candidates, in order: **ERes2NetV2** (Apache-2.0, 17.8 M, ONNX on
-ModelScope; fixes exactly the short-turn cliff our shipped ERes2Net-base has:
-1.48 % vs 3.28 % @ 2 s) and **WeSpeaker ResNet34-LM** (CC-BY-4.0, 6.6 M,
-ONNX shipped by sherpa; the known-good pairing with segmentation-3.0 —
-literally pyannote's own embedding). CAM++ stays rejected (measured in-repo
-2026-07: cluster identity flips between segmentation windows — `assets.py`).
-ReDimNet/ReDimNet2 is watch-only (best checkpoints CC-BY-NC-SA, official
-ONNX export broken; trigger: a CC-BY vox2 checkpoint with working export
-beating ERes2NetV2 on the harness).
+The premise half-died in research and the rest died on the harness
+(`eval/embedder_ab.py`, table in `eval/README.md`). **English/VoxCeleb
+ERes2NetV2 was never released** — 3D-Speaker #208: not open-sourced, no plan
+to — so the 1.48 % @ 2 s promise belongs to a model that does not exist; the
+only V2 is Chinese-200k-trained. Measured on the full matrix (each candidate
+diarizes AND names, both seats):
 
-Gate: harness DER (clustering quality) *and* DIR@FAR (naming) both
-non-regressing, short-turn naming improved. Profiles are model-bound by
-design (`voiceprints.py`), so the swap starts a fresh profile set — ship
-together with step 2's rename-once loop so re-enrollment is one correction
-per colleague, not a manual chore. Loser is declined with numbers; one model
-ships (one path).
+| arm | loop DER | loop attribution | DIR@FAR0 full | 3 s | 2 s |
+|---|---|---|---|---|---|
+| ERes2Net-base (shipped) | **18.0 %** | **89.7 %** | 88.7 % | **79.2 %** | **49.1 %** |
+| ERes2NetV2 zh-200k | 23.8 % | 83.1 % | 91.5 % | 10.6 % | 12.8 % |
+| ResNet34-LM (pyannote's) | 24.8 % | 82.1 % | 70.0 % | 0.0 % | 0.0 % |
+
+Both candidates regress clustering ~6–7 pts of word attribution, and the
+short-turn axis — the step's whole motivation — *collapses* instead of
+improving: their cosine distributions compress upward on our domain (FAR0
+thresholds 0.820/0.878 vs 0.605), pushing short-cluster knowns under the
+stranger ceiling. ResNet34-LM's "known-good pairing" is a pyannote-pipeline
+fact that does not survive sherpa's clustering. The shipped
+ERes2Net-base stays; the full-duration naming ceiling (92.5 %) is clustering
+confusion, not embedding quality — steps 4–5 territory.
+
+Watch triggers (unchanged in the declined list): ReDimNet2 with a CC-BY
+vox2 checkpoint and working ONNX export; additionally recorded from the
+2026-08-07 hunt: `iic/speech_eres2net_large_sv_en_voxceleb_16k` (EN, EER
+0.57 %, Apache-2.0 claim, PyTorch-only, absent from every supported export
+path) — worth an export attempt only if a future step is actually limited by
+full-duration embedding accuracy, which today none is. CAM++ stays rejected
+(`assets.py`).
 
 ## Step 4 — own the diarization loop (VBx + stride + per-chunk embedding)
 

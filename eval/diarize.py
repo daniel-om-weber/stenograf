@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from common import OUT_DIR, REFS_DIR, load_manifest, read_pcm16
 from rttm import Turn, write_rttm
@@ -99,7 +100,12 @@ class _FrozenDiarizer(Diarizer):
         return self._turns
 
 
-def run_ami(channel_ids: set[str] | None = None) -> None:
+def run_ami(
+    channel_ids: set[str] | None = None,
+    *,
+    embedding: Path | None = None,
+    out_name: str = "ami",
+) -> None:
     """Diarize + finalize every corpus channel; write hypotheses for both scorers.
 
     Per channel into ``out/diar/ami/``: ``<id>.rttm`` (DER), ``<id>.words.json``
@@ -125,11 +131,11 @@ def run_ami(channel_ids: set[str] | None = None) -> None:
     if not channels:
         raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
 
-    diarizer = SherpaOnnxDiarizer()
+    diarizer = SherpaOnnxDiarizer(embedding_model=embedding)
     asr = ParakeetMLXBackend()
     asr_loaded = False
     vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
-    out_dir = OUT_DIR / "diar" / "ami"
+    out_dir = OUT_DIR / "diar" / out_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for channel in channels:
@@ -207,10 +213,24 @@ def main() -> int:
         action="store_true",
         help="run the AMI/ICSI corpus channels instead of the manifest segments",
     )
+    parser.add_argument(
+        "--embedding",
+        type=Path,
+        help="--ami only: speaker-embedding ONNX override (candidate models)",
+    )
+    parser.add_argument(
+        "--out-name",
+        default="ami",
+        help="--ami only: output dir under out/diar/ (keeps candidate runs off the baseline)",
+    )
     args = parser.parse_args()
 
     if args.ami:
-        run_ami(set(args.segments.split(",")) if args.segments else None)
+        run_ami(
+            set(args.segments.split(",")) if args.segments else None,
+            embedding=args.embedding,
+            out_name=args.out_name,
+        )
         return 0
 
     wanted = set(args.segments.split(",")) if args.segments else None

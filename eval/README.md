@@ -585,6 +585,32 @@ docstring). Step 1.5's re-open trigger (an operating point below ~0.4) did
 not fire; AS-Norm/QMF stay un-adopted — the residual FAR is a purity problem,
 not a calibration problem.
 
+#### Embedding-model A/B: both candidates lose both seats (2026-08-07)
+
+`embedder_ab.py` closes `PLAN-DIARIZATION.md` step 3. The embedding model
+sits in two seats — clustering inside sherpa's diarization and re-ID scoring
+— so each candidate re-ran the full 40-channel matrix (own out dir, child
+process per loop channel) and was scored in both: DER/word attribution
+against the refs, then same-group naming trials re-enrolled with the
+candidate, full + 3 s/2 s truncation, compared at FAR-anchored operating
+points (raw thresholds are model-specific). Candidates were the only two
+sherpa-compatible options standing after the model hunt: English ERes2NetV2
+was never released (3D-Speaker #208), leaving the Chinese-200k V2
+(`v2zh`) — a language-domain change measured, not assumed — and WeSpeaker
+ResNet34-LM (`resnet34lm`, dim 256, pyannote-3's own embedding).
+
+The table in `PLAN-DIARIZATION.md` step 3 has the verdict: both regress loop
+DER by ~6–7 pts (18.0 % → 23.8/24.8 %) and word attribution by ~7 pts
+(89.7 % → 83.1/82.1 %), and the short-turn axis the step existed to fix
+collapses — 3 s DIR@FAR0 79.2 % → 10.6 % (v2zh) / 0.0 % (resnet34lm), 2 s
+49.1 % → 12.8 % / 0.0 %. Mechanism, visible in the operating thresholds:
+both candidates' cosine distributions compress upward on our meeting domain
+(FAR0 at 0.820/0.878 vs base 0.605), so stranger scores ride high and
+short-cluster known scores fall below them. v2zh's one win — full-duration
+DIR 91.5 % vs 88.7 % — is real but pays 5.8 DER points and the short-turn
+collapse for it. Declined; ERes2Net-base stays. The recorded leads (EN
+eres2net-large self-export, ReDimNet2) carry their triggers in the plan.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
