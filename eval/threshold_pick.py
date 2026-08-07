@@ -39,7 +39,7 @@ from common import OUT_DIR, read_pcm16
 from reid_score import Trial, dir_at_far, load_trials, operating_point
 
 HYP_DIR = OUT_DIR / "diar" / "ami"
-CANDIDATES = (0.50, 0.55, 0.60, 0.62, 0.65, 0.70)
+CANDIDATES = (0.50, 0.53, 0.55, 0.56, 0.57, 0.58, 0.60, 0.62, 0.65, 0.70)
 BUDGETS = (None, 3.0, 2.0)
 
 

@@ -723,6 +723,41 @@ or step 5 needing the budget, and the first move then is per-chunk embedding
 paying it), with any stride change re-running the threshold calibration as
 part of its gate.
 
+#### Post-swap recalibration: 0.62 → 0.56, auto-updates stay declined (2026-08-07)
+
+The first full matrix on the shipped OwnDiarizer stack (43.7 min, gate ≤1 h
+holds) reproduces the ward arm's numbers through production — loop DER mean
+13.2 %, attribution 94.8 % — and moves the naming headline to **DIR 94.1 % @
+FAR 0 %** (FAR0 threshold 0.592; known ceiling 3/51 wrong-profile, was 4/53).
+Trial composition shifted with the new clusters (51 known / 19 unknown), so
+pre-swap naming numbers are not comparable to successors. Two owed re-runs on
+this matrix:
+
+- **`threshold_pick.py` (supersedes the 0.62 section above).** Ward removed
+  the very strangers 0.62's margin was bought against: the impure-enrollment
+  leak (0.860/0.681/0.622) is gone, and every measured stranger now tops out
+  at 0.529 same-group / 0.531 cross-group — the survivors are TS3010's
+  MTD040ME pulling toward MTD039UID at ~0.52. Both arms hold FAR 0 % / FRR
+  0 % at full duration on the whole 0.53–0.56 plateau; **0.56** (the
+  cluster-arm FAR0-strict point) keeps a 0.029 margin over the highest
+  stranger anywhere — the same class as the 0.023 that justified 0.62 — and
+  recovers what 0.62 was paying on the new curves: +13.7 pts DIR at 3 s of
+  clean speech, +5.9 at 2 s, and one known trial per arm at full duration,
+  for zero measured FAR. Shipped as `DEFAULT_THRESHOLD = 0.56`
+  (`voiceprints.py`). Step 1.5's re-open trigger (<0.4) still does not fire.
+- **`auto_update.py` (step 2.3's re-open trigger fired: the IS1009 confusion
+  behind all three wrong updates is fixed).** The decline survives with the
+  poison's shape changed: FIO084 now pulls 0.655/0.688 — below every margin
+  gate — but ward-era clusters supply new ungateable wrong updates: Bmr024's
+  13 s S5 enrolls into fe008's profile at **0.838 with a 0.603
+  top-minus-second gap** (survives margin .20; higher margin than most
+  correct updates), Bmr025's S2 into me001 at 0.732 (survives margin .10).
+  On the benefit side the oracle still ties no-update at the shipped 0.56 at
+  every duration (≤1 trial of separation anywhere; the FAR0-at-lower-
+  threshold gains at 3 s exist but sit below the operating point). Profile
+  growth stays user-confirmed; the next diarization change re-runs this
+  harness as part of its gate.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

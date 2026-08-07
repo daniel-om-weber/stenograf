@@ -259,6 +259,13 @@ one-shot act.
    triggers: steps 4–5 fix the clustering confusion behind all three wrong
    updates (re-run the harness then), or a trial set that can resolve
    sub-20-pt (single-trial) benefits.
+   **Trigger fired and re-run 2026-08-07 post-ward: DECLINE REAFFIRMED.**
+   The IS1009 poison dropped below every gate (0.655/0.688), but ward-era
+   clusters supply new ungateable wrong updates — Bmr024's 13 s cluster into
+   the wrong profile at 0.838 with a 0.603 top-minus-second gap, past the
+   margin-.20 gate — and the oracle still ties no-update at the shipped
+   threshold at every duration (`eval/README.md`). The next diarization
+   change re-runs this harness as part of its gate.
 4. **Threshold — SHIPPED 2026-08-07, 0.5 → 0.62, measured on both enrollment
    arms** (`eval/threshold_pick.py`; curves in `eval/README.md`). The old 0.5
    accepted 11.8 % of hard strangers (headset arm) and 25 % (cluster arm);
@@ -277,6 +284,13 @@ one-shot act.
    did not fire. AS-Norm/QMF stay un-adopted: the curve is satisfying —
    the residual FAR is not a calibration problem, it is a clustering purity
    problem.
+   **Re-run 2026-08-07 after step 4, as owed: 0.62 → 0.56.** Ward removed
+   the strangers 0.62's margin was bought against (max stranger now 0.531
+   anywhere, the IS1009 leak gone); 0.56 is the cluster-arm FAR0-strict
+   point, holds FAR 0 / FRR 0 at full duration in both arms with a 0.029
+   margin, and recovers +13.7 pts DIR at 3 s / +5.9 at 2 s over 0.62
+   (`eval/README.md`). Any future stride or model change re-runs this
+   calibration as part of its gate.
 
 ## Step 3 — embedding model upgrade — DECLINED 2026-08-07, both candidates measured
 

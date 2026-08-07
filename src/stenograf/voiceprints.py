@@ -39,18 +39,19 @@ from stenograf.audio import l2_normalize
 from stenograf.output import atomic_write_text
 from stenograf.paths import data_dir
 
-DEFAULT_THRESHOLD = 0.62
+DEFAULT_THRESHOLD = 0.56
 """Cosine similarity at or above which a cluster is deemed the same speaker as
 a stored profile. Picked from measured curves (2026-08-07, five-group corpus
-harness, `eval/threshold_pick.py`): the smallest threshold rejecting every
-non-pathological stranger in BOTH enrollment arms at every measured duration —
-clean-sample strangers top out at 0.597 (the old 0.5 accepted 11.8 % of them),
-cluster-enrollment strangers at 0.505, and full-duration DIR is flat here
-(88.7 % headset / 90 % cluster arm, identical to 0.5). Known solo/1:1 matches
-score 0.870+, far above. What sits above 0.62 is only the impure-enrollment
-leak (a fused cluster's profile attracting its absorbed speaker at up to
-0.860) — a diarization-confusion problem no threshold fixes. Override per run
-with ``--reid-threshold`` (``steno start``/``transcribe``)."""
+harness, `eval/threshold_pick.py`, re-run after the ward clustering swap): the
+smallest threshold rejecting every measured stranger in BOTH enrollment arms
+at every measured duration, with margin — strangers top out at 0.531
+(cross-group diagnostic; 0.529 same-group), so 0.56 keeps a 0.029 margin and
+holds FAR 0 % / FRR 0 % at full duration in both arms. The previous 0.62 was
+calibrated against complete-linkage clusters, whose impure-enrollment leak
+(strangers to 0.860) ward removed; on today's curves it pays 13.7 pts DIR at
+3 s of clean speech and 5.9 at 2 s for no FAR gain. Known solo/1:1 matches
+score 0.870+, far above. Override per run with ``--reid-threshold``
+(``steno start``/``transcribe``)."""
 
 _STORE_VERSION = 2
 

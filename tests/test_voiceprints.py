@@ -260,8 +260,9 @@ class TestSpeakerReID:
 
 
 def test_default_threshold_matches_plan():
-    # 0.62, measured 2026-08-07 (PLAN-DIARIZATION step 2.4, eval/threshold_pick.py).
-    assert DEFAULT_THRESHOLD == 0.62
+    # 0.56, measured 2026-08-07 on the ward-clustering matrix (PLAN-DIARIZATION
+    # step 2.4 re-run, eval/threshold_pick.py).
+    assert DEFAULT_THRESHOLD == 0.56
 
 
 class TestAssign:
