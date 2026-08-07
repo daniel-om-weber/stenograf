@@ -32,10 +32,11 @@ import time
 import numpy as np
 from common import OUT_DIR, read_pcm16
 from diarize import _words_json
-from loop_freeze import FREEZE_DIR, load_emb_cache, save_emb_cache
+from loop_freeze import freeze_dir, load_emb_cache, save_emb_cache
 from rttm import Turn, parse_rttm, write_rttm
 
 from stenograf.asr.base import Word
+from stenograf.audio import SAMPLE_RATE
 from stenograf.diarization.loop import OwnDiarizer, _cluster
 from stenograf.diarization.sherpa import cluster_embeddings
 from stenograf.pipeline import fold_excess_clusters, merge_words_turns
@@ -63,6 +64,9 @@ def main() -> int:
     )
     parser.add_argument("--segments", help="comma-separated channel ids (default: all)")
     parser.add_argument("--check", help="byte-compare outputs against this arm dir (parity gate)")
+    parser.add_argument(
+        "--shift-s", type=float, default=1.0, help="window stride in seconds (reference: 1.0)"
+    )
     args = parser.parse_args()
 
     import ami
@@ -76,7 +80,11 @@ def main() -> int:
     if not channels:
         raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
 
-    diarizer = OwnDiarizer(cluster_method=args.cluster)
+    root = freeze_dir(args.shift_s)
+    diarizer = OwnDiarizer(
+        cluster_method=args.cluster,
+        shift=int(round(args.shift_s * SAMPLE_RATE)),
+    )
     failures = 0
     for channel in channels:
         names = [f"{channel.id}.rttm", f"{channel.id}.emb.json", f"{channel.id}.words.json"]
@@ -86,7 +94,7 @@ def main() -> int:
             continue
 
         started = time.monotonic()
-        freeze = FREEZE_DIR / f"{channel.id}.npz"
+        freeze = root / f"{channel.id}.npz"
         if not freeze.exists():
             print(f"[{channel.id}] no freeze — run eval/loop_freeze.py first", file=sys.stderr)
             return 1
@@ -95,10 +103,10 @@ def main() -> int:
         clusters = _cluster(data["vectors"], 0.5, channel.num_speakers + 1, args.cluster)
         turns = diarizer._assemble(int(data["n"]), list(data["labels"]), pairs, clusters)
 
-        embeddings = load_emb_cache(args.cluster, channel.id)
+        embeddings = load_emb_cache(args.cluster, channel.id, root)
         if embeddings is None:
             embeddings = cluster_embeddings(turns, read_pcm16(channel.wav_path), diarizer.embed)
-            save_emb_cache(args.cluster, channel.id, embeddings)
+            save_emb_cache(args.cluster, channel.id, embeddings, root)
         if args.fold == "production":
             folded = fold_excess_clusters(turns, embeddings, channel.num_speakers)
             folded_turns, folded_emb = list(folded[0]), folded[1]

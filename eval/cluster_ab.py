@@ -35,6 +35,8 @@ ARMS = {
     "ward": "ami-loop-ward",
     "ward-sv": "ami-loop-ward-sv",
     "ward-sv08": "ami-loop-ward-sv08",
+    "ward-s3": "ami-loop-ward-s3",
+    "ward-s2": "ami-loop-ward-s2",
 }
 
 FOCUS = (

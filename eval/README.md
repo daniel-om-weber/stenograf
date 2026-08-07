@@ -686,6 +686,26 @@ pair in `tests/test_pipeline.py`; `COLLAPSE_SIMILARITY`'s docstring now
 scopes its 0.95 cross-speaker figure to estimate-mode collapse, a different
 regime from the fold gate.
 
+#### Stride stays at 1 s: the speedup is paid in naming purity (2026-08-07)
+
+`OwnDiarizer(shift=…)` is the knob the owned loop unlocked; strides 2 s and
+3 s ran the full ward+gated-fold arm each (`loop_freeze.py --shift-s`,
+per-stride freeze dirs). Measured, strides 1/2/3: loop DER
+**13.2 / 13.5 / 14.4 %**, attribution **94.8 / 94.4 / 93.5 %**, diarization
+stage **1× / 2.1× / 3.1×** faster. The kill is naming: the FAR0 operating
+threshold jumps 0.592 → ~0.78 at both larger strides (coarser turn
+boundaries put more cross-speaker audio in every cluster embedding, so
+stranger scores ride up), which silently invalidates the step-2.4
+calibration — at the shipped 0.62, trial FAR goes 0 → 5.0 → 13.6 %, and
+by-reference stranger misnaming 12.8 → 12.9 → 18.5 % with catastrophic
+speakers 1 → 2 → 4. The research record's "8.5× at ≈0 DER cost" did not
+survive contact with our stack (cost scales ∝ chunks, and the quality cost
+is real). Declined both; re-open trigger = finalize latency becoming binding
+or step 5 needing the budget, and the first move then is per-chunk embedding
+(mask at stat-pooling — attacks the contamination mechanism instead of
+paying it), with any stride change re-running the threshold calibration as
+part of its gate.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

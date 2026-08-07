@@ -85,6 +85,7 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         *,
         clustering_threshold: float = 0.5,
         cluster_method: str = "ward",
+        shift: int = SHIFT,
         progress: assets.ProgressHook | None = None,
     ) -> None:
         super().__init__(
@@ -94,6 +95,7 @@ class OwnDiarizer(SherpaOnnxDiarizer):
             progress=progress,
         )
         self._cluster_method = cluster_method
+        self._shift = shift  # window stride, samples — THE knob owning the loop unlocks
         self._session = None  # lazy onnxruntime session for segmentation
 
     # ---- segmentation ------------------------------------------------------
@@ -129,11 +131,12 @@ class OwnDiarizer(SherpaOnnxDiarizer):
             padded = np.zeros(WINDOW, dtype=np.float32)
             padded[:n] = audio
             return [run(padded)]
-        num_chunks = (n - WINDOW) // SHIFT + 1
-        labels = [run(audio[i * SHIFT : i * SHIFT + WINDOW]) for i in range(num_chunks)]
-        if (n - WINDOW) % SHIFT > 0:
+        shift = self._shift
+        num_chunks = (n - WINDOW) // shift + 1
+        labels = [run(audio[i * shift : i * shift + WINDOW]) for i in range(num_chunks)]
+        if (n - WINDOW) % shift > 0:
             padded = np.zeros(WINDOW, dtype=np.float32)
-            tail = audio[num_chunks * SHIFT :]
+            tail = audio[num_chunks * shift :]
             padded[: len(tail)] = tail
             labels.append(run(padded))
         return labels
@@ -169,8 +172,8 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         """Clustered (chunk, speaker) pairs → output turns (votes, top-k,
         times). Split from :meth:`diarize` so eval can freeze a channel's
         segmentation + embeddings once and swap partitioners cheaply."""
-        num_frames = (WINDOW + (len(labels) - 1) * SHIFT) // RF_SHIFT + 1
-        starts = [int(i * SHIFT / RF_SHIFT + 0.5) for i in range(len(labels))]
+        num_frames = (WINDOW + (len(labels) - 1) * self._shift) // RF_SHIFT + 1
+        starts = [int(i * self._shift / RF_SHIFT + 0.5) for i in range(len(labels))]
 
         # How many speakers each global frame has: per-chunk counts averaged
         # over covering chunks, round-half-up (spec §1.3). Overlap-inclusive.
@@ -194,7 +197,7 @@ class OwnDiarizer(SherpaOnnxDiarizer):
             for speaker, cluster in assigned:
                 votes[start : start + FRAMES, cluster] += chunk[:, speaker]
 
-        if (n - WINDOW) % SHIFT > 0:  # padded tail chunk: truncate its padding
+        if (n - WINDOW) % self._shift > 0:  # padded tail chunk: truncate its padding
             votes = votes[: n // RF_SHIFT + 1]
             speakers_per_frame = speakers_per_frame[: n // RF_SHIFT + 1]
 
@@ -221,7 +224,7 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         for chunk_index, chunk in enumerate(labels):
             clean = chunk.copy()
             clean[np.sum(chunk, axis=1) >= 2] = False
-            offset = chunk_index * SHIFT
+            offset = chunk_index * self._shift
             for speaker in range(clean.shape[1]):
                 column = clean[:, speaker]
                 if int(column.sum()) < MIN_EMBED_FRAMES:

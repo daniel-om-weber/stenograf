@@ -21,24 +21,34 @@ Run::
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import time
+from pathlib import Path
 
 import numpy as np
 from common import OUT_DIR, read_pcm16
 
-from stenograf.audio import to_float32
+from stenograf.audio import SAMPLE_RATE, to_float32
 from stenograf.diarization.loop import OwnDiarizer
 
 FREEZE_DIR = OUT_DIR / "diar" / "freeze"
 
 
-def freeze_sha(channel_id: str) -> str:
-    return hashlib.sha256((FREEZE_DIR / f"{channel_id}.npz").read_bytes()).hexdigest()[:16]
+def freeze_dir(shift_s: float) -> Path:
+    """Stride-1 s is the reference freeze; other strides get their own dir —
+    the artifacts are incompatible across strides by construction."""
+    return FREEZE_DIR if shift_s == 1.0 else OUT_DIR / "diar" / f"freeze-s{shift_s:g}"
 
 
-def load_emb_cache(partitioner: str, channel_id: str) -> dict[str, np.ndarray] | None:
+def freeze_sha(channel_id: str, root: Path = FREEZE_DIR) -> str:
+    return hashlib.sha256((root / f"{channel_id}.npz").read_bytes()).hexdigest()[:16]
+
+
+def load_emb_cache(
+    partitioner: str, channel_id: str, root: Path = FREEZE_DIR
+) -> dict[str, np.ndarray] | None:
     """Cached raw-k+1 cluster embeddings, or None if absent or stale.
 
     Stamped with the freeze's sha: a cache written against different
@@ -46,22 +56,27 @@ def load_emb_cache(partitioner: str, channel_id: str) -> dict[str, np.ndarray] |
     (2026-08-07 review). Values carry ~1e-8 ONNX extraction jitter relative to
     an in-process compute — semantically nil, but the reason cache-path
     emb.json bytes differ from inline-path ones."""
-    path = FREEZE_DIR / f"emb-{partitioner}" / f"{channel_id}.json"
+    path = root / f"emb-{partitioner}" / f"{channel_id}.json"
     if not path.exists():
         return None
     data = json.loads(path.read_text())
-    if data.get("freeze") != freeze_sha(channel_id):
+    if data.get("freeze") != freeze_sha(channel_id, root):
         return None
     return {k: np.array(v, dtype=np.float32) for k, v in data["embeddings"].items()}
 
 
-def save_emb_cache(partitioner: str, channel_id: str, embeddings: dict[str, np.ndarray]) -> None:
-    path = FREEZE_DIR / f"emb-{partitioner}" / f"{channel_id}.json"
+def save_emb_cache(
+    partitioner: str,
+    channel_id: str,
+    embeddings: dict[str, np.ndarray],
+    root: Path = FREEZE_DIR,
+) -> None:
+    path = root / f"emb-{partitioner}" / f"{channel_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
-                "freeze": freeze_sha(channel_id),
+                "freeze": freeze_sha(channel_id, root),
                 "embeddings": {k: [float(x) for x in v] for k, v in embeddings.items()},
             }
         )
@@ -71,14 +86,21 @@ def save_emb_cache(partitioner: str, channel_id: str, embeddings: dict[str, np.n
 def main() -> int:
     import ami
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--shift-s", type=float, default=1.0, help="window stride in seconds (reference: 1.0)"
+    )
+    args = parser.parse_args()
+
     channels = [c for c in ami.load_channels(include_duo=True) if c.num_speakers > 1]
     if not channels:
         raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
-    FREEZE_DIR.mkdir(parents=True, exist_ok=True)
+    root = freeze_dir(args.shift_s)
+    root.mkdir(parents=True, exist_ok=True)
 
-    diarizer = OwnDiarizer()
+    diarizer = OwnDiarizer(shift=int(round(args.shift_s * SAMPLE_RATE)))
     for channel in channels:
-        out = FREEZE_DIR / f"{channel.id}.npz"
+        out = root / f"{channel.id}.npz"
         if out.exists():
             print(f"[{channel.id}] exists, kept")
             continue

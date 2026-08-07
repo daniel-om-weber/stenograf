@@ -349,16 +349,21 @@ gate (4 cross-speaker admissions, caught by the fold-gate audit). Heavy
 fallback (two-covariance PLDA via WeSpeaker + stock VBx) stays recorded,
 re-open trigger = a Phase-B-style residual the gate audit can't explain.
 
+**Stride DECLINED 2026-08-07 at 2 s and 3 s, measured** (the research
+record's "8.5× at ≈0 DER cost" did not survive our harness): DER
+13.2 / 13.5 / 14.4 % and attribution 94.8 / 94.4 / 93.5 % at strides
+1/2/3 for 2.1× / 3.1× speedups — and the FAR0 naming threshold jumps
+0.592 → ~0.78 at both larger strides (coarser boundaries contaminate every
+cluster embedding), silently invalidating step 2.4's calibration (trial FAR
+at 0.62: 0 → 5.0 → 13.6 %; by-ref stranger misnaming 12.8 → 12.9 → 18.5 %).
+Evidence in `eval/README.md`. Re-open trigger: finalize latency becomes
+binding or step 5 needs the budget — then per-chunk embedding first (mask at
+stat-pooling, attacks the contamination mechanism), and any stride change
+re-runs the threshold calibration as part of its gate. `OwnDiarizer(shift=…)`
+stays a parameter; the default is the reference 1 s.
+
 Remaining in this step:
 
-- **Stride 3 s** — measured 8.5× segmentation speedup at ≈0 DER cost for ≤5
-  speakers (with the min-cluster-size floor uncapped-1 %, which recovers the
-  stride's under-counting failure mode). Finalize diarization drops from
-  ~8 min to ~1–2 min per meeting hour — the budget that makes step 5
-  affordable. Per-chunk embedding (mask at stat-pooling) needs ONNX surgery
-  on the extractor and is deferred until stride alone proves insufficient.
-  The frozen-artifact harness (`eval/loop_freeze.py` + `loop_arm.py`)
-  measures a stride arm with one new freeze pass, no ASR.
 - **The production swap off-mac**: `OwnDiarizer` has no production caller
   yet — `build_diarizer` still constructs sherpa. Swap, drop the sherpa
   diarization pipeline dependency on non-mac (the extractor stays), delete
