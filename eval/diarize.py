@@ -106,6 +106,7 @@ def run_ami(
     embedding: Path | None = None,
     out_name: str = "ami",
     own_loop: bool = False,
+    cluster_method: str = "complete",
 ) -> None:
     """Diarize + finalize every corpus channel; write hypotheses for both scorers.
 
@@ -135,7 +136,7 @@ def run_ami(
     if own_loop:
         from stenograf.diarization.loop import OwnDiarizer
 
-        diarizer = OwnDiarizer(embedding_model=embedding)
+        diarizer = OwnDiarizer(embedding_model=embedding, cluster_method=cluster_method)
     else:
         diarizer = SherpaOnnxDiarizer(embedding_model=embedding)
     asr = ParakeetMLXBackend()
@@ -234,6 +235,11 @@ def main() -> int:
         action="store_true",
         help="--ami only: diarize with stenograf's owned loop instead of sherpa's",
     )
+    parser.add_argument(
+        "--cluster",
+        default="complete",
+        help="--own-loop only: clustering method (complete | average | nmesc)",
+    )
     args = parser.parse_args()
 
     if args.ami:
@@ -242,6 +248,7 @@ def main() -> int:
             embedding=args.embedding,
             out_name=args.out_name,
             own_loop=args.own_loop,
+            cluster_method=args.cluster,
         )
         return 0
 

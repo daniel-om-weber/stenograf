@@ -84,6 +84,7 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         embedding_model: Path | None = None,
         *,
         clustering_threshold: float = 0.5,
+        cluster_method: str = "complete",
         progress: assets.ProgressHook | None = None,
     ) -> None:
         super().__init__(
@@ -92,6 +93,7 @@ class OwnDiarizer(SherpaOnnxDiarizer):
             clustering_threshold=clustering_threshold,
             progress=progress,
         )
+        self._cluster_method = cluster_method
         self._session = None  # lazy onnxruntime session for segmentation
 
     # ---- segmentation ------------------------------------------------------
@@ -164,7 +166,9 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         pairs, vectors = self._pair_embeddings(audio, labels)
         if not pairs:
             return []
-        clusters = _cluster(np.stack(vectors), self._threshold, num_speakers)
+        clusters = _cluster(
+            np.stack(vectors), self._threshold, num_speakers, self._cluster_method
+        )
 
         # Vote accumulation on the global grid: each clustered (chunk, local
         # speaker)'s active frames vote for its cluster (spec §1.7).
@@ -223,16 +227,30 @@ class OwnDiarizer(SherpaOnnxDiarizer):
                 if not slices:
                     continue
                 vector = self.embed(np.concatenate(slices))
-                if vector is not None and not np.any(np.isnan(vector)):
+                # embed() can hand back the zero vector on degenerate audio
+                # (l2_normalize passes it through); zero-norm rows would go NaN
+                # under normalization, where the reference keeps them zero.
+                if vector is not None and not np.any(np.isnan(vector)) and np.any(vector):
                     pairs.append((chunk_index, speaker))
                     vectors.append(vector)
         return pairs, vectors
 
 
-def _cluster(vectors: np.ndarray, threshold: float, num_speakers: int | None) -> np.ndarray:
-    """Complete-linkage AHC on cosine distance, cut like the reference: k-cut
-    when a count is known, else at the first merge height ≥ threshold
-    (spec §1.6; ``threshold`` is a cosine DISTANCE)."""
+def _cluster(
+    vectors: np.ndarray,
+    threshold: float,
+    num_speakers: int | None,
+    method: str = "complete",
+) -> np.ndarray:
+    """Cluster (chunk, speaker) embeddings into global speakers.
+
+    ``method`` picks the known-count partitioner: ``complete`` /``average``
+    are AHC linkages on cosine distance (complete is the reference's choice,
+    average is BUT VBx's AHC-init choice), ``nmesc`` is spectral clustering on
+    the NME-binarized affinity (:func:`_nmesc`). Threshold mode (no count)
+    always uses the reference's complete-linkage cut — first merge height ≥
+    ``threshold``, a cosine DISTANCE (spec §1.6) — because production never
+    calls it (count estimation belongs to stenodiar/speakrs)."""
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
 
@@ -241,10 +259,14 @@ def _cluster(vectors: np.ndarray, threshold: float, num_speakers: int | None) ->
         return np.zeros(0, dtype=np.int64)
     if n == 1:
         return np.zeros(1, dtype=np.int64)
-    normalized = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    normalized = vectors / np.maximum(norms, 1e-10)  # zero rows stay zero (Eigen semantics)
+    if num_speakers is not None and num_speakers > 0 and method == "nmesc":
+        return _nmesc(normalized, min(num_speakers, n))
     distance = np.clip(1.0 - normalized @ normalized.T, 0.0, None)
     np.fill_diagonal(distance, 0.0)
-    tree = linkage(squareform(distance, checks=False), method="complete")
+    linkage_method = method if num_speakers is not None and num_speakers > 0 else "complete"
+    tree = linkage(squareform(distance, checks=False), method=linkage_method)
     if num_speakers is not None and num_speakers > 0:
         flat = fcluster(tree, t=min(num_speakers, n), criterion="maxclust")
     else:
@@ -254,6 +276,54 @@ def _cluster(vectors: np.ndarray, threshold: float, num_speakers: int | None) ->
     # 0-based, first-appearance order (labels are arbitrary either way).
     remap: dict[int, int] = {}
     return np.array([remap.setdefault(int(c), len(remap)) for c in flat], dtype=np.int64)
+
+
+_NMESC_P_RATIOS = (0.01, 0.02, 0.04, 0.06, 0.09, 0.13, 0.18, 0.25)
+"""Neighbor-fraction sweep for the NME criterion (Park et al. 2020's search
+space, coarsened to eight points — the criterion is smooth in p)."""
+
+
+def _nmesc(normalized: np.ndarray, k: int) -> np.ndarray:
+    """Spectral clustering at known ``k`` with NME-tuned p-binarization.
+
+    Park et al., *Auto-tuning spectral clustering for speaker diarization
+    using normalized maximum eigengap* (IEEE SPL 27, 2020; NeMo's NMESC is
+    the Apache-2.0 reference): keep each row's top-p cosine affinities, zero
+    the rest, symmetrize, and pick p by the eigengap at k normalized by the
+    neighbor fraction; then embed rows in the top-k eigenvectors of the
+    normalized affinity and k-means them (seeded — deterministic)."""
+    from scipy.cluster.vq import kmeans2
+    from scipy.linalg import eigh
+
+    n = len(normalized)
+    if n <= k:
+        return np.arange(n, dtype=np.int64)
+    affinity = normalized @ normalized.T
+    best: tuple[float, np.ndarray] | None = None
+    for ratio in _NMESC_P_RATIOS:
+        p = min(n - 1, max(2, round(ratio * n)))
+        keep = np.argpartition(-affinity, p, axis=1)[:, : p + 1]  # self survives
+        pruned = np.zeros_like(affinity)
+        np.put_along_axis(pruned, keep, np.take_along_axis(affinity, keep, axis=1), axis=1)
+        w = 0.5 * (pruned + pruned.T)
+        degree = np.maximum(w.sum(axis=1), 1e-10)
+        scale = 1.0 / np.sqrt(degree)
+        p_matrix = scale[:, None] * w * scale[None, :]
+        values, vectors = eigh(
+            p_matrix, subset_by_index=(n - k - 1, n - 1)
+        )  # ascending; top k+1 of the affinity spectrum
+        gap = float(values[1] - values[0])  # λ_k − λ_{k+1} in descending terms
+        score = gap / (p / n)
+        if best is None or score > best[0]:
+            best = (score, vectors[:, 1:])  # top-k eigenvectors
+    assert best is not None
+    embedding = best[1]
+    norms = np.linalg.norm(embedding, axis=1, keepdims=True)
+    embedding = embedding / np.maximum(norms, 1e-10)
+    # seed is real (scipy ≥1.7 keyword-only); the bundled stub predates it.
+    _, labels = kmeans2(embedding, k, minit="++", seed=0)  # pyright: ignore[reportCallIssue]
+    remap: dict[int, int] = {}
+    return np.array([remap.setdefault(int(c), len(remap)) for c in labels], dtype=np.int64)
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
