@@ -310,30 +310,53 @@ path) — worth an export attempt only if a future step is actually limited by
 full-duration embedding accuracy, which today none is. CAM++ stays rejected
 (`assets.py`).
 
-## Step 4 — own the diarization loop (VBx + stride + per-chunk embedding)
+## Step 4 — own the diarization loop (clustering upgrade + stride)
 
 sherpa's `OfflineSpeakerDiarization.process()` is a monolith: to change
 clustering or stride we take over the loop, keeping the *models* and the
-`SpeakerEmbeddingExtractor` — run segmentation-3.0 via onnxruntime directly
-(powerset decode is ~30 lines; sherpa's own implementation is the reference),
-then our clustering. This buys, in one step:
+`SpeakerEmbeddingExtractor` — run segmentation-3.0 via onnxruntime directly,
+then our clustering. Reference semantics extracted line-by-line into
+`eval/diarization-loop-spec.md` (2026-08-07 — windowing, powerset order,
+embedding gates, FastClustering cut semantics, the two-frame-scale gotcha,
+all cited and falsification-tested).
 
-- **VBx clustering** (Apache-2.0, ~200 lines of numpy: AHC init + one
-  eigen-decomposition + ~10 VB iterations) — the main source of pyannote
-  community-1's −2.8 AMI-SDM gain over 3.1, at zero new-model cost.
-- **Stride 3 s + per-chunk embedding** — measured 8.5× CPU speedup at ≈0 DER
-  cost for ≤5 speakers (with the min-cluster-size floor set uncapped-1 %,
-  which recovers the stride's under-counting failure mode). Finalize
-  diarization drops from ~8 min to ~1–2 min per meeting hour — the budget
-  that makes step 5 affordable.
+**Phase A — the owned loop — BUILT 2026-08-07, parity gate PASSED**
+(`stenograf/diarization/loop.py`, `eval/loop_parity.py`): raw `diarize(k+1)`
+on all 20 loop channels, mean ΔDER **−1.41 %** (own slightly ahead), 14/20
+within ±0.6 pts, runtime equal. The six divergers swing both ways (own −23.6
+on TS3010a … +8.2 on TS3010d): AHC merge fragility on confusion-heavy
+channels, where tiny embedding deltas (our stream concatenates audio, sherpa
+concatenates feature frames) flip discrete merges — the same fragility
+Phase B exists to fix, not a systematic bias.
+
+**Phase B — clustering upgrade, candidates REVISED on the spec's findings.**
+The planned VBx is *not shippable as assumed*: BUT's model files carry no
+license, pyannote community-1's PLDA (CC-BY-4.0) is fit to a different
+embedding and cannot accept ours, no Fa/Fb/loopP was ever published for
+PLDA-free cosine embeddings, and the one paper solving exactly that
+(SphereVBx-PF) withheld its values and its code (spec §3). Permissive
+candidates, measured on the harness against the Phase-A AHC baseline:
+**NME-SC** (auto-tuning spectral clustering, Apache-2.0, no threshold),
+**BUT's `twoGMMcalib_lin` adaptive AHC threshold** (~15 lines, no PLDA), and
+**pyannote's small-cluster reassignment** (min-cluster-size floor — also the
+stride speedup's published rescue). Heavy fallback if none beats AHC:
+two-covariance PLDA trained on VoxCeleb2 via WeSpeaker's Apache-2.0 trainer,
+then stock VBx with the AMI recipe as the sweep origin.
+
+- **Stride 3 s** — measured 8.5× segmentation speedup at ≈0 DER cost for ≤5
+  speakers (with the min-cluster-size floor uncapped-1 %, which recovers the
+  stride's under-counting failure mode). Finalize diarization drops from
+  ~8 min to ~1–2 min per meeting hour — the budget that makes step 5
+  affordable. Per-chunk embedding (mask at stat-pooling) needs ONNX surgery
+  on the extractor and is deferred until stride alone proves insufficient.
 - The step-1 policies (overlap exclusion, margins) become first-class in our
   own loop instead of post-processing sherpa's output.
 
-Gate: DER within noise of the sherpa path on the harness *before* the VBx
-switch (loop parity), then VBx must beat AHC by a visible margin. The sherpa
-diarization pipeline dependency is then dropped on non-mac platforms (the
-extractor stays); the old path is deleted, not kept as a fallback. macOS
-(stenodiar/speakrs, community-1 CoreML) is untouched by this step.
+Gate (unchanged in spirit): a Phase-B candidate must beat Phase-A AHC by a
+visible margin on the harness. The sherpa diarization pipeline dependency is
+then dropped on non-mac platforms (the extractor stays); the old path is
+deleted, not kept as a fallback. macOS (stenodiar/speakrs, community-1
+CoreML) is untouched by this step.
 
 ## Step 5 — the DiariZen gate (the only model that beats everything above)
 

@@ -105,6 +105,7 @@ def run_ami(
     *,
     embedding: Path | None = None,
     out_name: str = "ami",
+    own_loop: bool = False,
 ) -> None:
     """Diarize + finalize every corpus channel; write hypotheses for both scorers.
 
@@ -131,7 +132,12 @@ def run_ami(
     if not channels:
         raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
 
-    diarizer = SherpaOnnxDiarizer(embedding_model=embedding)
+    if own_loop:
+        from stenograf.diarization.loop import OwnDiarizer
+
+        diarizer = OwnDiarizer(embedding_model=embedding)
+    else:
+        diarizer = SherpaOnnxDiarizer(embedding_model=embedding)
     asr = ParakeetMLXBackend()
     asr_loaded = False
     vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
@@ -223,6 +229,11 @@ def main() -> int:
         default="ami",
         help="--ami only: output dir under out/diar/ (keeps candidate runs off the baseline)",
     )
+    parser.add_argument(
+        "--own-loop",
+        action="store_true",
+        help="--ami only: diarize with stenograf's owned loop instead of sherpa's",
+    )
     args = parser.parse_args()
 
     if args.ami:
@@ -230,6 +241,7 @@ def main() -> int:
             set(args.segments.split(",")) if args.segments else None,
             embedding=args.embedding,
             out_name=args.out_name,
+            own_loop=args.own_loop,
         )
         return 0
 

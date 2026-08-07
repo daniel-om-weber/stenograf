@@ -585,6 +585,22 @@ docstring). Step 1.5's re-open trigger (an operating point below ~0.4) did
 not fire; AS-Norm/QMF stay un-adopted — the residual FAR is a purity problem,
 not a calibration problem.
 
+#### Owning the diarization loop: parity measured (2026-08-07)
+
+`loop_parity.py` gates `PLAN-DIARIZATION.md` step 4 Phase A: the owned loop
+(`stenograf/diarization/loop.py` — segmentation-3.0 via onnxruntime, powerset
+decode, per-(chunk,speaker) embeddings, complete-linkage AHC, all built from
+the line-cited reference spec `eval/diarization-loop-spec.md`) against
+sherpa's `OfflineSpeakerDiarization`, raw `diarize(k+1)` on all 20 loop
+channels. Mean ΔDER **−1.41 %** (own slightly ahead), 14/20 within ±0.6 pts,
+runtime equal (see `out/diar-loop-parity.md` for the table). Six channels
+diverge in both directions (own −23.6 TS3010a, −9.4 ES2003d, −5.7 Bmr030 vs
++8.2 TS3010d, +4.5 IS1009d, +1.5 ES2007c): AHC merge-decision fragility on
+confusion-heavy channels — our embedding streams concatenate audio where
+sherpa concatenates feature frames, and the tiny vector deltas flip discrete
+merges. Bit-parity was never the gate (the spec records where the reference
+is internally inconsistent, §1.5); score parity holds.
+
 #### Embedding-model A/B: both candidates lose both seats (2026-08-07)
 
 `embedder_ab.py` closes `PLAN-DIARIZATION.md` step 3. The embedding model
