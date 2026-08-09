@@ -8,11 +8,12 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**One side-plan is live:** `PLAN-DIARIZATION-SPEED.md` (scoped 2026-08-09
-after an adversarial review re-measured the draft's estimates — the 111.7 s
-baseline is the known-count path, not the default; pool-don't-batch, then
-remove embedded seconds; the online worker sits behind five gates, two of
-which run before any worker code). `PLAN-DIARIZATION.md` (2026-08-09, all five steps
+**One side-plan is live:** `PLAN-DIARIZATION-SPEED.md` (scoped AND largely
+executed 2026-08-09: the pool shipped at 2.86× with bit-exact gates, the
+notes warmer shipped with its honest 2.3 s number, L2/L3 seconds-removal
+declined at kill-test; open: L1's fbank-parity precondition, and the
+weak-box session that decides the online worker — steps 4+6+watts).
+`PLAN-DIARIZATION.md` (2026-08-09, all five steps
 measured to a verdict — the declined list below carries the survivors; read
 `eval/diarization-sota-2026.md` and `eval/README.md`'s corpus-harness
 sections before touching `diarization/`, `voiceprints.py`, or evaluating any
