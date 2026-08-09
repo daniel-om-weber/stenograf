@@ -256,7 +256,9 @@ strangers — attendees absent from Bmr021), and `reid_score.py` — DIR @ FAR
 with the FAR/FRR curve, unit-tested in `tests/test_eval_reid.py`;
 parsing/mixing math in `tests/test_eval_ami.py`. Corpus facts (URL patterns,
 identity mapping traps, format gotchas) are in `ami.py`'s docstrings;
-calibration caveats in `PLAN-DIARIZATION.md` step 0.
+calibration caveats in `eval/diarization-sota-2026.md`'s scoring-family
+table (published AMI numbers are family A, 0 s collar; ours are family B,
+0.25 s — compare our numbers only to our numbers).
 
 **Trial convention (2026-08-07): the headline pool is same-group only.** A
 cluster scores against its *own* group's gallery (`out/reid/trials.json`) —
@@ -417,7 +419,9 @@ best single channel +0.27 pts, worst −0.33 pts, no margin consistently signed.
 Padding the *output* turns is no better — DER of padded turns worsens on 8 of
 10 channels (IS1009a +10.5 pts at 0.25 s; best improvement −0.9 pts,
 Bmr021) — so the pad earns no place anywhere in the pipeline. Declined in
-`PLAN-DIARIZATION.md` step 1.2 on these numbers.
+`PLAN-DIARIZATION.md` step 1.2 on these numbers. Re-open trigger: an
+intersection rule that no longer assigns every word — the no-op proof rests
+on nearest-turn snapping.
 
 #### A minimum-duration gate on naming has nothing to gate (2026-08-06)
 

@@ -28,7 +28,8 @@ Corpus facts this module is built on (verified against the mirror 2026-08-06):
 AMI reference turns are the words layer (``punc``/zero-duration dropped,
 vocal sounds excluded) merged per speaker across gaps ≤ ``MERGE_GAP_S`` — the
 RT smoothing convention; our DER numbers are comparable only to our own
-(``PLAN-DIARIZATION.md``'s calibration note).
+(scoring-family table in ``eval/diarization-sota-2026.md``: published AMI
+numbers are family A, 0 s collar; ``der.py`` is family B, 0.25 s).
 
 Commands (downloads ~6.3 GB into ``eval/audio/ami/raw/`` on first use)::
 

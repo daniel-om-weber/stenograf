@@ -52,15 +52,19 @@ room), and the livekit re-ask whose trigger — the helper everywhere — has no
 fired. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
 twelve seconds.
 
-**`PLAN-DIARIZATION.md` is the one live side-plan (opened 2026-08-02):** the
-diarization + speaker re-ID accuracy program, with its research record in
-`eval/diarization-sota-2026.md`. Read both before touching `diarization/`,
-`voiceprints.py`, `eval/der.py`, or evaluating any diarization or
-speaker-embedding model — the declined list there (Sortformer, joint SA-ASR,
-TS-VAD, AS-Norm-by-default, pyannote.audio-as-dependency) carries measured
-reasons and re-open triggers.
+**The diarization + speaker re-ID program CLOSED 2026-08-09 — no live
+side-plan remains.** All five steps of `PLAN-DIARIZATION.md` were measured to
+a verdict and the file was deleted (`git log --follow -p PLAN-DIARIZATION.md`
+for the step record). Before touching `diarization/`, `voiceprints.py`,
+`eval/der.py`, or evaluating any diarization or speaker-embedding model, read
+`eval/diarization-sota-2026.md` (the research record) and `eval/README.md`'s
+corpus-harness sections (every shipped default's numbers, and every declined
+candidate's); the declined list — Sortformer, joint SA-ASR, TS-VAD,
+AS-Norm-by-default, pyannote.audio-as-dependency, DiariZen meeting-base, both
+embedding-upgrade candidates, stride >1 s, automatic profile updates — now
+lives in PLAN.md with measured reasons and re-open triggers.
 
-**Six side-plans closed and were deleted; their evidence is in git history,
+**Seven side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 (2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`
 (2026-07-27): five of six items green — the `.lnk` launcher, the
@@ -86,6 +90,10 @@ history before touching `notes/` — the deleted JSON schema was quietly doing
 four jobs (structure, sanitizing, truncation detection, refusal detection) and
 which replacement covers each is not guessable from the code. Their leftovers —
 two Ollama gates that need a non-macOS box and Gate A's read — are in PLAN.md.
+`PLAN-DIARIZATION.md` (2026-08-09, all five steps measured): the AMI/ICSI
+harness, the owned ward+gated-fold loop as production, profile store v2 +
+rename-once enrollment, the 0.56 threshold — and DiariZen meeting-base
+declined at the fair k+1+fold boundary (`eval/README.md`).
 Retrieve any of them with `git log --follow -p <file>`. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
@@ -174,8 +182,8 @@ both dispatch gates by design.
   against the real backend, not mocks.
 - **Diarization licensing**: DiariZen's multi-domain checkpoints are
   CC-BY-NC — unshippable; its `meeting-base` checkpoint is MIT (trained only
-  on AMI/AISHELL-4/AliMeeting) and is `PLAN-DIARIZATION.md`'s step-5
-  candidate.
+  on AMI/AISHELL-4/AliMeeting), was measured on the harness 2026-08-09 and
+  declined on accuracy (`eval/README.md`).
   speakrs (cross-platform: CoreML on mac, ORT elsewhere) is the chosen
   auto-count estimator, still immature at v0.5.0 — **vendored with two
   CPU-throughput patches** in `native/stenodiar/vendor/` (see VENDOR.md;

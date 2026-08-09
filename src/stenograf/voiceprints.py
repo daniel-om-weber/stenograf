@@ -97,7 +97,7 @@ class SpeakerProfile:
     stored set — rather than by collapsing the set to a mean vector. Modern
     speaker embeddings measurably lose accuracy when averaged into one vector
     (the i-vector-era rule is retracted; 2.05 % vs 2.85 % EER for score vs
-    embedding averaging in the research record, ``PLAN-DIARIZATION.md``); on
+    embedding averaging — ``eval/diarization-sota-2026.md``); on
     our own harness the two are within single-trial noise, so the store keeps
     the form the literature favors and later steps need — per-meeting entries
     are what rename-once enrollment appends to and what gated updates can

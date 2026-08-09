@@ -1,6 +1,8 @@
 # Speaker diarization & voice-profile re-ID — state of the art, August 2026
 
-Research record for `PLAN-DIARIZATION.md`. Compiled 2026-08-02 from three
+Research record for the diarization + re-ID program (`PLAN-DIARIZATION.md`,
+closed 2026-08-09 with every step measured — `git log --follow -p` for the
+step record, `eval/README.md` for the harness evidence). Compiled 2026-08-02 from three
 parallel web-verified research passes (diarization systems; speaker-embedding
 models, scoring and enrollment; integrated pipelines and evaluation). Every
 load-bearing number carries its source. Numbers quoted from primary sources
@@ -466,4 +468,6 @@ as a product mode. No vendor publishes DER/cpWER for meeting naming.
 | Stride 3 + per-chunk embedding ≈ 8.5× speedup at ≈0 cost | §1.5 | pays for any heavier model; requires owning the pipeline loop |
 | AMI/ICSI CC-BY-4.0 with headset channels | §6 | labelled eval in our exact topology without hand-labelling |
 
-The implementation sequence lives in `PLAN-DIARIZATION.md`.
+The implementation sequence lived in `PLAN-DIARIZATION.md` (closed
+2026-08-09; every step's verdict is in `eval/README.md`, the surviving
+declined list with re-open triggers in `PLAN.md`).

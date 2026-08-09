@@ -8,11 +8,11 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**One side-plan is live: `PLAN-DIARIZATION.md`** (opened 2026-08-02) — the
-diarization + speaker re-ID accuracy program; its research record is
-`eval/diarization-sota-2026.md`, and both are to be read before touching
-`diarization/`, `voiceprints.py`, or evaluating any diarization or
-speaker-embedding model. **The rest are closed.** `PLAN-CAPTURE-HELPER.md` (2026-08-02, built
+**No side-plan is live.** `PLAN-DIARIZATION.md` (2026-08-09, all five steps
+measured to a verdict — the declined list below carries the survivors; read
+`eval/diarization-sota-2026.md` and `eval/README.md`'s corpus-harness
+sections before touching `diarization/`, `voiceprints.py`, or evaluating any
+diarization or speaker-embedding model), `PLAN-CAPTURE-HELPER.md` (2026-08-02, built
 — both halves shipped and the arrival-stamped transports are gone),
 `PLAN-LINUX.md` (2026-07-26), `PLAN-WINDOWS.md` and `PLAN-ASR-CHALLENGER.md`
 (both 2026-07-27), and `PLAN-NOTES-MARKDOWN.md` + `PLAN-MEETING-PRESETS.md`
@@ -615,10 +615,57 @@ Kept here so future sessions don't re-open them.
   attribution, the 0.5 re-ID threshold and far-field speaker-count
   over-splitting (a small group measured as 8) stay unmeasured. The scorer is
   built and tested; only labels are missing, and labelling was ruled out.
-  `PLAN-DIARIZATION.md` step 0 (2026-08-02) sidesteps the ruling-out rather
+  The AMI/ICSI harness (`eval/ami.py`, 2026-08-02, from the deleted
+  diarization plan's step 0) sidesteps the ruling-out rather
   than reversing it: AMI/ICSI are CC-BY-4.0 *with per-speaker headset
   channels*, so references in our exact two-channel topology are built from
   public corpora — labelling our own audio stays ruled out.
+- **The diarization + speaker re-ID program — closed 2026-08-09, every
+  candidate measured.** `PLAN-DIARIZATION.md` deleted
+  (`git log --follow -p PLAN-DIARIZATION.md` for the step record); evidence
+  is in `eval/README.md`'s corpus-harness sections, the research record in
+  `eval/diarization-sota-2026.md`. What ships: the owned ward+gated-fold
+  loop, overlap-clean embeddings, the solo-channel bypass with
+  `Diarizer.channel_embedding` for 1:1 profiles, profile store v2 +
+  rename-once enrollment, threshold 0.56. The heavy clustering fallback
+  stays scoped, deferred not closed: two-covariance PLDA via WeSpeaker +
+  stock VBx (`eval/diarization-loop-spec.md` §3, ranked option A, with
+  starting hyperparameters); trigger = a Phase-B-style clustering residual
+  the fold-gate audit can't explain.
+  Declined with numbers, and what would reopen each:
+  - **DiariZen meeting-base (2026-08-09):** loses the fair k+1+production-fold
+    frame on loops (+1.3 mean / +1.2 median paired ΔDER, wins 4/20, sign
+    p≈0.012, attribution −1.1) and the near-field duos (+2.0/+1.3, 3/20);
+    its own hyperparameters swept and exonerated. The ONNX-export program
+    never opens. Trigger: the meeting mix shifts toward many-speaker rooms —
+    it won all four ICSI k=4–8 loops while their k=2 duos flipped back.
+  - **Embedding upgrade (2026-08-07):** ERes2NetV2-zh and ResNet34-LM both
+    regress clustering (6.6/7.6 pts attribution) and *collapse* the
+    short-turn axis (FAR0 thresholds 0.82/0.88 vs 0.605); English ERes2NetV2
+    was never released. Watch: ReDimNet2 with a CC-BY vox2 checkpoint + working ONNX;
+    an export attempt of `eres2net_large_sv_en_voxceleb_16k` only if a step
+    is actually limited by full-duration embedding accuracy — today none is.
+  - **Stride >1 s (2026-08-07):** 2.1×/3.1× speedups cost naming purity (the
+    FAR0 threshold jumps 0.592→~0.78, silently invalidating the calibration).
+    Trigger: finalize latency becomes binding — then per-chunk embedding
+    (mask at stat-pooling) first, and any stride change re-runs the
+    threshold calibration in its gate.
+  - **Automatic profile updates (2026-08-07, reaffirmed post-ward):**
+    ungateable wrong updates above every implementable bar while the oracle
+    ties no-update everywhere; growth stays user-confirmed. Re-run
+    `eval/auto_update.py` as part of any future diarization change's gate
+    (likewise `eval/threshold_pick.py`).
+  - **Sortformer** (broken ONNX+CPU path, 4-speaker cap, can't consume a
+    known count — no trigger); **joint/LLM SA-ASR** (trigger: a permissive,
+    CPU-practical joint model beating the modular cascade on meeting
+    benchmarks with real non-oracle diarization); **TS-VAD** (trigger: an
+    Apache/MIT ONNX implementation, or Personal-VAD-class open weights);
+    **AS-Norm** (degraded the strongest open-set models; trigger: an
+    unsatisfying threshold curve, and QMF-style duration-aware calibration
+    goes first); **EEND-TA** (watch — no code or weights; trigger: a
+    release); **pyannote.audio as a dependency** (opt-out telemetry, ORT
+    dropped, paid-SDK pull — weights keep getting extracted, the package
+    never imports here).
 - **Repair-only overhang — the one open accuracy idea.** Default decode stays
   the exact current slice; overhang fires only on a detected ≥1.5 s speech
   hole. It is the salvage from the reverted cut-overlap work, structurally
