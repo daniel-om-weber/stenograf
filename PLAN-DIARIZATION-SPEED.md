@@ -155,18 +155,31 @@ Still owed from this step: finalize watts (race-to-idle check) — folded
 into step 6's gate session, which needs the same quiet machine (the
 desktop was loud when the gates ran); weak-Intel scaling is step 4's.
 
-## Step 3 — warm the notes model during the meeting (scheduling, cheap)
+## Step 3 — warm the notes model during the meeting — DONE 2026-08-09, benefit smaller than projected
 
-The notes backend loads lazily inside the first `complete()` call
-(`notes/mlx.py`) — strictly after diarization, though the load depends on
-nothing from the transcript. A dedicated notes thread created at meeting
-start builds the backend and runs a token-sized warm-up, then waits for the
-transcript; MLX generation must stay on that thread (thread-affinity guard
-already in the module). Removes a 4.35 GB cold load (and on Ollama boxes,
-model load + first token) from the end-of-meeting wait for zero duplicated
-chunk semantics. Gate on free memory — 4.35 GB resident through the meeting
-is fine on 48 GB, not on a 16 GB box — and on the live pass showing no new
-shedding with the warm-up present.
+Shipped: `notes/warm.py` (`NotesWarmer`) — a dedicated thread started by
+`MeetingRun.run` once capture and the ASR are up; after a 45 s grace and a
+12 GiB free-memory gate it builds the exact backend the notes tail would
+(`notes/run.py::resolve_backend`, same arguments) and runs `MlxBackend.
+warm()` (load + one token, binding generation to that thread); the notes
+tail then executes on the warmer's thread with the prebuilt backend. Cold
+path is the fallback by construction (short meeting, low memory, warm
+failure, cancel); Ollama is deliberately not warmed (server `keep_alive`
+evaporates before a normal meeting ends). Ctrl-C semantics preserved from
+the waiting thread. Gates green on a 150 s isolated-settings replay: warm
+fired mid-meeting, both channels kept "reusing live decodes" (shed exactly
+0), notes wrote through the warmer.
+
+**Honest outcome: the projected win largely evaporated on measurement.**
+Cold mlx load + first token is **2.3 s** page-cache-warm on the M4 Max
+(mmap lazy loading; the "4.35 GB cold load" was an unmeasured projection —
+the arch review's best benefit-per-risk ranking was wrong on this machine).
+Ceiling is a truly cold cache (first meeting after boot), plausibly a few
+seconds more, **unmeasured**. The thinking-mode generation dominates the
+notes tail regardless. Kept because it is small, gated safe everywhere,
+and the cold-cache first-meeting case is the realistic one — but this step
+would not have been built at this priority had the 2.3 s been measured
+first. (Measure-the-comparator lesson, same shape as step 0's.)
 
 ## Step 4 — the weak-box datapoint, reframed as the whole wait
 
