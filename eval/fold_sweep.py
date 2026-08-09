@@ -150,7 +150,9 @@ def main() -> int:
             embeddings = load_emb_cache(partitioner, channel.id)
             if embeddings is None:
                 pcm = read_pcm16(channel.wav_path)
-                embeddings = cluster_embeddings(turns, pcm, diarizer.embed)
+                embeddings = cluster_embeddings(
+                    turns, pcm, diarizer.embed, pool=diarizer._executor()
+                )
                 save_emb_cache(partitioner, channel.id, embeddings)
 
             ref = parse_rttm(channel.ref_path)

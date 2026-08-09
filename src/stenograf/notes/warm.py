@@ -31,10 +31,11 @@ if TYPE_CHECKING:
     from stenograf.notes.backend import NotesBackend
 
 MIN_AVAILABLE_BYTES = 12 * 1024**3
-"""Warm only with this much reclaimable memory. The default mac model wires
-~4.35 GB for the rest of the meeting, and buying a head start on notes must
-not push the live pass or the desktop into swap — a 16 GB box stays on the
-cold path, the 48 GB dev box warms."""
+"""Warm only with this much reclaimable memory. The default mac model is a
+4.35 GB download; what it actually wires resident through a meeting is
+unmeasured, so this gate is a conservative guess (2026-08-09), not a
+calibration — sized so that a box tight on memory never trades swap
+pressure for a head start on notes."""
 
 WARM_DELAY_S = 45.0
 """Grace before warming: meeting start is when the ASR loads and the live
@@ -96,6 +97,7 @@ class NotesWarmer:
         self._min_available = min_available_bytes
         self._backend: NotesBackend | None = None
         self._job: Callable[[NotesBackend | None], bool] | None = None
+        self._job_consumed = False
         self._result = False
         self._error: BaseException | None = None
         self._job_ready = threading.Event()
@@ -127,8 +129,10 @@ class NotesWarmer:
         Mirrors the notes tail's Ctrl-C contract from the *waiting* thread
         (signal handlers can't reach the worker): first KeyboardInterrupt
         warns via ``on_first_interrupt``, the second abandons the wait and
-        returns None — the daemon thread may still finish writing, which
-        only ever means the notes land anyway."""
+        returns None. In the CLI the process exits right after, killing the
+        daemon mid-generation — the notes then genuinely do NOT land (all
+        writes are atomic, so no partial file either); only a long-lived
+        front-end would see generation run to completion after the skip."""
         if self._cancelled.is_set():
             return job(None)  # thread already released — degrade to inline
         self._job = job
@@ -145,32 +149,40 @@ class NotesWarmer:
                 on_first_interrupt()
         if self._error is not None:
             raise self._error
+        if not self._job_consumed:
+            # The thread died before reaching the job (a warm-up failure
+            # outside the guarded block) — the cold path still owes notes.
+            return job(None)
         return self._result
 
     def _run(self) -> None:
-        job_arrived = self._job_ready.wait(self._delay_s)
-        if not job_arrived and not self._cancelled.is_set():
-            try:
-                available = _available_bytes()
-                if available is None or available >= self._min_available:
-                    backend = self._build()
-                    warm = getattr(backend, "warm", None)
-                    if warm is not None:
-                        warm()
-                    self._backend = backend
-                    self.warmed = True
-            except Exception:
-                # A failed warm-up must never cost the notes: drop the half
-                # -built backend, generation rebuilds cold.
-                self._backend = None
-                self.warmed = False
-        self._job_ready.wait()
-        job = self._job
-        if job is None:  # cancelled
-            self._done.set()
-            return
+        # The outer finally is the liveness contract: _done is set on EVERY
+        # exit, or run_notes would wait forever on a dead thread.
         try:
-            self._result = job(self._backend)
-        except BaseException as exc:  # noqa: BLE001 — re-raised on the waiting thread
-            self._error = exc
-        self._done.set()
+            job_arrived = self._job_ready.wait(self._delay_s)
+            if not job_arrived and not self._cancelled.is_set():
+                try:
+                    available = _available_bytes()
+                    if available is None or available >= self._min_available:
+                        backend = self._build()
+                        warm = getattr(backend, "warm", None)
+                        if warm is not None:
+                            warm()
+                        self._backend = backend
+                        self.warmed = True
+                except Exception:
+                    # A failed warm-up must never cost the notes: drop the
+                    # half-built backend, generation rebuilds cold.
+                    self._backend = None
+                    self.warmed = False
+            self._job_ready.wait()
+            job = self._job
+            if job is None:  # cancelled
+                return
+            self._job_consumed = True
+            try:
+                self._result = job(self._backend)
+            except BaseException as exc:  # noqa: BLE001 — re-raised on the waiting thread
+                self._error = exc
+        finally:
+            self._done.set()

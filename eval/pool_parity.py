@@ -49,6 +49,11 @@ pre-pool HEAD reproduced its RTTMs byte-exactly, verified 2026-08-09).
 NOT `ami-loop` — that dir predates ward-by-default by six hours and no
 current code reproduces it."""
 
+DRIFT_TOLERANCE = 1e-5
+"""Half-2 embedding drift ceiling. The intra-op 8 → 1 float-reduction shift
+measured 1.08e-7 max across all 20 channels (2026-08-09); anything near
+this ceiling is a code change, not thread jitter."""
+
 
 def _bit_equal(a: list[np.ndarray], b: list[np.ndarray]) -> bool:
     return len(a) == len(b) and all(np.array_equal(x, y) for x, y in zip(a, b, strict=True))
@@ -69,7 +74,11 @@ def half1(channel_id: str, worker_counts: list[int]) -> bool:
         seg_done = time.monotonic()
         pairs, vectors = diarizer._pair_embeddings(audio, labels)
         emb_done = time.monotonic()
-        results[workers] = (labels, pairs, vectors)
+        # the full production surface: cluster embeddings ride the pool too
+        result = diarizer.diarize_with_embeddings(
+            read_pcm16(channel.wav_path), channel.num_speakers + 1
+        )
+        results[workers] = (labels, pairs, vectors, result.turns, result.embeddings)
         print(
             f"  workers={workers:2d}: segmentation {seg_done - started:6.1f} s, "
             f"embeddings {emb_done - seg_done:6.1f} s, "
@@ -77,13 +86,16 @@ def half1(channel_id: str, worker_counts: list[int]) -> bool:
         )
 
     ok = True
-    ref_labels, ref_pairs, ref_vectors = results[1]
+    ref_labels, ref_pairs, ref_vectors, ref_turns, ref_emb = results[1]
     for workers in worker_counts:
-        labels, pairs, vectors = results[workers]
+        labels, pairs, vectors, turns, emb = results[workers]
         exact = (
             _bit_equal(labels, ref_labels)
             and pairs == ref_pairs
             and _bit_equal(vectors, ref_vectors)
+            and turns == ref_turns
+            and emb.keys() == ref_emb.keys()
+            and all(np.array_equal(emb[key], ref_emb[key]) for key in ref_emb)
         )
         print(f"  workers={workers}: {'BIT-EXACT vs workers=1' if exact else 'MISMATCH'}")
         ok &= exact
@@ -100,14 +112,17 @@ def half2(baseline: str) -> bool:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     diarizer = OwnDiarizer()
-    identical = True
+    ok = True
+    compared = 0
     drifts: list[float] = []
     for channel in ami.load_channels():
         if channel.num_speakers == 1:
             continue  # solo channels never touch the loop
         ref_rttm = baseline_dir / f"{channel.id}.rttm"
-        if not ref_rttm.exists():
-            print(f"[half 2] {channel.id}: no baseline rttm, skipped")
+        ref_emb_path = baseline_dir / f"{channel.id}.emb.json"
+        if not ref_rttm.exists() or not ref_emb_path.exists():
+            print(f"[half 2] {channel.id}: baseline artifacts missing — FAIL")
+            ok = False
             continue
         started = time.monotonic()
         pcm = read_pcm16(channel.wav_path)
@@ -118,29 +133,32 @@ def half2(baseline: str) -> bool:
         new_rttm = out_dir / f"{channel.id}.rttm"
         write_rttm(new_rttm, [Turn(t.speaker, t.start, t.end) for t in turns], channel.id)
         same = new_rttm.read_bytes() == ref_rttm.read_bytes()
-        identical &= same
 
-        drift = float("nan")
-        ref_emb_path = baseline_dir / f"{channel.id}.emb.json"
-        if ref_emb_path.exists():
-            ref_emb = {
-                k: np.asarray(v, dtype=np.float32)
-                for k, v in json.loads(ref_emb_path.read_text()).items()
-            }
-            if ref_emb.keys() == embeddings.keys():
-                drift = max(
-                    (float(np.max(np.abs(embeddings[k] - ref_emb[k]))) for k in ref_emb),
-                    default=0.0,
-                )
-                drifts.append(drift)
+        ref_emb = {
+            k: np.asarray(v, dtype=np.float32)
+            for k, v in json.loads(ref_emb_path.read_text()).items()
+        }
+        drift = float("inf")  # keys differing IS a failure, not a skip
+        if ref_emb.keys() == embeddings.keys():
+            drift = max(
+                (float(np.max(np.abs(embeddings[k] - ref_emb[k]))) for k in ref_emb),
+                default=0.0,
+            )
+        drifts.append(drift)
+        passed = same and drift <= DRIFT_TOLERANCE
+        ok &= passed
+        compared += 1
         print(
             f"[half 2] {channel.id}: {'turns identical' if same else 'TURNS DIFFER'}, "
             f"max emb drift {drift:.2e}, {time.monotonic() - started:.0f} s"
         )
     if drifts:
         print(f"[half 2] max embedding drift across channels: {max(drifts):.2e}")
-    print(f"[half 2] {'PASS — no merge decision moved' if identical else 'FAIL'}")
-    return identical
+    if compared == 0:
+        print("[half 2] nothing compared — FAIL")
+        ok = False
+    print(f"[half 2] {'PASS — no merge decision moved' if ok else 'FAIL'}")
+    return ok
 
 
 def main() -> int:

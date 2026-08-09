@@ -108,7 +108,10 @@ def _propagate(
         if max(overlaps) > 0:
             assigned[i] = int(np.argmax(overlaps))
         else:
-            sims = centroids @ vectors[pair]
+            # gated-finite inputs; macOS Accelerate raises spurious FP flags
+            # on clean GEMMs (see loop.py::_cluster)
+            with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                sims = centroids @ vectors[pair]
             assigned[i] = int(np.argmax(sims))
     return assigned
 
@@ -141,13 +144,12 @@ def run_channel(channel, arm: str, nth: int, diarizer: OwnDiarizer) -> dict:
             for a, b in _runs(spf == 1)
             if (b - a) * RF_SHIFT / 16_000 >= MIN_INTERVAL_S
         ]
+        spans = [(a, b, a * RF_SHIFT, min(b * RF_SHIFT, n)) for a, b in intervals]
+        spans = [(a, b, lo, hi) for a, b, lo, hi in spans if hi > lo]
+        pooled = diarizer._executor().map(diarizer.embed, [audio[lo:hi] for _, _, lo, hi in spans])
         unit_vectors = []
         kept = []
-        for a, b in intervals:
-            lo, hi = a * RF_SHIFT, min(b * RF_SHIFT, n)
-            if hi <= lo:
-                continue
-            vec = diarizer.embed(audio[lo:hi])
+        for (a, b, lo, hi), vec in zip(spans, pooled, strict=True):
             if vec is not None and np.all(np.isfinite(vec)) and np.any(vec):
                 unit_vectors.append(vec)
                 kept.append((a, b))

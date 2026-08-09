@@ -735,6 +735,31 @@ pre-pool loop is fully deterministic run-to-run even at intra-op 8, so any
 byte mismatch vs the right baseline is real, never "threading noise".
 Finalize watts (race-to-idle check) still owed: deferred to the online-gate
 session that needs the quiet machine anyway (`PLAN-DIARIZATION-SPEED.md`).
+Reproducing the 111.7 s denominator needs pre-pool code (checkout 9a13e6c;
+`OwnDiarizer` now hardwires intra-op 1) — the committed gate's own arms
+support 183.9 → 39.1 s = 4.7×. Both parity runs executed niced
+(backgrounded); their totals match same-day foreground component
+measurements within noise, and half 1 runs its slowest arm first, so
+thermal drift biases against the pool.
+
+#### Fewer/longer embedding units: L2 and L3 declined at kill-test (2026-08-09)
+
+`eval/embed_units.py` (freeze-based, all 20 loop channels, production fold;
+DER family B): **L3** — embed each maximal global sole-speaker interval
+once, assign pairs by overlap — cuts embedded audio 9.9× but lands mean
+DER 13.7 % vs the ward baseline's 13.2 % with worst-channel **+3.5 pt**
+(Bmr030, k=4), 7× over the ward-arm shipping bar (worst +0.5 pt).
+**L2** — ward only every-3rd-chunk's frozen vectors, propagate — mean
+14.3 % with a catastrophic **+17.1 pt** on TS3010d (min naming cosine
+0.756 vs baseline). Declined without buying a matrix — the kill-tests
+exist to fail this cheaply. One attribution finding: on ES2003c, thinning
+clustering evidence 3× leaves naming cosines at 1.0000, but
+TS3010d/Bmr024/IS1009a corrupt clusters with boundaries byte-identical —
+so cluster-evidence thinning damages naming *by itself* on some channels,
+and the declined-stride bullet's mechanism reading must NOT be narrowed to
+boundary-coarsening-only. The surviving seconds-removal path is the
+shared trunk (`PLAN-DIARIZATION-SPEED.md` step 5 L1), which keeps the
+clustering units and their values.
 
 #### Stride stays at 1 s: the speedup is paid in naming purity (2026-08-07)
 

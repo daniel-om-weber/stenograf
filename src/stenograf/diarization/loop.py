@@ -229,10 +229,12 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         sliced on the WINDOW/FRAMES scale and embedded as one concatenated
         stream (spec §1.4). The embed calls run on the shared pool in task
         order, so pairs/vectors come out exactly as the sequential loop
-        produced them (the held slices total the embedded audio, ~50 MB per
-        meeting-hour — fine, finalize already holds the channel)."""
+        produced them. Tasks hold slice VIEWS; the copying concatenate
+        happens inside each worker — the embedded audio totals ~5.9× the
+        channel (~1.35 GB/meeting-hour), which must never be materialized
+        at once (it lands hardest on the no-stenodiar low-RAM tier)."""
         n = len(audio)
-        tasks: list[tuple[int, int, np.ndarray]] = []
+        tasks: list[tuple[int, int, list[np.ndarray]]] = []
         for chunk_index, chunk in enumerate(labels):
             clean = chunk.copy()
             clean[np.sum(chunk, axis=1) >= 2] = False
@@ -251,9 +253,12 @@ class OwnDiarizer(SherpaOnnxDiarizer):
                     if start < n:
                         slices.append(audio[start : min(end, n)])
                 if slices:
-                    tasks.append((chunk_index, speaker, np.concatenate(slices)))
+                    tasks.append((chunk_index, speaker, slices))
 
-        results = self._executor().map(self.embed, [audio_slice for _, _, audio_slice in tasks])
+        def embed_task(slices: list[np.ndarray]) -> np.ndarray | None:
+            return self.embed(np.concatenate(slices))
+
+        results = self._executor().map(embed_task, [s for _, _, s in tasks])
         pairs: list[tuple[int, int]] = []
         vectors: list[np.ndarray] = []
         for (chunk_index, speaker, _), vector in zip(tasks, results, strict=True):

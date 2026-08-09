@@ -114,7 +114,9 @@ def main() -> int:
 
         embeddings = load_emb_cache(args.cluster, channel.id, root)
         if embeddings is None:
-            embeddings = cluster_embeddings(turns, read_pcm16(channel.wav_path), diarizer.embed)
+            embeddings = cluster_embeddings(
+                turns, read_pcm16(channel.wav_path), diarizer.embed, pool=diarizer._executor()
+            )
             save_emb_cache(args.cluster, channel.id, embeddings, root)
         if args.fold == "production":
             folded = fold_excess_clusters(turns, embeddings, channel.num_speakers)

@@ -166,9 +166,12 @@ tail then executes on the warmer's thread with the prebuilt backend. Cold
 path is the fallback by construction (short meeting, low memory, warm
 failure, cancel); Ollama is deliberately not warmed (server `keep_alive`
 evaporates before a normal meeting ends). Ctrl-C semantics preserved from
-the waiting thread. Gates green on a 150 s isolated-settings replay: warm
-fired mid-meeting, both channels kept "reusing live decodes" (shed exactly
-0), notes wrote through the warmer.
+the waiting thread. Gates green on two isolated-settings replays: a 150 s
+run at `--local 1 --remote 1` (no diarizer loaded — warm fired
+mid-meeting, both channels kept "reusing live decodes", shed exactly 0,
+notes wrote through the warmer) and a 50 s run at `--local 2 --remote 2`
+(meeting ends as warm fires: the mlx load ran concurrently with the
+diarizing 12-worker finalize, clean).
 
 **Honest outcome: the projected win largely evaporated on measurement.**
 Cold mlx load + first token is **2.3 s** page-cache-warm on the M4 Max
@@ -193,51 +196,49 @@ per-platform branch). Suspicion to test, not assume: on a CPU-only box with
 Ollama in thinking mode, notes may dominate the wait there too, which would
 invert the draft's "weak Intel is the online worker's strong case".
 
-## Step 5 — remove embedded seconds (accuracy-gated, the big lever)
+## Step 5 — remove embedded seconds — L2 and L3 DECLINED at kill-test 2026-08-09; L1 is the surviving path
 
-Every arm here changes embedding values, so each costs a harness matrix
-plus `threshold_pick.py` and `auto_update.py` re-runs; `loop_freeze.py`
-cannot amortize any of it (it persists exactly what these arms change, and
-is sha-stamped against stale reuse). Kill-tests come before matrices.
+The kill-tests ran on all 20 loop channels (`eval/embed_units.py`,
+freeze-based — no matrix bought, per-channel numbers in the harness
+section of `eval/README.md`):
 
-- **L3 first — embed each maximal contiguous sole-speaker run once.**
-  ~241 calls / ~9.4 s instead of 2 361 / 93.4 s on the reference channel
-  (priced with the validated cost model); ~30 lines in `_pair_embeddings`,
-  no ONNX work, and the speedup is hardware-independent. Risk is the
-  clustering unit: fewer, longer vectors, and a run spanning a missed
-  speaker change becomes one contaminated vector (the TST-Bench failure
-  mode). Kill-test: one channel — cluster count, DER, naming cosines vs
-  reference; buy the matrix only if it holds.
-- **L2 as the attribution probe** (cheap, do with L3's kill-test): embed
-  every Nth chunk, propagate labels by frame overlap; `speakers_per_frame`,
-  `starts` and the vote grid stay byte-identical to today, so the
-  boundary-coarsening mechanism named in the stride kill is not engaged.
-  The declined bullet's damage attribution (clustering vectors vs
-  `cluster_embeddings()` naming vectors) is **inferred, never isolated** —
-  at stride 2 the surviving offsets are a subset of stride 1's, so
-  clustering vectors can only be removed, not contaminated. One N=3 run
-  diffing naming cosines tests the attribution the declined bullet rests
-  on; if confirmed, note it on the bullet (its scope is narrower than it
-  reads).
-- **L1 behind L3 — one shared trunk pass + masked stat-pooling** (=
-  SDBench's "per-chunk" method, which carries a published accuracy prior:
-  DER 0.255 → 0.257 on their benchmark — a measured data point for this
-  exact architecture, not a guess). The embedder trunk is time-local
-  (verified: the only global-over-time ops are the three ReduceMeans in
-  `/pool/`; the graph splits cleanly and trunk = 97–103 % of full-model
-  cost), so one pass over long blocks plus O(1) masked mean/std per pair
-  from prefix sums reaches the same ~10× and also makes the naming-stage
-  `cluster_embeddings()` calls free — measured at step 0 as ~10–15 s per
-  channel on both paths. Two seams break value-equivalence honestly: CMN scope
-  (sherpa subtracts a per-call global mean *outside* the graph — dropping
-  it moves cosine 0.86 → 0.33, measured) and mask-edge receptive-field
-  bleed. **Precondition before any matrix**: our own fbank front end must
-  hit cosine > 0.9999 against sherpa's on ~100 clips; a day's attempt
-  reached only 0.855 — if parity can't be reached, L1 dies on
-  implementation risk at zero matrix cost. L1 is also the enabling move
-  for Intel EPs (below); pursue it only if L3 moves the accuracy numbers
-  or the EP need materializes. Blocked trunk processing required — a
-  whole-file trunk output is ~576 MB.
+- **L3 (contiguous sole-speaker runs, ~10× less embedded audio) —
+  DECLINED.** Mean DER 13.7 % vs baseline 13.2 %, and the worst channel
+  regresses **+3.5 pt** (Bmr030, k=4 — inside the product-weighted 3–5
+  speaker range) with +1.9/+1.8 on two more. The closed program's shipping
+  bar (ward: worst-channel +0.5 pt) is missed by 7×. The savings were
+  real (9.9× on the reference channel) — the accuracy price is not payable.
+  Re-open trigger: none from here; the seconds-removal budget goes to L1.
+- **L2 (cluster every Nth chunk's vectors, labels propagated) —
+  DECLINED, with a finding that narrows nothing.** Mean 14.3 %, and
+  TS3010d is catastrophic: **+17.1 pt** (0.344 vs 0.173) with min naming
+  cosine 0.756. The attribution the probe was built for came back MIXED:
+  on ES2003c thinning clustering evidence 3× left naming cosines at
+  1.0000 (the declined-stride bullet's mechanism claim holds there), but
+  TS3010d/Bmr024/IS1009a show cluster-evidence thinning ALONE corrupting
+  clusters and naming vectors with boundaries byte-identical — so "L2 is
+  safe where stride wasn't" is **refuted**, and the declined-stride
+  bullet's scope stays as written (do not narrow it).
+- **L1 — one shared trunk pass + masked stat-pooling — now the ONLY open
+  seconds-removal path**, and the kill-test outcome strengthens its case:
+  L3 failed by changing the clustering units, and L1 keeps the
+  per-(chunk, speaker) units exactly while computing them ~10× cheaper (=
+  SDBench's "per-chunk" method, published accuracy prior DER
+  0.255 → 0.257). The embedder trunk is time-local (verified: the only
+  global-over-time ops are the three ReduceMeans in `/pool/`; the graph
+  splits cleanly and trunk = 97–103 % of full-model cost), so one pass
+  over long blocks plus O(1) masked mean/std per pair from prefix sums
+  reaches the ~10× and also makes the naming-stage `cluster_embeddings()`
+  calls free — measured at step 0 as ~10–15 s per channel on both paths.
+  Two seams break value-equivalence honestly: CMN scope (sherpa subtracts
+  a per-call global mean *outside* the graph — dropping it moves cosine
+  0.86 → 0.33, measured) and mask-edge receptive-field bleed.
+  **Precondition before any matrix**: our own fbank front end must hit
+  cosine > 0.9999 against sherpa's on ~100 clips; a day's attempt reached
+  only 0.855 — if parity can't be reached, L1 dies on implementation risk
+  at zero matrix cost. L1 is also the enabling move for Intel EPs
+  (below). Blocked trunk processing required — a whole-file trunk output
+  is ~576 MB. This is the next session's opening move for this plan.
 
 ## Step 6 — decide the online worker against the post-step-2/5 numbers
 
@@ -263,9 +264,14 @@ weakest supported box, on a real hybrid meeting:
 
 Gates 3 and 4 need no worker code: trickle-pace the existing `OwnDiarizer`
 over a growing prefix beside a replay and read powermetrics +
-`shed_by_channel`. One afternoon; run them first and let them kill it
-cheaply. If declined, record the trigger: a measured weak-box wait split
-where diarization clears gates 1+2.
+`shed_by_channel`. Scope clarification (2026-08-09 review): shedding can
+only move while capture runs, so the *finalize* pool can never cause it —
+gate 3 tests specifically the online worker's capture-time duty cycle.
+On the M4 Max that duty cycle (~5 % of one core) passes trivially, so the
+gates are only informative on the weak box: run them there, in the same
+session as step 4's wait split and the owed finalize-watt reading. If
+declined, record the trigger: a measured weak-box wait split where
+diarization clears gates 1+2.
 
 ## Non-levers and declines, measured this review (don't re-spend)
 

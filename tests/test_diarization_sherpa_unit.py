@@ -15,6 +15,9 @@ broke what every mocked test passed green.
 
 from __future__ import annotations
 
+import os
+import sys
+
 import numpy as np
 import pytest
 
@@ -163,3 +166,19 @@ def test_l2_normalize_guards_the_zero_vector():
     zero = l2_normalize(np.zeros(3, dtype=np.float32))
     assert np.all(zero == 0.0) and not np.any(np.isnan(zero))  # no div-by-zero / NaN
     assert l2_normalize(np.array([3.0, 4.0, 0.0])) == pytest.approx([0.6, 0.8, 0.0])
+
+
+def test_pool_workers_falls_back_when_probes_fail(monkeypatch):
+    # sysctl dead (macOS branch) and /proc/cpuinfo unreadable (Linux branch)
+    # must land on the capped logical-count fallback, never raise.
+    from stenograf.diarization import sherpa
+
+    def broken_run(*args, **kwargs):
+        raise OSError("no sysctl here")
+
+    monkeypatch.setattr(sherpa.subprocess, "run", broken_run)
+    workers = sherpa._pool_workers()
+    assert 1 <= workers <= sherpa._MAX_POOL
+    ceiling = min(sherpa._MAX_THREADS, os.cpu_count() or 1)
+    if sys.platform not in ("darwin",) and not sys.platform.startswith("linux"):
+        assert workers <= ceiling

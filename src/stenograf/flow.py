@@ -420,7 +420,7 @@ class MeetingRun:
         notes_warmer: NotesWarmer | None = None
         if self.request.notes:
             # Start the notes warmer now that capture and the ASR are up: its
-            # own grace delay keeps the multi-GB load away from meeting start,
+            # own grace delay keeps the model load away from meeting start,
             # and every early exit below cancels it — the cold path is the
             # fallback by construction (stenograf.notes.warm).
             notes_warmer = NotesWarmer(self._build_notes_backend)

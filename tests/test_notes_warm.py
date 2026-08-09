@@ -108,3 +108,22 @@ def test_job_error_reraises_on_waiting_thread(monkeypatch):
         assert str(exc) == "boom"
     else:  # pragma: no cover
         raise AssertionError("job error must propagate")
+
+
+def test_build_baseexception_never_hangs_the_wait(monkeypatch):
+    # A BaseException during warm-up escapes the Exception guard and kills
+    # the thread — _done must still be set (the finally contract) and the
+    # job must degrade to inline, or the end of the meeting waits forever.
+    monkeypatch.setattr(warm_module, "_available_bytes", lambda: None)
+
+    class Boom(BaseException):
+        pass
+
+    def build():
+        raise Boom()
+
+    warmer = NotesWarmer(build, delay_s=0.01)
+    warmer.start()
+    warmer._thread.join(timeout=5)
+    assert not warmer._thread.is_alive()
+    assert warmer.run_notes(lambda handed: handed is None) is True

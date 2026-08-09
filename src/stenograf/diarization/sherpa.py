@@ -32,11 +32,17 @@ they are skipped when a cluster has any longer span, and used only as a last
 resort (see :func:`cluster_embeddings`)."""
 
 _MAX_THREADS = 8
-"""Intra-op cap for the sherpa *monolith* only (`eval/loop_parity.py`'s
+"""Two jobs: intra-op cap for the sherpa monolith (`eval/loop_parity.py`'s
 reference arm; measured 2026-07-12, 12-core box: 48.7 s at 1 thread vs
-17.9 s at 8, plateau ~8). The shipped path runs every ORT session at ONE
+17.9 s at 8, plateau ~8) and the pool's fallback worker cap where physical
+cores are unknowable. The shipped path runs every ORT session at ONE
 intra-op thread and parallelizes across calls instead — see
 :func:`_pool_workers`."""
+
+_MAX_POOL = 16
+"""Hard ceiling on pool workers: efficiency decays past the physical core
+count (2026-08-09: 12 workers ≈ 8 on 16 logical CPUs) and a many-core
+server gains nothing this workload can use."""
 
 
 def _num_threads() -> int:
@@ -53,8 +59,17 @@ def _pool_workers() -> int:
     bit-exact against the sequential intra-op-1 reference). Logical CPUs
     oversubscribe — hyperthreads and E-cores measured to add nothing (12
     workers ≈ 8 on 16 logical CPUs) — so: P-cores via sysctl on macOS,
-    physical cores via /proc/cpuinfo on Linux, logical count capped at
-    :data:`_MAX_THREADS` elsewhere."""
+    physical cores via /proc/cpuinfo on Linux (bounded by the scheduler
+    affinity mask, so a cgroup-quota'd container never spawns a host-sized
+    pool), logical count capped at :data:`_MAX_THREADS` elsewhere; every
+    branch capped at :data:`_MAX_POOL`."""
+    affinity = None
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)  # Linux-only
+    if sched_getaffinity is not None:
+        try:
+            affinity = len(sched_getaffinity(0))
+        except OSError:
+            affinity = None
     if sys.platform == "darwin":
         try:
             out = subprocess.run(
@@ -67,7 +82,7 @@ def _pool_workers() -> int:
         except (OSError, subprocess.SubprocessError):
             out = ""
         if out.isdigit() and int(out) > 0:
-            return int(out)
+            return max(1, min(int(out), _MAX_POOL))
     if sys.platform.startswith("linux"):
         cores: set[tuple[str, str]] = set()
         try:
@@ -80,8 +95,11 @@ def _pool_workers() -> int:
         except OSError:
             cores.clear()
         if cores:
-            return len(cores)
-    return max(1, min(_MAX_THREADS, os.cpu_count() or 1))
+            return max(1, min(len(cores), affinity or len(cores), _MAX_POOL))
+    fallback = min(_MAX_THREADS, os.cpu_count() or 1)
+    if affinity is not None:
+        fallback = min(fallback, affinity)
+    return max(1, fallback)
 
 
 class SherpaOnnxDiarizer(Diarizer):
