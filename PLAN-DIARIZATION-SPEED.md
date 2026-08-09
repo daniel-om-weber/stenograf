@@ -1,139 +1,254 @@
-# PLAN-DIARIZATION-SPEED — draft discussion notes, not yet a plan
+# PLAN-DIARIZATION-SPEED — steps and gates
 
-Opened 2026-08-09, immediately after the diarization program closed. Status:
-**notes for a scoping session** — nothing here is committed work; the next
-session turns this into steps with gates, or closes it. Accuracy is settled
-(the closed program's verdicts stand); this is purely about *when* and *how
-fast* the same computation runs.
+Scoped 2026-08-09, replacing the same-day draft discussion notes (`git log
+-p` this file for them). Accuracy is settled — the closed diarization
+program's verdicts stand; this plan changes *when* and *how fast* the same
+computation runs. The draft's estimates were adversarially reviewed the same
+day (three independent measurement sessions on the M4 Max, one channel of
+real in-room audio each); every number below marked **measured** was taken
+then unless it carries an older date, and each gate re-measures on its own
+inputs — none of the review's scratch scripts are load-bearing.
 
-## The measured baseline (2026-08-09, M4 Max, ES2003c.loop, 37.6 min)
+## What the review corrected before any step ran
 
-Production `OwnDiarizer.diarize` at k+1, per stage:
+- **The 111.7 s baseline is the known-count path, and that is not the
+  default** (measured, from code). `build_diarizer` returns
+  `SpeakrsCliDiarizer`, which forks on speaker count
+  (`diarization/speakrs.py`): known count → `OwnDiarizer` (the measured
+  2 361-embed loop); auto-detect — the default, and what the setup form
+  recommends — → the stenodiar subprocess, then ~one embedding per cluster
+  span. Only when stenodiar is absent (the manylinux_2_28 low-floor wheel,
+  i.e. the oldest hardware) does the owned loop take both cases. The
+  "under a second per meeting-hour" warm-helper figure in `speakrs.py`'s
+  timeout comment is **assumed**, never measured — hence step 0.
+- **Parallelization's headroom was quoted against the wrong denominator.**
+  The shipped loop already runs `min(8, cpu)` intra-op threads
+  (`diarization/sherpa.py`), worth 1.50× over single-thread on the embed
+  stage (measured). An 8-worker pool at intra-op 1 beats *shipped* by
+  2.5–2.6× (measured, interleaved re-runs ±2 %), not the draft's 3–6×; a
+  4-core mobile Intel projects to ~1.9× net (**inferred** — step 4 measures
+  it).
+- **Batching the embedder is a 3.8× pessimization** (measured, reproduced
+  interleaved): ORT's conv path collapses above batch 1 on this model
+  (conv time 8.6× for 2× work; 85.6 % of the profile is conv). Batching
+  segmentation: 1.14× at batch 32. Pooling segmentation instead: 3.07× at
+  12 workers with max|Δ| = 0.0 and zero powerset argmax flips (measured).
+  The draft's "DiariZen drives batch 32" was a GPU argument imported into a
+  CPU setting.
+- **The draft's parity tolerance would have failed its own change for a
+  spurious reason.** Changing intra-op 8 → 1 shifts embeddings 3.4e-7 —
+  above the borrowed 1.9e-8 — by float reduction order alone; the pool
+  itself, against an intra-op-1 sequential reference, is **bit-exact** at
+  2/4/8/12 workers, shared or per-worker extractors, 318 real slices
+  (measured). The gate in step 2 is built from that split.
+- **Extractor thread-safety: safe as exercised.** One shared
+  `SpeakerEmbeddingExtractor` across 8 workers is bit-identical to
+  sequential and no slower than per-worker copies, which would cost
+  8 × 26 MB (measured; one platform, one model — the gate re-checks on
+  Intel). ORT `Run` is documented thread-safe; sherpa's per-call fbank
+  state lives in `create_stream()`.
+- **The structural redundancy is confirmed and is the bigger prize**:
+  13 192 s of audio embedded for a 2 251 s channel — 5.9× the file, 9.8×
+  its speech (measured on the frozen ES2003c.loop reference). Embed cost is
+  affine in input length (6.5 ms + 5.9 ms/s, predicts the production 93.4 s
+  to 0.2 %), so removing embedded seconds pays linearly and identically on
+  every platform, where pooling pays less the weaker the chip. The
+  algorithm needs one *vector* per (chunk, speaker) pair for the vote; it
+  does not need one *trunk pass* per pair — the floor is ~10× under today.
+- **A recorded re-open path is backwards for our loop** (priced with the
+  validated cost model, not run): the declined-stride bullet's "per-chunk
+  embedding, mask at stat-pooling first" would embed 2 248 full 10-s
+  windows = ~147 s, *slower* than today's 93 s. It is the right fix for
+  pyannote, which embeds the full window per speaker slot; our
+  `_pair_embeddings` already crops to sole-speaker audio
+  (`diarization/loop.py`), so the 21× framing never applied here. Step 1
+  corrects the record.
+- **The online idea's costs were understated.** Notes consume speaker
+  labels (`notes/prompt.py` renders `speaker [ts]: text` and instructs
+  attribution), so diarization can never leave the notes critical path by
+  running beside it. A worker's sustained load on a weak chip is the most
+  plausible trigger of live-decode shedding, and a shed channel loses
+  finalize ASR reuse entirely (`session.py`, `reuse_live_finalize`) — the
+  failure mode is a net *slowdown*, not neutrality. Hybrid meetings
+  diarize two channels (~2× the draft's duty cycle), fan noise during a
+  meeting raises the floor of the very mic being diarized, and byte-parity
+  across mixed online/offline runs pins session config (threads, EP)
+  identically across all paths forever. Step 6 decides with gates that can
+  kill the design before any worker code exists.
 
-| stage | time | share | shape of the work |
-|---|---|---|---|
-| segmentation | 17.5 s | 16 % | 2 248 windows, **sequential, batch 1** |
-| embeddings | 93.4 s | **84 %** | 2 361 `embed()` calls, **sequential, batch 1** |
-| clustering + assemble | 0.7 s | <1 % | global ward over all vectors |
-| **total** | **111.7 s** | RTF **0.049** | ≈ 3 min per meeting hour |
+## Step 0 — path-cost split (minutes; scopes everything else)
 
-Context for any latency discussion: this is a *finalize* cost — the live
-pass never waits on it — and the end-of-meeting wait also contains the
-notes-LLM pass, which needs the finished transcript and can never move
-online. What the wait is actually made of on a real meeting is unmeasured
-(see "Missing measurements").
+Two `steno transcribe` runs on the same meeting audio, one with
+`--speakers`, one auto. Record wall-clock of the diarization stage for
+each, and which path ran. If the estimate path is ≥5× cheaper than the
+owned loop, this program's beneficiaries are (a) users who state counts
+because exact counts label speakers better, and (b) the manylinux_2_28 /
+no-stenodiar tier — state that scope in this file and weigh every later
+step against it.
 
-## Lever 1 — parallelize + batch (engineering only, no accuracy trade)
+## Step 1 — correct the record (no code)
 
-The 2 361 embedding calls are mutually independent; onnxruntime's `Run`
-releases the GIL, and models this small do not saturate intra-op threading
-(`_num_threads` caps it today). A thread pool across the P-cores is
-plausibly 3–6× on the 84 % stage. The segmentation model has a batch
-dimension we run at 1; DiariZen drives the same architecture at batch 32 —
-plausibly 2–4× on the 16 % stage. Projected combined: **~112 s → ~30–45 s**
-per 40-min meeting (estimate, to be measured).
+- PLAN.md declined-stride bullet and `eval/README.md`'s matching passage:
+  replace "per-chunk embedding (mask at stat-pooling) first" with the
+  shared-trunk formulation (one trunk pass over long blocks, masked
+  statistics pooling per pair — step 5's L1), and note the per-chunk
+  variant was priced at ~147 s vs 93 s here because our loop already crops
+  to sole-speaker audio.
+- `eval/diarization-sota-2026.md`: the 21× / DER 0.255→0.257 numbers are
+  SDBench (arXiv:2507.16136), not arXiv:2606.08505 (which is the
+  relative-minimum-cluster-size paper, on CAM++, containing neither
+  number).
+- `eval/diarization-loop-spec.md`'s "~2 active speakers per chunk":
+  measured 1.05–1.08.
 
-Why this is the first move regardless of everything below: it speeds up
-every path that exists — today's finalize, `steno transcribe` (offline
-forever), and every catch-up/recovery path of a future online worker — on
-every platform, weak hardware most of all.
+## Step 2 — the pool (engineering only, no accuracy trade)
 
-Gates and known traps for the plan:
+Thread-pool both stages: workers at intra-op 1, shared extractor, worker
+count = performance cores (not `os.cpu_count()` — hyperthreads and E-cores
+measured to add nothing at 12 vs 8 workers on 16 logical CPUs). Fold
+**channel-parallel finalize** into the same thread budget: finalize runs
+diarizing channels strictly serially today (`session.py` plan loop), so a
+hybrid meeting pays 2 × 112 s; channels are independent and this is a loop
+restructure, not a second path. Expected on M4 Max: 111.7 → ~42 s single
+channel (segmentation 3.07×, embeddings 2.6×, both measured as components);
+weak Intel ~1.9× (**inferred**, step 4 measures).
 
-- **Parity gate on the harness**: same inputs, same outputs. Execution-order
-  float jitter is expected — the precedent tolerance is the swap gate's
-  emb.json ≤ 1.9e-8 with *no merge decision moved*; define the tolerance
-  before the change, byte-compare turns.
-- **Extractor thread-safety is unverified.** sherpa-onnx's
-  `SpeakerEmbeddingExtractor` may need one instance per worker thread;
-  measure both layouts.
-- **Thread budget interplay**: outer parallelism × `intra_op_num_threads`
-  must not oversubscribe (today both sessions get `_num_threads()` intra-op
-  threads); likely intra-op → 1 per worker once the outer pool exists.
-- Power: batch/parallel is race-to-idle — expected watt-neutral or better,
-  but the finalize watt number has never been taken; cheap to record while
-  gating (passwordless powermetrics).
+Gate, two halves:
 
-## Lever 2 — already declined, recorded with its re-open path
+1. **Pool vs intra-op-1 sequential reference: bit-exact** (`max|Δ| = 0.0`
+   on all embeddings and segmentation logits), at ≥2 worker counts.
+   Exact equality, not a tolerance — measured achievable.
+2. **Intra-op-1 reference vs shipped intra-op-8 output**: drift ~3.4e-7 is
+   expected and inherent; the gate is the swap-gate precedent — no merge
+   decision moved, byte-identical turns, harness DER unchanged.
 
-Stride ≥ 2 s measured 2.1×/3.1× end-to-end but contaminates cluster
-embeddings and silently invalidates the 0.56 naming calibration (FAR at the
-shipped threshold 0 → 5 → 13.6 %). Declined in the closed program; the
-recorded re-open path (PLAN.md declined list) is per-chunk embedding masked
-at stat-pooling *first*, and any stride change re-runs the threshold
-calibration inside its gate. Note the redundancy it attacks is structural:
-at stride 1 every second of speech lies in ~10 overlapping windows and is
-embedded up to ~10×.
+Record finalize watts during the sequential and pooled runs while gating
+(passwordless powermetrics) — race-to-idle check, free to take, decides
+nothing downstream.
 
-## Lever 3 — speculative, measure before believing
+## Step 3 — warm the notes model during the meeting (scheduling, cheap)
 
-- CoreML EP for the ERes2Net embedder (CNN, ANE-friendly; sherpa-onnx
-  exposes the provider knob). The segmentation LSTM is typically a poor
-  CoreML fit. Unmeasured.
-- int8 embedder quantization: treat as effectively declined — int8 already
-  ruined German ASR in this repo, and quantizing the embedder shifts the
-  cosine scale, forcing a full threshold recalibration for an unproven win.
+The notes backend loads lazily inside the first `complete()` call
+(`notes/mlx.py`) — strictly after diarization, though the load depends on
+nothing from the transcript. A dedicated notes thread created at meeting
+start builds the backend and runs a token-sized warm-up, then waits for the
+transcript; MLX generation must stay on that thread (thread-affinity guard
+already in the module). Removes a 4.35 GB cold load (and on Ollama boxes,
+model load + first token) from the end-of-meeting wait for zero duplicated
+chunk semantics. Gate on free memory — 4.35 GB resident through the meeting
+is fine on 48 GB, not on a 16 GB box — and on the live pass showing no new
+shedding with the warm-up present.
 
-## The online idea — compute during the meeting, cluster at the end
+## Step 4 — the weak-box datapoint, reframed as the whole wait
 
-Feasibility is structural and favorable: of the four stages, **only
-clustering is global over the meeting, and clustering costs 0.55 s.**
-Segmentation windows and per-chunk embeddings depend only on audio already
-heard — a worker trailing the recording by a few seconds amortizes the
-112 s across the meeting (~5 % of one P-core here; 15–30 % on a weak Intel).
-At meeting end: cluster accumulated vectors, fold, intersect, name — seconds.
+One session on the CachyOS notebook or the GPD, one real (or `verify`-
+skill) meeting: record the **entire** end-of-meeting wait split —
+diarization (and which path), notes model load, notes generation — plus the
+intra-op sweep and pool sweep from step 2's harness (<5 min compute) and a
+batch>1 embed timing (the conv collapse is measured on ARM; x86's NCHWc
+layout may behave differently — if batching *wins* there, step 2 grows a
+per-platform branch). Suspicion to test, not assume: on a CPU-only box with
+Ollama in thinking mode, notes may dominate the wait there too, which would
+invert the draft's "weak Intel is the online worker's strong case".
 
-Design properties worth keeping from the discussion:
+## Step 5 — remove embedded seconds (accuracy-gated, the big lever)
 
-- **Pure precompute, identical semantics.** Same window boundaries, same
-  models, deterministic; only the last few tail windows need the meeting's
-  end. State is small: (labels, pairs, vectors) per channel. If the worker
-  dies or lags, finalize computes whatever is missing — the offline path is
-  the fallback by construction, which is only comfortable because lever 1
-  makes that fallback fast. Byte-parity with the offline loop is the gate.
-- **Parallelization's role changes online**: steady-state arrival is ~1
-  window + ≤3 embedding calls per second — sequential keeps up even on weak
-  chips. The pool earns its place in catch-up (late start, load, lid-close,
-  crash recovery) and in the forever-offline paths. Online is a scheduling
-  layer over the same code, not a second algorithm.
+Every arm here changes embedding values, so each costs a harness matrix
+plus `threshold_pick.py` and `auto_update.py` re-runs; `loop_freeze.py`
+cannot amortize any of it (it persists exactly what these arms change, and
+is sha-stamped against stale reuse). Kill-tests come before matrices.
 
-Costs, to be weighed with numbers next session:
+- **L3 first — embed each maximal contiguous sole-speaker run once.**
+  ~241 calls / ~9.4 s instead of 2 361 / 93.4 s on the reference channel
+  (priced with the validated cost model); ~30 lines in `_pair_embeddings`,
+  no ONNX work, and the speedup is hardware-independent. Risk is the
+  clustering unit: fewer, longer vectors, and a run spanning a missed
+  speaker change becomes one contaminated vector (the TST-Bench failure
+  mode). Kill-test: one channel — cluster count, DER, naming cosines vs
+  reference; buy the matrix only if it holds.
+- **L2 as the attribution probe** (cheap, do with L3's kill-test): embed
+  every Nth chunk, propagate labels by frame overlap; `speakers_per_frame`,
+  `starts` and the vote grid stay byte-identical to today, so the
+  boundary-coarsening mechanism named in the stride kill is not engaged.
+  The declined bullet's damage attribution (clustering vectors vs
+  `cluster_embeddings()` naming vectors) is **inferred, never isolated** —
+  at stride 2 the surviving offsets are a subset of stride 1's, so
+  clustering vectors can only be removed, not contaminated. One N=3 run
+  diffing naming cosines tests the attribution the declined bullet rests
+  on; if confirmed, note it on the bullet (its scope is narrower than it
+  reads).
+- **L1 behind L3 — one shared trunk pass + masked stat-pooling.** The
+  embedder trunk is time-local (verified: the only global-over-time ops are
+  the three ReduceMeans in `/pool/`; the graph splits cleanly and trunk =
+  97–103 % of full-model cost), so one pass over long blocks plus O(1)
+  masked mean/std per pair from prefix sums reaches the same ~10× and also
+  makes the naming-stage `cluster_embeddings()` calls free — which are
+  *outside* the 2 361 and the 111.7 s, and unmeasured (step 0/4 runs
+  should time them). Two seams break value-equivalence honestly: CMN scope
+  (sherpa subtracts a per-call global mean *outside* the graph — dropping
+  it moves cosine 0.86 → 0.33, measured) and mask-edge receptive-field
+  bleed. **Precondition before any matrix**: our own fbank front end must
+  hit cosine > 0.9999 against sherpa's on ~100 clips; a day's attempt
+  reached only 0.855 — if parity can't be reached, L1 dies on
+  implementation risk at zero matrix cost. L1 is also the enabling move
+  for Intel EPs (below); pursue it only if L3 moves the accuracy numbers
+  or the EP need materializes. Blocked trunk processing required — a
+  whole-file trunk output is ~576 MB.
 
-1. **Power during the meeting.** Moves ~112 s of compute into the live
-   window — plausibly a few tenths of a watt sustained, same order as the
-   entire live budget (~0.6 W) that was fought down from 6.1 W with
-   efficiency explicitly prioritized over latency. Needs powermetrics, and
-   possibly a plugged-in-only policy question.
-2. **A second computation path.** `steno transcribe` keeps the offline loop
-   forever, so the online worker duplicates the loop's chunking semantics
-   in streaming form — every future loop change then has two homes. The
-   one-path principle doesn't strictly forbid it, but it's a real
-   maintenance cost.
-3. **Benefit is hardware-dependent.** On this Mac after lever 1: saves
-   ~30–45 s out of a wait that stays minutes long because of notes. On
-   mobile Intel: saves 6–12 min (2–4 min after lever 1) — the strong case.
-   The trigger candidate: *the post-lever-1 finalize number on weak
-   hardware still bites.*
+## Step 6 — decide the online worker against the post-step-2/5 numbers
 
-## Missing measurements (do these before or at the scoping session)
+Structural facts stand: only clustering is global (verified — non-tail
+chunks are pure functions of their window), `SessionStore` is
+prefix-immortal so input byte-parity is free, and crash fallback is the
+offline path by construction. Build it only if ALL of these hold on the
+weakest supported box, on a real hybrid meeting:
 
-1. **Real-meeting finalize split**: ASR (should be ≈0 — live decode reuse),
-   diarization, re-ID naming, notes-LLM, on a real meeting from
-   `~/Documents/Meetings` (or the `verify` skill's synthetic session).
-   The online decision is made against this split, not against the
-   diarization number alone.
-2. **Finalize watts** during the current sequential run vs the lever-1
-   parallel run (race-to-idle check).
-3. **An Intel datapoint.** Everything above marked for Intel is *inferred*
-   (mobile 3–6× slower single-core ⇒ RTF ~0.15–0.3 ⇒ 6–12 min per 40-min
-   meeting today). Directly measurable on the CachyOS notebook or the GPD;
-   worth one run if weak-hardware numbers will carry the online decision.
+1. **Share** — post-step-2/5 diarization ≥ 40 % of the total wait
+   (diarization + notes, step 4's split).
+2. **Absolute** — post-step-2/5 diarization ≥ 90 s there.
+3. **Non-regression** — with a synthetic load at the worker's duty cycle
+   beside a full `--replay` meeting, `shed_by_channel` stays exactly 0.0.
+   Any shedding kills the design (shed = finalize re-decodes ASR).
+4. **Thermal** — package watts and fan state during that loaded replay
+   indistinguishable from unloaded, or the policy is AC-only — and an
+   AC-only policy is itself evidence against building it (the policy layer
+   and the started-then-stopped mixed state raise the second-code-path
+   cost, they don't halve it).
+5. **Path coverage** — step 0 established the owned loop actually carries
+   enough real meetings to matter.
 
-## Suggested sequencing for the plan (to be debated)
+Gates 3 and 4 need no worker code: trickle-pace the existing `OwnDiarizer`
+over a growing prefix beside a replay and read powermetrics +
+`shed_by_channel`. One afternoon; run them first and let them kill it
+cheaply. If declined, record the trigger: a measured weak-box wait split
+where diarization clears gates 1+2.
 
-1. Lever 1 with its parity gate and thread-safety measurements.
-2. Missing-measurement runs (finalize split, watts, one Intel datapoint).
-3. Decide online precompute against those numbers; if pursued, it is a
-   scheduling layer over lever 1's code with byte-parity against the
-   offline loop as the gate; if declined, record the trigger that reopens
-   it (weak-hardware finalize pain).
+## Non-levers and declines, measured this review (don't re-spend)
+
+- **Embedder batching**: 0.26× (see corrections above). Re-open only if
+  step 4 shows x86 inverts it.
+- **EPs through sherpa**: unreachable — sherpa's bundled ORT accepts any
+  `provider` string and silently falls back to CPU (verified for openvino,
+  xnnpack, directml). Every EP lever for the embedder requires L1's
+  sherpa-bypass; segmentation already runs in our own session and is open
+  to EPs today.
+- **CoreML embedder EP**: 1.50× measured through sherpa, mac-only, 2 s
+  compile per process, likely non-composing with the pool (ANE is one
+  shared resource — cheap to test if ever wanted). Helps the platform that
+  needs it least; skip.
+- **int8 embedder**: declined, with the reason corrected — the "int8
+  ruined German ASR" transfer is weak (that damage compounded through an
+  autoregressive decoder; this is one feed-forward pass into cosine). The
+  real reasons: ORT CPU int8 conv pays only with VNNI, absent on exactly
+  the arbitrary-mobile-Intel target, and the recalibration bill (0.56 +
+  ward + fold gates) is certain while the win is unmeasured. Re-open
+  trigger: a measured >1.5× on real target hardware, not "never".
+- **fp16**: no x86 CPU fp16 conv kernels in ORT — cast-to-fp32 makes it
+  neutral-to-slower. ARM-only curiosity.
+- **Graph-opt level / saved optimized model / IOBinding / arena tuning**:
+  quantified non-levers (opt already `ORT_ENABLE_ALL` with fused convs;
+  session init 0.05 s; feature+copy share 6.7 %; arena only matters with
+  per-worker sessions, which the shared extractor obviates).
+- **Slice-length cap (truncate embed inputs at ~3 s, 1.91× measured on the
+  embed stage)**: subsumed by L3 (which removes the same seconds and more);
+  revisit only if L3's kill-test fails for reasons a cap wouldn't share.
