@@ -63,6 +63,11 @@ def main() -> int:
         "--out-name", help=f"output dir under out/diar/ (default {BASELINE}-<cluster>)"
     )
     parser.add_argument("--segments", help="comma-separated channel ids (default: all)")
+    parser.add_argument(
+        "--include-duo",
+        action="store_true",
+        help="add the synthetic k=2 duo channels (no baseline words — DER only)",
+    )
     parser.add_argument("--check", help="byte-compare outputs against this arm dir (parity gate)")
     parser.add_argument(
         "--shift-s", type=float, default=1.0, help="window stride in seconds (reference: 1.0)"
@@ -76,7 +81,11 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     base_dir = OUT_DIR / "diar" / BASELINE
     wanted = set(args.segments.split(",")) if args.segments else None
-    channels = [c for c in ami.load_channels() if wanted is None or c.id in wanted]
+    channels = [
+        c
+        for c in ami.load_channels(include_duo=args.include_duo)
+        if wanted is None or c.id in wanted
+    ]
     if not channels:
         raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
 
@@ -119,21 +128,22 @@ def main() -> int:
                 args.fold, turns, embeddings, channel.num_speakers, ref, **gate
             )
 
-        words = [
-            Word(text=w["text"], start=w["start"], end=w["end"])
-            for w in json.loads((base_dir / f"{channel.id}.words.json").read_text())["words"]
-        ]
-        entries = merge_words_turns(words, folded_turns)
-
         write_rttm(
             out_dir / names[0], [Turn(t.speaker, t.start, t.end) for t in folded_turns], channel.id
         )
         (out_dir / names[1]).write_text(
             json.dumps({k: [float(x) for x in v] for k, v in folded_emb.items()})
         )
-        (out_dir / names[2]).write_text(
-            json.dumps(_words_json(entries), ensure_ascii=False, indent=2)
-        )
+        base_words = base_dir / f"{channel.id}.words.json"
+        if base_words.exists():
+            words = [
+                Word(text=w["text"], start=w["start"], end=w["end"])
+                for w in json.loads(base_words.read_text())["words"]
+            ]
+            entries = merge_words_turns(words, folded_turns)
+            (out_dir / names[2]).write_text(
+                json.dumps(_words_json(entries), ensure_ascii=False, indent=2)
+            )
         print(f"[{channel.id}] {len(folded_turns)} turns, {time.monotonic() - started:.0f}s")
 
     if args.check:
@@ -141,8 +151,14 @@ def main() -> int:
         for channel in channels:
             for suffix in (".rttm", ".emb.json", ".words.json"):
                 name = f"{channel.id}{suffix}"
-                same = (out_dir / name).read_bytes() == (check_dir / name).read_bytes()
-                if not same:
+                ours, theirs = out_dir / name, check_dir / name
+                if not ours.exists() and not theirs.exists():
+                    continue  # duos carry no words.json on either side
+                if ours.exists() != theirs.exists():
+                    failures += 1
+                    print(f"PARITY FAIL {name} (exists on one side only)")
+                    continue
+                if ours.read_bytes() != theirs.read_bytes():
                     failures += 1
                     print(f"PARITY FAIL {name}")
         print("parity: PASS" if failures == 0 else f"parity: {failures} files differ")

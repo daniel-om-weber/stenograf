@@ -758,6 +758,81 @@ this matrix:
   growth stays user-confirmed; the next diarization change re-runs this
   harness as part of its gate.
 
+#### DiariZen meeting-base: measured on the harness, declined (2026-08-09)
+
+The one shippable model the research record put clearly above the pyannote
+family (`eval/diarization-sota-2026.md` §1.1: AMI-SDM 15.6 vs 21.1, MIT,
+meetings-only training) loses to the shipped OwnDiarizer stack on our
+topology. `eval/diarizen_arm.py` ran it as exactly the replacement the plan
+described — DiariZen's turns, our words/embeddings/scoring — in three arms
+(reports: `out/diar-ami-diarizen{,-exactk,-est}.md`), with the decision rule
+pre-registered in the arm's docstring *before* the matrix landed:
+
+| arm | loops ΔDER (mean/median, n=20) | DZ wins | duos ΔDER | DZ wins |
+|---|---|---|---|---|
+| **k+1 + production fold** (fair) | **+1.3 / +1.2** | 4/20 | **+2.0 / +1.3** | 3/20 |
+| exact k (no fold) | +11.7 / +12.0 | 2/20 | +16.7 / +6.9 | 1/20 |
+| estimate (as published) | loop DER mean 17.1 % (vs 14.5 % k+1+fold — its own best framing) | — | — | — |
+
+Positive Δ = DiariZen worse. Loop DER mean 14.5 % vs production 13.2 %; word
+attribution mean **−1.1 pts** (wins 6/20); sign tests p≈0.012 (loops) and
+p≈0.003 (duos); every leave-one-group-out keeps production ahead (+0.8 to
++2.0). The duo arm is also the near-field go/no-go the plan required
+(training data exclusively far-field): 13.3 % mean vs 11.4 % — no. Declined
+on the pre-registered rule, which required DiariZen to *win* both mean and
+median by ≥2 pts.
+
+What the arms establish beyond the verdict:
+
+- **The fair frame was the 2026-08-09 review's catch, and it mattered ~13
+  pts**: the first smoke ran DiariZen at exact k (26.1 % on ES2003a.loop)
+  when the k+1 + `fold_excess_clusters` layer it would ship under cuts that
+  to 12.0 % — the fold lives in the pipeline half step 5 never replaces, and
+  exact-k is a configuration our own stack loses 4.4 pts with. The exact-k
+  arm stays as the ablation: the fold is worth ~10 pts mean on DiariZen
+  clusters too.
+- **The 0.8 fold gate transfers to DiariZen clusters, measured**
+  (fold-audit table in `out/diar-ami-diarizen.md`): all 22 gate-admitted
+  merges (cosine ≥ 0.8) are same-speaker by reference; every cross-speaker
+  fold (7, all forced through the duration-spare path by the stated count)
+  sits at ≤ 0.702 — the same empty band the gate was calibrated in on ward
+  clusters.
+- **The known count helps DiariZen only through the fold.** The raw forced
+  count *reproduces* the research record's warning (exact-k 24.9 % loop mean
+  vs estimate's 17.1 %); count-plus-fold beats both. Estimate mode (its
+  published configuration) over-counts 15/16 of the k=3 channels (bound
+  3–6) and lands 2.6 pts behind the k+1+fold arm.
+- **`min_cluster_size` is not the excuse**: the checkpoint's AMI-SDM-tuned
+  mcs=30 swept {30, 15, 5, 1} at k+1+fold on ES2003a/IS1009a/Bmr025 loops
+  (`out/diar-diarizen-mcs.md`) — DER identical at 30/15 on all three
+  (12.0/46.6/13.8 %; still flat at 5 on the k=3 channels), collapsing below
+  (mcs=1: 55.0/52.5/42.8 %). The loss is the model's on this topology, not
+  a transplanted hyperparameter's.
+- **The counter-signal, recorded honestly**: DiariZen wins all four ICSI
+  loops (k=4–8: DER −0.4 to −2.5, not monotone in k; attribution +0.8 to
+  +2.8) while production wins the 3-speaker AMI loops and their duos
+  **31/32** — the product's common case per the meeting-mix weighting. n=4
+  and one meeting series, so "many speakers" is confounded with "ICSI"
+  (different corpus, recording chain, reference granularity); what partly
+  de-confounds it is within-corpus: the four ICSI *duos* (same audio, k=2)
+  go to production at mean +0.7 while the ICSI loops go to DiariZen at
+  −1.6 — the flip tracks speaker count, not corpus. A lead, not a mechanism.
+  If the product's meeting mix shifts toward many-speaker rooms, this is
+  the number to re-open on.
+- **Harness economics** (both shortcuts parity-checked before use, both in
+  the arm's docstring): PyTorch-on-MPS runs the pipeline at RTF 0.06–0.08
+  vs 1.22 CPU (estimate-mode turns byte-identical; known-count cross-DER
+  0.064 %, ΔDER 0.019 pts on IS1009a.loop), and caching the k-independent
+  stage 1 (segmentation + chunk embeddings) makes every arm after the first
+  nearly free (0.6 s vs 126 s per channel) — three full 40-channel arms for
+  ~2.5 h of compute instead of ~75 h naive.
+
+Even a win here would only have opened the adoption program — ONNX export
+of WavLM-Base+ + Conformer as the first task, then the step-2.3/2.4 re-runs
+and fold/collapse gate recalibrations. The loss closes step 5 with nothing
+owed: production diarization is unchanged, so the 0.56 threshold and the
+auto-update decline stand unmodified.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

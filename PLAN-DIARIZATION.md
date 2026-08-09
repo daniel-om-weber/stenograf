@@ -394,22 +394,26 @@ package directly. Real-backend coverage moved with the swap
 Deferred per-chunk embedding (mask at stat-pooling) stays recorded above as
 the stride re-open's first move.
 
-## Step 5 — the DiariZen gate (the only model that beats everything above)
+## Step 5 — the DiariZen gate — DECLINED 2026-08-09, measured in three arms
 
-`BUT-FIT/diarizen-meeting-base` (MIT, ungated) is the one shippable model
-clearly above the pyannote family: AMI-SDM 15.6 vs 21.1 for the same paper's
-pyannote-3 run, domain-matched to meetings. Costs: PyTorch-only today (an
-ONNX export of WavLM-Base+ + Conformer must be made and verified — plausible,
-unproven), ~400 MB on disk, an estimated 2–3× the *current* finalize
-diarization time (≈ parity with today after step 4's speedup).
-
-Decide only after steps 1–4 are measured: **trigger = the harness still shows
-≥2 points of DER (or a visible word-attribution gap) between our stack and
-what the research record says meeting-base delivers.** If triggered, the
-export is the first task, and near-field behavior on the harness's mic
-channel is the go/no-go (its training data is exclusively far-field). If
-adopted it *replaces* the segmentation+clustering half everywhere off-mac —
-one path; if it loses or the export stalls, decline here with numbers.
+`BUT-FIT/diarizen-meeting-base` (MIT, ungated) was the one shippable model
+clearly above the pyannote family on paper (AMI-SDM 15.6 vs 21.1). On the
+harness it loses to the shipped stack (`eval/diarizen_arm.py`, decision rule
+pre-registered in its docstring; full evidence in `eval/README.md`): at the
+fair replacement boundary — DiariZen at k+1 folded by the production
+`fold_excess_clusters`, since the fold lives in the pipeline half step 5
+never replaces — loops go **+1.3 mean / +1.2 median ΔDER against it** (wins
+4/20, sign p≈0.012, attribution −1.1 pts), and the k=2 duos, the near-field
+go/no-go, go +2.0/+1.3 (wins 3/20). Exact-k (+11.7) and estimate-as-published
+(17.1 % vs 14.5 % loop mean) are both worse framings for it; mcs swept —
+the checkpoint's own hyperparameters are not the excuse; the 0.8 fold gate
+transfers to its clusters (22/22 gate-admitted merges same-speaker, crosses
+≤ 0.702). The ONNX-export program never opens. **Re-open trigger: the
+product's meeting mix shifts toward many-speaker rooms — DiariZen won all
+four ICSI loops (k=4–8, −0.4 to −2.5 DER, attribution +0.8 to +2.8; n=4, one
+meeting series, but the ICSI duos flip back to production, so the signal
+tracks speaker count, not corpus) while losing the 3-speaker AMI loops and
+their duos 31/32.**
 
 ---
 
