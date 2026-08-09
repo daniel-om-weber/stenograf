@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from stenograf.notes import warm as warm_module
 from stenograf.notes.warm import NotesWarmer
 
@@ -110,6 +112,7 @@ def test_job_error_reraises_on_waiting_thread(monkeypatch):
         raise AssertionError("job error must propagate")
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
 def test_build_baseexception_never_hangs_the_wait(monkeypatch):
     # A BaseException during warm-up escapes the Exception guard and kills
     # the thread — _done must still be set (the finally contract) and the
