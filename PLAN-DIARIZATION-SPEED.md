@@ -76,15 +76,30 @@ inputs — none of the review's scratch scripts are load-bearing.
   identically across all paths forever. Step 6 decides with gates that can
   kill the design before any worker code exists.
 
-## Step 0 — path-cost split (minutes; scopes everything else)
+## Step 0 — path-cost split — DONE 2026-08-09, the split is 8.7×
 
-Two `steno transcribe` runs on the same meeting audio, one with
-`--speakers`, one auto. Record wall-clock of the diarization stage for
-each, and which path ran. If the estimate path is ≥5× cheaper than the
-owned loop, this program's beneficiaries are (a) users who state counts
-because exact counts label speakers better, and (b) the manylinux_2_28 /
-no-stenodiar tier — state that scope in this file and weigh every later
-step against it.
+Measured (M4 Max, ES2003c.loop 37.6 min, `diarize_with_embeddings` — what
+finalize calls — timed directly, ASR/notes excluded):
+
+| arm | time | RTF | notes |
+|---|---|---|---|
+| known-count (owned loop) | 126.2 s | 0.056 | = the 111.7 s baseline + ~14.5 s `cluster_embeddings` (3 clusters) |
+| estimate (stenodiar, cold) | 14.1 s | 0.0063 | CoreML compile included |
+| estimate (stenodiar, warm) | 14.4 s | 0.0064 | = 3.4 s helper + 10.0 s `cluster_embeddings` (5 clusters), isolated same day |
+
+Two facts fall out beyond the split itself: the helper is ~5.4 s/meeting-
+hour (the "under a second" comment in `speakrs.py` was ~5× optimistic,
+corrected), and **`cluster_embeddings` is a first-class ~10–15 s/channel
+cost on BOTH paths** — step 2's pool must cover its embed calls too, and
+step 5 L1 would make it free.
+
+Scope, therefore: this program's beneficiaries are (a) users who state
+counts — which the product recommends because exact counts label speakers
+better — and (b) the manylinux_2_28 / no-stenodiar tier, where the owned
+loop takes both cases. On the default estimate path diarization is ~14 s
+per channel and the wait is notes. Every later step is weighed against
+that scope. (The estimate arm found 5 speakers where the reference has 3 —
+the known-accuracy gap, not this plan's business.)
 
 ## Step 1 — correct the record (no code)
 

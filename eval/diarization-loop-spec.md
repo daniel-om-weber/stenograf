@@ -112,8 +112,12 @@ covering that frame and rounds:
 ### 1.4 What gets embedded
 
 `GetChunkSpeakerSampleIndexes` (412–484). One embedding per **(chunk, local speaker
-index 0..2)** pair, i.e. the redundancy §1.5 of the research record calls ~21×
-(10 s window / 1 s shift, ~2 active speakers per chunk).
+index 0..2)** pair — but measured on the ES2003c.loop reference the mean is
+**1.05–1.08 pairs per chunk** (2026-08-09), and steps 1–3 below crop each
+pair to its sole-speaker active runs, so our redundancy is ~10× (window/shift
+overlap),
+not the ~21× §1.5 of the research record ascribes to pyannote (which embeds
+the full window per speaker slot).
 
 1. `ExcludeOverlap` first (487–508): any frame whose row-sum ≥ 2 is zeroed
    entirely. So overlap frames are decoded into the *output turns* but never

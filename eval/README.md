@@ -722,10 +722,12 @@ by-reference stranger misnaming 12.8 → 12.9 → 18.5 % with catastrophic
 speakers 1 → 2 → 4. The research record's "8.5× at ≈0 DER cost" did not
 survive contact with our stack (cost scales ∝ chunks, and the quality cost
 is real). Declined both; re-open trigger = finalize latency becoming binding
-or step 5 needing the budget, and the first move then is per-chunk embedding
-(mask at stat-pooling — attacks the contamination mechanism instead of
-paying it), with any stride change re-running the threshold calibration as
-part of its gate.
+or step 5 needing the budget, and the first move then is the shared-trunk
+route (one trunk pass, masked statistics pooling per pair — attacks the
+contamination mechanism instead of paying it; `PLAN-DIARIZATION-SPEED.md`
+step 5 L1, which also prices why the per-chunk variant recorded here until
+2026-08-09 is backwards for our sole-speaker-cropping loop), with any
+stride change re-running the threshold calibration as part of its gate.
 
 #### Post-swap recalibration: 0.62 → 0.56, auto-updates stay declined (2026-08-07)
 

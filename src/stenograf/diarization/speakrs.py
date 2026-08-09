@@ -38,9 +38,10 @@ _BUILD_SCRIPT = "build.ps1" if sys.platform == "win32" else "build.sh"
 _ENV_OVERRIDE = "STENOGRAF_DIAR_HELPER"
 
 _TIMEOUT_S = 1800
-"""Hard cap on one helper run. Warm runs take under a second per meeting-hour;
-the first run ever also downloads the models and compiles them for CoreML
-(minutes, then cached per machine), so the cap is generous, not tight."""
+"""Hard cap on one helper run. Warm runs take seconds per meeting-hour
+(3.4 s on a 37.6-min channel, CoreML, 2026-08-09); the first run ever also
+downloads the models and compiles them for CoreML (minutes, then cached per
+machine), so the cap is generous, not tight."""
 
 DEFAULT_MODE = "coreml" if sys.platform == "darwin" else "cpu"
 """stenodiar execution mode: CoreML on macOS, ONNX Runtime CPU elsewhere

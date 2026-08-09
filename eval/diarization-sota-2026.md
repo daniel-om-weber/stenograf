@@ -140,13 +140,15 @@ architecture question.
 | Stack | Size | CPU RTF | 60 min → | Source |
 |---|---|---|---|---|
 | stenograf today (seg-3.0 + ERes2Net + AHC, 8 ORT threads) | 32 MB | ~0.13 | ~8 min | measured in-repo (`sherpa.py:26-31`) |
-| same models, stride 3 + per-chunk embedding | 32 MB | ~0.22 (M4, 1 thread) | ~13 min → ~1–2 min at 8 threads | arXiv:2606.08505 Table III |
+| same models, stride 3 + per-chunk embedding | 32 MB | ~0.22 (M4, 1 thread) | ~13 min → ~1–2 min at 8 threads | SDBench, arXiv:2507.16136 |
 | DiariZen meeting-base (WavLM-Base+ + Conformer) | ~400 MB | ~0.2–0.4 (extrapolated, unverified) | ~12–24 min | DiariZen-large 0.3 CPU RTF |
 | Sortformer v2/v2.1 | 471 MB | unpublished — "not currently optimizing on any CPU models" | unknown | HF discussion, nvidia/diar_sortformer_4spk-v1 #10 |
 | speakrs/FluidAudio CoreML (our macOS path) | 19 MB | ~0.002 | ~7 s | M4 Pro |
 
 **The two measured engineering speedups** (two independent sources —
-SDBench/Argmax, Interspeech 2025; arXiv:2606.08505):
+SDBench/Argmax, Interspeech 2025, arXiv:2507.16136; and arXiv:2606.08505,
+the relative-minimum-cluster-size paper, on CAM++ — citation corrected
+2026-08-09, the IDs were swapped and the 21×/DER numbers are SDBench's):
 
 - Segmentation sliding-window stride 1 s → 3–4 s: 8.5–38× speedup; DER cost
   ≈0.02 for ≤5 speakers. Failure mode: coarser stride under-counts speakers
@@ -155,7 +157,11 @@ SDBench/Argmax, Interspeech 2025; arXiv:2606.08505):
   89 % of that loss.
 - Per-chunk instead of per-speaker-per-window embedding: pyannote embeds ~21×
   redundant audio; embedding each chunk once and applying speaker masks at
-  aggregation is mathematically equivalent (DER 0.255 → 0.257).
+  aggregation is mathematically equivalent (DER 0.255 → 0.257). **Does not
+  transfer to our loop** (2026-08-09): pyannote's 21× is ~3 speaker slots ×
+  full-window embedding; our `_pair_embeddings` already crops to
+  sole-speaker audio (~1.05 pairs/chunk, ~10× redundancy), so per-chunk
+  embedding would *add* work here — priced in `PLAN-DIARIZATION-SPEED.md`.
 
 ### 1.6 Licensing (diarization)
 
