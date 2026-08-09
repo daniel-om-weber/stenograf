@@ -68,6 +68,9 @@ class _StubSherpa:
     def embed(self, audio):
         return np.array([1.0, 0.0], dtype=np.float32) if len(audio) else None
 
+    def _executor(self):
+        return None  # cluster_embeddings(pool=None) maps sequentially
+
 
 _AUDIO = np.ones(8 * SAMPLE_RATE, dtype=np.int16)
 

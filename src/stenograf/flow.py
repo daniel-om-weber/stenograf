@@ -41,6 +41,7 @@ from stenograf import loaders, output
 from stenograf.audio import SAMPLE_RATE, load_audio
 from stenograf.config import Language, MeetingProfile
 from stenograf.notes import run as notes_run
+from stenograf.notes.warm import NotesWarmer
 from stenograf.pipeline import (
     STAGE_ASR,
     STAGE_DIARIZATION,
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
 
     import numpy as np
 
+    from stenograf.notes.backend import NotesBackend
     from stenograf.session import MeetingResult
 
 
@@ -415,89 +417,141 @@ class MeetingRun:
         # header for the whole meeting (the recorder emits no status event
         # between capture start and finalize). REC/elapsed carry it from here.
         view.status("")
+        notes_warmer: NotesWarmer | None = None
+        if self.request.notes:
+            # Start the notes warmer now that capture and the ASR are up: its
+            # own grace delay keeps the multi-GB load away from meeting start,
+            # and every early exit below cancels it — the cold path is the
+            # fallback by construction (stenograf.notes.warm).
+            notes_warmer = NotesWarmer(self._build_notes_backend)
+            notes_warmer.start()
         try:
-            result = recorder.run(
-                provider,
-                live=options.live,
-                view=view,
-                on_frame=tee.add if tee else None,
-                checkpoint=(
-                    CheckpointConfig(
-                        output.checkpoint_writer(self.out_dir, self.basename),
-                        options.resolved_flush_interval(),
-                    )
-                    if options.live
-                    else None
-                ),
-                max_seconds=options.max_seconds,
-                provider_started=True,
-            )
-        finally:
-            if tee is not None:
-                tee.close()  # flush + finalize the recording even on a dying run
-                if tee.error is not None:
-                    # Even a failed recording may have left decodable audio —
-                    # name every file that survived, or the user never learns
-                    # where the partial meeting went.
-                    saved = [
-                        p for p in (tee.path, tee.fallback_path) if p is not None and p.exists()
-                    ]
-                    if saved:
+            try:
+                result = recorder.run(
+                    provider,
+                    live=options.live,
+                    view=view,
+                    on_frame=tee.add if tee else None,
+                    checkpoint=(
+                        CheckpointConfig(
+                            output.checkpoint_writer(self.out_dir, self.basename),
+                            options.resolved_flush_interval(),
+                        )
+                        if options.live
+                        else None
+                    ),
+                    max_seconds=options.max_seconds,
+                    provider_started=True,
+                )
+            finally:
+                if tee is not None:
+                    tee.close()  # flush + finalize the recording even on a dying run
+                    if tee.error is not None:
+                        # Even a failed recording may have left decodable audio —
+                        # name every file that survived, or the user never learns
+                        # where the partial meeting went.
+                        saved = [
+                            p
+                            for p in (tee.path, tee.fallback_path)
+                            if p is not None and p.exists()
+                        ]
+                        if saved:
+                            view.status(
+                                f"audio recording FAILED mid-meeting ({tee.error}) — "
+                                "partial audio in " + ", ".join(p.name for p in saved)
+                            )
+                        else:
+                            view.status(f"audio recording FAILED: {tee.error}")
+                    elif tee.fallback_path is not None and tee.path.exists():
                         view.status(
-                            f"audio recording FAILED mid-meeting ({tee.error}) — "
-                            "partial audio in " + ", ".join(p.name for p in saved)
+                            f"recorded audio: {tee.path} — the Opus encoder died "
+                            f"mid-meeting; the remainder is in {tee.fallback_path.name}"
+                        )
+                    elif tee.fallback_path is not None:
+                        view.status(
+                            f"recorded audio: {tee.fallback_path} — the Opus encoder "
+                            f"failed, so this recording is a WAV"
                         )
                     else:
-                        view.status(f"audio recording FAILED: {tee.error}")
-                elif tee.fallback_path is not None and tee.path.exists():
-                    view.status(
-                        f"recorded audio: {tee.path} — the Opus encoder died "
-                        f"mid-meeting; the remainder is in {tee.fallback_path.name}"
-                    )
-                elif tee.fallback_path is not None:
-                    view.status(
-                        f"recorded audio: {tee.fallback_path} — the Opus encoder "
-                        f"failed, so this recording is a WAV"
-                    )
-                else:
-                    view.status(f"recorded audio: {tee.path}")
-        self.result = result
-        _report_lost_reference(result, view)
-        transcript = result.transcript
-        if transcript is not None:
-            # Usually persisted already, at the finalized event (PersistOnce
-            # replays); a view that skipped the event writes here.
-            paths = self.persist(transcript)
-            persist_voiceprints(
-                self.out_dir, result.speaker_embeddings, self.created_at, view.error
+                        view.status(f"recorded audio: {tee.path}")
+            self.result = result
+            _report_lost_reference(result, view)
+            transcript = result.transcript
+            if transcript is not None:
+                # Usually persisted already, at the finalized event (PersistOnce
+                # replays); a view that skipped the event writes here.
+                paths = self.persist(transcript)
+                persist_voiceprints(
+                    self.out_dir, result.speaker_embeddings, self.created_at, view.error
+                )
+                self.elapsed = time.monotonic() - started
+                view.status(
+                    f"wrote {', '.join(p.name for p in paths)} → {self.out_dir} "
+                    f"({self.elapsed:.1f}s)"
+                )
+                notes_ok = True
+                if self.request.notes and not self.abandon_notes.is_set():
+                    self.notes_running = True
+                    try:
+                        notes_ok = self._run_notes_step(view, transcript, notes_warmer)
+                    finally:
+                        self.notes_running = False
+                if notes_ok:  # a notes failure keeps its own message visible
+                    # No "press q" hint: two views render this line and only one
+                    # of them is a terminal. Each says how to leave in its own
+                    # footer.
+                    view.status("saved")
+            return transcript
+        finally:
+            if notes_warmer is not None:
+                notes_warmer.cancel()  # idempotent; a consumed warmer already exited
+
+    def _build_notes_backend(self) -> NotesBackend:
+        """The exact backend the notes tail will use, for the warmer to heat
+        (same resolution, same arguments — see notes.run.resolve_backend)."""
+        from stenograf.notes.run import resolve_backend
+
+        return resolve_backend(
+            self.options.notes_backend,
+            self.options.notes_model,
+            None,
+            self.request.settings.notes,
+        )[0]
+
+    def _run_notes_step(
+        self, view: LiveView, transcript: Transcript, warmer: NotesWarmer | None
+    ) -> bool:
+        """The notes tail, through the warmer's thread when one exists (the
+        mlx backend binds generation to the thread that warmed it)."""
+        options = self.options
+
+        def generate(backend: NotesBackend | None) -> bool:
+            return notes_run.run_notes(
+                view,
+                transcript,
+                self.out_dir,
+                self.basename,
+                created_at=self.created_at,
+                notes_settings=self.request.settings.notes,
+                backend_name=options.notes_backend,
+                model=options.notes_model,
+                instructions_file=options.notes_instructions,
+                prebuilt_backend=backend,
             )
-            self.elapsed = time.monotonic() - started
-            view.status(
-                f"wrote {', '.join(p.name for p in paths)} → {self.out_dir} "
-                f"({self.elapsed:.1f}s)"
+
+        if warmer is None:
+            return generate(None)
+        outcome = warmer.run_notes(
+            generate,
+            on_first_interrupt=lambda: view.error("finishing notes — Ctrl-C again to skip them"),
+        )
+        if outcome is None:
+            view.error(
+                f"notes skipped — the transcript is safe; "
+                f"`steno notes {self.out_dir}` regenerates them"
             )
-            notes_ok = True
-            if self.request.notes and not self.abandon_notes.is_set():
-                self.notes_running = True
-                try:
-                    notes_ok = notes_run.run_notes(
-                        view,
-                        transcript,
-                        self.out_dir,
-                        self.basename,
-                        created_at=self.created_at,
-                        notes_settings=settings.notes,
-                        backend_name=options.notes_backend,
-                        model=options.notes_model,
-                        instructions_file=options.notes_instructions,
-                    )
-                finally:
-                    self.notes_running = False
-            if notes_ok:  # a notes failure keeps its own message visible
-                # No "press q" hint: two views render this line and only one of
-                # them is a terminal. Each says how to leave in its own footer.
-                view.status("saved")
-        return transcript
+            return False
+        return outcome
 
 
 def persist_voiceprints(

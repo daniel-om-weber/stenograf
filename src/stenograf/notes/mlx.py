@@ -120,6 +120,25 @@ class MlxBackend:
             return False
         return True
 
+    def warm(self) -> None:
+        """Load the weights and generate one token NOW, on this thread.
+
+        The meeting-end wait then starts at the prompt instead of at a
+        4.35 GB cold load. Binds generation to the calling thread exactly
+        like a first ``complete()`` would (module docstring) — the caller
+        owns running the real completions on this same thread afterwards
+        (:class:`stenograf.notes.warm.NotesWarmer`). The one-token pass is
+        what turns the load into a *warm* model: weight upload and kernel
+        compilation happen on first generate, not on ``load``."""
+        if self._generation_thread is None:
+            self._generation_thread = threading.get_ident()
+        from mlx_lm import stream_generate
+
+        model, tokenizer = self._load()
+        prompt = self._render(tokenizer, [{"role": "user", "content": "ok"}])
+        for _ in stream_generate(model, tokenizer, prompt=prompt, max_tokens=1):
+            break
+
     def complete(self, messages: list[dict[str, str]]) -> str:
         if self._generation_thread is None:
             self._generation_thread = threading.get_ident()

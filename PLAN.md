@@ -653,11 +653,13 @@ Kept here so future sessions don't re-open them.
     FAR0 threshold jumps 0.592→~0.78, silently invalidating the calibration).
     Trigger: finalize latency becomes binding — then the shared-trunk route
     first (one trunk pass over long blocks, masked statistics pooling per
-    pair — `PLAN-DIARIZATION-SPEED.md` step 5 L1; the per-chunk variant
-    recorded here until 2026-08-09 was priced backwards for our loop, ~147 s
-    vs 93 s, because `_pair_embeddings` already crops to sole-speaker
-    audio), and any stride change re-runs the threshold calibration in its
-    gate.
+    pair — `PLAN-DIARIZATION-SPEED.md` step 5 L1, which is SDBench's
+    "per-chunk" method as its "mask at stat-pooling" indicates; disambiguated
+    2026-08-09 because the phrase also reads as one-pass-per-10-s-window,
+    and THAT variant is backwards for our sole-speaker-cropping loop:
+    ~147 s vs 93 s at the reference channel's 1.05 pairs/chunk, flipping
+    only above ~1.7), and any stride change re-runs the threshold
+    calibration in its gate.
   - **Automatic profile updates (2026-08-07, reaffirmed post-ward):**
     ungateable wrong updates above every implementable bar while the oracle
     ties no-update everywhere; growth stays user-confirmed. Re-run

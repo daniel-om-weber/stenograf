@@ -140,15 +140,18 @@ architecture question.
 | Stack | Size | CPU RTF | 60 min → | Source |
 |---|---|---|---|---|
 | stenograf today (seg-3.0 + ERes2Net + AHC, 8 ORT threads) | 32 MB | ~0.13 | ~8 min | measured in-repo (`sherpa.py:26-31`) |
-| same models, stride 3 + per-chunk embedding | 32 MB | ~0.22 (M4, 1 thread) | ~13 min → ~1–2 min at 8 threads | SDBench, arXiv:2507.16136 |
+| same models, stride 3 + per-chunk embedding | 32 MB | ~0.22 (M4, 1 thread) | ~13 min → ~1–2 min at 8 threads | arXiv:2606.08505 (RTF 1.84 → 0.22, M4 CPU) |
 | DiariZen meeting-base (WavLM-Base+ + Conformer) | ~400 MB | ~0.2–0.4 (extrapolated, unverified) | ~12–24 min | DiariZen-large 0.3 CPU RTF |
 | Sortformer v2/v2.1 | 471 MB | unpublished — "not currently optimizing on any CPU models" | unknown | HF discussion, nvidia/diar_sortformer_4spk-v1 #10 |
 | speakrs/FluidAudio CoreML (our macOS path) | 19 MB | ~0.002 | ~7 s | M4 Pro |
 
 **The two measured engineering speedups** (two independent sources —
-SDBench/Argmax, Interspeech 2025, arXiv:2507.16136; and arXiv:2606.08505,
-the relative-minimum-cluster-size paper, on CAM++ — citation corrected
-2026-08-09, the IDs were swapped and the 21×/DER numbers are SDBench's):
+SDBench/Argmax, arXiv:2507.16136; and arXiv:2606.08505, the
+relative-minimum-cluster-size paper, on CAM++. Attribution corrected
+2026-08-09 and verified against both texts: the 21× redundancy and the
+DER 0.255→0.257 pair are SDBench's; the M4-CPU RTF 1.84→0.22, the 8.5×,
+and the mcs/89 %-recovery result are 2606.08505's; the 38× stride
+extreme is SDBench's):
 
 - Segmentation sliding-window stride 1 s → 3–4 s: 8.5–38× speedup; DER cost
   ≈0.02 for ≤5 speakers. Failure mode: coarser stride under-counts speakers
@@ -156,12 +159,20 @@ the relative-minimum-cluster-size paper, on CAM++ — citation corrected
   minimum-cluster-size floor; setting `mcs = round(0.01·n)` uncapped recovers
   89 % of that loss.
 - Per-chunk instead of per-speaker-per-window embedding: pyannote embeds ~21×
-  redundant audio; embedding each chunk once and applying speaker masks at
-  aggregation is mathematically equivalent (DER 0.255 → 0.257). **Does not
-  transfer to our loop** (2026-08-09): pyannote's 21× is ~3 speaker slots ×
-  full-window embedding; our `_pair_embeddings` already crops to
-  sole-speaker audio (~1.05 pairs/chunk, ~10× redundancy), so per-chunk
-  embedding would *add* work here — priced in `PLAN-DIARIZATION-SPEED.md`.
+  redundant audio (3 speaker slots × ~7× window overlap); SDBench's
+  per-chunk strategy runs the trunk over the input audio ONCE — "embedding
+  exactly 30 seconds of audio for a 30-second audio input", fully
+  non-redundant, speaker masks applied at the final statistics-pooling
+  layer — i.e. it IS the shared-trunk route `PLAN-DIARIZATION-SPEED.md`
+  step 5 L1 pursues, and it gives L1 a published accuracy prior: DER
+  0.255 → 0.257, near-equivalent but not identical. Whole-pipeline value
+  was 1.2× on their stack (their embedding share is small; ours is 84 % of
+  the loop, so the leverage differs). Disambiguation (2026-08-09): a
+  *per-window* masked variant — one trunk pass per 10-s window, removing
+  only the slot factor — is NOT their method and would *add* work to our
+  loop, which already crops to sole-speaker audio (~1.05 pairs/chunk on
+  the low-overlap reference channel; priced ~147 s vs 93 s in
+  `PLAN-DIARIZATION-SPEED.md`).
 
 ### 1.6 Licensing (diarization)
 
@@ -471,7 +482,7 @@ as a product mode. No vendor publishes DER/cpWER for meeting naming.
 | Enrollment from meeting audio + rename-once online enrollment | §4 | biggest single re-ID win (−52.7 % speaker error); gate updates |
 | ERes2Net-base collapses on short turns; V2 fixes it | §2.1 | embedding upgrade candidate (CAM++ stays rejected) |
 | DiariZen meeting-base (MIT) is the only shippable model clearly above baseline | §1.1 | candidate, gated on measurement + ONNX export work |
-| Stride 3 + per-chunk embedding ≈ 8.5× speedup at ≈0 cost | §1.5 | pays for any heavier model; requires owning the pipeline loop |
+| Stride 3 + per-chunk embedding ≈ 8.5× speedup at ≈0 cost | §1.5 | stride costs naming purity on our stack (declined, PLAN.md); per-chunk = SDBench's shared-trunk method = a live candidate (PLAN-DIARIZATION-SPEED step 5 L1, DER 0.255→0.257 prior) — only the per-window reading adds work here (§1.5 disambiguation) |
 | AMI/ICSI CC-BY-4.0 with headset channels | §6 | labelled eval in our exact topology without hand-labelling |
 
 The implementation sequence lived in `PLAN-DIARIZATION.md` (closed

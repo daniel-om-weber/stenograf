@@ -707,6 +707,35 @@ replace. Real-backend
 structural coverage: `tests/test_diarization_loop_real.py` (gated on cached
 models + eval audio).
 
+#### The pool: 2.86× at bit-exact parity, every ORT session intra-op 1 (2026-08-09)
+
+The loop's two model stages and `cluster_embeddings` submit into one shared
+`ThreadPoolExecutor` sized to physical performance cores
+(`sherpa.py::_pool_workers`), every ORT session at ONE intra-op thread, one
+shared extractor (measured bit-exact and as fast as per-worker copies at 8
+workers; per-worker copies cost 26 MB each). `eval/pool_parity.py`, M4 Max,
+ES2003c.loop 37.6 min:
+
+| config | segmentation | embeddings | total |
+|---|---|---|---|
+| workers=1 (sequential, intra-op 1) | 38.7 s | 145.2 s | 183.9 s |
+| workers=4 | 12.6 s | 52.0 s | 64.6 s |
+| workers=12 (= P-cores, shipped) | 5.4 s | 33.7 s | **39.1 s** |
+
+Against the pre-pool shipped config (111.7 s at intra-op 8, sequential):
+**2.86×**. Gate half 1: labels, pairs, vectors and cluster embeddings
+**bit-exact** vs workers=1 at 4 and 12 workers — exact equality, no
+tolerance. Gate half 2: the full pooled pipeline byte-matches
+`ami-loop-ward-sv08` RTTMs on all 20 loop channels (max emb drift 1.08e-7,
+no merge decision moved) — the intra-op 8 → 1 flip moved nothing.
+Two traps for re-runs: `ami-loop` is NOT a valid baseline (it predates
+ward-by-default by six hours; pre-pool HEAD reproduces ward-sv08
+byte-exactly but not ami-loop — verified before trusting the gate), and the
+pre-pool loop is fully deterministic run-to-run even at intra-op 8, so any
+byte mismatch vs the right baseline is real, never "threading noise".
+Finalize watts (race-to-idle check) still owed: deferred to the online-gate
+session that needs the quiet machine anyway (`PLAN-DIARIZATION-SPEED.md`).
+
 #### Stride stays at 1 s: the speedup is paid in naming purity (2026-08-07)
 
 `OwnDiarizer(shift=…)` is the knob the owned loop unlocked; strides 2 s and
@@ -723,11 +752,14 @@ speakers 1 → 2 → 4. The research record's "8.5× at ≈0 DER cost" did not
 survive contact with our stack (cost scales ∝ chunks, and the quality cost
 is real). Declined both; re-open trigger = finalize latency becoming binding
 or step 5 needing the budget, and the first move then is the shared-trunk
-route (one trunk pass, masked statistics pooling per pair — attacks the
-contamination mechanism instead of paying it; `PLAN-DIARIZATION-SPEED.md`
-step 5 L1, which also prices why the per-chunk variant recorded here until
-2026-08-09 is backwards for our sole-speaker-cropping loop), with any
-stride change re-running the threshold calibration as part of its gate.
+route (one trunk pass over long blocks, masked statistics pooling per pair
+— attacks the contamination mechanism instead of paying it; SDBench's
+"per-chunk" method, = `PLAN-DIARIZATION-SPEED.md` step 5 L1, with a
+published accuracy prior of DER 0.255 → 0.257. Disambiguated 2026-08-09:
+read as one-pass-per-10-s-window instead, the variant is backwards for our
+sole-speaker-cropping loop — ~147 s vs 93 s at 1.05 pairs/chunk, flipping
+only above ~1.7), with any stride change re-running the threshold
+calibration as part of its gate.
 
 #### Post-swap recalibration: 0.62 → 0.56, auto-updates stay declined (2026-08-07)
 

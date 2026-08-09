@@ -107,7 +107,10 @@ class SpeakrsCliDiarizer(Diarizer):
     ) -> DiarizationResult:
         turns = self.diarize(samples, num_speakers)
         return DiarizationResult(
-            turns=turns, embeddings=cluster_embeddings(turns, samples, self._loop.embed)
+            turns=turns,
+            embeddings=cluster_embeddings(
+                turns, samples, self._loop.embed, pool=self._loop._executor()
+            ),
         )
 
     def channel_embedding(

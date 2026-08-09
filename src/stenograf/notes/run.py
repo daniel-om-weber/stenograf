@@ -27,10 +27,48 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
+    from stenograf.notes.backend import NotesBackend
     from stenograf.notes.model import MeetingNotes
     from stenograf.settings import NotesSettings
     from stenograf.transcript import Transcript
     from stenograf.view import LiveView
+
+
+def resolve_backend(
+    backend_name: str | None,
+    model: str | None,
+    ollama_url: str | None,
+    notes_settings: NotesSettings | None,
+    *,
+    prebuilt_backend: NotesBackend | None = None,
+) -> tuple[NotesBackend, NotesSettings]:
+    """The backend a notes run with these arguments uses, plus the settings
+    in force. Factored out so the meeting-start warmer
+    (:mod:`stenograf.notes.warm`) builds the *identical* backend the notes
+    tail would; ``prebuilt_backend`` short-circuits construction with one it
+    built earlier — settings still resolve, they also pick the template and
+    instructions."""
+    if notes_settings is None:
+        from stenograf.settings import load_settings
+
+        notes_settings = load_settings().notes
+    settings = notes_settings
+    if backend_name and settings.backend and backend_name != settings.backend:
+        # [notes] model in settings.toml was written for the configured
+        # backend and must not ride along to an explicitly chosen other one
+        # (an explicit model argument still wins).
+        settings = dataclasses.replace(settings, backend=backend_name, model=None)
+    if model or ollama_url:
+        settings = dataclasses.replace(
+            settings,
+            model=model or settings.model,
+            ollama_url=ollama_url or settings.ollama_url,
+        )
+    if prebuilt_backend is not None:
+        return prebuilt_backend, settings
+    from stenograf.notes import create_backend
+
+    return create_backend(backend_name, settings), settings
 
 
 def generate_and_write_notes(
@@ -47,6 +85,7 @@ def generate_and_write_notes(
     no_export: bool = False,
     notes_settings: NotesSettings | None = None,
     on_progress: Callable[[str], None] | None = None,
+    prebuilt_backend: NotesBackend | None = None,
 ) -> tuple[list[Path], MeetingNotes]:
     """Generate notes and write ``<basename>.notes.md`` (plus the combined-note
     export when a target dir is configured). Returns ``(written_paths,
@@ -57,29 +96,20 @@ def generate_and_write_notes(
     start (so a ``--notes`` run uses the values in force when the meeting began);
     ``None`` loads it here (the standalone ``steno notes`` path). ``on_progress``
     receives the generation progress lines; ``None`` stays silent — the caller
-    owns presentation."""
-    from stenograf.notes import create_backend
+    owns presentation. ``prebuilt_backend`` is a backend the meeting-start
+    warmer already built via :func:`resolve_backend` **with the same
+    arguments** — anything else warms one model and generates with another."""
     from stenograf.notes.export import export_note
     from stenograf.notes.generate import generate_notes
     from stenograf.notes.template import DEFAULT_TEMPLATE
 
-    if notes_settings is None:
-        from stenograf.settings import load_settings
-
-        notes_settings = load_settings().notes
-    settings = notes_settings
-    if backend_name and settings.backend and backend_name != settings.backend:
-        # [notes] model in settings.toml was written for the configured
-        # backend and must not ride along to an explicitly chosen other one
-        # (--model below still wins).
-        settings = dataclasses.replace(settings, backend=backend_name, model=None)
-    if model or ollama_url:
-        settings = dataclasses.replace(
-            settings,
-            model=model or settings.model,
-            ollama_url=ollama_url or settings.ollama_url,
-        )
-    backend = create_backend(backend_name, settings)
+    backend, settings = resolve_backend(
+        backend_name,
+        model,
+        ollama_url,
+        notes_settings,
+        prebuilt_backend=prebuilt_backend,
+    )
     position = getattr(backend, "set_position", None)
     if position is not None:
         # The agentic contract (command backend only): the meeting folder is
@@ -131,6 +161,7 @@ def run_notes(
     backend_name: str | None = None,
     model: str | None = None,
     instructions_file: Path | None = None,
+    prebuilt_backend: NotesBackend | None = None,
 ) -> bool:
     """The notes tail after a run: non-fatal, reported through a view.
 
@@ -140,6 +171,9 @@ def run_notes(
     so a notes failure reports through the view and returns ``False`` — rerun
     later with ``steno notes``. A Ctrl-C during generation warns first and
     skips only on a second press (:func:`_second_interrupt_skips`).
+    ``prebuilt_backend`` is the meeting-start warmer's backend; this call
+    must then be running on the warmer's thread
+    (:class:`stenograf.notes.warm.NotesWarmer`).
     """
     view.status("generating notes…")
     try:
@@ -154,6 +188,7 @@ def run_notes(
                 model=model,
                 instructions_file=instructions_file,
                 on_progress=lambda message: view.status(f"notes: {message}"),
+                prebuilt_backend=prebuilt_backend,
             )
     except KeyboardInterrupt:
         view.error(

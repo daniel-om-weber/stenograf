@@ -145,3 +145,37 @@ def test_reid_round_trips_real_cluster_embeddings(diarized):
 
     # Scoped to the model: a query under a different embedding model matches nothing.
     assert SpeakerReID(store, "some-other-model.onnx").resolve(embeddings) == {}
+
+
+def test_pool_is_bit_exact_against_sequential(diarized):
+    # The worker pool is a pure scheduling change: same calls, same order,
+    # every ORT session at one intra-op thread. The gate is exact equality —
+    # not a tolerance — of segmentation labels, (chunk, speaker) pairs, pair
+    # vectors, and cluster embeddings between workers=1 (the sequential
+    # reference) and a parallel pool (eval/README.md, 2026-08-09).
+    from stenograf.audio import to_float32
+    from stenograf.diarization.loop import OwnDiarizer
+
+    pcm = _load_clip()
+    audio = to_float32(pcm)
+    sequential = OwnDiarizer(workers=1)
+    pooled = OwnDiarizer(workers=4)
+
+    labels_seq = sequential._chunk_labels(audio)
+    labels_pool = pooled._chunk_labels(audio)
+    assert len(labels_seq) == len(labels_pool)
+    for a, b in zip(labels_seq, labels_pool, strict=True):
+        assert np.array_equal(a, b)
+
+    pairs_seq, vectors_seq = sequential._pair_embeddings(audio, labels_seq)
+    pairs_pool, vectors_pool = pooled._pair_embeddings(audio, labels_pool)
+    assert pairs_seq == pairs_pool
+    for a, b in zip(vectors_seq, vectors_pool, strict=True):
+        assert np.array_equal(a, b)
+
+    result_seq = sequential.diarize_with_embeddings(pcm, num_speakers=2)
+    result_pool = pooled.diarize_with_embeddings(pcm, num_speakers=2)
+    assert result_seq.turns == result_pool.turns
+    assert result_seq.embeddings.keys() == result_pool.embeddings.keys()
+    for cluster in result_seq.embeddings:
+        assert np.array_equal(result_seq.embeddings[cluster], result_pool.embeddings[cluster])

@@ -28,7 +28,7 @@ import numpy as np
 from stenograf import assets
 from stenograf.audio import SAMPLE_RATE, to_float32
 from stenograf.diarization.base import SpeakerTurn
-from stenograf.diarization.sherpa import SherpaOnnxDiarizer, _num_threads
+from stenograf.diarization.sherpa import SherpaOnnxDiarizer
 
 WINDOW = 160_000
 """Segmentation window, samples (10 s; ONNX metadata ``window_size``)."""
@@ -86,12 +86,14 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         clustering_threshold: float = 0.5,
         cluster_method: str = "ward",
         shift: int = SHIFT,
+        workers: int | None = None,
         progress: assets.ProgressHook | None = None,
     ) -> None:
         super().__init__(
             segmentation_model,
             embedding_model,
             clustering_threshold=clustering_threshold,
+            workers=workers,
             progress=progress,
         )
         self._cluster_method = cluster_method
@@ -101,17 +103,23 @@ class OwnDiarizer(SherpaOnnxDiarizer):
     # ---- segmentation ------------------------------------------------------
 
     def _segmentation(self):
+        # One intra-op thread: batching this model returns 1.14× at batch 32
+        # where a pool of intra-op-1 workers returns 3.07× with zero argmax
+        # flips (measured 2026-08-09) — parallelism belongs to the pool, and
+        # ORT's Run is thread-safe on a shared session.
         if self._session is None:
-            import onnxruntime
+            with self._init_lock:
+                if self._session is None:
+                    import onnxruntime
 
-            model = self._segmentation_model or assets.fetch(
-                assets.PYANNOTE_SEGMENTATION, self._progress
-            )
-            options = onnxruntime.SessionOptions()
-            options.intra_op_num_threads = _num_threads()
-            self._session = onnxruntime.InferenceSession(
-                str(model), sess_options=options, providers=["CPUExecutionProvider"]
-            )
+                    model = self._segmentation_model or assets.fetch(
+                        assets.PYANNOTE_SEGMENTATION, self._progress
+                    )
+                    options = onnxruntime.SessionOptions()
+                    options.intra_op_num_threads = 1
+                    self._session = onnxruntime.InferenceSession(
+                        str(model), sess_options=options, providers=["CPUExecutionProvider"]
+                    )
         return self._session
 
     def _chunk_labels(self, audio: np.ndarray) -> list[np.ndarray]:
@@ -133,13 +141,15 @@ class OwnDiarizer(SherpaOnnxDiarizer):
             return [run(padded)]
         shift = self._shift
         num_chunks = (n - WINDOW) // shift + 1
-        labels = [run(audio[i * shift : i * shift + WINDOW]) for i in range(num_chunks)]
+        chunks = [audio[i * shift : i * shift + WINDOW] for i in range(num_chunks)]
         if (n - WINDOW) % shift > 0:
             padded = np.zeros(WINDOW, dtype=np.float32)
             tail = audio[num_chunks * shift :]
             padded[: len(tail)] = tail
-            labels.append(run(padded))
-        return labels
+            chunks.append(padded)
+        # Pool map preserves chunk order; each run() is independent, so the
+        # result is bit-identical to the sequential loop at any worker count.
+        return list(self._executor().map(run, chunks))
 
     # ---- the loop ----------------------------------------------------------
 
@@ -217,10 +227,12 @@ class OwnDiarizer(SherpaOnnxDiarizer):
         """One embedding per (chunk, local speaker): overlap frames zeroed,
         pairs under MIN_EMBED_FRAMES clean frames skipped, contiguous runs
         sliced on the WINDOW/FRAMES scale and embedded as one concatenated
-        stream (spec §1.4)."""
+        stream (spec §1.4). The embed calls run on the shared pool in task
+        order, so pairs/vectors come out exactly as the sequential loop
+        produced them (the held slices total the embedded audio, ~50 MB per
+        meeting-hour — fine, finalize already holds the channel)."""
         n = len(audio)
-        pairs: list[tuple[int, int]] = []
-        vectors: list[np.ndarray] = []
+        tasks: list[tuple[int, int, np.ndarray]] = []
         for chunk_index, chunk in enumerate(labels):
             clean = chunk.copy()
             clean[np.sum(chunk, axis=1) >= 2] = False
@@ -238,16 +250,20 @@ class OwnDiarizer(SherpaOnnxDiarizer):
                         end = int(run_end / FRAMES * WINDOW) + offset
                     if start < n:
                         slices.append(audio[start : min(end, n)])
-                if not slices:
-                    continue
-                vector = self.embed(np.concatenate(slices))
-                # embed() can hand back the zero vector on degenerate audio
-                # (l2_normalize passes it through), and an extractor NaN/inf
-                # must not reach the affinity math; the reference drops NaN
-                # embeddings too.
-                if vector is not None and np.all(np.isfinite(vector)) and np.any(vector):
-                    pairs.append((chunk_index, speaker))
-                    vectors.append(vector)
+                if slices:
+                    tasks.append((chunk_index, speaker, np.concatenate(slices)))
+
+        results = self._executor().map(self.embed, [audio_slice for _, _, audio_slice in tasks])
+        pairs: list[tuple[int, int]] = []
+        vectors: list[np.ndarray] = []
+        for (chunk_index, speaker, _), vector in zip(tasks, results, strict=True):
+            # embed() can hand back the zero vector on degenerate audio
+            # (l2_normalize passes it through), and an extractor NaN/inf
+            # must not reach the affinity math; the reference drops NaN
+            # embeddings too.
+            if vector is not None and np.all(np.isfinite(vector)) and np.any(vector):
+                pairs.append((chunk_index, speaker))
+                vectors.append(vector)
         return pairs, vectors
 
 

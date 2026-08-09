@@ -55,14 +55,17 @@ inputs — none of the review's scratch scripts are load-bearing.
   every platform, where pooling pays less the weaker the chip. The
   algorithm needs one *vector* per (chunk, speaker) pair for the vote; it
   does not need one *trunk pass* per pair — the floor is ~10× under today.
-- **A recorded re-open path is backwards for our loop** (priced with the
-  validated cost model, not run): the declined-stride bullet's "per-chunk
-  embedding, mask at stat-pooling first" would embed 2 248 full 10-s
-  windows = ~147 s, *slower* than today's 93 s. It is the right fix for
-  pyannote, which embeds the full window per speaker slot; our
-  `_pair_embeddings` already crops to sole-speaker audio
-  (`diarization/loop.py`), so the 21× framing never applied here. Step 1
-  corrects the record.
+- **A recorded re-open path was ambiguous, and one reading is backwards**
+  (priced with the validated cost model, not run): the declined-stride
+  bullet's "per-chunk embedding, mask at stat-pooling first" read as
+  one-trunk-pass-per-10-s-window would embed 2 248 full windows = ~147 s,
+  *slower* than today's 93 s, because `_pair_embeddings` already crops to
+  sole-speaker audio (`diarization/loop.py`) — the 21× framing never
+  applied here. SDBench's actual "per-chunk" method runs the trunk over
+  the input audio once ("embedding exactly 30 seconds of audio for a
+  30-second audio input") — that is step 5's L1, with a published accuracy
+  prior of DER 0.255 → 0.257. Step 1 disambiguated the record
+  (adversarially re-verified against the source text same day).
 - **The online idea's costs were understated.** Notes consume speaker
   labels (`notes/prompt.py` renders `speaker [ts]: text` and instructs
   attribution), so diarization can never leave the notes critical path by
@@ -83,32 +86,38 @@ finalize calls — timed directly, ASR/notes excluded):
 
 | arm | time | RTF | notes |
 |---|---|---|---|
-| known-count (owned loop) | 126.2 s | 0.056 | = the 111.7 s baseline + ~14.5 s `cluster_embeddings` (3 clusters) |
-| estimate (stenodiar, cold) | 14.1 s | 0.0063 | CoreML compile included |
-| estimate (stenodiar, warm) | 14.4 s | 0.0064 | = 3.4 s helper + 10.0 s `cluster_embeddings` (5 clusters), isolated same day |
+| known-count (owned loop) | 126.2 s | 0.056 | probe passed k=3; production passes k+1 — the expensive stages are k-invariant (k only enters `_cluster` and the fold), so production is ≥ this and the split is conservative. First-arm lazy loads (ORT session, 26 MB extractor) push the other way; both effects are small against 126 vs 14 |
+| estimate (process-cold, models cached) | 14.1 s | 0.0063 | NOT first-run cost — CoreML artifacts were already compiled and cached; a true first run takes minutes (`speakrs.py`) |
+| estimate (2nd run) | 14.4 s | 0.0064 | ≈ 3.4 s helper + 10.0 s `cluster_embeddings` (5 clusters), decomposed in a separate run (~1 s transport unaccounted); run-to-run noise ±2 % |
 
 Two facts fall out beyond the split itself: the helper is ~5.4 s/meeting-
 hour (the "under a second" comment in `speakrs.py` was ~5× optimistic,
 corrected), and **`cluster_embeddings` is a first-class ~10–15 s/channel
-cost on BOTH paths** — step 2's pool must cover its embed calls too, and
-step 5 L1 would make it free.
+cost on BOTH paths** (the ~14.5 s known-count figure is inferred by
+cross-run subtraction, ±2–3 s; the 10.0 s estimate-path figure is timed
+directly) — step 2's pool must cover its embed calls too, and step 5 L1
+would make it free.
 
 Scope, therefore: this program's beneficiaries are (a) users who state
 counts — which the product recommends because exact counts label speakers
 better — and (b) the manylinux_2_28 / no-stenodiar tier, where the owned
 loop takes both cases. On the default estimate path diarization is ~14 s
-per channel and the wait is notes. Every later step is weighed against
-that scope. (The estimate arm found 5 speakers where the reference has 3 —
-the known-accuracy gap, not this plan's business.)
+per channel (measured); whether notes then dominates that wait is
+plausible but **unmeasured until step 4's split**. Every later step is
+weighed against that scope. (The estimate arm found 5 speakers where the
+reference has 3 — a real caveat on the cheap path, since notes consumes
+those labels; the accuracy gap itself is the closed program's territory,
+not this plan's.)
 
 ## Step 1 — correct the record (no code)
 
 - PLAN.md declined-stride bullet and `eval/README.md`'s matching passage:
   replace "per-chunk embedding (mask at stat-pooling) first" with the
   shared-trunk formulation (one trunk pass over long blocks, masked
-  statistics pooling per pair — step 5's L1), and note the per-chunk
-  variant was priced at ~147 s vs 93 s here because our loop already crops
-  to sole-speaker audio.
+  statistics pooling per pair — step 5's L1, = SDBench's method with its
+  DER 0.255 → 0.257 prior), and record the disambiguation: the
+  per-*window* reading was priced at ~147 s vs 93 s here because our loop
+  already crops to sole-speaker audio.
 - `eval/diarization-sota-2026.md`: the 21× / DER 0.255→0.257 numbers are
   SDBench (arXiv:2507.16136), not arXiv:2606.08505 (which is the
   relative-minimum-cluster-size paper, on CAM++, containing neither
@@ -116,30 +125,35 @@ the known-accuracy gap, not this plan's business.)
 - `eval/diarization-loop-spec.md`'s "~2 active speakers per chunk":
   measured 1.05–1.08.
 
-## Step 2 — the pool (engineering only, no accuracy trade)
+## Step 2 — the pool — DONE 2026-08-09, both gates green, 2.86×
 
-Thread-pool both stages: workers at intra-op 1, shared extractor, worker
-count = performance cores (not `os.cpu_count()` — hyperthreads and E-cores
-measured to add nothing at 12 vs 8 workers on 16 logical CPUs). Fold
-**channel-parallel finalize** into the same thread budget: finalize runs
-diarizing channels strictly serially today (`session.py` plan loop), so a
-hybrid meeting pays 2 × 112 s; channels are independent and this is a loop
-restructure, not a second path. Expected on M4 Max: 111.7 → ~42 s single
-channel (segmentation 3.07×, embeddings 2.6×, both measured as components);
-weak Intel ~1.9× (**inferred**, step 4 measures).
+Shipped: one shared `ThreadPoolExecutor` per diarizer (workers = physical
+P-cores, `_pool_workers()`), every ORT session at intra-op 1, one shared
+extractor; `_chunk_labels`, `_pair_embeddings` AND `cluster_embeddings`
+submit into the same budget (step 0 showed the last is ~10–15 s/channel on
+both paths). Measured (`eval/pool_parity.py`, table in `eval/README.md`):
+111.7 → **39.1 s** on the reference channel (2.86× vs shipped; 4.7× vs
+sequential intra-op-1). Both gate halves green: bit-exact vs the sequential
+reference at 4 and 12 workers, and the full pooled pipeline byte-matches
+`ami-loop-ward-sv08` on all 20 loop channels (max emb drift 1.08e-7 — the
+intra-op 8 → 1 flip moved no decision). Gate lesson recorded in
+`eval/README.md`: `ami-loop` was a stale baseline (predates
+ward-by-default); the loop is deterministic run-to-run, so a mismatch vs
+the RIGHT baseline is always real.
 
-Gate, two halves:
+**Channel-parallel finalize: dropped as redundant, by design.** The shared
+pool is work-conserving — one channel already saturates the P-cores, so
+two channels' diarize running concurrently through the same pool buys
+~nothing over serial channels through that pool (only the ~1 s serial
+clustering and the 3.4 s estimate-helper subprocess could overlap).
+Restructuring `session.py` for that margin fails the cost/benefit that
+motivated it — the 2× claim assumed the pre-pool sequential regime.
+Re-open only if a real finalize profile shows dead pool time between
+channels.
 
-1. **Pool vs intra-op-1 sequential reference: bit-exact** (`max|Δ| = 0.0`
-   on all embeddings and segmentation logits), at ≥2 worker counts.
-   Exact equality, not a tolerance — measured achievable.
-2. **Intra-op-1 reference vs shipped intra-op-8 output**: drift ~3.4e-7 is
-   expected and inherent; the gate is the swap-gate precedent — no merge
-   decision moved, byte-identical turns, harness DER unchanged.
-
-Record finalize watts during the sequential and pooled runs while gating
-(passwordless powermetrics) — race-to-idle check, free to take, decides
-nothing downstream.
+Still owed from this step: finalize watts (race-to-idle check) — folded
+into step 6's gate session, which needs the same quiet machine (the
+desktop was loud when the gates ran); weak-Intel scaling is step 4's.
 
 ## Step 3 — warm the notes model during the meeting (scheduling, cheap)
 
@@ -192,14 +206,16 @@ is sha-stamped against stale reuse). Kill-tests come before matrices.
   diffing naming cosines tests the attribution the declined bullet rests
   on; if confirmed, note it on the bullet (its scope is narrower than it
   reads).
-- **L1 behind L3 — one shared trunk pass + masked stat-pooling.** The
-  embedder trunk is time-local (verified: the only global-over-time ops are
-  the three ReduceMeans in `/pool/`; the graph splits cleanly and trunk =
-  97–103 % of full-model cost), so one pass over long blocks plus O(1)
-  masked mean/std per pair from prefix sums reaches the same ~10× and also
-  makes the naming-stage `cluster_embeddings()` calls free — which are
-  *outside* the 2 361 and the 111.7 s, and unmeasured (step 0/4 runs
-  should time them). Two seams break value-equivalence honestly: CMN scope
+- **L1 behind L3 — one shared trunk pass + masked stat-pooling** (=
+  SDBench's "per-chunk" method, which carries a published accuracy prior:
+  DER 0.255 → 0.257 on their benchmark — a measured data point for this
+  exact architecture, not a guess). The embedder trunk is time-local
+  (verified: the only global-over-time ops are the three ReduceMeans in
+  `/pool/`; the graph splits cleanly and trunk = 97–103 % of full-model
+  cost), so one pass over long blocks plus O(1) masked mean/std per pair
+  from prefix sums reaches the same ~10× and also makes the naming-stage
+  `cluster_embeddings()` calls free — measured at step 0 as ~10–15 s per
+  channel on both paths. Two seams break value-equivalence honestly: CMN scope
   (sherpa subtracts a per-call global mean *outside* the graph — dropping
   it moves cosine 0.86 → 0.33, measured) and mask-edge receptive-field
   bleed. **Precondition before any matrix**: our own fbank front end must
