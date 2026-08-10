@@ -733,14 +733,207 @@ ward-by-default by six hours; pre-pool HEAD reproduces ward-sv08
 byte-exactly but not ami-loop — verified before trusting the gate), and the
 pre-pool loop is fully deterministic run-to-run even at intra-op 8, so any
 byte mismatch vs the right baseline is real, never "threading noise".
-Finalize watts (race-to-idle check) still owed: deferred to the online-gate
-session that needs the quiet machine anyway (`PLAN-DIARIZATION-SPEED.md`).
+Finalize watts (race-to-idle check): measured on x86 in the section below —
+18.4 W across 150 s of diarizing finalize against a 3.5 W live-capture floor.
 Reproducing the 111.7 s denominator needs pre-pool code (checkout 9a13e6c;
 `OwnDiarizer` now hardwires intra-op 1) — the committed gate's own arms
 support 183.9 → 39.1 s = 4.7×. Both parity runs executed niced
 (backgrounded); their totals match same-day foreground component
 measurements within noise, and half 1 runs its slowest arm first, so
 thermal drift biases against the pool.
+
+#### The x86 datapoint: the pool holds, the estimate path inverts, the online worker dies (2026-08-11)
+
+Machine for every number here: GPD G1617-02, Ryzen AI 9 HX 370 (4 Zen5 +
+8 Zen5c = 12 physical / 24 logical), 23 GB, CachyOS, **on AC, governor
+`powersave` + EPP `power` as found** — ratios are under that power policy, and
+this is a 12-core part under a handheld TDP cap, not the 4-core mobile Intel
+the projections in `PLAN-DIARIZATION-SPEED.md` aim at. Same reference channel
+as the M4 Max table above (`ES2003c.loop`, sha256
+`af5f73cbc607eb6a5e1fbd7143880163af8deff5580255772be8f99208a607f6`,
+2256.93 s). The loop finds **2361 pairs, matching the M4 Max exactly** —
+strong but not conclusive evidence of the same channel, and the residue says
+so: embedded audio measures 13509 s here against the 13192 s recorded
+2026-08-09 (**+2.4 %**), and the plan called the channel 2251 s against
+2256.93 s here. Run lengths therefore differ slightly while the pair count
+does not, so the x86 embed stage does ~2.4 % more work than the M4 Max's and
+cross-machine ratios are like-for-like only to that tolerance. The mixing is
+deterministic per meeting (no RNG, int32 sums, per-meeting masks) but nothing
+hashed the result until now; settle it in one command by comparing that
+sha256 on the Mac.
+
+**Repeats of one config span 11–21 % on this box, and that is the first
+thing to design around.** Interleaved 12/8/12/8 worker arms: 145.6, 149.9,
+161.0, 157.3 s — two identical 12-worker arms **10.6 %** apart, rising with
+arm index; across all sessions the same `workers=12` config measured 133.2,
+145.6, 150.1 and 161.0 s, a **21 %** spread. (Cause unattributed: no power or
+temperature was sampled *during* the ladders, so thermal soak, clock ramp and
+ORT arena reuse are all consistent with the ordering.) A ladder run in
+increasing worker order therefore *manufactured* an 8-worker optimum (136.7 s
+at 8 vs 150.1 s at 12) that the interleave refutes: 8 and 12 are
+indistinguishable and `_pool_workers()`'s pick of 12 stands. Interleave every
+arm on a fanless or handheld box, and treat any difference under ~15 % here
+as unmeasured.
+
+**Watt instrument** for every power number below: the amdgpu hwmon
+`power1_average` (SMU PPT) rail, sampled at 1 Hz, averaged over the window
+named with each figure. RAPL's `energy_uj` is root-only on this kernel, so
+the rail was **not** cross-checked against it or against turbostat — the
+*ratios* are what the conclusions rest on, the absolutes are single-rail.
+Windows differ per row, which is why the same live-capture phase reads
+1901 rpm over 60–2262 s and 1919 rpm over 60–900 s.
+
+Worker ladder, segmentation + embeddings at intra-op 1 (same units as the M4
+Max table; increasing order, so read only the shape):
+
+| workers | segmentation | embeddings | total |
+|---|---|---|---|
+| 1 (sequential, intra-op 1) | 60.7 s | 475.5 s | 536.2 s |
+| 4 | 21.1 s | 160.9 s | 182.0 s |
+| 8 | 15.1 s | 121.6 s | 136.7 s |
+| 12 (= physical cores, shipped) | 12.5 s | 137.6 s | **150.1 s** |
+| 24 (= logical, SMT) | 10.9 s | 165.9 s | 176.8 s |
+
+**The two stages want different pool sizes here, and one shared pool cannot
+give it to them:** segmentation improves monotonically to 24 workers
+(10.9 s, i.e. past the physical core count onto SMT siblings) while
+embeddings bottom out at 8 (121.6 s) — both read from the same arms, so the
+ordering bias is common to them. A split-optimal 132.5 s against the shipped
+150.1 s prices the one-pool invariant at ~1.13× on this chip. That invariant
+is deliberate (concurrent stages and channels can never oversubscribe the
+machine) and 1.13× is inside this box's own repeat spread, so this is a
+recorded observation, not a proposed change.
+
+**The committed gate passes on x86** (`pool_parity.py --half 1 --workers
+8,12`, own arms 480.5 → 135.7 / 133.2 s): labels, pairs, vectors, turns and
+cluster embeddings **bit-exact** vs workers=1 at both counts. The one shared
+`SpeakerEmbeddingExtractor` across 12 workers had been exercised on one
+platform and one model only; it now holds on two architectures. Half 2 is
+unrunnable here — it needs `out/diar/ami-loop-ward-sv08/`, which only the
+machine that built the matrix has.
+
+**The pool's win over pre-pool is ~1.4–1.5× here against the M4 Max's
+2.86×,** and the difference is in the denominator: intra-op threading scales
+2.43× at 8 threads on this chip (32.3 → 13.3 s, regressing at 16), so the
+sequential-at-intra-op-8 config the pool replaced is comparatively strong.
+Reconstructed pre-pool arm (sequential, both sessions at `_num_threads()` =
+8): **219.3 s** — 1.46× against the ladder's 150.1 s, 1.43× against the
+interleave mean of 153.3 s. Against sequential-at-intra-op-1: 3.6×. Two
+caveats the ratio does not carry: the pre-pool arm ran **last**, after ~25
+minutes of continuous load, which on this box biases *for* the pool (the M4
+Max run above deliberately ordered the other way); and the 2.43× intra-op
+figure comes from a single increasing-order pass over the meeting's **first**
+200 slices (4.96 s mean against the channel's 5.72 s), i.e. exactly the
+protocol the batching paragraph below shows to be unsafe here. Treat it as
+"intra-op scales materially better on x86 than the 1.5× recorded for ARM",
+not as a calibrated ratio — the ARM figure's own protocol is not recorded
+anywhere.
+
+**Batching still loses — no per-platform branch.** Per-item cost at intra-op
+1, warmed 5 s, timed in two passes of opposite order (spread ≤ 1.7 %):
+embedder 0.92 / 0.86 / 0.83 / 0.79× at batch 2 / 4 / 8 / 32; segmenter 1.13×
+at batch 2, flat after. ARM's conv collapse (0.26×) is much milder here, same
+sign. Two things make the verdict stronger than the ratio: the timed input is
+*uniform*-length, which is batching's best case (real pair slices vary, so a
+batch pays padding), and padded batching needs masked statistics pooling the
+ERes2Net graph does not have — i.e. it is L1, not a cheap branch. **Trap:** a
+first run of this arm said batching *won* 1.9×; a cold single-threaded ORT
+call on this chip measures 1.8× a warm one (249 vs 140 ms), so an unwarmed
+increasing-batch sweep reads clock ramp as a batching win.
+
+**The path split inverts off macOS**, which changes who the speed program is
+for:
+
+| arm | this box (ORT CPU) | M4 Max (CoreML) |
+|---|---|---|
+| known count → owned loop | **154.2 s** (RTF 0.068) | 126.2 s |
+| estimate → stenodiar + naming | **256.1 / 292.6 s** (RTF 0.11–0.13) | 14.1 s |
+
+The helper alone is 241.9 / 278.8 s here against 3.4 s on CoreML, so the
+estimate path costs **1.66–1.90× more than the owned loop** where macOS makes
+it ~9× cheaper (8.95× from this table's own arms; 8.7× is step 0's second
+run). `cluster_embeddings` is 14 s on both paths, matching the M4 Max's
+10–15 s. The estimate arm finds 5 speakers where the reference has 3 — the
+same accuracy caveat the M4 Max arm carried. Two limits on how far this
+travels: the M4 Max known-count arm passed k=3 where this one passes the
+production k+1=4 (k-invariant per step 0's decomposition, but not the same
+call), and the **direction** generalizes off macOS because the execution
+provider does (`speakrs.py` picks CoreML only on darwin) while the
+**magnitude** does not — the owned loop here rides a 12-worker pool, and
+stenodiar's own threading was never characterized, so on a 4-core box the
+inversion could narrow or vanish.
+
+**The whole end-of-meeting wait, one real replay** (both reference channels at
+meeting cadence, `--local 1 --remote 3 --notes`, 37.6 min, ollama qwen3:8b on
+CPU):
+
+| phase | wall | package | Tctl | fan |
+|---|---|---|---|---|
+| live capture | 2262 s | 3.5 W | 54.5 °C | 1901 rpm |
+| finalize mic (solo, live decodes reused) | 8.5 s | 17.5 W | 61 °C | 1875 rpm |
+| finalize system (3 speakers, diarizing) | **150.1 s** | 18.4 W | 74 °C | 3861 rpm |
+| notes, single pass | **169.8 s** | 15.6 W | 74 °C | 4002 rpm |
+| **total wait** | **328.4 s** | | | |
+
+Diarization is **45.7 %** of that wait on the known-count path and ~60 % on
+the default estimate path (≈ 256–293 s + 170 s). Both channels finalized
+"reusing live decodes": the live pass shed exactly 0 across 37.6 minutes.
+On the suspicion this run existed to test — that notes would dominate the
+wait on a CPU-only Ollama box — the answer here is no, but hold it loosely:
+n=1 meeting, one model, one language, a 33 KB transcript, and the run sent
+no `think` field, so qwen3 ran at the server default rather than a pinned
+thinking mode. Ollama on this box is genuinely CPU-only (the package ships
+only `libggml-cpu-*.so`). The notes output was clean and template-complete,
+which is incidental evidence for `PLAN.md`'s unrun Ollama gates, not a
+substitute for running them.
+
+**The online worker's gates, measured without writing one.** `OwnDiarizer`'s
+real stages are trickle-paced one 10 s window per second of wall clock —
+production's stride, so this is meeting cadence, not an accelerated proxy —
+beside a 15-minute `--replay` of the same meeting. Only the 3-speaker channel
+is loaded: a 1-speaker channel never reaches the diarizer (`session.py` drops
+it), so trickling both would impose ~1.6× the duty a worker actually would.
+
+| gate | bar | measured | verdict |
+|---|---|---|---|
+| 1 share | diarization ≥ 40 % of the wait | 45.7 % (known count), ~60 % (estimate) | pass |
+| 2 absolute | ≥ 90 s | 150.1 s (known count), 256–293 s (estimate) | pass |
+| 3 non-regression | `shed_by_channel` exactly 0.0 | both channels finalized "reusing live decodes", which `session.py` grants only on shed == 0.0 | pass, over 900 s |
+| 4 thermal | watts **and** fan indistinguishable from unloaded | fan indistinguishable; package power **+43 %** at the real duty (below) | **fail** |
+| 5 path coverage | the owned loop carries real meetings | off macOS it carries the *cheaper* path, and the default path is dearer | pass |
+
+Duty cycle is the number gate 4 is really about: **0.44 core** on the
+3-speaker channel with zero late windows, measured *under* the concurrent
+live pass (0.45 when both channels were loaded — the second channel's work
+barely moves the first's). That is ~2× this box's own uncontended cost for
+the same work
+(the sequential ladder arm is 536.2 s of CPU for 2256.9 s of audio =
+0.238 core); the difference is contention plus clock policy, and the
+contended figure is the one a worker would actually pay. The comparable M4
+Max number is 0.081 core (183.9 s / 2257 s) from the sequential arm above —
+a ~3× gap, not the "~5 % of one core" the plan carried, which was never
+measured.
+
+Gate 4's power comparison: 1 Hz PPT samples over the **same** 60–900 s
+window of each run, n=839 in all three arms.
+
+| arm | package | Tctl | fan |
+|---|---|---|---|
+| unloaded capture | 3.57 W | 56.7 °C | 1919 rpm |
+| + worker on the diarized channel (the real duty) | **5.09 W (+43 %)** | 54.6 °C | 1886 rpm |
+| + worker on both channels (upper bound, ~1.6× duty) | 5.77 W (+62 %) | 59.3 °C | 1994 rpm |
+
+**Only the power rail carries the load signal; temperature and fan do not
+survive a between-run comparison here at all** — the honestly-loaded arm ran
+*cooler and quieter* than its unloaded comparator, because each run's thermal
+state at minute one dominates a 2 W difference. That is also the method
+caveat: these arms are separate runs rather than interleaved, which is the
+discipline this section otherwise preaches, so read the fan/temp columns as
+noise and the watt column as the measurement. Priced from the watt rows and
+stated as derived, not measured: +1.53 W held across a 37.6-min meeting ≈
+**3.5 kJ**, against the offline finalize's 150.1 s × (18.4 − 3.5 W) ≈
+**2.2 kJ** for the same work — race-to-idle wins on energy, and +43 % is far
+outside the 11–21 % repeat spread.
 
 #### Fewer/longer embedding units: L2 and L3 declined at kill-test (2026-08-09)
 

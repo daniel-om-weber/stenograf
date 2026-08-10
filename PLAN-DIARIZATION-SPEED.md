@@ -184,17 +184,45 @@ and the cold-cache first-meeting case is the realistic one — but this step
 would not have been built at this priority had the 2.3 s been measured
 first. (Measure-the-comparator lesson, same shape as step 0's.)
 
-## Step 4 — the weak-box datapoint, reframed as the whole wait
+## Step 4 — the whole wait on x86 — DONE 2026-08-11; the estimate path inverts off macOS
 
-One session on the CachyOS notebook or the GPD, one real (or `verify`-
-skill) meeting: record the **entire** end-of-meeting wait split —
-diarization (and which path), notes model load, notes generation — plus the
-intra-op sweep and pool sweep from step 2's harness (<5 min compute) and a
-batch>1 embed timing (the conv collapse is measured on ARM; x86's NCHWc
-layout may behave differently — if batching *wins* there, step 2 grows a
-per-platform branch). Suspicion to test, not assume: on a CPU-only box with
-Ollama in thinking mode, notes may dominate the wait there too, which would
-invert the draft's "weak Intel is the online worker's strong case".
+One session on the GPD, one 37.6-min `--replay` meeting on the reference
+channel pair plus the sweeps. Numbers and machine caveats are in
+`eval/README.md`; what they decide:
+
+- **The whole wait is 328.4 s** on the known-count path: finalize 158.6 s
+  (mic 8.5 + diarizing system 150.1) + notes 169.8 s (ollama qwen3:8b,
+  single pass, CPU). Diarization is **45.7 %** of it. The suspicion this
+  step existed to test — that notes would dominate on a CPU-only Ollama box
+  — is **not** what happened; on the default path diarization is the larger
+  half.
+- **The path split inverts.** stenodiar on ORT CPU costs 241.9 / 278.8 s
+  against 3.4 s on CoreML, so the estimate path (256–293 s) is 1.7–1.9×
+  *more* expensive than the owned loop (154.2 s) here, where macOS makes it
+  8.7× cheaper. Step 0's scope sentence is macOS-only: off macOS every user
+  is a beneficiary of this program, and the default path is the expensive
+  one.
+- **The pool holds at a smaller ratio** — 1.46× over the reconstructed
+  pre-pool config against the M4 Max's 2.86×, because x86 intra-op
+  threading is comparatively strong (2.43× at 8 threads) — and the
+  committed gate passes bit-exact at 8 and 12 workers, so the shared
+  extractor now holds on two architectures.
+- **Batching does not invert on x86**, so step 2 grows no per-platform
+  branch, and the reason is stronger than the ratio (uniform-length inputs
+  are batching's best case; padded batching needs L1's masked pooling).
+- **Measurement lesson, worth more than any single number here:** repeats of
+  one config span 11 % interleaved and 21 % across sessions on this box —
+  larger than most effects worth chasing. An increasing-order worker ladder
+  manufactured an 8-worker optimum that an interleaved 12/8/12/8 re-run
+  refuted; `_pool_workers()`'s 12 stands. Interleave every arm on a handheld,
+  and treat anything under ~15 % here as unmeasured.
+
+**What this step did NOT settle, and is now the open remainder:** this box is
+a 12-core part under a handheld TDP cap, not the 4-core mobile Intel the
+corrections section projects ~1.9× net for. That projection stays
+**inferred**, and the estimate-path inversion above is a *direction* that
+follows from the execution provider, with a magnitude that does not follow to
+fewer cores. Both want a genuinely small x86 box; neither blocks anything.
 
 ## Step 5 — remove embedded seconds — L2 and L3 DECLINED at kill-test 2026-08-09; L1 is the surviving path
 
@@ -240,38 +268,45 @@ section of `eval/README.md`):
   (below). Blocked trunk processing required — a whole-file trunk output
   is ~576 MB. This is the next session's opening move for this plan.
 
-## Step 6 — decide the online worker against the post-step-2/5 numbers
+## Step 6 — the online worker — DECLINED 2026-08-11 on gate 4, all five gates measured
 
-Structural facts stand: only clustering is global (verified — non-tail
-chunks are pure functions of their window), `SessionStore` is
-prefix-immortal so input byte-parity is free, and crash fallback is the
-offline path by construction. Build it only if ALL of these hold on the
-weakest supported box, on a real hybrid meeting:
+Four of the five gates pass on x86 and the design still dies, on the one
+the plan wrote for exactly this. Per-gate numbers are in `eval/README.md`;
+the shape of the result:
 
-1. **Share** — post-step-2/5 diarization ≥ 40 % of the total wait
-   (diarization + notes, step 4's split).
-2. **Absolute** — post-step-2/5 diarization ≥ 90 s there.
-3. **Non-regression** — with a synthetic load at the worker's duty cycle
-   beside a full `--replay` meeting, `shed_by_channel` stays exactly 0.0.
-   Any shedding kills the design (shed = finalize re-decodes ASR).
-4. **Thermal** — package watts and fan state during that loaded replay
-   indistinguishable from unloaded, or the policy is AC-only — and an
-   AC-only policy is itself evidence against building it (the policy layer
-   and the started-then-stopped mixed state raise the second-code-path
-   cost, they don't halve it).
-5. **Path coverage** — step 0 established the owned loop actually carries
-   enough real meetings to matter.
+- **Share (45.7 %, ~60 % on the default path) and absolute (150 s, 256–293 s)
+  pass**, which is what made the decision worth taking rather than assuming.
+- **Non-regression passes**, over 900 s of a 2262 s meeting: with the
+  worker's duty cycle running beside the live pass, every channel still
+  finalized "reusing live decodes" — which finalize grants only on
+  `shed_by_channel == 0.0` — at zero late windows.
+- **Thermal fails.** Fan state is indistinguishable, package power is not:
+  **+43 %** (5.09 vs 3.57 W) over the same window, loading only the channel
+  production actually diarizes — far outside this box's 11–21 % repeat
+  spread. Measured duty is 0.44 core under live-pass contention. Priced
+  from the power rows (derived, not measured), the worker holds +1.5 W
+  across the whole meeting ≈ 3.5 kJ where the offline finalize spends
+  ~2.2 kJ in 150 s: race-to-idle wins on energy as well as on the gate. An
+  AC-only policy was pre-declared as evidence against building, not a way
+  past this.
+- **Path coverage passes**, and more strongly than expected: off macOS the
+  owned loop is the *cheaper* path.
 
-Gates 3 and 4 need no worker code: trickle-pace the existing `OwnDiarizer`
-over a growing prefix beside a replay and read powermetrics +
-`shed_by_channel`. Scope clarification (2026-08-09 review): shedding can
-only move while capture runs, so the *finalize* pool can never cause it —
-gate 3 tests specifically the online worker's capture-time duty cycle.
-On the M4 Max that duty cycle (~5 % of one core) passes trivially, so the
-gates are only informative on the weak box: run them there, in the same
-session as step 4's wait split and the owed finalize-watt reading. If
-declined, record the trigger: a measured weak-box wait split where
-diarization clears gates 1+2.
+Structural facts that survive the decline (they were verified, and a future
+attempt should not re-derive them): only clustering is global, non-tail
+chunks are pure functions of their window, `SessionStore` is prefix-immortal
+so input byte-parity is free, crash fallback is the offline path by
+construction, and gates 3/4 need no worker code at all — trickle-pace the
+existing `OwnDiarizer` beside a replay.
+
+**Re-open trigger: L1 landing — and it is not a free pass.** L1 removes
+*embedding* seconds only; segmentation is untouched and is 11.3 % of loop
+cost here (60.7 of 536.2 s), so a 10× embed cut leaves 0.20× of the work:
+duty 0.44 → **~0.09 core**, and the power delta +1.53 W → ~+0.31 W, i.e.
+~+9 % over the capture floor — inside this box's repeat spread, so at that
+point gate 4 becomes genuinely undecidable by this method and would need a
+paired, interleaved load-on/load-off design to answer. Re-run gates 3 and 4
+on this box after L1; nothing else about the design needs revisiting first.
 
 ## Non-levers and declines, measured this review (don't re-spend)
 

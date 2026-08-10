@@ -12,11 +12,18 @@ defaults is in `eval/README.md` and in the code's own docstrings.
 channel records from a chosen device on all three platforms — `[capture]
 mic_device`, `steno devices`, `--mic-device`, and the setup form's picker;
 what remains is §7's hardware gates, and its §4a is superseded by the measured
-macOS design in `native/README.md`). `PLAN-DIARIZATION-SPEED.md` (scoped AND largely
-executed 2026-08-09: the pool shipped at 2.86× with bit-exact gates, the
-notes warmer shipped with its honest 2.3 s number, L2/L3 seconds-removal
-declined at kill-test; open: L1's fbank-parity precondition, and the
-weak-box session that decides the online worker — steps 4+6+watts).
+macOS design in `native/README.md`). `PLAN-DIARIZATION-SPEED.md`, where **only
+step 5's L1 is still open** (scoped and executed 2026-08-09/08-11: the pool
+shipped at 2.86× with bit-exact gates, the notes warmer shipped with its
+honest 2.3 s number, L2/L3 seconds-removal declined at kill-test, the x86
+session measured the whole wait and **declined the online worker on its
+thermal gate**, and the finalize watts it owed are measured). Two results from
+that session reach beyond the plan: **stenodiar's estimate path is 1.7–1.9×
+more expensive than the owned loop off macOS** (helper 242–279 s on ORT CPU vs
+3.4 s on CoreML), inverting the macOS-only assumption that only
+count-stating users benefit from diarization speed work; and the box drifts
+±8 % run to run, so any future timing ladder on a handheld must interleave
+its arms. Evidence: `eval/README.md`.
 `PLAN-DIARIZATION.md` (2026-08-09, all five steps
 measured to a verdict — the declined list below carries the survivors; read
 `eval/diarization-sota-2026.md` and `eval/README.md`'s corpus-harness
@@ -715,6 +722,17 @@ Kept here so future sessions don't re-open them.
 - **Packaged signed installers / any downloadable artifact.** Needs the $99
   Developer ID plus notarization; revisit only if non-terminal users ask to
   double-click an installer.
+- **The stenodiar timeout is mode-blind, and CPU mode made that matter
+  (2026-08-11).** `_TIMEOUT_S = 1800` was sized when the helper ran CoreML at
+  ~3.4 s per 37.6-min channel; on ORT CPU the same channel costs 242–279 s
+  (`eval/README.md`), so the cap covers a day of audio on macOS and a few
+  meeting-hours on a 12-core x86 box — fewer on a smaller one. Expiry is not
+  graceful in the way a timeout usually is: the user has already waited out
+  the full cap, and the channel then finalizes with no speaker labels at all.
+  Nothing is known to have hit it. Candidate fix if it ever does: scale the
+  cap by mode and by audio length rather than pinning one wall-clock number,
+  and cover it with a test — deferred because no measurement yet shows a real
+  meeting near the bound.
 - **Lower-priority, independent:** greedy re-ID → Hungarian assignment;
   SRT/VTT dropping text not covered by `words` (latent — Parakeet emits
   full-or-none); meeting-mode auto-detect; hybrid cross-channel dedup;

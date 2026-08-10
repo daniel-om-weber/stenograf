@@ -50,19 +50,28 @@ def _num_threads() -> int:
 
 
 def _pool_workers() -> int:
-    """Worker threads for the diarization pool: physical performance cores.
+    """Worker threads for the diarization pool: one per core worth using.
 
     Outer call-level threading at one intra-op thread each beats intra-op
     threading on this workload (2026-08-09, M4 Max, 37.6-min channel:
     intra-op scaling caps at 1.5× over single-thread while a pool of
     intra-op-1 workers reaches 2.5–2.6× over the 8-intra-op-thread config,
-    bit-exact against the sequential intra-op-1 reference). Logical CPUs
-    oversubscribe — hyperthreads and E-cores measured to add nothing (12
-    workers ≈ 8 on 16 logical CPUs) — so: P-cores via sysctl on macOS,
-    physical cores via /proc/cpuinfo on Linux (bounded by the scheduler
-    affinity mask, so a cgroup-quota'd container never spawns a host-sized
-    pool), logical count capped at :data:`_MAX_THREADS` elsewhere; every
-    branch capped at :data:`_MAX_POOL`."""
+    bit-exact against the sequential intra-op-1 reference; the pool wins by
+    less on x86, where intra-op threading scales better — `eval/README.md`).
+    Logical CPUs oversubscribe — hyperthreads and E-cores measured to add
+    nothing (12 workers ≈ 8 on 16 logical CPUs) — so: P-cores via sysctl on
+    macOS, physical cores via /proc/cpuinfo on Linux (bounded by the
+    scheduler affinity mask, so a cgroup-quota'd container never spawns a
+    host-sized pool), logical count capped at :data:`_MAX_THREADS`
+    elsewhere; every branch capped at :data:`_MAX_POOL`.
+
+    The Linux branch counts every physical core, fast or not, where macOS
+    asks for performance cores specifically — no counterpart is universally
+    available here (`cpu_capacity`, `cpuinfo_max_freq` and the PMU's
+    `cpu_core` list each cover only some machines). Measured 2026-08-11 on a
+    4+8 hybrid: counting all 12 is indistinguishable from 8 once arms are
+    interleaved. That was a same-ISA split (Zen5 + Zen5c, clock and cache
+    only); hybrid Intel, where E-cores differ more, is untested."""
     affinity = None
     sched_getaffinity = getattr(os, "sched_getaffinity", None)  # Linux-only
     if sched_getaffinity is not None:
