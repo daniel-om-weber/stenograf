@@ -109,7 +109,7 @@ reference has 3 — a real caveat on the cheap path, since notes consumes
 those labels; the accuracy gap itself is the closed program's territory,
 not this plan's.)
 
-## Step 1 — correct the record (no code)
+## Step 1 — correct the record (no code) — DONE 2026-08-09, all three edits landed
 
 - PLAN.md declined-stride bullet and `eval/README.md`'s matching passage:
   replace "per-chunk embedding (mask at stat-pooling) first" with the
