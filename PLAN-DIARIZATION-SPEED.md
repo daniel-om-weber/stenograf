@@ -258,24 +258,23 @@ section of `eval/README.md`):
   over long blocks plus O(1) masked mean/std per pair from prefix sums
   reaches the ~10× and also makes the naming-stage `cluster_embeddings()`
   calls free — measured at step 0 as ~10–15 s per channel on both paths.
-  Two seams break value-equivalence honestly: CMN scope (sherpa subtracts
-  a per-call global mean *outside* the graph — dropping it moves cosine
-  0.86 → 0.33, measured) and mask-edge receptive-field bleed.
+  Two seams break value-equivalence honestly: CMN scope (sherpa subtracts a
+  per-call global mean *outside* the graph, and it is load-bearing —
+  dropping it collapses cosine to 0.10–0.45, re-measured 2026-08-11 against
+  a correct front end) and mask-edge receptive-field bleed.
   L1 is also the enabling move for Intel EPs (below). Blocked trunk
   processing required — a whole-file trunk output is ~576 MB.
 
-  **The precondition is MET (2026-08-11), and the blocker was one constant.**
-  `eval/fbank_parity.py` reproduces sherpa's features exactly and its
-  embeddings to **worst 1−cos = 3.0e-11** across 0.5/1/4/10/30 s clips and
-  the concatenated-runs case production actually embeds — seven orders
-  inside the bar. The day that ended at 0.855 was not implementation risk:
-  the embedder's front end uses **`high_freq` = 7600 Hz, not Nyquist**, and
-  every other Kaldi option is the default. Two facts made it cheap once
-  looked for, both recorded in that script: sherpa's own
-  `OnlineStream.get_frames()` exists to compare FBANK across pipelines (so
-  this is checkable against ground truth, not inferable from cosine), and
-  `kaldi-native-fbank` on PyPI is the same library sherpa bundles, so an
-  option sweep in a throwaway env names the config in one pass. **L1's risk
+  **The precondition is MET (2026-08-11).** `eval/fbank_parity.py` gates
+  our own front end at worst 1−cos = 3.0e-11 against a 1e-4 bar, over every
+  length regime and over production's real pair-slice shapes, with a float32
+  arm because L1 will likely compute in float32. The config and the method
+  that found it are in `eval/README.md`; the headline is that four options
+  differ from Kaldi's defaults, one of them (`high_freq` 7600, not Nyquist)
+  is not guessable, and any single one wrong costs cosine 0.66–0.98 — so a
+  front end must be checked against sherpa's own frames, not inferred from
+  embedding cosine. That is what the earlier 0.855 attempt lacked; which
+  constant it had wrong is unknown and not worth reconstructing. **L1's risk
   is now the two value-equivalence seams and the blocked-trunk build, not
   the front end.**
 

@@ -935,33 +935,44 @@ stated as derived, not measured: +1.53 W held across a 37.6-min meeting ≈
 **2.2 kJ** for the same work — race-to-idle wins on energy, and +43 % is far
 outside the 11–21 % repeat spread.
 
-#### Owning the embedder's front end: exact, and the blocker was one constant (2026-08-11)
+#### Owning the embedder's front end: the config, and how to check one (2026-08-11)
 
 The shared-trunk route needs to feed the embedding model ourselves, which
-needs our own fbank to match sherpa's. `eval/fbank_parity.py` does, and its
-gate is not close: features match bit-for-bit against sherpa's own
-`get_frames()` (residual 1e-4 in the log domain is float32-vs-float64
-rounding) and embeddings reach **worst 1−cos = 3.0e-11** over 0.5/1/4/10/30 s
-clips plus the concatenated sole-speaker runs production really embeds — the
-bar was 1e-4.
+needs our own fbank to match sherpa's. `eval/fbank_parity.py` gates that, and
+passes with room: embeddings reach **worst 1−cos = 3.0e-11** (float32 front
+end 1.3e-8) against a 1e-4 bar, over 0.5/1/4/10/30 s clips and over
+production's real pair-slice shapes — 10–40 pieces of ~272 samples each, an
+order of magnitude shorter and more fragmented than contiguous speech.
+Features agree with sherpa's own `get_frames()` to **4.9e-4 in the log
+domain**, which is float32-vs-float64 rounding rather than a difference: a
+float32 front end lands in the same band and still passes.
 
-**`high_freq` is 7600 Hz, not Nyquist.** That one value is the entire
-difference between this and the earlier attempt that stalled at cosine 0.855:
-with Kaldi's default every frame is subtly wrong everywhere, which reads like
-a broken front end rather than one wrong constant. Everything else is Kaldi
-default (80 bins, 25/10 ms, dither 0, `snip_edges=false`, povey, preemph
-0.97, power spectrum, log floor at float32 epsilon), plus the per-call mean
-subtraction sherpa applies outside the graph.
+**Four options differ from Kaldi's defaults**, and none is guessable from the
+model: `num_bins` 80, `dither` 0, `snip_edges` false, and `high_freq`
+**7600 Hz rather than Nyquist**. Get any single one wrong and cosine lands in
+0.66–0.98 — measured one-at-a-time against the correct baseline: log floor
+not at float32 epsilon 0.67, `high_freq` at Nyquist 0.76–0.93, no preemphasis
+0.92, `low_freq` 0 0.92, `snip_edges` true 0.97, FFT size 1024 0.98,
+zero-padded edges instead of Kaldi's mirroring 0.999. **That band is the
+lesson:** a wrong front end does not announce which constant is wrong, and
+several plausible single mistakes are indistinguishable by cosine alone. The
+per-call mean subtraction sherpa applies outside the graph is part of the
+front end too — without it embeddings collapse to cosine 0.10–0.45.
 
-Method worth reusing before touching features again: sherpa's
+So check against ground truth rather than inferring from cosine. Two facts
+make that cheap, and are the reusable part of this entry: sherpa's
 `OnlineStream.get_frames(index, n)` is documented "for comparing FBANK
-features across pipelines", so a front end is checkable against ground truth
-instead of inferred from embedding cosine — but it aborts the **process** on
-an out-of-range request, so compute the frame count rather than probing for
-it. And `kaldi-native-fbank` on PyPI is the same k2-fsa library sherpa
-bundles; diffing candidate option sets against it in a throwaway env (never a
-dependency) named the config in a single sweep after a day of guessing had
-not.
+features across pipelines" — but it aborts the **process** on an
+out-of-range request, so compute the frame count rather than probing for it;
+and `kaldi-native-fbank` on PyPI is the same k2-fsa library sherpa bundles,
+so sweeping option sets against it in a throwaway env (never a dependency)
+names the config in one pass.
+
+One trap the gate itself had to fix: the reference channel is ~45 % exact-zero
+samples, and silent clips reproduce under *any* config (cosine > 0.999 even
+with `high_freq` wrong), so a uniform sampler quietly filled a third of the
+short regimes with clips that cannot fail. The harness now draws until each
+regime holds live audio.
 
 #### Fewer/longer embedding units: L2 and L3 declined at kill-test (2026-08-09)
 
