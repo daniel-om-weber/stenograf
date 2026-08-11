@@ -3,3 +3,9 @@
 # encoding conversion on a checkout would silently revoke it for that user.
 src/stenograf/assets/Stenograf.app/** binary
 src/stenograf/assets/icon.png binary
+
+# Git for Windows defaults to core.autocrlf=true, and a shell script with CRLF
+# line endings dies on its own `set -eu` before it can say anything useful —
+# including install.sh's "you are on Windows, use install.ps1", which exists
+# precisely for a reader on that platform.
+*.sh text eol=lf

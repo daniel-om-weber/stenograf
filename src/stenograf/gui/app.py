@@ -375,9 +375,21 @@ def build(app: QGuiApplication) -> tuple[QQmlApplicationEngine, StenografGui]:
     # root property is set before component completion: every binding correct on
     # the first pass, zero warnings.
     engine.setInitialProperties({"app": gui})
+    # Qt prints why a load failed to stderr — which an app-icon launch and
+    # `pythonw` do not have, so the one actionable line (a missing Qt plugin,
+    # a QML syntax error) is exactly what the user cannot see. Collected here
+    # so it travels with the exception instead. The signal still fires for the
+    # default handler, so the printed output is unchanged where it exists.
+    # Disconnected again below: the engine outlives this function, and a live
+    # connection would append every runtime QML warning of the whole session to
+    # a list nothing reads.
+    reasons: list[str] = []
+    collect = engine.warnings.connect(lambda errors: reasons.extend(e.toString() for e in errors))
     engine.load(QUrl.fromLocalFile(str(QML_DIR / "Main.qml")))
+    engine.warnings.disconnect(collect)
     if not engine.rootObjects():
-        raise RuntimeError(f"the interface failed to load from {QML_DIR}")
+        detail = "; ".join(reasons) if reasons else "Qt gave no reason"
+        raise RuntimeError(f"the interface failed to load from {QML_DIR}: {detail}")
     gui.window = engine.rootObjects()[0]  # type: ignore[assignment]  # an ApplicationWindow is a QWindow
     return engine, gui
 

@@ -148,6 +148,23 @@ class TestQmlTree:
                 assert item is not None, f"{page}.qml did not instantiate"
             assert log.seen == []
 
+    def test_a_failed_load_carries_qts_reason(self, qt_app, monkeypatch, tmp_path):
+        # Qt writes the one actionable line — a missing plugin DLL, a bad
+        # import — to a stderr that an icon launch and `pythonw` do not have.
+        # Users then report "the interface failed to load" and nothing else,
+        # which names no cause and suggests no fix.
+        broken = tmp_path / "qml"
+        broken.mkdir()
+        (broken / "Main.qml").write_text("import QtQuick\nNoSuchTypeAnywhere {}\n")
+        monkeypatch.setattr("stenograf.gui.app.QML_DIR", broken)
+
+        # The handler is here to swallow the failure Qt prints on the way out,
+        # which is expected and would otherwise be read as a broken suite.
+        with _Warnings(), pytest.raises(RuntimeError) as failure:
+            build(qt_app)
+
+        assert "NoSuchTypeAnywhere" in str(failure.value)
+
     def test_the_app_has_an_icon_to_show(self, qt_app):
         # Ships in the wheel next to the .app bundle it was cut from. Without
         # it the Dock and the taskbar fall back to a generic Python tile —

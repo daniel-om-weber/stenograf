@@ -13,6 +13,7 @@ second Stenograf that opens a dead TUI.
 from __future__ import annotations
 
 import hashlib
+import os
 import plistlib
 import shutil
 import struct
@@ -443,6 +444,41 @@ def test_install_script_parses_and_is_executable():
     content = script.read_text()
     assert "tool install --upgrade stenograf" in content
     assert "setup" in content  # the script must end in `steno setup`
+
+
+@pytest.mark.skipif(WINDOWS, reason="POSIX installer: exec bits and sh don't exist here")
+@pytest.mark.parametrize("reported", ["MINGW64_NT-10.0-26100", "MSYS_NT-10.0", "CYGWIN_NT-10.0"])
+def test_install_script_refuses_a_windows_unix_shell(tmp_path, reported):
+    """Git Bash reports ``MINGW64_NT-…`` and must be turned away before it acts.
+
+    The script is the README's first code block, so a Windows reader who goes
+    looking for a shell that has ``sh`` finds one — and everything downstream
+    succeeds well enough to look installed. The stand-in ``uv`` and ``curl``
+    are the point of the fixture, not decoration: should the guard ever stop
+    matching, this test installs stenograf over the developer's own tool
+    environment instead of failing.
+    """
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "uname").write_text(f"#!/bin/sh\necho {reported}\n")
+    for reachable_only_past_the_guard in ("uv", "curl"):
+        (fake / reachable_only_past_the_guard).write_text(
+            "#!/bin/sh\necho 'the guard let this through' >&2\nexit 42\n"
+        )
+    for stub in fake.iterdir():
+        stub.chmod(0o755)
+
+    result = subprocess.run(
+        ["sh", str(REPO_ROOT / "install.sh")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"},
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "the guard let this through" not in result.stderr
+    assert "install.ps1" in result.stderr  # the command that does work is named
 
 
 @pytest.mark.skipif(not WINDOWS, reason="Windows installer: PowerShell parsing is win32-only")

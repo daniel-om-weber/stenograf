@@ -35,10 +35,20 @@ in from the start.
 
 One command sets up everything — [uv](https://docs.astral.sh/uv/) (installed
 for you if missing), stenograf itself, the permission prompts, the model
-downloads, and a desktop launcher:
+downloads, and a desktop launcher. **Pick the one for your system:**
+
+**macOS and Linux** — in a terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh
+```
+
+**Windows** — in PowerShell (*not* in Git Bash, MSYS2 or Cygwin: that route is
+untested and the installer above refuses to run there. WSL works, but records
+only audio playing inside WSL):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.ps1 | iex"
 ```
 
 That's the only command you have to type. Afterwards, open **Stenograf** from
@@ -76,15 +86,12 @@ capture helper on your machine, which needs the Xcode command-line tools
 
 ### Windows
 
-Same one command, run from PowerShell — installs uv if missing, then stenograf,
-then the launcher:
+The PowerShell command above installs uv if missing, then stenograf, then the
+launcher — it is the supported way in. To rebuild an existing install rather
+than upgrade it in place, run `uv tool install --force stenograf`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.ps1 | iex"
-```
-
-Windows never prompts for the microphone, so capture stays silent until you flip
-the toggle under Settings > Privacy & security > Microphone — `steno setup`
+Windows never prompts for the microphone, so capture stays silent until you
+flip the toggle under Settings > Privacy & security > Microphone — `steno setup`
 reads that toggle up front and says so rather than letting you find out from a
 transcript of silence.
 
