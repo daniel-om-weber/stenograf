@@ -224,7 +224,7 @@ corrections section projects ~1.9× net for. That projection stays
 follows from the execution provider, with a magnitude that does not follow to
 fewer cores. Both want a genuinely small x86 box; neither blocks anything.
 
-## Step 5 — remove embedded seconds — L2 and L3 DECLINED at kill-test 2026-08-09; L1 is the surviving path
+## Step 5 — remove embedded seconds — L2/L3 DECLINED 2026-08-09; L1 survives and its precondition is MET 2026-08-11
 
 The kill-tests ran on all 20 loop channels (`eval/embed_units.py`,
 freeze-based — no matrix bought, per-channel numbers in the harness
@@ -261,12 +261,23 @@ section of `eval/README.md`):
   Two seams break value-equivalence honestly: CMN scope (sherpa subtracts
   a per-call global mean *outside* the graph — dropping it moves cosine
   0.86 → 0.33, measured) and mask-edge receptive-field bleed.
-  **Precondition before any matrix**: our own fbank front end must hit
-  cosine > 0.9999 against sherpa's on ~100 clips; a day's attempt reached
-  only 0.855 — if parity can't be reached, L1 dies on implementation risk
-  at zero matrix cost. L1 is also the enabling move for Intel EPs
-  (below). Blocked trunk processing required — a whole-file trunk output
-  is ~576 MB. This is the next session's opening move for this plan.
+  L1 is also the enabling move for Intel EPs (below). Blocked trunk
+  processing required — a whole-file trunk output is ~576 MB.
+
+  **The precondition is MET (2026-08-11), and the blocker was one constant.**
+  `eval/fbank_parity.py` reproduces sherpa's features exactly and its
+  embeddings to **worst 1−cos = 3.0e-11** across 0.5/1/4/10/30 s clips and
+  the concatenated-runs case production actually embeds — seven orders
+  inside the bar. The day that ended at 0.855 was not implementation risk:
+  the embedder's front end uses **`high_freq` = 7600 Hz, not Nyquist**, and
+  every other Kaldi option is the default. Two facts made it cheap once
+  looked for, both recorded in that script: sherpa's own
+  `OnlineStream.get_frames()` exists to compare FBANK across pipelines (so
+  this is checkable against ground truth, not inferable from cosine), and
+  `kaldi-native-fbank` on PyPI is the same library sherpa bundles, so an
+  option sweep in a throwaway env names the config in one pass. **L1's risk
+  is now the two value-equivalence seams and the blocked-trunk build, not
+  the front end.**
 
 ## Step 6 — the online worker — DECLINED 2026-08-11 on gate 4, all five gates measured
 

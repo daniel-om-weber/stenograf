@@ -935,6 +935,34 @@ stated as derived, not measured: +1.53 W held across a 37.6-min meeting ≈
 **2.2 kJ** for the same work — race-to-idle wins on energy, and +43 % is far
 outside the 11–21 % repeat spread.
 
+#### Owning the embedder's front end: exact, and the blocker was one constant (2026-08-11)
+
+The shared-trunk route needs to feed the embedding model ourselves, which
+needs our own fbank to match sherpa's. `eval/fbank_parity.py` does, and its
+gate is not close: features match bit-for-bit against sherpa's own
+`get_frames()` (residual 1e-4 in the log domain is float32-vs-float64
+rounding) and embeddings reach **worst 1−cos = 3.0e-11** over 0.5/1/4/10/30 s
+clips plus the concatenated sole-speaker runs production really embeds — the
+bar was 1e-4.
+
+**`high_freq` is 7600 Hz, not Nyquist.** That one value is the entire
+difference between this and the earlier attempt that stalled at cosine 0.855:
+with Kaldi's default every frame is subtly wrong everywhere, which reads like
+a broken front end rather than one wrong constant. Everything else is Kaldi
+default (80 bins, 25/10 ms, dither 0, `snip_edges=false`, povey, preemph
+0.97, power spectrum, log floor at float32 epsilon), plus the per-call mean
+subtraction sherpa applies outside the graph.
+
+Method worth reusing before touching features again: sherpa's
+`OnlineStream.get_frames(index, n)` is documented "for comparing FBANK
+features across pipelines", so a front end is checkable against ground truth
+instead of inferred from embedding cosine — but it aborts the **process** on
+an out-of-range request, so compute the frame count rather than probing for
+it. And `kaldi-native-fbank` on PyPI is the same k2-fsa library sherpa
+bundles; diffing candidate option sets against it in a throwaway env (never a
+dependency) named the config in a single sweep after a day of guessing had
+not.
+
 #### Fewer/longer embedding units: L2 and L3 declined at kill-test (2026-08-09)
 
 `eval/embed_units.py` (freeze-based, all 20 loop channels, production fold;
