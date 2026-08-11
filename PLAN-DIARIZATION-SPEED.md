@@ -310,8 +310,13 @@ on this box after L1; nothing else about the design needs revisiting first.
 
 ## Non-levers and declines, measured this review (don't re-spend)
 
-- **Embedder batching**: 0.26× (see corrections above). Re-open only if
-  step 4 shows x86 inverts it.
+- **Embedder batching**: 0.26× on ARM, and **x86 did not invert it**
+  (0.79–0.92× per item at batch 2–32, measured 2026-08-11) — the one
+  re-open condition this carried has fired and come back negative, so it is
+  closed rather than pending. Any future attempt inherits two further
+  obstacles named in `eval/README.md`: real slices are variable-length, so
+  a batch pays padding the measurement did not, and padded batching needs
+  masked statistics pooling the graph lacks — i.e. it is L1, not a branch.
 - **EPs through sherpa**: unreachable — sherpa's bundled ORT accepts any
   `provider` string and silently falls back to CPU (verified for openvino,
   xnnpack, directml). Every EP lever for the embedder requires L1's
@@ -324,10 +329,15 @@ on this box after L1; nothing else about the design needs revisiting first.
 - **int8 embedder**: declined, with the reason corrected — the "int8
   ruined German ASR" transfer is weak (that damage compounded through an
   autoregressive decoder; this is one feed-forward pass into cosine). The
-  real reasons: ORT CPU int8 conv pays only with VNNI, absent on exactly
-  the arbitrary-mobile-Intel target, and the recalibration bill (0.56 +
-  ward + fold gates) is certain while the win is unmeasured. Re-open
-  trigger: a measured >1.5× on real target hardware, not "never".
+  real reasons: ORT CPU int8 conv pays only with VNNI, and the
+  recalibration bill (0.56 + ward + fold gates) is certain while the win is
+  unmeasured. **The VNNI half is weaker than it was written** (noted
+  2026-08-11, from a CPU-flag read, not a measurement): this Zen5 box
+  advertises `avx512_vnni`, as does every recent AMD and Intel mobile part,
+  so "absent on the target" now describes only the older machines in the
+  arbitrary-hardware tail. The recalibration bill is what still decides it.
+  Re-open trigger unchanged: a measured >1.5× on real target hardware, not
+  "never".
 - **fp16**: no x86 CPU fp16 conv kernels in ORT — cast-to-fp32 makes it
   neutral-to-slower. ARM-only curiosity.
 - **Graph-opt level / saved optimized model / IOBinding / arena tuning**:
