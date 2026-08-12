@@ -35,12 +35,12 @@ HelperCaptureProvider._stop_signal`. What else is genuinely per-platform:
   (`native/README.md`). Echo is cancelled downstream (:mod:`stenograf.aec`).
 - **Linux** (Rust helper): one PulseAudio-protocol record stream per channel —
   the mic from ``@DEFAULT_SOURCE@``, system audio from ``@DEFAULT_MONITOR@``;
-  PipeWire serves both via ``pipewire-pulse``. Measured device-name
-  behaviours: ``@DEFAULT_MONITOR@`` follows a default-sink change mid-capture
-  (the user plugs in a headset and the capture moves with the meeting app's
-  playback); ``@DEFAULT_SOURCE@`` pins to the mic that was default at start —
-  an acceptable asymmetry, the remote channel is the one that must survive an
-  output-device switch. A muted sink's monitor still delivers.
+  PipeWire serves both via ``pipewire-pulse``. Measured device-name behaviours
+  (2026-08-12, PipeWire 1.6.8): both aliases follow a mid-capture default
+  change, which is how the system channel travels with the meeting app's
+  playback when a headset is plugged in. A *pinned* mic is the one exception
+  and refuses to be moved (``pulse.rs``). A muted sink's monitor still
+  delivers.
 - **Windows** (same Rust helper): WASAPI shared-mode streams plus the two
   things only Windows has — the privacy consent store and the "(loopback)"
   device suffix — in :mod:`stenograf.capture.windows`.

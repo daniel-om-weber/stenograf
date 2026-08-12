@@ -1,6 +1,8 @@
 # PLAN-MIC-DEVICE — choosing which microphone a meeting records
 
-Status: **steps 1–3 BUILT 2026-08-12; only the hardware gates (§7) remain.**
+Status: **steps 1–3 BUILT 2026-08-12; G5 and G5r are green (§7), the macOS and
+Windows gates and G6 remain.** G5 found and cost a real defect: the Linux pin
+held only until the device went away, and the fix is in `pulse.rs` (§7).
 Scope: the **mic** channel's input device becomes selectable — "the OS default"
 or one named device — on macOS, Windows and Linux, chosen in the Qt setup form
 (which also names the current default) and settable standing in
@@ -45,8 +47,10 @@ in the tool can change that:
   and rebuilds the engine on a change — it follows the default by design.
 - Windows: `GetDefaultAudioEndpoint(eCapture, eConsole)`
   (`native/stenocap/src/wasapi.rs:130`), pinned at start.
-- Linux: `@DEFAULT_SOURCE@` (`native/stenocap/src/pulse.rs:114`), pinned at
-  start by the server.
+- Linux: `@DEFAULT_SOURCE@` (`native/stenocap/src/pulse.rs:114`). Not pinned at
+  start, as this once said: measured 2026-08-12, an unpinned mic follows a
+  default-source change mid-capture, the server moving the stream it already
+  resolved.
 - Helper argv is `[--mic] [--system] | --devices` (`main.rs:48-66`); the Swift
   helper accepts `--mic`/`--system` only (`main.swift:764-771`). `--devices` is
   a read-only preflight consumed by `query_devices`
@@ -110,6 +114,17 @@ and **after re-plugging a USB mic into a different port**, and diff against the
 baseline; the same on the CachyOS notebook (pulse source names) and the Windows
 box (endpoint IDs). D2 stays ASSUMED for the UUID-shaped and pulse/WASAPI IDs
 until then — the two static-string macOS IDs above need no further proof.
+
+**Linux, 2026-08-12: the baseline is taken and the reboot diff is set up, not
+yet run.** `~/.local/share/steno-m2/` (outside the repo, and outside `/tmp`
+because the reboot destroys that) holds `snapshot.sh`, the pre-reboot
+`snap-boot0.txt` and the procedure. This machine's two ids are
+`rnnoise_source` (a filter-chain source, and the default) and
+`alsa_input.pci-0000_c4_00.6.analog-stereo` — both derived from a PCI address
+or a module name rather than from an enumeration order, so the reboot half is
+expected to be clean; the re-plug half is the one that can bite and **cannot be
+run here at all: this machine has no USB audio device**, so that half stays
+not-run rather than passed.
 
 The probe (source + binary + baseline) is in this session's scratchpad; it is
 deliberately *not* committed, because `steno devices` (§5.6) replaces it the
@@ -422,9 +437,98 @@ passes a positional value starts failing.
 | G2 | macOS | Unplug the pinned device mid-meeting → "mic capture lost … retrying", **no** switch to the built-in mic; re-plug resumes. |
 | G3 | macOS | Connect AirPods (a default-*output* switch) while pinned → capture stays on the pinned input. Guards the 2026-07-20 regression. Partly covered already: switching the default output between the built-in speakers and an external monitor mid-run left a pinned mic delivering without a gap (2026-08-12), but AirPods are a Bluetooth *input* too and only real hardware settles it. |
 | G4 | Windows | Pin works; preflight names it; an absent ID fails before model load. |
-| G5 | Linux | Pin works on pipewire-pulse; the **system** channel still follows a default-sink change (D1's reason must survive). |
+| G5 | Linux | **MEASURED 2026-08-12 — green, after fixing what it found (below).** Pin works on pipewire-pulse; the **system** channel still follows a default-sink change (D1's reason survives). |
+| G5r | Linux | **MEASURED 2026-08-12 — the Linux twin of G2, red then green.** A pinned device removed mid-capture must not become a different microphone. |
 | G6 | any | **Dual-clock AEC run**: mic on a USB interface, system audio on the built-in output — two independent crystals, which pinning is what makes possible. Run ≥15 min, score ERLE *over time*, and count the framer's gap-correction complaints in the helper's stderr as the primary signal. `frame.rs:180-184` is explicit that slow stamp-vs-device-clock drift accumulates until it crosses `GAP_TOLERANCE_UNITS` and is then corrected **in one step** — a timeline discontinuity AEC3 cannot follow. A one-shot ERLE spot-check cannot see this; the first draft's version of this gate was wrong. |
 | G7 | macOS + a virtual device | A pinned aggregate/BlackHole device logs the invalid-host-time warning (§4a.5) rather than silently arrival-stamping. |
+
+### What the Linux gates measured (2026-08-12, CachyOS, PipeWire 1.6.8)
+
+The rig is a `module-null-sink` + `module-remap-source` pair, which yields a
+source whose content is exactly known — so *which device was recorded* is
+answered by the audio rather than by a log line — plus a second pair carrying a
+different tone, so both sides of every switch are positively identified. The
+first attempt read silence→tone and was thrown away: a suspended sink's monitor
+delivers nothing, so silence→tone is equally the signature of a stream that was
+dead all along.
+
+Green: the pin is honoured, shown three ways at once — content (the pinned tone
+source at full amplitude, the pinned physical mic and the unpinned default at
+the noise floor), the server's own routing table (source-output → pid), and the
+device name the server reports back after connect. By id and by description
+alike; a name two devices share is refused naming both ids; a bogus, mis-cased
+or monitor-named pin is fatal, never a fallback. The system channel still
+follows a default-sink change mid-capture — its stream's source moves while the
+pinned mic's stays put, with real audio on *both* sides of the switch. An absent
+pin fails before models load, proven by call order (the preflight in `flow.py`
+precedes `load_backends`) rather than by wall clock, exit 1, remedy named. And
+end to end: speech played only into the pinned device is the speech in the
+transcript, both mic-only and in the full pinned-mic + system + AEC shape.
+
+**The defect it found.** The pin was connect-time only — `connect_record`
+omitted `PA_STREAM_DONT_MOVE`, so the server could re-route the stream, and
+removing a pinned device mid-capture silently moved the recording to the
+*fallback* source (measured: the fallback's tone in the mic channel one second
+later, no diagnostic). That is exactly the failure D4 and §8.1 exist to prevent,
+reached with no user action at all. `pulse.rs` now sets `DONT_MOVE` for a pinned
+mic **only** — the system tap and an unpinned mic follow the default *by* being
+moved, so the flag must never reach them, which is now a unit test rather than a
+comment. That alone converts wrong-audio into silent-audio, because losing the
+device leaves no trace in the stream API (index, state, `suspended` and device
+name all unchanged across the removal — which also rules out
+`pa_stream_get_device_index` as the cheaper signal), so a pinned mic delivering
+nothing for 5 s is the failure signal; the same removal then yields no wrong
+audio and a FATAL naming the device and the remedy.
+
+**The watchdog's own trap, found in review and fixed before it shipped.** A
+first version judged silence at the top of the pump loop, which made the pump's
+*own* stall indistinguishable from the device's silence: stopping the process
+for 6 s declared a live, delivering microphone disconnected. The helper shares
+the CLI's process group, so `Ctrl+Z` on `steno start` for five seconds would
+have ended the meeting with a false reason. Silence is therefore only counted
+while the pump is actually running, a hole counts as liveness (the server
+reporting it dropped *this* stream's audio proves the device is there), and the
+judgement happens after the drain. Guarded by 30 s of continuous virtual and
+25 s of continuous physical pinned capture with no trip, by the stall repro, and
+by both follow-the-default behaviours re-measured unchanged.
+
+Bounds worth knowing before trusting it: a trip ends the *helper*, so losing a
+pinned mic also ends the system channel and the session finalizes what arrived —
+a false trip truncates a meeting rather than losing one, which is what makes 5 s
+survivable. The stream never reattaches, so re-plugging does not resume a
+meeting (unlike G2's macOS expectation). And the guard is Linux-only by need:
+`wasapi.rs` already turns device invalidation into a stream-died error.
+
+Not established, and not to be written up as if it were: two *physical* mics
+discriminated by content (the physical arm's audio evidence is the absence of a
+tone, so its positive identity rests on the routing table); **NFC matching,
+which is untested and untestable here** — every id and description on this
+machine is ASCII, and NFD is a macOS behaviour, though trim and case-sensitivity
+were checked against real devices; the 5 s window, chosen against a module
+unload rather than an unplugged USB interface; and **classic PulseAudio, which
+was never exercised** — all of this is pipewire-pulse, while the low-floor
+manylinux_2_28 wheel exists for exactly the distros that may still run the real
+thing, whose move and suspend semantics are its own. (`pactl suspend-source` is
+a no-op here: delivery continued unbroken through a nominal suspension.) The
+framer's 30 ms complaint also fired within ~2 s on *every* run, virtual and
+physical alike, which is trap 7 arriving on schedule — no timestamp or AEC
+conclusion may ride on this rig, and G6 still needs real crystals.
+
+Two smaller defects turned up alongside, recorded rather than fixed because
+neither is a gate: a `mic_device` value beginning with `--` reaches the helper's
+parser, which exits 2, and `_ask_helper` reports *every* exit 2 as "the capture
+helper … is older than this version of stenograf; rebuild it" — wrong diagnosis
+and wrong remedy for a settings typo (`steno devices` handles the same value
+correctly); and `--devices` answers with the source *id* for an unpinned mic but
+the *description* for a pinned one, so `capture: mic ← …` and `steno doctor`
+mix vocabularies depending on whether a pin exists — as does the new
+disconnected-mid-meeting FATAL, which names the id. One pass should settle which
+of the two a user is shown.
+
+One consequence of the fix worth stating, because the picker makes it one
+click: pinning the device that is *already* the default is not a no-op. It
+changes both the follow behaviour (it stops following) and the liveness policy
+(it becomes fatal for that device to go away).
 
 Docs when green: `README.md` (the setting + `steno devices`),
 `native/README.md` (the new flags), `.claude/skills/verify/SKILL.md` (§5.9).

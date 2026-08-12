@@ -2,9 +2,10 @@
 //!
 //! Both channels are pulse record streams — the mic from `@DEFAULT_SOURCE@`,
 //! system audio from `@DEFAULT_MONITOR@`, the same server-resolved names the
-//! retired `parec` transport used (their measured behaviours carry over: the
-//! monitor follows a default-sink change mid-capture, the mic pins to the
-//! device that was default at start). One client library serves both sound
+//! retired `parec` transport used. Either alias follows a mid-capture default
+//! change, because the server moves the stream it already resolved; a pinned
+//! mic is the one stream that refuses ([`DONT_MOVE`][StreamFlagSet], and
+//! [`DEVICE_LOST`]). One client library serves both sound
 //! servers: PipeWire ships `pipewire-pulse` precisely so pulse clients need no
 //! second path, and its timing answers come from `pw_time`, the native clock.
 //!
@@ -38,7 +39,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use libpulse_binding::callbacks::ListResult;
 use libpulse_binding::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
@@ -93,6 +94,75 @@ pub const GAP_TOLERANCE_UNITS: i64 = 300_000;
 /// second (a single tiny round trip) keeps the error near the snapshot's own
 /// accuracy instead of the drift's accumulation.
 const TIMING_REFRESH: Duration = Duration::from_secs(1);
+
+/// How long a pinned mic may deliver nothing before the run is called dead.
+///
+/// Losing the device mid-capture leaves no trace in the stream API — measured
+/// 2026-08-12 on PipeWire 1.6.8, where unloading a pinned source left index,
+/// state, `suspended` and device name all unchanged and merely stopped the
+/// audio, so silence is the only symptom there is. Only a pinned mic is judged
+/// this way: it cannot legitimately move, while a monitor whose sink is
+/// suspended delivers nothing for entirely ordinary reasons.
+///
+/// Five seconds is chosen, not measured: long enough to dwarf any scheduling
+/// hiccup the forgiveness below does not already cover, short enough that a
+/// meeting recorded from a dead microphone is caught while it is still worth
+/// telling someone. A trip ends the helper, so it truncates a meeting rather
+/// than losing one.
+const DEVICE_LOST: Duration = Duration::from_secs(5);
+
+/// A pump gap this long is treated as our own stall, not the device's silence.
+///
+/// The watchdog can only judge what the pump observed, and a pump that was not
+/// scheduled observed nothing: stopping the process for six seconds declared a
+/// live, delivering microphone disconnected (measured 2026-08-12). The helper
+/// shares the CLI's process group, so a terminal's SIGTSTP reaches exactly this
+/// path — as does a starved thread on a loaded machine.
+const STALL_FORGIVEN: Duration = Duration::from_secs(1);
+
+/// Whether this stream is the one that may never be re-routed.
+///
+/// The system tap follows a default-sink change *by* being moved, and an
+/// unpinned mic likewise follows the default source (both measured 2026-08-12),
+/// so only a pinned mic may refuse a move — and only it may be judged dead for
+/// going quiet.
+fn pinned(tap: Tap, mic_device: Option<&str>) -> bool {
+    matches!(tap, Tap::Mic) && mic_device.is_some()
+}
+
+/// Has a pinned mic stopped delivering, or did we simply stop looking?
+///
+/// Its own rules, kept out of the pump so both are testable without a sound
+/// server: only data proves the device is alive, and silence is only counted
+/// while the pump is actually running.
+struct Liveness {
+    last_data: Instant,
+    last_tick: Instant,
+}
+
+impl Liveness {
+    fn new(now: Instant) -> Self {
+        Self { last_data: now, last_tick: now }
+    }
+
+    /// Once per pump iteration, before judging.
+    fn tick(&mut self, now: Instant) {
+        if now.duration_since(self.last_tick) >= STALL_FORGIVEN {
+            self.last_data = now;
+        }
+        self.last_tick = now;
+    }
+
+    /// Audio arrived — including a hole, which is the server reporting that it
+    /// dropped *this stream's* audio and so is proof the device is still there.
+    fn observed(&mut self, now: Instant) {
+        self.last_data = now;
+    }
+
+    fn lost(&self, now: Instant) -> bool {
+        now.duration_since(self.last_data) >= DEVICE_LOST
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tap {
@@ -330,9 +400,19 @@ pub fn pump(
         minreq: u32::MAX,
         fragsize: FRAGSIZE_BYTES,
     };
-    let flags = StreamFlagSet::INTERPOLATE_TIMING
+    let mut flags = StreamFlagSet::INTERPOLATE_TIMING
         | StreamFlagSet::AUTO_TIMING_UPDATE
         | StreamFlagSet::ADJUST_LATENCY;
+    // A chosen mic must fail rather than drift: the server re-routes record
+    // streams whose device disappears, so without this the pin lasts only until
+    // the device is unplugged and then silently records the fallback source
+    // instead — measured 2026-08-12, the audio changed device mid-capture with
+    // no diagnostic, which is the wrong-microphone transcript the pin exists to
+    // prevent.
+    let pinned = pinned(tap, mic_device);
+    if pinned {
+        flags |= StreamFlagSet::DONT_MOVE;
+    }
     if let Err(err) = stream.connect_record(Some(&device), Some(&attr), flags) {
         return Some(open_failure(tap, &device, &err.to_string().unwrap_or_default()));
     }
@@ -379,10 +459,12 @@ pub fn pump(
     let mut samples: Vec<i16> = Vec::new();
     let mut carry: Option<u8> = None;
     let mut timing_refreshed = std::time::Instant::now();
+    let mut liveness = Liveness::new(Instant::now());
     let outcome = 'pump: loop {
         if stop.load(Ordering::Relaxed) {
             break None;
         }
+        liveness.tick(Instant::now());
         if timing_refreshed.elapsed() >= TIMING_REFRESH {
             timing_refreshed = std::time::Instant::now();
             // Fire and forget: the reply lands during a later dispatch, and
@@ -411,6 +493,7 @@ pub fn pump(
                 }
                 Ok(PeekResult::Empty) => break,
                 Ok(PeekResult::Hole(_)) => {
+                    liveness.observed(Instant::now());
                     // Overrun: audio the server dropped. Discarding advances
                     // the read position; the next chunk's stamp jumps forward
                     // and the framer fills the gap with silence, keeping later
@@ -418,6 +501,7 @@ pub fn pump(
                     let _ = stream.discard();
                 }
                 Ok(PeekResult::Data(bytes)) => {
+                    liveness.observed(Instant::now());
                     let stamp = now_units() - latency_units;
                     decode(&mut carry, bytes, &mut samples);
                     let _ = stream.discard();
@@ -432,6 +516,16 @@ pub fn pump(
                     }
                 }
             }
+        }
+        // After the drain, so what the server had waiting for us has been taken
+        // into account before the silence is held against the device.
+        if pinned && liveness.lost(Instant::now()) {
+            break Some(format!(
+                "the selected microphone ({device}) stopped delivering audio for \
+                 {}s — reconnect it and start again, or pass `--mic-device default` \
+                 to follow the system default",
+                DEVICE_LOST.as_secs()
+            ));
         }
         std::thread::sleep(POLL);
     };
@@ -486,7 +580,7 @@ fn decode(carry: &mut Option<u8>, bytes: &[u8], out: &mut Vec<i16>) {
 
 #[cfg(test)]
 mod tests {
-    use super::decode;
+    use super::{decode, pinned, Duration, Instant, Liveness, Tap, DEVICE_LOST};
 
     #[test]
     fn decode_reassembles_a_sample_split_across_chunks() {
@@ -509,5 +603,50 @@ mod tests {
         decode(&mut carry, &[], &mut out);
         assert!(out.is_empty());
         assert_eq!(carry, Some(0x0d));
+    }
+
+    #[test]
+    fn only_a_pinned_mic_refuses_to_be_moved() {
+        assert!(pinned(Tap::Mic, Some("usb-1")));
+        // Both of these follow the default by being moved, so neither may take
+        // DONT_MOVE or be judged dead for going quiet.
+        assert!(!pinned(Tap::Mic, None));
+        assert!(!pinned(Tap::System, Some("usb-1")));
+    }
+
+    #[test]
+    fn a_pinned_mic_is_lost_only_after_the_full_silence() {
+        let t0 = Instant::now();
+        let mut live = Liveness::new(t0);
+        assert!(!live.lost(t0 + DEVICE_LOST - Duration::from_millis(1)));
+        assert!(live.lost(t0 + DEVICE_LOST));
+        live.observed(t0 + DEVICE_LOST);
+        assert!(!live.lost(t0 + DEVICE_LOST + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_stalled_pump_is_not_a_lost_device() {
+        // The pump stops being scheduled for longer than the whole budget and
+        // then resumes: it observed nothing, which is not the same as the
+        // device delivering nothing.
+        let t0 = Instant::now();
+        let mut live = Liveness::new(t0);
+        let resumed = t0 + DEVICE_LOST + Duration::from_secs(5);
+        live.tick(resumed);
+        assert!(!live.lost(resumed));
+    }
+
+    #[test]
+    fn steady_ticks_do_not_excuse_a_silent_device() {
+        // Forgiveness must not become amnesty: a pump running normally holds
+        // the device to the full DEVICE_LOST.
+        let t0 = Instant::now();
+        let mut live = Liveness::new(t0);
+        let mut now = t0;
+        for _ in 0..100 {
+            now += Duration::from_millis(100);
+            live.tick(now);
+        }
+        assert!(live.lost(now));
     }
 }
