@@ -272,6 +272,9 @@ jobs:
           name: dist-linux-x86_64
           path: dist
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # For doctor's desktop-app check below — the runner image's gap, the same
+      # one ci.yml installs against, not the wheel's.
+      - run: sudo apt-get install -y libegl1
       - run: uv tool install -p 3.13 ./dist/stenograf-*manylinux_2_39_x86_64.whl
       - run: steno --version
       - run: steno setup --models-only
@@ -286,6 +289,9 @@ jobs:
           steno doctor > doctor.txt 2>&1 || true
           cat doctor.txt
           grep -q "stenograf/bin/stenodiar" doctor.txt
+          # The QML tree loads from the installed wheel — the desktop app is
+          # the default UI, and no other leg of this pipeline opens it.
+          grep -q "Qt loads and the interface compiles" doctor.txt
           if grep -qi "not found" doctor.txt; then
             echo "the installed wheel is missing a helper" >&2
             exit 1
@@ -371,6 +377,11 @@ jobs:
           cat doctor.txt
           grep -q "ASR backend" doctor.txt
           grep -q "ffmpeg" doctor.txt
+          # The QML tree loads from the installed wheel, in a `uv tool`
+          # environment — the combination a user has and no other job builds.
+          # A Windows install whose Qt cannot load its style plugin is exactly
+          # the failure this line exists to catch (2026-08-11).
+          grep -q "Qt loads and the interface compiles" doctor.txt
           # The installed wheel's own helpers, not a stray build in the checkout.
           grep -qi "stenodiar.exe" doctor.txt
           # The capture check cannot *pass* on a runner — there is no audio

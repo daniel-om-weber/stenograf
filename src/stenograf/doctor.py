@@ -60,6 +60,7 @@ def run_checks() -> list[Check]:
             )
         )
 
+    checks.append(_desktop_app_check())
     checks.append(_asr_check())
     checks.append(_ffmpeg_check())
     checks.append(_models_check())
@@ -198,6 +199,117 @@ def _diarizer_helper_check() -> Check:
         ok=True,
         detail=f"{path} — speaker counts are estimated with speakrs (VBx)",
     )
+
+
+_QML_PROBE = """
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QLibraryInfo, QPluginLoader
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlComponent, QQmlEngine
+
+from stenograf.gui.app import QML_DIR
+
+# Both get a name on purpose: as temporaries Python collects them mid-probe,
+# and the component then reports Null with nothing to say about why
+# (measured 2026-08-11).
+application = QGuiApplication([])
+engine = QQmlEngine()
+for source in sorted(QML_DIR.glob("*.qml")):
+    component = QQmlComponent(engine, str(source))
+    if component.status() is not QQmlComponent.Status.Ready:
+        sys.exit(component.errorString().strip() or f"{source.name} did not compile")
+
+# Running offscreen means the platform plugin the app will really use never
+# loads, and failing to load it is the most common way a Qt app cannot start.
+# Loaded directly instead of by starting a second application: it resolves the
+# same dependencies without needing a window server, and without the Dock tile
+# a real platform would give a diagnostic that is supposed to be invisible.
+# macOS and Windows only — which plugin a Linux session picks depends on the
+# session, and a headless box legitimately has none.
+platform_plugin = {"darwin": "libqcocoa.dylib", "win32": "qwindows.dll"}.get(sys.platform)
+if platform_plugin:
+    path = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath))
+    loader = QPluginLoader(str(path / "platforms" / platform_plugin))
+    if not loader.load():
+        sys.exit(f"{platform_plugin}: {loader.errorString()} ({path / 'platforms'})")
+"""
+"""What the app does when it opens, minus the window: every QML file compiled
+(which is what resolves Qt's imports and loads the style plugin) and the
+platform plugin loaded. Those are the steps that fail when a Qt library is
+present but not loadable.
+
+Compiled, not instantiated: instantiating needs the live shell, and the shell
+builds the screen that runs these very checks."""
+
+
+def _desktop_app_check() -> Check:
+    """Whether the desktop app — the default UI — can actually open.
+
+    Optional because the failure is survivable: every CLI subcommand works
+    without a window, and this must not turn a headless machine's `steno
+    doctor` into an exit 1.
+
+    In a subprocess, because there is nothing safe to do in this one: a
+    ``QGuiApplication`` may already exist (the app's own Doctor screen calls
+    this), and creating one where none does aborts the process outright on a
+    machine with no display. The child is pinned to the offscreen platform, so
+    a missing screen is never what it reports.
+    """
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", _QML_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        )
+    except subprocess.TimeoutExpired:
+        # Not the exception's own message: it quotes the command, and the
+        # command is the whole probe source.
+        return Check(
+            name="Desktop app",
+            ok=False,
+            detail="the Qt probe did not finish in 180 s",
+            optional=True,
+        )
+    except OSError as exc:
+        return Check(
+            name="Desktop app", ok=False, detail=f"the Qt probe did not run: {exc}", optional=True
+        )
+    if probe.returncode == 0:
+        return Check(
+            name="Desktop app",
+            ok=True,
+            detail="Qt loads and the interface compiles",
+            optional=True,
+        )
+    return Check(
+        name="Desktop app",
+        ok=False,
+        detail=f"{_probe_reason(probe.stderr)} — the CLI (`steno start`, "
+        "`steno transcribe`) works without it; to repair the window, reinstall with "
+        "`uv tool install --force stenograf`",
+        optional=True,
+    )
+
+
+def _probe_reason(stderr: str) -> str:
+    """The one sentence worth printing out of a failed probe's stderr.
+
+    Where it sits depends on how Qt failed. A short block — an aborted Qt, a
+    QML error — is worth quoting whole, since its last line is often only a
+    list of alternatives. A traceback is not, and its final line is not
+    reliably the message either: a `dlopen` failure ends in indented
+    continuation lines listing every path tried. The last unindented line is
+    the exception in both cases."""
+    lines = [line for line in stderr.strip().splitlines() if line.strip()]
+    if not lines:
+        return "no reason given"
+    if len(lines) <= 5:
+        return "; ".join(line.strip() for line in lines)
+    return next((line.strip() for line in reversed(lines) if not line[:1].isspace()), lines[-1])
 
 
 def _codesign_valid(path: Path) -> tuple[bool, str]:

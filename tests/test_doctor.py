@@ -1,4 +1,7 @@
+import os
 import platform
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +28,100 @@ def test_run_checks_includes_python_and_asr():
     assert "ASR backend" in names
     python = next(c for c in doctor.run_checks() if c.name == "Python")
     assert python.ok  # we require >=3.12 and run under it
+
+
+def test_desktop_app_check_runs_and_is_reported():
+    # The window the app opens, built by the Qt this machine actually has —
+    # the check exists because a Qt that imports can still fail to load its
+    # plugins, which nothing short of loading them can tell. Optional: a
+    # headless machine runs every subcommand without a window.
+    check = doctor._desktop_app_check()
+    assert check.ok, check.detail
+    assert check.optional
+    assert "Desktop app" in {c.name for c in doctor.run_checks()}
+
+
+def test_desktop_app_check_compiles_every_screen(tmp_path):
+    """Not just the window: each screen is a file of its own, reached at
+    runtime, and a plugin only one of them imports is exactly how a broken Qt
+    hides from a check that compiles the entry point alone."""
+    from stenograf.gui import app as gui_app
+
+    tree = tmp_path / "qml"
+    shutil.copytree(gui_app.QML_DIR, tree)
+    (tree / "Notes.qml").write_text("import QtQuick\nNoSuchTypeAnywhere {}\n")
+    # The probe runs in its own interpreter, so the tree it reads is swapped in
+    # its source rather than by patching this process.
+    probe = doctor._QML_PROBE.replace(
+        "from stenograf.gui.app import QML_DIR", f"QML_DIR = Path({str(tree)!r})"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+    )
+    assert result.returncode != 0
+    assert "NoSuchTypeAnywhere" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        # An aborted Qt: the actionable sentence is not the last line, which
+        # only lists what was available instead.
+        (
+            'qt.qpa.plugin: Could not find the Qt platform plugin "xcb"\n'
+            "This application failed to start because no Qt platform plugin "
+            "could be initialized.\n\nAvailable platform plugins are: offscreen.\n",
+            "This application failed to start",
+        ),
+        # A dlopen failure: the exception is followed by indented continuation
+        # lines naming every path tried, and there can be dozens.
+        (
+            "Traceback (most recent call last):\n"
+            + "".join(f'  File "<string>", line {n}, in <module>\n    x\n' for n in range(8))
+            + "ImportError: dlopen(QtQml.abi3.so): Library not loaded: @rpath/QtQml\n"
+            + "".join(f"    tried: '/opt/{n}/QtQml' (no such file)\n" for n in range(30)),
+            "ImportError: dlopen",
+        ),
+    ],
+)
+def test_desktop_app_check_quotes_the_actionable_line(monkeypatch, stderr, expected):
+    """The report is the only place a user ever sees why the app will not open,
+    so the wrong line here costs them the cause entirely."""
+    failed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=stderr)
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **kw: failed)
+
+    check = doctor._desktop_app_check()
+
+    assert not check.ok
+    assert expected in check.detail
+    assert "uv tool install --force stenograf" in check.detail
+    assert len(check.detail) < 400  # a report line, not a dyld dump
+
+
+def test_desktop_app_check_survives_a_probe_that_cannot_run(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError("no such interpreter")
+
+    monkeypatch.setattr(doctor.subprocess, "run", refuse)
+    check = doctor._desktop_app_check()
+    assert not check.ok
+    assert "no such interpreter" in check.detail
+
+
+def test_desktop_app_check_does_not_quote_the_probe_at_a_timeout(monkeypatch):
+    # TimeoutExpired stringifies its command, and the command is the whole
+    # probe source — a screenful of Python in the middle of the report.
+    def stall(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=[sys.executable, "-c", doctor._QML_PROBE], timeout=180)
+
+    monkeypatch.setattr(doctor.subprocess, "run", stall)
+    check = doctor._desktop_app_check()
+    assert not check.ok
+    assert "import sys" not in check.detail
+    assert len(check.detail) < 100
 
 
 def test_capture_helper_check_reports_found(monkeypatch, tmp_path):
