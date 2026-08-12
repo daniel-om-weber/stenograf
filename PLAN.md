@@ -18,12 +18,13 @@ shipped at 2.86× with bit-exact gates, the notes warmer shipped with its
 honest 2.3 s number, L2/L3 seconds-removal declined at kill-test, the x86
 session measured the whole wait and **declined the online worker on its
 thermal gate**, and the finalize watts it owed are measured). Two results from
-that session reach beyond the plan: **stenodiar's estimate path is 1.7–1.9×
+that session reach beyond the plan: **stenodiar's estimate path is 1.66–1.90×
 more expensive than the owned loop off macOS** (helper 242–279 s on ORT CPU vs
 3.4 s on CoreML), inverting the macOS-only assumption that only
-count-stating users benefit from diarization speed work; and the box drifts
-±8 % run to run, so any future timing ladder on a handheld must interleave
-its arms. Evidence: `eval/README.md`.
+count-stating users benefit from diarization speed work; and repeats of one
+config on that box span 11–21 %, so any future timing ladder on a handheld
+must interleave its arms and treat anything under ~15 % as unmeasured.
+Evidence: `eval/README.md`.
 `PLAN-DIARIZATION.md` (2026-08-09, all five steps
 measured to a verdict — the declined list below carries the survivors; read
 `eval/diarization-sota-2026.md` and `eval/README.md`'s corpus-harness
@@ -385,10 +386,11 @@ are matched verbatim against the template actually used, zero matches is a hard
 fail, missing or empty sections are warnings that travel on
 `NotesProvenance.warnings`, and truncation is read off the backend's own
 completion signal (`finish_reason` / `done_reason`) rather than a text
-heuristic. `.notes.json` is no longer written. **Three gates remain, and two of
-them need a machine this desk does not have:**
+heuristic. `.notes.json` is no longer written. **Three gates remain; the two
+Ollama ones are unrun rather than blocked — the CachyOS box that runs them has
+been in hand since 2026-08-11:**
 
-- **Gate 0 — the Ollama probe. Not run; needs the CachyOS notebook.** One
+- **Gate 0 — the Ollama probe. Not run.** One
   `/api/chat` call to qwen3:8b, no `format`, oversized prompt, answering three
   things at once: whether `prompt_eval_count` shows the server silently
   truncating the head (`ollama.py` sends no `options.num_ctx`, so its char
@@ -408,12 +410,14 @@ them need a machine this desk does not have:**
   try. n=2 against n=1, so the direction is the claim, not the size: the
   shipped macOS default could not produce notes for that real meeting on the
   old path and can on the new one.
-- **Gate B — template adherence on Ollama. Not run; needs CachyOS or
-  Windows.** Run twice on the same box — first with `format=` still in place
-  (check out `4fe5c76`, the last commit that has it), then without — because a
-  single unconstrained run cannot attribute a failure between "removing
-  `format=` broke it" and "this path never worked" (a real Ollama notes e2e has
-  never been run at all; it is in the declined list below). **It does not block
+- **Gate B — template adherence on Ollama. Not run.** Run twice on the same
+  box — first with `format=` still in place (check out `4fe5c76`, the last
+  commit that has it), then without — because a single unconstrained run
+  cannot attribute a failure between "removing `format=` broke it" and "this
+  path never worked". The 2026-08-11 replay's notes came out clean and
+  template-complete on the current path (`eval/README.md`), which weakens the
+  second alternative without settling the attribution this gate exists for.
+  **It does not block
   the macOS default; it blocks declaring the Ollama path healthy** — which is
   worth remembering before a release, since Ollama is the notes default on both
   non-macOS platforms.
@@ -736,6 +740,5 @@ Kept here so future sessions don't re-open them.
 - **Lower-priority, independent:** greedy re-ID → Hungarian assignment;
   SRT/VTT dropping text not covered by `words` (latent — Parakeet emits
   full-or-none); meeting-mode auto-detect; hybrid cross-channel dedup;
-  acoustic first-segment LID for the live pass; a real Ollama notes e2e (needs
-  a machine with Ollama installed — now also the reason Gates 0 and B above are
-  unrun); re-running the winning biasing config over the full test set.
+  acoustic first-segment LID for the live pass; re-running the winning biasing
+  config over the full test set.
