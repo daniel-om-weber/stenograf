@@ -147,8 +147,9 @@ class SetupScreen(Screen):
         self._generation += 1
         token = self._generation
         # Hidden until the new list lands: swapping a combo's model resets its
-        # selection, and doing that under a visible control could discard a
-        # choice the user had just made.
+        # selection to the first entry, and a control that visibly jumps to
+        # another device reads as the app changing the choice. The choice
+        # itself does not survive leaving the form — it is per run by design.
         self.set(micDevicesReady=False)
         self.work(
             list_input_devices,

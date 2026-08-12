@@ -437,6 +437,16 @@ func resolveInput(_ devices: [InputDevice], pin: String) -> Result<InputDevice, 
 /// meeting, vanishing at t=1 s is retried forever (`MicSupervisor`).
 let pinGraceSeconds = 3.0
 
+/// The device a pin names right now, or the reason it names none — the shape
+/// the supervisors need, where a miss is a log line rather than an exit.
+func currentInput(_ pin: String) -> (device: InputDevice?, reason: String) {
+    switch resolveInput(inputDevices(), pin: pin) {
+    case .success(let device): return (device, "")
+    case .failure(.missing): return (nil, "is not connected")
+    case .failure(let why): return (nil, why.message(pin))
+    }
+}
+
 /// [`resolveInput`] retried for [`pinGraceSeconds`] while the device is merely absent.
 func resolveInputWithGrace(pin: String) -> Result<InputDevice, Unresolved> {
     let deadline = Date().addingTimeInterval(pinGraceSeconds)
@@ -645,10 +655,18 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter,
         // must be loud here rather than quietly swap the two channels.
         let wanted = inputDevices().first { $0.uid == micUID }.map { inputChannelCount($0.deviceID) }
         let got = inputChannelCount(aggID)
+        if got <= 1 {
+            // Only the tap's own stream: the device did not join. Nothing later
+            // would notice — no device came or went, so nothing re-examines it
+            // — and the meeting would record the far end and an empty room.
+            log("could not add \(micUID) to the capture group (it carries \(got) input "
+                + "channel(s), the system tap's alone)")
+            AudioHardwareDestroyAggregateDevice(aggID)
+            return nil
+        }
         if let wanted, got != wanted + 1 {
             log("WARNING the capture group carries \(got) input channel(s), not the "
-                + "\(wanted + 1) expected of this microphone plus the system tap "
-                + "— the microphone may be missing from the recording")
+                + "\(wanted + 1) expected of this microphone plus the system tap")
         }
     }
 
@@ -667,12 +685,10 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter,
         // the tap. A list holding only the tap means the device left the group
         // without leaving the system's device list, which nothing watches —
         // hence the warning; the channel stops rather than carrying tap audio.
-        split.note(list)
-        if list.count > 1 {
-            renderInputBuffer(Array(list.dropLast()), hostTime: hostTime,
-                              sourceFormat: sourceFormat, resampler: micResampler,
-                              layout: micLayout)
-        }
+        guard split.splittable(list) else { return }
+        renderInputBuffer(Array(list.dropLast()), hostTime: hostTime,
+                          sourceFormat: sourceFormat, resampler: micResampler,
+                          layout: micLayout)
         renderInputBuffer(Array(list.suffix(1)), hostTime: hostTime, sourceFormat: sourceFormat,
                           resampler: resampler, layout: layout)
     }
@@ -733,12 +749,24 @@ func renderInputBuffer(_ list: [AudioBuffer], hostTime: UInt64,
 func downmix(_ list: [AudioBuffer],
              into dst: UnsafeMutablePointer<Float>, frames: Int) {
     if list.count > 1 {
+        // Each plane may carry more than one channel of its own — a pinned
+        // multi-channel interface is the first thing that can deliver that
+        // shape — so the sum is over every channel in every plane, not over
+        // planes alone, which would read one channel of each and scale wrong.
+        var channels = 0
         for i in 0..<frames { dst[i] = 0 }
-        for plane in 0..<list.count {
-            guard let src = list[plane].mData?.assumingMemoryBound(to: Float.self) else { continue }
-            for i in 0..<frames { dst[i] += src[i] }
+        for plane in list {
+            guard let src = plane.mData?.assumingMemoryBound(to: Float.self) else { continue }
+            let perPlane = max(Int(plane.mNumberChannels), 1)
+            for i in 0..<frames {
+                var sum: Float = 0
+                for c in 0..<perPlane { sum += src[i * perPlane + c] }
+                dst[i] += sum
+            }
+            channels += perPlane
         }
-        let scale = 1.0 / Float(list.count)
+        guard channels > 0 else { return }
+        let scale = 1.0 / Float(channels)
         for i in 0..<frames { dst[i] *= scale }
         return
     }
@@ -859,10 +887,10 @@ final class TapSupervisor: @unchecked Sendable {
         rebuild()
     }
 
-    /// The pinned microphone's UID if it is connected right now, else nil.
+    /// The pinned microphone's UID if it is usable right now, else nil.
     private func currentMicUID() -> String? {
         guard let micPin else { return nil }
-        return try? resolveInput(inputDevices(), pin: micPin).get().uid
+        return currentInput(micPin).device?.uid
     }
 
     private func rebuild() {  // on queue
@@ -877,8 +905,9 @@ final class TapSupervisor: @unchecked Sendable {
             emitter.reanchor(.mic)
             if micUID == nil, !micLost {
                 micLost = true
-                log("WARNING mic capture lost — the selected microphone \"\(micPin!)\" is not "
-                    + "connected; the meeting keeps recording system audio until it returns")
+                log("WARNING mic capture lost — the selected microphone "
+                    + "\"\(micPin!)\" \(currentInput(micPin!).reason); the meeting keeps "
+                    + "recording system audio until it returns")
             } else if micUID != nil, micLost {
                 micLost = false
             }
@@ -937,22 +966,39 @@ func requestMicrophoneAccess() {
 /// buffer that is not mono is the tell.
 final class SplitWatch: @unchecked Sendable {
     private let lock = NSLock()
+    private var expected = 0
     private var warned = false
 
-    func note(_ list: UnsafeMutableAudioBufferListPointer) {
+    /// Whether this buffer list may be split into microphone and tap.
+    ///
+    /// The first list defines the shape; any later one that differs is refused,
+    /// because there is no way to tell *which* stream went missing. Dropping
+    /// both channels for as long as that lasts is loud and recoverable; the
+    /// alternative is feeding the far end into the microphone channel, where
+    /// the canceller cancels the room against itself and the transcript
+    /// attributes the far end to the room.
+    func splittable(_ list: UnsafeMutableAudioBufferListPointer) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !warned else { return }
-        if list.count < 2 {
-            warned = true
-            log("WARNING no microphone audio in the capture group — the selected device "
-                + "left it; the meeting keeps recording system audio")
-        } else if list.last?.mNumberChannels != 1 {
-            warned = true
-            log("WARNING the capture group's last stream carries "
-                + "\(list.last?.mNumberChannels ?? 0) channels, not the system tap's one "
-                + "— the microphone and system channels may be swapped")
+        if expected == 0 {
+            expected = list.count
+            if list.count < 2 || list.last?.mNumberChannels != 1 {
+                warned = true
+                log("WARNING the capture group opened with \(list.count) input stream(s), "
+                    + "not the microphone's plus the system tap's mono one — the microphone "
+                    + "channel stays empty rather than risk carrying system audio")
+                return false
+            }
+            return true
         }
+        if list.count == expected { return true }
+        if !warned {
+            warned = true
+            log("WARNING the capture group changed from \(expected) to \(list.count) input "
+                + "stream(s) — both channels stop until it returns, because which stream "
+                + "left is not knowable")
+        }
+        return false
     }
 }
 
@@ -1186,7 +1232,7 @@ final class PinnedMicSupervisor: @unchecked Sendable {
 
     private func rebuildIfNeeded(_ reason: String) {  // on queue
         guard !stopped else { return }
-        let resolved = try? resolveInput(inputDevices(), pin: pin).get()
+        let resolved = currentInput(pin).device
         // Still the same device, still running: a list change that did not
         // touch us (some other device appeared) must leave capture alone.
         if let mic, let resolved, resolved.deviceID == mic.device.deviceID, !lost { return }
@@ -1202,7 +1248,7 @@ final class PinnedMicSupervisor: @unchecked Sendable {
             if !lost {
                 lost = true
                 log("WARNING mic capture lost (\(reason)) — the selected microphone "
-                    + "\"\(pin)\" is not available; retrying until it returns")
+                    + "\"\(pin)\" \(currentInput(pin).reason); retrying until it returns")
             }
             // One chain only: every device-list change while the mic is away
             // would otherwise start its own, and they would all fire together
@@ -1211,7 +1257,7 @@ final class PinnedMicSupervisor: @unchecked Sendable {
             retrying?.cancel()
             let again = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                self.rebuild(reason, resolved: try? resolveInput(inputDevices(), pin: self.pin).get())
+                self.rebuild(reason, resolved: currentInput(self.pin).device)
             }
             retrying = again
             queue.asyncAfter(deadline: .now() + 2.0, execute: again)
