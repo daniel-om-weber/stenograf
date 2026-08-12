@@ -1,5 +1,5 @@
 import numpy as np
-from conftest import write_wav
+from conftest import TOOL_TIMEOUT_S, write_wav
 
 from stenograf.audio import (
     SAMPLE_RATE,
@@ -108,6 +108,7 @@ def test_bundled_ffmpeg_decodes_without_a_system_install(tmp_path, monkeypatch):
     subprocess.run(
         [ffmpeg_exe(), "-nostdin", "-loglevel", "error", "-i", str(stereo), str(m4a)],
         check=True,
+        timeout=TOOL_TIMEOUT_S,
     )
 
     monkeypatch.setenv("PATH", "")

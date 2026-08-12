@@ -236,8 +236,14 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TID251"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# The whole suite runs in ~13 s; any single test near 30 s is hung, not slow.
+# The suite runs in ~60 s (1027 tests, 2026-08-12) and, apart from the real
+# diarization test CI skips (11.7 s), no test reaches 2 s — so any test near
+# 30 s is hung, not slow. Tests that start a real program carry their own,
+# smaller subprocess timeout (conftest.TOOL_TIMEOUT_S) so the stalled tool is
+# what fails.
 timeout = 30
 # Signal-based interruption can't unwind a test blocked in a C-level join from
-# a non-main thread; the thread method reports (and fails) reliably everywhere.
+# a non-main thread; the thread method dumps every thread's stack. It then ends
+# the process, though: a tripped cap costs the run every other test's result,
+# which is why nothing is left sitting near one.
 timeout_method = "thread"

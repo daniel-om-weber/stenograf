@@ -24,6 +24,14 @@ from stenograf.vad import SpeechSegment
 # on_status).
 from stenograf.view import CallbackView  # noqa: F401
 
+# Every test that starts a real program passes this as its own subprocess
+# timeout, so a stuck tool fails that one test and names itself. Without it the
+# per-test cap fires instead, and pytest-timeout's thread method ends the whole
+# session with os._exit(1) — one slow spawn then discards every other test's
+# result. Hence a value under that cap (30 s, pyproject.toml) and ~20x the
+# slowest such spawn measured here (1.1 s, 2026-08-12).
+TOOL_TIMEOUT_S = 20
+
 # Shell-level overrides a developer's environment may carry; any one of them
 # would give that machine a different run than CI, so isolation clears them.
 # STENOGRAF_CACHE deliberately survives: the live byte-parity tests skip

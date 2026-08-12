@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from conftest import TOOL_TIMEOUT_S
 
 from stenograf import shortcut
 
@@ -214,7 +215,9 @@ def test_the_installed_copy_still_satisfies_its_signature(tmp_path, monkeypatch)
 
     target = shortcut.install_shortcut()
 
-    subprocess.run(["codesign", "--verify", "--strict", str(target)], check=True, timeout=60)
+    subprocess.run(
+        ["codesign", "--verify", "--strict", str(target)], check=True, timeout=TOOL_TIMEOUT_S
+    )
 
 
 # -- the app launchers off macOS ---------------------------------------------
@@ -277,7 +280,10 @@ def test_the_linux_entry_validates(tmp_path, monkeypatch):
     assert target is not None
 
     result = subprocess.run(
-        ["desktop-file-validate", str(target)], capture_output=True, text=True, timeout=60
+        ["desktop-file-validate", str(target)],
+        capture_output=True,
+        text=True,
+        timeout=TOOL_TIMEOUT_S,
     )
     assert result.returncode == 0 and not result.stdout, result.stdout + result.stderr
 
@@ -430,7 +436,7 @@ def test_python_m_stenograf_is_a_working_entry():
         [sys.executable, "-m", "stenograf", "--version"],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=TOOL_TIMEOUT_S,
     )
     assert result.returncode == 0, result.stderr
     assert "stenograf" in result.stdout
@@ -440,7 +446,7 @@ def test_python_m_stenograf_is_a_working_entry():
 def test_install_script_parses_and_is_executable():
     script = REPO_ROOT / "install.sh"
     assert script.stat().st_mode & 0o111
-    subprocess.run(["sh", "-n", str(script)], check=True)
+    subprocess.run(["sh", "-n", str(script)], check=True, timeout=TOOL_TIMEOUT_S)
     content = script.read_text()
     assert "tool install --upgrade stenograf" in content
     assert "setup" in content  # the script must end in `steno setup`
@@ -472,7 +478,7 @@ def test_install_script_refuses_a_windows_unix_shell(tmp_path, reported):
         ["sh", str(REPO_ROOT / "install.sh")],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=TOOL_TIMEOUT_S,
         env={**os.environ, "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"},
     )
 
@@ -482,11 +488,18 @@ def test_install_script_refuses_a_windows_unix_shell(tmp_path, reported):
 
 
 @pytest.mark.skipif(not WINDOWS, reason="Windows installer: PowerShell parsing is win32-only")
+# The only spawn in the suite that gets more than the per-test cap: one of
+# these sat past 30 s on a GitHub runner and, because a tripped cap exits the
+# process, took that whole job's results with it (2026-08-12). The same call
+# runs in about a second by hand, so the tail is real but unmeasured; until it
+# is, the subprocess timeout below is the one that fires, and it says which
+# program stalled instead of dumping the interpreter's stack.
+@pytest.mark.timeout(90)
 def test_install_ps1_parses():
     script = REPO_ROOT / "install.ps1"
     # Parse-only: [ScriptBlock]::Create raises on a syntax error, runs nothing.
     check = f"[ScriptBlock]::Create((Get-Content -Raw '{script}')) | Out-Null"
-    subprocess.run(["powershell", "-NoProfile", "-Command", check], check=True)
+    subprocess.run(["powershell", "-NoProfile", "-Command", check], check=True, timeout=60)
     content = script.read_text()
     assert "tool install --upgrade stenograf" in content
     assert "setup" in content  # the script must end in `steno setup`

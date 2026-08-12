@@ -100,7 +100,11 @@ def qt_app_instance():
     return application
 
 
-def pump(until, timeout=30.0):
+# The budget stays well clear of the per-test cap (30 s, pyproject.toml): the
+# cap ends the whole session with os._exit(1), so a GUI wait that reached it
+# first would cost the run every other test's result instead of raising the
+# assertion below, which says what the loop was waiting for.
+def pump(until, timeout=10.0):
     """Run the event loop until ``until()`` holds — the queued-call delivery too."""
     app = QGuiApplication.instance()
     assert app is not None

@@ -6,9 +6,17 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import write_settings
+from conftest import TOOL_TIMEOUT_S, write_settings
 
 from stenograf import doctor
+
+# Several tests here call run_checks()/_desktop_app_check(), which spawn the
+# real Qt probe — a subprocess the library gives 180 s of its own (doctor.py).
+# A per-test cap under that budget would fire first, and since a tripped cap
+# exits the process, a slow-but-legal probe would cost the run every other
+# test's result plus doctor's own "the probe did not finish" message. So this
+# file's cap sits above the library's number rather than under the suite's.
+pytestmark = pytest.mark.timeout(200)
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +67,7 @@ def test_desktop_app_check_compiles_every_screen(tmp_path):
         [sys.executable, "-c", probe],
         capture_output=True,
         text=True,
+        timeout=TOOL_TIMEOUT_S,
         env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
     )
     assert result.returncode != 0
