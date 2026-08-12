@@ -513,11 +513,15 @@ tone, so its positive identity rests on the routing table); **NFC matching,
 which is untested and untestable here** — every id and description on this
 machine is ASCII, and NFD is a macOS behaviour, though trim and case-sensitivity
 were checked against real devices; the 5 s window, chosen against a module
-unload rather than an unplugged USB interface; and **classic PulseAudio, which
-was never exercised** — all of this is pipewire-pulse, while the low-floor
-manylinux_2_28 wheel exists for exactly the distros that may still run the real
-thing, whose move and suspend semantics are its own. (`pactl suspend-source` is
-a no-op here: delivery continued unbroken through a nominal suspension.) The
+unload rather than an unplugged USB interface; and **the pin's behaviour on
+classic PulseAudio**. That last one is narrower than it first looks: ci.yml's
+`capture-linux` job installs real PulseAudio and live-captures a meeting
+through a null sink there, so the transport itself is covered on the server the
+low-floor manylinux_2_28 wheel exists for. What that job never does is pin a
+mic or take a device away, so `DONT_MOVE`, the removal path and the watchdog
+are pipewire-pulse-only evidence, and move semantics are exactly where the two
+servers may differ. (`pactl suspend-source` is a no-op here: delivery continued
+unbroken through a nominal suspension.) The
 framer's 30 ms complaint also fired within ~2 s on *every* run, virtual and
 physical alike, which is trap 7 arriving on schedule — no timestamp or AEC
 conclusion may ride on this rig, and G6 still needs real crystals.
