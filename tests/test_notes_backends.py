@@ -17,7 +17,13 @@ from stenograf.notes import (
     register_backend,
 )
 from stenograf.notes.command import CommandBackend
-from stenograf.notes.ollama import DEFAULT_MODEL, ModelNotFoundError, OllamaBackend
+from stenograf.notes.ollama import (
+    _RESPONSE_TOKENS,
+    DEFAULT_MODEL,
+    ModelNotFoundError,
+    OllamaBackend,
+    _context_tokens,
+)
 from stenograf.settings import NotesSettings
 
 MESSAGES = [
@@ -123,10 +129,19 @@ def test_register_backend_makes_it_creatable():
 class FakeOllamaServer:
     """Monkeypatched ``urlopen`` speaking the three endpoints the backend uses."""
 
-    def __init__(self, models=("qwen3:8b",), chat_content=NOTE_MD, done_reason="stop"):
+    def __init__(
+        self,
+        models=("qwen3:8b",),
+        chat_content=NOTE_MD,
+        done_reason="stop",
+        prompt_eval_count=None,
+        context_length=40960,
+    ):
         self.models = models
         self.chat_content = chat_content
         self.done_reason = done_reason
+        self.prompt_eval_count = prompt_eval_count
+        self.context_length = context_length
         self.chat_payloads = []
 
     def __call__(self, request, timeout=None):
@@ -135,12 +150,19 @@ class FakeOllamaServer:
             body = {"version": "0.9.0"}
         elif url.endswith("/api/tags"):
             body = {"models": [{"name": m} for m in self.models]}
+        elif url.endswith("/api/show"):
+            info = {"general.architecture": "qwen3"}
+            if self.context_length is not None:
+                info["qwen3.context_length"] = self.context_length
+            body = {"model_info": info}
         elif url.endswith("/api/chat"):
             self.chat_payloads.append(json.loads(request.data.decode("utf-8")))
             body = {
                 "message": {"role": "assistant", "content": self.chat_content},
                 "done_reason": self.done_reason,
             }
+            if self.prompt_eval_count is not None:
+                body["prompt_eval_count"] = self.prompt_eval_count
         else:
             raise AssertionError(f"unexpected endpoint {url}")
         return io.BytesIO(json.dumps(body).encode("utf-8"))
@@ -167,12 +189,90 @@ def test_ollama_complete_sends_plain_messages_and_returns_content(monkeypatch):
     assert "format" not in payload
 
 
+def test_ollama_asks_for_a_context_that_fits_the_prompt(monkeypatch):
+    # Ollama's default context is 4096 tokens and it silently keeps only the
+    # tail of anything longer, so the request has to name the size it needs or
+    # a long meeting is summarized from its last minutes with no error.
+    server = FakeOllamaServer()
+    monkeypatch.setattr(urllib.request, "urlopen", server)
+    OllamaBackend().complete([{"role": "user", "content": "x" * 60_000}])
+    asked = server.chat_payloads[0]["options"]["num_ctx"]
+    # The bound is the densest prose measured (German, 3.04 chars/token), not a
+    # round 4: at 4 this passes while still under-asking for a German meeting.
+    assert asked > 60_000 / 3.04
+    assert server.chat_payloads[0]["options"]["num_predict"] == _RESPONSE_TOKENS
+
+    OllamaBackend().complete(MESSAGES)
+    assert server.chat_payloads[1]["options"]["num_ctx"] < asked, "sized per prompt, not fixed"
+
+
+@pytest.mark.parametrize(
+    ("chars", "expected"),
+    [(0, 4096), (1, 4096), (60_000, 28_672)],
+)
+def test_ollama_context_is_bucketed(chars, expected):
+    # Rounded up to whole buckets so consecutive map-reduce calls can share a
+    # loaded runner — Ollama reloads the model whenever num_ctx changes.
+    assert _context_tokens([{"role": "user", "content": "x" * chars}]) == expected
+
+
+def test_ollama_refuses_a_meeting_larger_than_the_models_context(monkeypatch):
+    # Ollama clamps an oversized num_ctx instead of refusing it, and a clamped
+    # context truncates exactly as no num_ctx would — so this has to be caught
+    # before the call, not detected after it.
+    server = FakeOllamaServer(context_length=8192)
+    monkeypatch.setattr(urllib.request, "urlopen", server)
+    with pytest.raises(NotesGenerationError, match="tops out at 8192"):
+        OllamaBackend().complete([{"role": "user", "content": "x" * 60_000}])
+    assert server.chat_payloads == [], "must not spend tokens on a doomed request"
+
+
+def test_ollama_a_server_that_ignores_num_ctx_is_caught(monkeypatch):
+    # The backstop for an older Ollama or a proxy that drops options: the
+    # server's own count of what it read collapses far under any tokenizer's
+    # floor for the text sent.
+    monkeypatch.setattr(urllib.request, "urlopen", FakeOllamaServer(prompt_eval_count=2050))
+    with pytest.raises(NotesGenerationError, match="truncated the meeting"):
+        OllamaBackend().complete([{"role": "user", "content": "x" * 80_000}])
+
+
+def test_ollama_a_whole_prompt_read_is_not_flagged(monkeypatch):
+    # Real numbers: the whole prompt built from a 37-minute meeting, read whole.
+    monkeypatch.setattr(urllib.request, "urlopen", FakeOllamaServer(prompt_eval_count=3953))
+    assert OllamaBackend().complete([{"role": "user", "content": "x" * 14_245}]) == NOTE_MD
+
+
+def test_ollama_without_the_show_endpoint_still_runs(monkeypatch):
+    # An API-compatible proxy need not serve /api/show. Losing the ceiling
+    # check must cost the check, not the notes.
+    server = FakeOllamaServer()
+    real = server.__call__
+
+    def no_show(request, timeout=None):
+        if request.full_url.endswith("/api/show"):
+            raise urllib.error.HTTPError(request.full_url, 404, "nope", {}, None)
+        return real(request, timeout)
+
+    monkeypatch.setattr(urllib.request, "urlopen", no_show)
+    assert OllamaBackend().complete(MESSAGES) == NOTE_MD
+
+
+def test_ollama_without_a_reported_context_still_runs(monkeypatch):
+    # A model whose /api/show names no context length must not become
+    # unusable — the ceiling check is skipped, the backstop above still applies.
+    server = FakeOllamaServer(context_length=None)
+    monkeypatch.setattr(urllib.request, "urlopen", server)
+    assert OllamaBackend().complete(MESSAGES) == NOTE_MD
+    # The reserve alone fills one bucket, so any prompt at all takes the next.
+    assert server.chat_payloads[0]["options"]["num_ctx"] == 8192
+
+
 def test_ollama_truncated_response_is_an_error_not_a_note(monkeypatch):
-    # done_reason == "length" is the server saying the response was cut at a
-    # token limit. The old schema path failed on the missing closing brace;
-    # markdown has no such tell, so the server's signal is the check.
+    # done_reason == "length" is the server saying the answer hit the cap sent
+    # with the request. Markdown has no missing closing brace to fail on, so
+    # this signal is the only tell that a note stops mid-sentence.
     monkeypatch.setattr(urllib.request, "urlopen", FakeOllamaServer(done_reason="length"))
-    with pytest.raises(NotesGenerationError, match="truncated"):
+    with pytest.raises(NotesGenerationError, match="ran past its .*-token budget"):
         OllamaBackend().complete(MESSAGES)
 
 

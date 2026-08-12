@@ -386,20 +386,38 @@ are matched verbatim against the template actually used, zero matches is a hard
 fail, missing or empty sections are warnings that travel on
 `NotesProvenance.warnings`, and truncation is read off the backend's own
 completion signal (`finish_reason` / `done_reason`) rather than a text
-heuristic. `.notes.json` is no longer written. **Three gates remain; the two
-Ollama ones are unrun rather than blocked — the CachyOS box that runs them has
-been in hand since 2026-08-11:**
+heuristic. `.notes.json` is no longer written. **The two Ollama gates ran 2026-08-12 on the
+CachyOS box; both are green and Gate 0 cost a real fix. Gate A's read is the one
+thing still open:**
 
-- **Gate 0 — the Ollama probe. Not run.** One
-  `/api/chat` call to qwen3:8b, no `format`, oversized prompt, answering three
-  things at once: whether `prompt_eval_count` shows the server silently
-  truncating the head (`ollama.py` sends no `options.num_ctx`, so its char
-  ceiling may be a client-side fiction — if so, derive `num_ctx` from
-  `max_input_chars`), whether `done_reason` is present (the truncation check
-  above depends on it), and whether reasoning arrives in `message.thinking` or
-  leaks into `message.content` (the latter needs the shared
-  `strip_reasoning()`). Do not write the conclusion up as "`format=` was doing
-  this": the repo reads neither field today, so the mechanism is unknown.
+- **Gate 0 — the Ollama probe. MEASURED 2026-08-12** (Ollama 0.32.9, qwen3:8b,
+  CPU). All three questions answered, and two of the three answers were defects
+  — both fixed in `notes/ollama.py`, whose docstrings carry the numbers.
+  **The char ceiling was a fiction.** With no `options.num_ctx` the server's
+  4096 default silently keeps the *tail*: a marker planted at the prompt's head
+  became invisible to the model above ~4 000 tokens, and `prompt_eval_count`
+  pinned at 2050 however much more was sent (26 957 tokens evaluated whole once
+  `num_ctx` was raised). **`done_reason` is present but never `"length"`**
+  unless a `num_predict` is set — the server context-shifts instead, and a
+  512-token context happily produced 1260 tokens reading `"stop"`, so the
+  truncation check that depends on this signal was dead code until the fix sent
+  an explicit limit. **Reasoning arrives in `message.thinking`**, content clean,
+  no `<think>` tag: Ollama never needed `strip_reasoning()` (which stays for the
+  backends that do). Nothing here is attributable to `format=` — the old path
+  sent no `num_ctx` either.
+
+  The fix deviates from this bullet's "derive `num_ctx` from `max_input_chars`",
+  and the literal version would not have worked: Ollama **clamps** an oversized
+  `num_ctx` instead of refusing it, which reinstates the same truncation
+  silently. It is sized per request and bounded by the model's own ceiling read
+  from `/api/show`, with anything larger refused before a token is spent. The
+  costs it buys — KV cache per token, CPU prefill rate, and the input ceiling
+  those two force — are the constants in `notes/ollama.py`, with their
+  measurements. **Reading a whole meeting is now the slow part**, which is the
+  standing consequence to remember: it is minutes per meeting-hour on a
+  CPU-only box, where the truncated version was seconds and wrong.
+  Re-open trigger: the reduce step of a long meeting is the longest answer this
+  system produces and the only one never measured against the response budget.
 - **Gate A — equivalence on real meetings. Captured; Daniel's read pending.**
   Before/after pairs on the same transcripts live in `gate-a/` (gitignored,
   real meeting content). `small-claude` and `mid-claude` succeeded on both
@@ -410,17 +428,23 @@ been in hand since 2026-08-11:**
   try. n=2 against n=1, so the direction is the claim, not the size: the
   shipped macOS default could not produce notes for that real meeting on the
   old path and can on the new one.
-- **Gate B — template adherence on Ollama. Not run.** Run twice on the same
-  box — first with `format=` still in place (check out `4fe5c76`, the last
-  commit that has it), then without — because a single unconstrained run
-  cannot attribute a failure between "removing `format=` broke it" and "this
-  path never worked". The 2026-08-11 replay's notes came out clean and
-  template-complete on the current path (`eval/README.md`), which weakens the
-  second alternative without settling the attribution this gate exists for.
-  **It does not block
-  the macOS default; it blocks declaring the Ollama path healthy** — which is
-  worth remembering before a release, since Ollama is the notes default on both
-  non-macOS platforms.
+- **Gate B — template adherence on Ollama. MEASURED 2026-08-12 — green, and the
+  attribution is settled.** Both arms ran on one transcript, a 37.5-minute
+  AMI ES2003c pass (public corpus, so the comparison is reproducible and no real
+  meeting content is involved): `4fe5c76` with `format=` in a worktree, then
+  HEAD without it. Both produced a note, so **removing `format=` broke nothing**,
+  and "this path never worked" is refuted outright. The unconstrained path is
+  also the better one — 4/4 template headings against 3/4, 2056 chars against
+  773, and named owners where the schema path rendered a literal `**null**`.
+  Two limits on what this clears. The meeting is 3953 prompt tokens, just under
+  the 4096 the probe found, so this arm never entered the truncation regime that
+  Gate 0 found and fixed — it tests the template, not the ceiling. And the old
+  arm's 3/4 is not a defect: an empty `## Decisions` is the section the markdown
+  path deliberately emits and the schema path omitted (below).
+  **It does not block the macOS default; it blocks declaring the Ollama path
+  healthy** — which is worth remembering before a release, since Ollama is the
+  notes default on both non-macOS platforms. With Gate 0's fix in, a re-run
+  keeps 4/4 headings and reaches content from the meeting's first half.
 
 Accepted regressions, decided rather than discovered later, and all of them
 release-notes material: `.notes.json` is gone; **owner-grouped action items are
