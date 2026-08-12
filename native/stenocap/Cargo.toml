@@ -6,6 +6,13 @@ description = "Capture helper: mic + system audio on one device clock, framed PC
 license = "MIT"
 publish = false
 
+# Device names cross machines in a hand-edited settings file, and the one
+# platform that hands them out decomposed (macOS, NFD) is not the one that has
+# to match them — so the comparison normalizes, and normalizing needs Unicode
+# tables no standard library carries. `device.rs` states the rule.
+[dependencies]
+unicode-normalization = "0.1"
+
 # Two backends: Windows (WASAPI) and Linux (the PulseAudio client protocol,
 # which PipeWire speaks natively through pipewire-pulse). macOS keeps its Swift
 # helper in ../stenocap-macos — process taps have no Rust binding and the

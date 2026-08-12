@@ -92,6 +92,34 @@ Echo is cancelled on the Python side instead, using the system channel as the
 far-end reference — which is also Chrome's default (`kSystemLoopbackAsAecReference`
 enabled, `kEnforceSystemEchoCancellation` disabled) despite shipping both.
 
+**A pinned microphone takes one of two other paths here, and neither is
+AVAudioEngine.** Measured on macOS 26.5.1 (2026-08-12): retargeting the engine's
+input node with `kAudioOutputUnitProperty_CurrentDevice` while the tap's
+aggregate runs wedges `engine.start()` in the HAL and it never returns (the main
+thread waits forever on the shared client IO thread), and opening the device
+with its own IO proc beside the aggregate wedges identically. Retargeting also
+posts `AVAudioEngineConfigurationChange` 9–13 ms after each build, so the
+supervisor rebuilt itself in a loop — nine rebuilds in ten seconds. So:
+
+- **mic alone**: an `AudioDeviceIOProc` straight on the chosen device.
+- **mic with system audio**: the device joins the tap's aggregate as a
+  drift-compensated sub-device, and its audio arrives in the same buffer list,
+  ahead of the tap's, on one clock. That aggregate delivers *nothing* until
+  something renders on its output device (25 s of silence produced not one
+  buffer; speech at second 10 started the flow at second 12), so a silent
+  keep-alive IO proc holds the output device awake for the run — zeros, nothing
+  audible, and nothing the tap can capture.
+
+The unpinned path is untouched by all of this: it is still AVAudioEngine
+following the default input, with the measured AirPods rebuild behaviour.
+
+One consequence worth knowing before comparing echo-cancellation numbers: with
+the keep-alive running, the system channel delivers *continuously*. Unpinned,
+it goes quiet whenever nothing plays (measured 2026-08-12: zero frames in 5 s
+of silence, against continuous frames on the pinned run). A reference that
+never stops is the better shape for the canceller, but it means a pinned run
+and an unpinned one are not the same experiment.
+
 `stenocap/` holds the **Rust implementation**, one crate with a backend per
 platform. On Windows it captures through WASAPI: the mic from the default
 capture endpoint, system audio from *loopback* on the default render endpoint.
@@ -132,6 +160,15 @@ evidence in twelve seconds) and all silent if got wrong:
   meeting where the far end never speaks still have a reference to cancel
   against.
 
+**Type-checking the other platforms from a Mac.** Homebrew's cargo is first on
+`PATH` and carries only the host target, which makes this look impossible; the
+rustup toolchain has the others. `cargo check --locked --tests --target
+x86_64-pc-windows-msvc` needs nothing else, and the Linux target additionally
+needs a stub `libpulse.pc` on `PKG_CONFIG_PATH` with `PKG_CONFIG_ALLOW_CROSS=1`
+(nothing is linked, so the stub's paths need not exist). Two borrow-checker
+errors in `pulse.rs` reached a "CI is the only compiler" review this way
+(2026-08-12) — the check costs seconds and CI costs a round trip.
+
 ## Wire protocol
 
 stdout carries frames only (status and errors go to stderr), little-endian:
@@ -143,6 +180,24 @@ on a clock **shared by both channels**; `samples` is mono 16 kHz int16 PCM.
 Channels are selected with argv flags (`--mic`, `--system`). Both
 implementations speak exactly this; the consumer of both is
 `stenograf.capture.helper`.
+
+Argv, identical on both:
+
+    stenocap [--mic] [--system] [--mic-device ID]  # capture
+    stenocap --devices [--mic-device ID]           # what this run would record
+    stenocap --list-inputs                         # every microphone, JSON array
+
+`--mic-device` records the mic channel from one device instead of the OS
+default. Its value is a platform-stable id (`kAudioDevicePropertyDeviceUID`,
+a WASAPI endpoint id, a pulse source name) or the device's exact name; both
+sides of the comparison are trimmed and NFC-normalized, the id is tried first,
+and a name two connected devices share is an error naming both ids rather than
+a guess. A value that names nothing connected is FATAL after a three-second
+grace (a USB interface can enumerate a moment after wake) — never a silent fall
+back to the default, which is the wrong-microphone recording this flag exists to
+prevent. The system channel is not selectable: it follows the default output by
+design. **Unknown arguments exit 2**, so a newer caller can never have its
+device choice ignored by an older binary.
 
 **Stopping differs, and only because the platforms do.** The Swift helper takes
 SIGINT/SIGTERM, flushes and exits 0. The Rust helper stops when **stdin reaches

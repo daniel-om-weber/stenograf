@@ -40,6 +40,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use libpulse_binding::callbacks::ListResult;
 use libpulse_binding::context::{Context, FlagSet as ContextFlagSet, State as ContextState};
 use libpulse_binding::def::BufferAttr;
 use libpulse_binding::mainloop::standard::{IterateResult, Mainloop};
@@ -49,6 +50,7 @@ use libpulse_binding::stream::{
     FlagSet as StreamFlagSet, Latency, PeekResult, State as StreamState, Stream,
 };
 
+use crate::device::{resolve_with_grace, InputDevice};
 use crate::frame::{FrameSink, Framer, SAMPLE_RATE};
 
 /// How often each pump dispatches server events and drains its stream.
@@ -185,9 +187,8 @@ fn iterate(mainloop: &mut Mainloop) -> Result<(), String> {
     }
 }
 
-/// What each channel would record from right now, for the CLI's preflight.
-pub fn device_names(taps: &[Tap]) -> Result<Vec<(Tap, String)>, String> {
-    let mut conn = connect("stenograf")?;
+/// The server's default source and sink names, as it reports them right now.
+fn server_defaults(conn: &mut Connection) -> Result<(Option<String>, Option<String>), String> {
     let fetched: Rc<RefCell<Option<(Option<String>, Option<String>)>>> =
         Rc::new(RefCell::new(None));
     let sink_slot = Rc::clone(&fetched);
@@ -200,17 +201,83 @@ pub fn device_names(taps: &[Tap]) -> Result<Vec<(Tap, String)>, String> {
     while op.get_state() == OperationState::Running {
         iterate(&mut conn.mainloop)?;
     }
-    let (source, sink) = fetched
-        .borrow_mut()
-        .take()
-        .ok_or("the sound server did not answer the device query".to_string())?;
+    // Bound, not returned as the tail expression: a `RefMut` in tail position
+    // outlives the `Rc` it borrows from and the borrow checker refuses it.
+    let answer = fetched.borrow_mut().take();
+    answer.ok_or_else(|| "the sound server did not answer the device query".to_string())
+}
+
+/// Every microphone the server knows, with the default one marked.
+///
+/// Monitors are dropped: a sink's monitor is a *source* to the server, but it
+/// is the far end of a loudspeaker, not a microphone, and offering one in the
+/// mic picker would silently record the system channel twice.
+fn sources(conn: &mut Connection) -> Result<Vec<InputDevice>, String> {
+    let collected: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+    let slot = Rc::clone(&collected);
+    let op = conn.context.introspect().get_source_info_list(move |result| {
+        let ListResult::Item(info) = result else { return };
+        if info.monitor_of_sink.is_some() {
+            return;
+        }
+        let Some(name) = info.name.as_ref().map(|n| n.to_string()) else { return };
+        let description =
+            info.description.as_ref().map(|d| d.to_string()).unwrap_or_else(|| name.clone());
+        slot.borrow_mut().push((name, description));
+    });
+    while op.get_state() == OperationState::Running {
+        iterate(&mut conn.mainloop)?;
+    }
+    let (default_source, _) = server_defaults(conn)?;
+    let devices = collected
+        .borrow()
+        .iter()
+        .map(|(name, description)| InputDevice {
+            is_default: default_source.as_deref() == Some(name.as_str()),
+            id: name.clone(),
+            name: description.clone(),
+        })
+        .collect();
+    Ok(devices)
+}
+
+/// Every microphone this machine could record from, for the picker.
+pub fn list_inputs() -> Result<Vec<InputDevice>, String> {
+    let mut conn = connect("stenograf")?;
+    sources(&mut conn)
+}
+
+/// The source the mic channel records from: the pinned one, or the server's
+/// default alias (which it re-resolves itself).
+fn mic_source(conn: &mut Connection, pin: Option<&str>) -> Result<(String, String), String> {
+    let Some(pin) = pin else {
+        return Ok((Tap::Mic.device().to_string(), Tap::Mic.device().to_string()));
+    };
+    let chosen = resolve_with_grace(pin, || sources(conn))?;
+    Ok((chosen.id, chosen.name))
+}
+
+/// What each channel would record from right now, for the CLI's preflight.
+pub fn device_names(taps: &[Tap], mic_device: Option<&str>) -> Result<Vec<(Tap, String)>, String> {
+    let mut conn = connect("stenograf")?;
+    // A pinned mic is validated against the source list (and named by its
+    // human description, the way the picker named it); an unpinned one is
+    // whatever the server currently calls its default.
+    let pinned = match mic_device {
+        Some(pin) if taps.contains(&Tap::Mic) => Some(mic_source(&mut conn, Some(pin))?.1),
+        _ => None,
+    };
+    let (source, sink) = server_defaults(&mut conn)?;
 
     let mut names = Vec::new();
     for &tap in taps {
         let name = match tap {
-            Tap::Mic => source
-                .clone()
-                .ok_or("no default microphone is configured — check sound settings")?,
+            Tap::Mic => match &pinned {
+                Some(name) => name.clone(),
+                None => source
+                    .clone()
+                    .ok_or("no default microphone is configured — check sound settings")?,
+            },
             Tap::System => {
                 let sink = sink
                     .clone()
@@ -228,6 +295,7 @@ pub fn device_names(taps: &[Tap]) -> Result<Vec<(Tap, String)>, String> {
 /// Returns the reason it ended abnormally, or `None` for a requested stop.
 pub fn pump(
     tap: Tap,
+    mic_device: Option<&str>,
     framer: Arc<Mutex<Framer>>,
     sink: Arc<FrameSink>,
     stop: Arc<AtomicBool>,
@@ -237,6 +305,16 @@ pub fn pump(
     let mut conn = match connect("stenograf") {
         Ok(conn) => conn,
         Err(why) => return Some(why),
+    };
+    // Resolved before the stream exists: a pin that names nothing present must
+    // fail with its own reason here, not as a stream that goes Failed ten
+    // seconds later with the server's generic complaint.
+    let device = match tap {
+        Tap::Mic => match mic_source(&mut conn, mic_device) {
+            Ok((id, _)) => id,
+            Err(why) => return Some(why),
+        },
+        Tap::System => Tap::System.device().to_string(),
     };
     let spec = Spec { format: Format::S16le, channels: 1, rate: SAMPLE_RATE };
     debug_assert!(spec.is_valid());
@@ -255,8 +333,8 @@ pub fn pump(
     let flags = StreamFlagSet::INTERPOLATE_TIMING
         | StreamFlagSet::AUTO_TIMING_UPDATE
         | StreamFlagSet::ADJUST_LATENCY;
-    if let Err(err) = stream.connect_record(Some(tap.device()), Some(&attr), flags) {
-        return Some(open_failure(tap, &err.to_string().unwrap_or_default()));
+    if let Err(err) = stream.connect_record(Some(&device), Some(&attr), flags) {
+        return Some(open_failure(tap, &device, &err.to_string().unwrap_or_default()));
     }
 
     // Ready, then timing: stamps derive from the server's latency accounting,
@@ -272,7 +350,7 @@ pub fn pump(
             return None;
         }
         if setup_deadline < std::time::Instant::now() {
-            return Some(open_failure(tap, "timed out waiting for the stream to start"));
+            return Some(open_failure(tap, &device, "timed out waiting for the stream to start"));
         }
         if let Err(why) = iterate(&mut conn.mainloop) {
             return Some(why);
@@ -281,7 +359,7 @@ pub fn pump(
             StreamState::Ready => {}
             StreamState::Failed | StreamState::Terminated => {
                 let why = conn.context.errno().to_string().unwrap_or_default();
-                return Some(open_failure(tap, &why));
+                return Some(open_failure(tap, &device, &why));
             }
             _ => continue,
         }
@@ -362,11 +440,10 @@ pub fn pump(
     outcome
 }
 
-fn open_failure(tap: Tap, detail: &str) -> String {
+fn open_failure(tap: Tap, device: &str, detail: &str) -> String {
     format!(
-        "could not open {} capture from {} ({detail}) — check sound settings",
+        "could not open {} capture from {device} ({detail}) — check sound settings",
         tap.label(),
-        tap.device(),
     )
 }
 

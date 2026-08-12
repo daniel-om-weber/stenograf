@@ -277,6 +277,181 @@ final class Resampler {
     }
 }
 
+// MARK: - input devices
+
+/// One microphone this machine could record from.
+///
+/// `uid` is what gets stored and re-resolved: `AudioObjectID`s are handles that
+/// change across a re-plug (and across a reboot), while
+/// `kAudioDevicePropertyDeviceUID` survives both.
+struct InputDevice {
+    let deviceID: AudioObjectID
+    let uid: String
+    let name: String
+    let isDefault: Bool
+}
+
+func address(_ selector: AudioObjectPropertySelector,
+             scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal)
+    -> AudioObjectPropertyAddress {
+    AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
+                               mElement: kAudioObjectPropertyElementMain)
+}
+
+/// Every audio device the system knows, input and output alike.
+func allDevices() -> [AudioObjectID] {
+    var addr = address(kAudioHardwarePropertyDevices)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject),
+                                         &addr, 0, nil, &size) == noErr else { return [] }
+    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+    guard !ids.isEmpty,
+          AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
+                                     &addr, 0, nil, &size, &ids) == noErr else { return [] }
+    return ids
+}
+
+/// A CFString-valued device property, read the way Core Audio hands it over.
+///
+/// These properties return a *retained* string the caller owns, so the buffer
+/// is an `Unmanaged` pointer and the reference is consumed here. Reading into a
+/// plain `CFString` variable instead — what this file used to do at its two
+/// call sites — writes past ARC's back; that is a leak per call, and the
+/// picker calls it once per device on every enumeration.
+func deviceString(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+    var addr = address(selector)
+    var value: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &value) == noErr,
+          let string = value else { return nil }
+    return string.takeRetainedValue() as String
+}
+
+func deviceUID(_ id: AudioObjectID) -> String? {
+    deviceString(id, kAudioDevicePropertyDeviceUID)
+}
+
+func deviceName(_ id: AudioObjectID) -> String? {
+    deviceString(id, kAudioObjectPropertyName)
+}
+
+/// How many input channels a device offers — 0 for a pure output device.
+///
+/// The stream *configuration*, not the device's name or transport: an
+/// aggregate, a virtual driver and a USB interface all look alike from
+/// outside, and this is the only thing that says which ones a microphone
+/// channel could actually open.
+func inputChannelCount(_ id: AudioObjectID) -> Int {
+    var addr = address(kAudioDevicePropertyStreamConfiguration,
+                       scope: kAudioObjectPropertyScopeInput)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else {
+        return 0
+    }
+    let raw = UnsafeMutableRawPointer.allocate(
+        byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+    defer { raw.deallocate() }
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
+    let list = UnsafeMutableAudioBufferListPointer(
+        raw.assumingMemoryBound(to: AudioBufferList.self))
+    return list.reduce(0) { $0 + Int($1.mNumberChannels) }
+}
+
+func defaultDeviceID(_ selector: AudioObjectPropertySelector) -> AudioObjectID? {
+    var addr = address(selector)
+    var deviceID = AudioObjectID(kAudioObjectUnknown)
+    var size = UInt32(MemoryLayout<AudioObjectID>.size)
+    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
+                                     &addr, 0, nil, &size, &deviceID) == noErr,
+          deviceID != AudioObjectID(kAudioObjectUnknown) else { return nil }
+    return deviceID
+}
+
+/// Every microphone, with the current default marked.
+///
+/// Enumeration is not TCC-gated (measured 2026-08-12 from a bundle whose
+/// authorization status was `notDetermined`: the full list, names included, no
+/// prompt), which is what lets the picker and `steno devices` list devices
+/// without asking for the microphone.
+func inputDevices() -> [InputDevice] {
+    let defaultID = defaultDeviceID(kAudioHardwarePropertyDefaultInputDevice)
+    var devices: [InputDevice] = []
+    for id in allDevices() where inputChannelCount(id) > 0 {
+        guard let uid = deviceUID(id) else { continue }
+        devices.append(InputDevice(deviceID: id, uid: uid,
+                                   name: deviceName(id) ?? uid, isDefault: id == defaultID))
+    }
+    return devices
+}
+
+// MARK: - choosing an input device
+
+/// Why a `--mic-device` value matched nothing usable.
+enum Unresolved: Error {
+    case missing
+    case ambiguous([String])
+
+    func message(_ pin: String) -> String {
+        switch self {
+        case .missing:
+            return "the selected microphone \"\(pin)\" is not available — run `steno devices` "
+                + "to list what is connected, or pass --mic-device default"
+        case .ambiguous(let uids):
+            return "the microphone name \"\(pin)\" matches \(uids.count) connected devices "
+                + "(\(uids.joined(separator: ", "))) — pass one of those IDs to --mic-device instead"
+        }
+    }
+}
+
+/// Trimmed and NFC-normalized — the one form both sides of a comparison take.
+///
+/// `kAudioObjectPropertyName` hands back decomposed text (NFD), so a name typed
+/// into a TOML file as precomposed characters would never match an
+/// unnormalized comparison; the rule is shared with the Rust helper
+/// (`../stenocap/src/device.rs`) and the Python layer.
+func normalizeDeviceKey(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
+}
+
+/// The device a stored selection names: UID first, then the exact name.
+///
+/// Never a "closest match" and never the default on a miss — silently
+/// recording the built-in mic when the user asked for the desk mic is the
+/// failure this whole feature exists to prevent, and it stays invisible until
+/// the transcript is bad.
+func resolveInput(_ devices: [InputDevice], pin: String) -> Result<InputDevice, Unresolved> {
+    let wanted = normalizeDeviceKey(pin)
+    if let byUID = devices.first(where: { normalizeDeviceKey($0.uid) == wanted }) {
+        return .success(byUID)
+    }
+    let byName = devices.filter { normalizeDeviceKey($0.name) == wanted }
+    if byName.count == 1 { return .success(byName[0]) }
+    if byName.isEmpty { return .failure(.missing) }
+    return .failure(.ambiguous(byName.map { $0.uid }))
+}
+
+/// How long a pinned device gets to appear at startup before the run fails.
+///
+/// A USB interface can enumerate a second or two after wake-from-sleep. Without
+/// this the helper would be asymmetric in the worst way: absent at t=0 kills the
+/// meeting, vanishing at t=1 s is retried forever (`MicSupervisor`).
+let pinGraceSeconds = 3.0
+
+/// [`resolveInput`] retried for [`pinGraceSeconds`] while the device is merely absent.
+func resolveInputWithGrace(pin: String) -> Result<InputDevice, Unresolved> {
+    let deadline = Date().addingTimeInterval(pinGraceSeconds)
+    while true {
+        switch resolveInput(inputDevices(), pin: pin) {
+        case .success(let device):
+            return .success(device)
+        case .failure(.missing) where Date() < deadline:
+            Thread.sleep(forTimeInterval: 0.25)
+        case .failure(let why):
+            return .failure(why)
+        }
+    }
+}
+
 // MARK: - system-audio process tap
 
 /// The aggregate that delivers the tap's audio, pinned to one output device.
@@ -286,72 +461,53 @@ struct AggSession {
     var aggID: AudioObjectID
     var procID: AudioDeviceIOProcID?
     var outputUID: String
+    /// The pinned microphone riding in this aggregate, if any (``PinnedMic``).
+    var micUID: String?
+    /// The silent keep-alive holding the output device awake, if any
+    /// (``startKeepAlive``).
+    var keepAlive: (deviceID: AudioObjectID, procID: AudioDeviceIOProcID)?
 }
 
-func defaultOutputDeviceUID() -> String? {
-    var deviceID = AudioObjectID(kAudioObjectUnknown)
-    var size = UInt32(MemoryLayout<AudioObjectID>.size)
-    var addr = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
-    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                     &addr, 0, nil, &size, &deviceID) == noErr,
-          deviceID != AudioObjectID(kAudioObjectUnknown) else {
+/// The default output device, as both the handle and the UID an aggregate
+/// needs. Read once and used for both: a keep-alive attached to a device the
+/// aggregate is not clocked by would hold the wrong one awake, and the
+/// aggregate would then deliver nothing for the whole meeting.
+func defaultOutputDevice() -> (deviceID: AudioObjectID, uid: String)? {
+    guard let deviceID = defaultDeviceID(kAudioHardwarePropertyDefaultOutputDevice) else {
         log("no default output device")
         return nil
     }
-    var uid: CFString = "" as CFString
-    size = UInt32(MemoryLayout<CFString>.size)
-    addr.mSelector = kAudioDevicePropertyDeviceUID
-    guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &uid) == noErr else {
+    guard let uid = deviceUID(deviceID) else {
         log("could not read output device UID")
         return nil
     }
-    return uid as String
+    return (deviceID, uid)
 }
 
 /// Is a device with this UID still present? The aggregate's pinned output
 /// disappearing (AirPods disconnecting mid-meeting) takes the aggregate's
 /// clock with it — the trigger for a rebuild onto the new default output.
 func deviceExists(uid target: String) -> Bool {
-    var addr = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDevices,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
-    var size: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject),
-                                         &addr, 0, nil, &size) == noErr else { return false }
-    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                     &addr, 0, nil, &size, &ids) == noErr else { return false }
-    var uidAddr = AudioObjectPropertyAddress(
-        mSelector: kAudioDevicePropertyDeviceUID,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
-    for id in ids {
-        var uid: CFString = "" as CFString
-        var uidSize = UInt32(MemoryLayout<CFString>.size)
-        if AudioObjectGetPropertyData(id, &uidAddr, 0, nil, &uidSize, &uid) == noErr,
-           (uid as String) == target {
-            return true
-        }
-    }
-    return false
+    allDevices().contains { deviceUID($0) == target }
 }
 
-/// Tracks the tap's observed channel layout so a mid-session change is logged
+/// Tracks a channel's observed buffer layout so a mid-session change is logged
 /// once rather than per buffer.
-final class TapLayout: @unchecked Sendable {
+final class ChannelLayoutWatch: @unchecked Sendable {
     private let lock = NSLock()
+    private let what: String
     private var channels = 0
+
+    init(what: String) {
+        self.what = what
+    }
 
     func note(_ observed: Int) {
         lock.lock()
         defer { lock.unlock() }
         if channels != 0, channels != observed {
-            log("WARNING system tap changed from \(channels) to \(observed) channel(s) "
-                + "— the output device was renegotiated mid-capture")
+            log("WARNING \(what) changed from \(channels) to \(observed) channel(s) "
+                + "— the device was renegotiated mid-capture")
         }
         channels = observed
     }
@@ -383,7 +539,13 @@ func createSystemTap() -> (tapID: AudioObjectID, tapUUID: String) {
 /// Wrap the tap in an aggregate pinned to the current default output and start
 /// the IO proc. Non-fatal — nil with the reason logged — so the supervisor can
 /// retry a rebuild after a device vanishes; startup turns nil into a FATAL.
-func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter) -> AggSession? {
+///
+/// `micUID` rides along when a pinned microphone shares this aggregate (see
+/// ``PinnedMic`` for why it must): the device joins as a drift-compensated
+/// sub-device, and its audio arrives in the same buffer list as the tap's,
+/// ahead of it, on the same clock.
+func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter,
+                    micUID: String? = nil) -> AggSession? {
     var asbd = AudioStreamBasicDescription()
     var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
     var addr = AudioObjectPropertyAddress(
@@ -397,7 +559,14 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter) -> 
     }
     log("system tap format: \(asbd.mSampleRate) Hz, \(asbd.mChannelsPerFrame) ch")
 
-    guard let outputUID = defaultOutputDeviceUID() else { return nil }
+    guard let output = defaultOutputDevice() else { return nil }
+    let outputUID = output.uid
+    var subDevices: [[String: Any]] = [[kAudioSubDeviceUIDKey: outputUID]]
+    if let micUID {
+        // Drift compensation because the microphone runs on its own crystal
+        // while the aggregate is clocked by the main sub-device.
+        subDevices.append([kAudioSubDeviceUIDKey: micUID, kAudioSubDeviceDriftCompensationKey: 1])
+    }
     let aggDesc: [String: Any] = [
         kAudioAggregateDeviceNameKey: "stenograf-agg",
         kAudioAggregateDeviceUIDKey: UUID().uuidString,
@@ -405,7 +574,7 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter) -> 
         kAudioAggregateDeviceIsStackedKey: false,
         kAudioAggregateDeviceTapAutoStartKey: true,
         kAudioAggregateDeviceMainSubDeviceKey: outputUID,
-        kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
+        kAudioAggregateDeviceSubDeviceListKey: subDevices,
         kAudioAggregateDeviceTapListKey: [[
             kAudioSubTapDriftCompensationKey: true,
             kAudioSubTapUIDKey: tapUUID,
@@ -442,7 +611,7 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter) -> 
         sampleRate = aggRate
     }
 
-    // The resampler always sees mono float32 at that rate; renderTapBuffer
+    // The resampler always sees mono float32 at that rate; renderInputBuffer
     // downmixes whatever channel layout the buffer actually arrives in.
     guard let sourceFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
@@ -453,15 +622,59 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter) -> 
         AudioHardwareDestroyAggregateDevice(aggID)
         return nil
     }
-    let layout = TapLayout()
+    let layout = ChannelLayoutWatch(what: "system tap")
+    let split = SplitWatch()
+
+    // The mic sub-device's buffers arrive in the same list, before the tap's:
+    // the aggregate composes its input streams sub-device by sub-device (the
+    // output device contributes none) and appends the taps last. Verified on
+    // this Mac 2026-08-12 — the tap is one mono buffer, so it is the last one,
+    // and everything before it is the microphone.
+    var micResampler: Resampler?
+    let micLayout = ChannelLayoutWatch(what: "mic device")
+    if let micUID {
+        guard let built = Resampler(source: sourceFormat, channel: .mic, emitter: emitter) else {
+            log("could not build the microphone resampler")
+            AudioHardwareDestroyAggregateDevice(aggID)
+            return nil
+        }
+        micResampler = built
+        // The composition is checked, not assumed: the split below trusts that
+        // the microphone's streams precede the tap's single mono one, so an
+        // aggregate that did not take the device (or a tap that grew a channel)
+        // must be loud here rather than quietly swap the two channels.
+        let wanted = inputDevices().first { $0.uid == micUID }.map { inputChannelCount($0.deviceID) }
+        let got = inputChannelCount(aggID)
+        if let wanted, got != wanted + 1 {
+            log("WARNING the capture group carries \(got) input channel(s), not the "
+                + "\(wanted + 1) expected of this microphone plus the system tap "
+                + "— the microphone may be missing from the recording")
+        }
+    }
 
     var procID: AudioDeviceIOProcID?
     let queue = DispatchQueue(label: "dev.stenograf.tap")
     let procStatus = AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) { _, inInputData, inInputTime, _, _ in
         let stamp = inInputTime.pointee
         let hostTime = stamp.mFlags.contains(.hostTimeValid) ? stamp.mHostTime : Clock.now()
-        renderTapBuffer(inInputData, hostTime: hostTime, sourceFormat: sourceFormat,
-                        resampler: resampler, layout: layout)
+        let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInputData))
+        guard let micResampler else {
+            renderInputBuffer(Array(list), hostTime: hostTime, sourceFormat: sourceFormat,
+                              resampler: resampler, layout: layout)
+            return
+        }
+        // Split: everything but the last buffer is the microphone, the last is
+        // the tap. A list holding only the tap means the device left the group
+        // without leaving the system's device list, which nothing watches —
+        // hence the warning; the channel stops rather than carrying tap audio.
+        split.note(list)
+        if list.count > 1 {
+            renderInputBuffer(Array(list.dropLast()), hostTime: hostTime,
+                              sourceFormat: sourceFormat, resampler: micResampler,
+                              layout: micLayout)
+        }
+        renderInputBuffer(Array(list.suffix(1)), hostTime: hostTime, sourceFormat: sourceFormat,
+                          resampler: resampler, layout: layout)
     }
     guard procStatus == noErr else {
         log("create tap IO proc failed: OSStatus \(fourCC(procStatus))")
@@ -476,18 +689,26 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter) -> 
         return nil
     }
     log("system capture started")
-    return AggSession(aggID: aggID, procID: procID, outputUID: outputUID)
+    var keepAlive: (deviceID: AudioObjectID, procID: AudioDeviceIOProcID)?
+    if micUID != nil, let keepProc = startKeepAlive(output.deviceID) {
+        keepAlive = (output.deviceID, keepProc)
+    }
+    if let micUID {
+        log("mic capture started (device \(micUID), through the system aggregate)")
+    }
+    return AggSession(aggID: aggID, procID: procID, outputUID: outputUID, micUID: micUID,
+                      keepAlive: keepAlive)
 }
 
-/// Downmix the IO-proc buffer to mono and hand it to the resampler.
+/// Downmix one IO-proc buffer to mono and hand it to the resampler.
 ///
 /// The frame count is derived from the buffer we were handed, never from the
 /// format read at startup: Core Audio renegotiates the tap when the output
 /// device changes (headphones, AirPods, a display with speakers), and reading a
 /// multi-channel buffer as mono would emit several times too many samples.
-func renderTapBuffer(_ abl: UnsafePointer<AudioBufferList>, hostTime: UInt64,
-                     sourceFormat: AVAudioFormat, resampler: Resampler, layout: TapLayout) {
-    let list = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: abl))
+func renderInputBuffer(_ list: [AudioBuffer], hostTime: UInt64,
+                       sourceFormat: AVAudioFormat, resampler: Resampler,
+                       layout: ChannelLayoutWatch) {
     guard let first = list.first, first.mData != nil else { return }
 
     let planes = list.count
@@ -509,7 +730,7 @@ func renderTapBuffer(_ abl: UnsafePointer<AudioBufferList>, hostTime: UInt64,
 
 /// Average every channel into one, for either buffer layout Core Audio uses:
 /// one plane per channel (deinterleaved), or one plane of interleaved frames.
-func downmix(_ list: UnsafeMutableAudioBufferListPointer,
+func downmix(_ list: [AudioBuffer],
              into dst: UnsafeMutablePointer<Float>, frames: Int) {
     if list.count > 1 {
         for i in 0..<frames { dst[i] = 0 }
@@ -535,7 +756,42 @@ func downmix(_ list: UnsafeMutableAudioBufferListPointer,
     }
 }
 
+/// Render digital silence into `deviceID` for as long as capture runs.
+///
+/// An aggregate that contains a microphone delivers **nothing at all** until
+/// something renders on its output device — measured 2026-08-12: with no audio
+/// playing, not one buffer arrived in 25 s, and speech at second 10 started the
+/// flow at second 12. The mic channel of a meeting cannot depend on the remote
+/// side making noise, so the output device is held awake here instead. The
+/// buffers written are zeros: nothing is audible, and the tap has nothing of
+/// ours to capture. Only the aggregate-hosted microphone needs this; the
+/// shipped default path never starts one.
+func startKeepAlive(_ deviceID: AudioObjectID) -> AudioDeviceIOProcID? {
+    var procID: AudioDeviceIOProcID?
+    let queue = DispatchQueue(label: "dev.stenograf.keepalive")
+    let created = AudioDeviceCreateIOProcIDWithBlock(&procID, deviceID, queue) { _, _, _, out, _ in
+        for buffer in UnsafeMutableAudioBufferListPointer(out) {
+            if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+        }
+    }
+    guard created == noErr, let procID else {
+        log("could not hold the output device awake (OSStatus \(fourCC(created)))")
+        return nil
+    }
+    let started = AudioDeviceStart(deviceID, procID)
+    guard started == noErr else {
+        log("could not hold the output device awake (OSStatus \(fourCC(started)))")
+        AudioDeviceDestroyIOProcID(deviceID, procID)
+        return nil
+    }
+    return procID
+}
+
 func tearDownAggregate(_ session: AggSession) {
+    if let keepAlive = session.keepAlive {
+        AudioDeviceStop(keepAlive.deviceID, keepAlive.procID)
+        AudioDeviceDestroyIOProcID(keepAlive.deviceID, keepAlive.procID)
+    }
     if let procID = session.procID {
         AudioDeviceStop(session.aggID, procID)
         AudioDeviceDestroyIOProcID(session.aggID, procID)
@@ -552,20 +808,31 @@ func tearDownAggregate(_ session: AggSession) {
 /// display unplugged) takes the aggregate's clock with it; this watches the
 /// device list and rebuilds the aggregate around the surviving default output,
 /// re-anchoring the channel on the shared clock (the gap lands as silence).
+///
+/// When a pinned microphone rides in the same aggregate (``PinnedMic``), that
+/// device's coming and going is watched here too: the aggregate is rebuilt with
+/// the mic when it is present and without it when it is not, so its
+/// disappearance costs the mic channel rather than the whole meeting, and its
+/// return picks capture back up. The pin is never resolved to a *different*
+/// microphone.
 final class TapSupervisor: @unchecked Sendable {
     private let emitter: Emitter
     private let tapID: AudioObjectID
     private let tapUUID: String
+    private let micPin: String?
     private let queue = DispatchQueue(label: "dev.stenograf.tap-rebuild")
     private var agg: AggSession?
     private var pending: DispatchWorkItem?
     private var lost = false
+    private var micLost = false
     private var stopped = false
 
-    init(emitter: Emitter, tapID: AudioObjectID, tapUUID: String, agg: AggSession) {
+    init(emitter: Emitter, tapID: AudioObjectID, tapUUID: String, agg: AggSession,
+         micPin: String? = nil) {
         self.emitter = emitter
         self.tapID = tapID
         self.tapUUID = tapUUID
+        self.micPin = micPin
         self.agg = agg
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -586,10 +853,16 @@ final class TapSupervisor: @unchecked Sendable {
 
     private func rebuildIfVanished() {  // on queue
         guard !stopped else { return }
-        if let agg, deviceExists(uid: agg.outputUID) {
-            return  // pinned device still present — leave the working path alone
+        if let agg, deviceExists(uid: agg.outputUID), agg.micUID == currentMicUID() {
+            return  // nothing we depend on moved — leave the working path alone
         }
         rebuild()
+    }
+
+    /// The pinned microphone's UID if it is connected right now, else nil.
+    private func currentMicUID() -> String? {
+        guard let micPin else { return nil }
+        return try? resolveInput(inputDevices(), pin: micPin).get().uid
     }
 
     private func rebuild() {  // on queue
@@ -599,7 +872,19 @@ final class TapSupervisor: @unchecked Sendable {
             agg = nil
         }
         emitter.reanchor(.system)
-        if let fresh = buildAggregate(tapID: tapID, tapUUID: tapUUID, emitter: emitter) {
+        let micUID = currentMicUID()
+        if micPin != nil {
+            emitter.reanchor(.mic)
+            if micUID == nil, !micLost {
+                micLost = true
+                log("WARNING mic capture lost — the selected microphone \"\(micPin!)\" is not "
+                    + "connected; the meeting keeps recording system audio until it returns")
+            } else if micUID != nil, micLost {
+                micLost = false
+            }
+        }
+        if let fresh = buildAggregate(tapID: tapID, tapUUID: tapUUID, emitter: emitter,
+                                      micUID: micUID) {
             agg = fresh
             log("system capture moved to output device \(fresh.outputUID)")
             lost = false
@@ -639,6 +924,70 @@ func requestMicrophoneAccess() {
     }
 }
 
+/// Checks, once, that the capture group's buffers are laid out as the split
+/// below assumes: the microphone's streams first, the tap's single mono stream
+/// last.
+///
+/// Two ways that can be wrong, both silent. The group may deliver the tap
+/// alone, which is a meeting that records the far end perfectly and the room
+/// not at all. Or the streams may not be in that order on some other macOS
+/// build, which would feed the *remote* audio into the microphone channel —
+/// the echo canceller then has the same audio on both sides and the transcript
+/// attributes the far end to the room. The tap is created mono, so a last
+/// buffer that is not mono is the tell.
+final class SplitWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var warned = false
+
+    func note(_ list: UnsafeMutableAudioBufferListPointer) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !warned else { return }
+        if list.count < 2 {
+            warned = true
+            log("WARNING no microphone audio in the capture group — the selected device "
+                + "left it; the meeting keeps recording system audio")
+        } else if list.last?.mNumberChannels != 1 {
+            warned = true
+            log("WARNING the capture group's last stream carries "
+                + "\(list.last?.mNumberChannels ?? 0) channels, not the system tap's one "
+                + "— the microphone and system channels may be swapped")
+        }
+    }
+}
+
+/// Warns once when a device keeps handing over buffers with no valid host time.
+///
+/// Such a buffer is stamped with its *arrival* instead — the very thing the
+/// helper transport exists to eliminate, because the echo canceller pairs the
+/// two channels by timestamp. Pinning is what makes virtual and aggregate
+/// devices (BlackHole, Loopback) selectable, and those are where invalid host
+/// times live. A single invalid stamp is noise the emitter's drift window
+/// absorbs; a device that never stamps is a different situation, so the warning
+/// waits for the third one.
+final class HostTimeWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private let device: String
+    private var invalid = 0
+    private var warned = false
+
+    init(device: String) {
+        self.device = device
+    }
+
+    func note(valid: Bool) {
+        guard !valid else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        invalid += 1
+        guard invalid >= 3, !warned else { return }
+        warned = true
+        log("WARNING mic device \(device) reports no capture time — its audio is stamped "
+            + "on arrival, which the echo canceller cannot pair reliably "
+            + "(virtual and aggregate devices do this)")
+    }
+}
+
 /// Build and start a mic engine on the current default input. Non-fatal — nil
 /// with the reason logged — so the supervisor can retry after a device change;
 /// startup turns nil into a FATAL.
@@ -653,8 +1002,12 @@ func buildMicEngine(emitter: Emitter) -> AVAudioEngine? {
             + "(\(format.sampleRate) Hz, \(format.channelCount) ch)")
         return nil
     }
-    log("mic format: \(format.sampleRate) Hz, \(format.channelCount) ch")
+    let name = deviceName(defaultDeviceID(kAudioHardwarePropertyDefaultInputDevice)
+        ?? AudioObjectID(kAudioObjectUnknown)) ?? "the default input"
+    log("mic format: \(format.sampleRate) Hz, \(format.channelCount) ch — \(name)")
+    let hostTimes = HostTimeWatch(device: name)
     input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, when in
+        hostTimes.note(valid: when.isHostTimeValid)
         let hostTime = when.isHostTimeValid ? when.hostTime : Clock.now()
         resampler.feed(buffer, hostTime: hostTime)
     }
@@ -677,7 +1030,215 @@ func startMic(emitter: Emitter) -> AVAudioEngine {
     return engine
 }
 
-/// Keeps the mic alive across device changes.
+// MARK: - the pinned microphone
+
+/// One microphone captured straight from its device, for a `--mic-device` run.
+///
+/// **Why not AVAudioEngine.** Retargeting the engine's input node is a
+/// documented dead end, and measured here on macOS 26.5.1 (2026-08-12) it is
+/// worse than useless while the system-audio tap runs: setting
+/// `kAudioOutputUnitProperty_CurrentDevice` to the built-in microphone with the
+/// tap's aggregate live wedges `engine.start()` inside the HAL and it never
+/// returns (a sample shows the main thread waiting on the shared client IO
+/// thread's mutex), and starting the tap *after* a pinned engine instead leaves
+/// the tap delivering not one buffer. Pinning a virtual device happened to
+/// work, which is exactly the kind of luck a meeting recorder cannot ship on.
+/// The engine also announces its own retargeting as a configuration change, so
+/// the supervisor rebuilt itself in a loop — nine rebuilds in ten seconds.
+///
+/// So a pinned mic is taken the way the system channel already is: an IO proc
+/// on the device, which coexists with the tap because that is what the tap
+/// itself uses. The unpinned path keeps AVAudioEngine unchanged — its
+/// default-following and its rebuild-on-AirPods behaviour are measured and
+/// shipped, and nothing here touches them.
+final class PinnedMic {
+    let device: InputDevice
+    private let procID: AudioDeviceIOProcID
+    private var stopped = false
+
+    private init(device: InputDevice, procID: AudioDeviceIOProcID) {
+        self.device = device
+        self.procID = procID
+    }
+
+    /// Open and start the device. Non-fatal — nil with the reason logged — so
+    /// the supervisor can retry after a re-plug.
+    static func start(device: InputDevice, emitter: Emitter) -> PinnedMic? {
+        // The device's own rate, not a format read at startup: buffers arrive
+        // at whatever the device is clocked to, and resampling 44.1 kHz audio
+        // as if it were 48 kHz warps the timeline by 8 % (measured on the
+        // system channel, `buildAggregate`).
+        var rate = 0.0
+        var rateSize = UInt32(MemoryLayout<Double>.size)
+        var rateAddr = address(kAudioDevicePropertyNominalSampleRate)
+        guard AudioObjectGetPropertyData(device.deviceID, &rateAddr, 0, nil, &rateSize, &rate)
+            == noErr, rate > 0 else {
+            log("mic unavailable: \(device.name) did not report a sample rate")
+            return nil
+        }
+        guard let sourceFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
+            let resampler = Resampler(source: sourceFormat, channel: .mic, emitter: emitter)
+        else {
+            log("mic unavailable: could not build a resampler for \(device.name) at \(rate) Hz")
+            return nil
+        }
+        let layout = ChannelLayoutWatch(what: "mic device \(device.name)")
+        let hostTimes = HostTimeWatch(device: device.name)
+        var procID: AudioDeviceIOProcID?
+        let queue = DispatchQueue(label: "dev.stenograf.mic")
+        let created = AudioDeviceCreateIOProcIDWithBlock(
+            &procID, device.deviceID, queue
+        ) { _, inInputData, inInputTime, _, _ in
+            let stamp = inInputTime.pointee
+            let valid = stamp.mFlags.contains(.hostTimeValid)
+            hostTimes.note(valid: valid)
+            let list = UnsafeMutableAudioBufferListPointer(
+                UnsafeMutablePointer(mutating: inInputData))
+            renderInputBuffer(Array(list), hostTime: valid ? stamp.mHostTime : Clock.now(),
+                              sourceFormat: sourceFormat, resampler: resampler, layout: layout)
+        }
+        guard created == noErr, let procID else {
+            log("mic unavailable: could not open \(device.name) (OSStatus \(fourCC(created)))")
+            return nil
+        }
+        let started = AudioDeviceStart(device.deviceID, procID)
+        guard started == noErr else {
+            log("mic unavailable: could not start \(device.name) (OSStatus \(fourCC(started)))")
+            AudioDeviceDestroyIOProcID(device.deviceID, procID)
+            return nil
+        }
+        log("mic format: \(rate) Hz — \(device.name)")
+        log("mic capture started")
+        return PinnedMic(device: device, procID: procID)
+    }
+
+    func stop() {
+        guard !stopped else { return }
+        stopped = true
+        AudioDeviceStop(device.deviceID, procID)
+        AudioDeviceDestroyIOProcID(device.deviceID, procID)
+    }
+}
+
+/// Keeps a pinned mic on *its* device, and on no other.
+///
+/// The device list is watched rather than the default input: a pinned run must
+/// ignore a default change by definition, and what it must react to is its own
+/// device disappearing and coming back (a re-plug hands out a new
+/// `AudioObjectID` under the same UID, so every restart re-resolves). The
+/// device's sample rate is watched too, because the resampler is built for one
+/// rate and a device that renegotiates would otherwise warp the timeline
+/// silently. While the device is away the channel simply stops — never falls
+/// back to another microphone.
+final class PinnedMicSupervisor: @unchecked Sendable {
+    private let emitter: Emitter
+    private let pin: String
+    private let queue = DispatchQueue(label: "dev.stenograf.mic-rebuild")
+    private var mic: PinnedMic?
+    private var pending: DispatchWorkItem?
+    private var retrying: DispatchWorkItem?
+    private var rateWatch: (deviceID: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    private var lost = false
+    private var stopped = false
+
+    init(emitter: Emitter, pin: String, mic: PinnedMic) {
+        self.emitter = emitter
+        self.pin = pin
+        self.mic = mic
+        watchRate(mic.device.deviceID)
+        var addr = address(kAudioHardwarePropertyDevices)
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &addr, queue
+        ) { [weak self] _, _ in self?.schedule("the device list changed") }
+    }
+
+    /// Watch the current device's sample rate, and only it.
+    ///
+    /// The resampler is built for one rate, so a device that renegotiates must
+    /// rebuild. The old listener is removed first: a re-plugged device is a new
+    /// `AudioObjectID`, and leaving each generation's listener registered would
+    /// pile up one rebuild trigger per unplug for the rest of the meeting.
+    private func watchRate(_ deviceID: AudioObjectID) {  // on queue (or init)
+        unwatchRate()
+        var addr = address(kAudioDevicePropertyNominalSampleRate)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.schedule("the microphone changed its sample rate")
+        }
+        AudioObjectAddPropertyListenerBlock(deviceID, &addr, queue, block)
+        rateWatch = (deviceID, block)
+    }
+
+    private func unwatchRate() {  // on queue (or init)
+        guard let watch = rateWatch else { return }
+        var addr = address(kAudioDevicePropertyNominalSampleRate)
+        AudioObjectRemovePropertyListenerBlock(watch.deviceID, &addr, queue, watch.block)
+        rateWatch = nil
+    }
+
+    /// Debounce: one plug event fires several list changes back-to-back.
+    private func schedule(_ reason: String) {  // on queue
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.rebuildIfNeeded(reason) }
+        pending = work
+        queue.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func rebuildIfNeeded(_ reason: String) {  // on queue
+        guard !stopped else { return }
+        let resolved = try? resolveInput(inputDevices(), pin: pin).get()
+        // Still the same device, still running: a list change that did not
+        // touch us (some other device appeared) must leave capture alone.
+        if let mic, let resolved, resolved.deviceID == mic.device.deviceID, !lost { return }
+        rebuild(reason, resolved: resolved)
+    }
+
+    private func rebuild(_ reason: String, resolved: InputDevice?) {  // on queue
+        guard !stopped else { return }
+        mic?.stop()
+        mic = nil
+        emitter.reanchor(.mic)
+        guard let resolved, let fresh = PinnedMic.start(device: resolved, emitter: emitter) else {
+            if !lost {
+                lost = true
+                log("WARNING mic capture lost (\(reason)) — the selected microphone "
+                    + "\"\(pin)\" is not available; retrying until it returns")
+            }
+            // One chain only: every device-list change while the mic is away
+            // would otherwise start its own, and they would all fire together
+            // when it returns — each one stopping and restarting a microphone
+            // that was already back, with a silence-padded gap apiece.
+            retrying?.cancel()
+            let again = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.rebuild(reason, resolved: try? resolveInput(inputDevices(), pin: self.pin).get())
+            }
+            retrying = again
+            queue.asyncAfter(deadline: .now() + 2.0, execute: again)
+            return
+        }
+        retrying?.cancel()
+        if rateWatch?.deviceID != fresh.device.deviceID {
+            watchRate(fresh.device.deviceID)
+        }
+        mic = fresh
+        lost = false
+        log("mic capture restarted (\(reason))")
+    }
+
+    func stop() {
+        queue.sync {
+            stopped = true
+            pending?.cancel()
+            retrying?.cancel()
+            unwatchRate()
+            mic?.stop()
+            mic = nil
+        }
+    }
+}
+
+/// Keeps the *default* mic alive across device changes (the unpinned path).
 ///
 /// A default-*output* switch (connecting AirPods!) permanently stops a running
 /// AVAudioEngine — measured 2026-07-20: the mic goes silent mid-meeting with
@@ -686,6 +1247,8 @@ func startMic(emitter: Emitter) -> AVAudioEngine {
 /// Both funnel into one debounced rebuild: stop the old engine, re-anchor the
 /// channel on the shared clock (the gap lands as silence), start fresh on the
 /// current default input, and retry until a device comes back.
+///
+/// A pinned run uses [`PinnedMicSupervisor`] instead and never gets here.
 final class MicSupervisor: @unchecked Sendable {
     private let emitter: Emitter
     private let queue = DispatchQueue(label: "dev.stenograf.mic-rebuild")
@@ -761,18 +1324,154 @@ final class MicSupervisor: @unchecked Sendable {
 
 // MARK: - main
 
-let args = Array(CommandLine.arguments.dropFirst())
-let wantMic = args.contains("--mic")
-let wantSystem = args.contains("--system")
+let usage = "usage: stenocap [--mic] [--system] [--mic-device ID]"
+    + " | --devices [--mic-device ID] | --list-inputs"
+
+/// Everything argv can say, and nothing it cannot.
+///
+/// Scanning for known flags and ignoring the rest is how a new caller passing
+/// `--mic-device X` to a stale binary would record the *default* microphone
+/// while the UI said otherwise — and it cannot express a value-taking flag at
+/// all, since `--mic-device --mic` would swallow the channel.
+struct Options {
+    var mic = false
+    var system = false
+    var devices = false
+    var listInputs = false
+    var help = false
+    var micDevice: String?
+}
+
+/// What a caller got wrong about argv, phrased for the usage line below it.
+struct UsageError: Error {
+    let message: String
+}
+
+func parseArguments(_ args: [String]) -> Result<Options, UsageError> {
+    var options = Options()
+    var index = 0
+    while index < args.count {
+        switch args[index] {
+        case "--mic": options.mic = true
+        case "--system": options.system = true
+        case "--devices": options.devices = true
+        case "--list-inputs": options.listInputs = true
+        case "-h", "--help": options.help = true
+        case "--mic-device":
+            guard index + 1 < args.count else {
+                return .failure(UsageError(message: "--mic-device needs a device id or name"))
+            }
+            let value = args[index + 1]
+            if value.hasPrefix("--") {
+                return .failure(UsageError(
+                    message: "--mic-device needs a device id or name, not the flag \(value)"))
+            }
+            // `default` is the word every failure message offers as the way
+            // back to the OS default, so the binary that prints it accepts it.
+            options.micDevice = normalizeDeviceKey(value) == "default" ? nil : value
+            index += 1
+        case let other:
+            return .failure(UsageError(message: "unknown argument \(other)"))
+        }
+        index += 1
+    }
+    return .success(options)
+}
+
+/// One line of JSON on stdout, escaped by Foundation rather than by hand:
+/// device names come from the driver and are not ours to trust.
+func printJSON(_ value: Any) {
+    guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+          let text = String(data: data, encoding: .utf8) else {
+        log("FATAL: could not encode the device list")
+        exit(1)
+    }
+    print(text)
+}
+
+let options: Options
+switch parseArguments(Array(CommandLine.arguments.dropFirst())) {
+case .success(let parsed): options = parsed
+case .failure(let why):
+    log(why.message)
+    log(usage)
+    exit(2)
+}
+
+// --help succeeds and a bare invocation does not: the second is a caller that
+// forgot to name a channel, and `stenocap --help` is what a wheel's smoke test
+// runs to prove the binary starts on this machine.
+if options.help {
+    log(usage)
+    exit(0)
+}
+
+// Neither read-only query may ask for microphone access: enumeration is not
+// TCC-gated (measured 2026-08-12), and prompting inside `steno doctor` or a
+// setup form would be a permission dialog nobody asked for.
+if options.listInputs {
+    printJSON(inputDevices().map { ["id": $0.uid, "name": $0.name, "default": $0.isDefault] })
+    exit(0)
+}
+
+let wantMic = options.mic
+let wantSystem = options.system
+
+if options.devices {
+    var named: [String: String] = [:]
+    if wantMic || !wantSystem {
+        if let pin = options.micDevice {
+            switch resolveInputWithGrace(pin: pin) {
+            case .success(let device): named["mic"] = device.name
+            case .failure(let why):
+                log("FATAL: \(why.message(pin))")
+                exit(1)
+            }
+        } else if let id = defaultDeviceID(kAudioHardwarePropertyDefaultInputDevice) {
+            named["mic"] = deviceName(id) ?? "the default input"
+        } else {
+            log("FATAL: no default microphone is configured — check Sound settings")
+            exit(1)
+        }
+    }
+    if wantSystem || !wantMic {
+        guard let id = defaultDeviceID(kAudioHardwarePropertyDefaultOutputDevice) else {
+            log("FATAL: no default output device is configured — check Sound settings")
+            exit(1)
+        }
+        named["system"] = deviceName(id) ?? "the default output"
+    }
+    printJSON(named)
+    exit(0)
+}
 
 if !wantMic && !wantSystem {
-    log("usage: stenocap [--mic] [--system]  (at least one channel)")
+    log("\(usage)  (at least one channel)")
     exit(2)
 }
 
 let emitter = Emitter()
 var tapSupervisor: TapSupervisor?
 var micSupervisor: MicSupervisor?
+var pinnedMic: PinnedMicSupervisor?
+
+/// The startup path for a pinned mic: resolve (with its grace), then open the
+/// device. Both failures are fatal, and neither substitutes another microphone
+/// (`resolveInput`).
+func startPinnedMic(pin: String) -> PinnedMic {
+    switch resolveInputWithGrace(pin: pin) {
+    case .failure(let why):
+        log("FATAL: \(why.message(pin))")
+        exit(1)
+    case .success(let device):
+        guard let mic = PinnedMic.start(device: device, emitter: emitter) else {
+            log("FATAL: mic capture failed to start on \(device.name) "
+                + "— is another app capturing? (OBS, a second stenograf)")
+            exit(1)
+        }
+        return mic
+    }
+}
 
 if wantMic { requestMicrophoneAccess() }
 // Startup watchdog, armed only after the (legitimately open-ended) permission
@@ -789,22 +1488,56 @@ startupWatchdog.setEventHandler {
 }
 startupWatchdog.resume()
 _ = Clock.epoch  // fix the shared origin before either channel can stamp a frame
+
+// Three ways to take the microphone, and which one applies is decided here:
+//
+//   unpinned            → AVAudioEngine on the default input, as ever
+//   pinned, no system   → an IO proc straight on the device
+//   pinned, with system → the device joins the tap's aggregate
+//
+// The third exists because the second does not work beside the tap: opening a
+// hardware input directly while the tap's aggregate runs wedges the HAL
+// (measured 2026-08-12, `PinnedMic`). Inside the aggregate there is one IO
+// context and the conflict cannot arise — and both channels then share a clock
+// by construction rather than by agreement.
+let micInAggregate = wantMic && wantSystem && options.micDevice != nil
+// Resolved once, before the tap exists, so a missing device fails with its own
+// message rather than as a broken aggregate — and the answer is *kept*:
+// re-deriving it a moment later is a window in which the device can vanish and
+// the run silently becomes system-audio-only.
+var pinnedMicUID: String?
+if let pin = options.micDevice, micInAggregate {
+    switch resolveInputWithGrace(pin: pin) {
+    case .failure(let why):
+        log("FATAL: \(why.message(pin))")
+        exit(1)
+    case .success(let device):
+        pinnedMicUID = device.uid
+    }
+}
 if wantSystem {
     let (tapID, tapUUID) = createSystemTap()
-    guard let agg = buildAggregate(tapID: tapID, tapUUID: tapUUID, emitter: emitter) else {
+    guard let agg = buildAggregate(tapID: tapID, tapUUID: tapUUID, emitter: emitter,
+                                   micUID: pinnedMicUID) else {
         log("FATAL: could not start system capture "
             + "— is another app capturing? (OBS, a second stenograf)")
         exit(1)
     }
-    tapSupervisor = TapSupervisor(emitter: emitter, tapID: tapID, tapUUID: tapUUID, agg: agg)
+    tapSupervisor = TapSupervisor(emitter: emitter, tapID: tapID, tapUUID: tapUUID, agg: agg,
+                                  micPin: micInAggregate ? options.micDevice : nil)
 }
-if wantMic {
-    micSupervisor = MicSupervisor(emitter: emitter, engine: startMic(emitter: emitter))
+if wantMic && !micInAggregate {
+    if let pin = options.micDevice {
+        pinnedMic = PinnedMicSupervisor(emitter: emitter, pin: pin, mic: startPinnedMic(pin: pin))
+    } else {
+        micSupervisor = MicSupervisor(emitter: emitter, engine: startMic(emitter: emitter))
+    }
 }
 startupWatchdog.cancel()
 
 func shutdown() -> Never {
     micSupervisor?.stop()
+    pinnedMic?.stop()
     tapSupervisor?.stop()
     try? FileHandle.standardOutput.synchronize()
     log("stopped")

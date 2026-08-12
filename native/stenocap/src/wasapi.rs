@@ -37,18 +37,21 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use windows::core::Result as WinResult;
+use windows::core::PCWSTR;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice,
     IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, DEVICE_STATE_ACTIVE, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+    COINIT_MULTITHREADED, STGM_READ,
 };
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
+use crate::device::{resolve_with_grace, InputDevice};
 use crate::frame::{FrameSink, Framer, SAMPLE_RATE};
 
 const WAVE_FORMAT_PCM: u16 = 1;
@@ -127,13 +130,15 @@ impl Drop for Com {
     }
 }
 
+fn enumerator() -> WinResult<IMMDeviceEnumerator> {
+    unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
+}
+
 fn default_endpoint(tap: Tap) -> WinResult<IMMDevice> {
     unsafe {
-        let enumerator: IMMDeviceEnumerator =
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         // eConsole, not eCommunications: this is a meeting *recorder*, and the
         // endpoints a user hears the call on are the console ones.
-        enumerator.GetDefaultAudioEndpoint(
+        enumerator()?.GetDefaultAudioEndpoint(
             match tap {
                 Tap::Mic => eCapture,
                 Tap::System => eRender,
@@ -152,13 +157,87 @@ fn friendly_name(device: &IMMDevice) -> WinResult<String> {
     }
 }
 
+/// The endpoint ID string — what is stored, and what survives a reboot.
+///
+/// `GetId` hands back COM-allocated memory the caller owns, so the copy is
+/// taken and the original freed here; leaking it once per enumeration would
+/// leak once per device per meeting start.
+fn endpoint_id(device: &IMMDevice) -> Result<String, String> {
+    unsafe {
+        let raw = device
+            .GetId()
+            .map_err(|e| format!("could not read an audio device's id ({e})"))?;
+        let id = raw
+            .to_string()
+            .map_err(|e| format!("an audio device's id is not valid text ({e})"));
+        CoTaskMemFree(Some(raw.0 as *const std::ffi::c_void));
+        id
+    }
+}
+
+/// Every active capture endpoint, with the default one marked.
+pub fn list_inputs() -> Result<Vec<InputDevice>, String> {
+    let _com = Com::enter();
+    inputs()
+}
+
+/// [`list_inputs`] without entering COM — for callers already inside it.
+fn inputs() -> Result<Vec<InputDevice>, String> {
+    let enumerator =
+        enumerator().map_err(|e| format!("could not open the audio device list ({e})"))?;
+    // A machine with no default input is a legitimate state (nothing is
+    // plugged in), so this marks the list rather than failing it.
+    let default_id = unsafe { enumerator.GetDefaultAudioEndpoint(eCapture, eConsole) }
+        .ok()
+        .and_then(|device| endpoint_id(&device).ok());
+    let collection = unsafe { enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) }
+        .map_err(|e| format!("could not list the capture devices ({e})"))?;
+    let count = unsafe { collection.GetCount() }
+        .map_err(|e| format!("could not count the capture devices ({e})"))?;
+    let mut devices = Vec::new();
+    for index in 0..count {
+        // One unreadable endpoint must not hide the rest: a driver that fails
+        // its own property store is exactly when the user needs the picker.
+        let Ok(device) = (unsafe { collection.Item(index) }) else { continue };
+        let Ok(id) = endpoint_id(&device) else { continue };
+        let name = friendly_name(&device).unwrap_or_else(|_| id.clone());
+        let is_default = default_id.as_deref() == Some(id.as_str());
+        devices.push(InputDevice { id, name, is_default });
+    }
+    Ok(devices)
+}
+
+/// The mic endpoint this run records from: the pinned one, or the default.
+///
+/// A pin is resolved through the shared rule (`device.rs`) with its grace
+/// period, and a pin that names nothing present is an error — never the
+/// default, which would silently record the wrong microphone.
+fn capture_endpoint(pin: Option<&str>) -> Result<IMMDevice, String> {
+    let Some(pin) = pin else {
+        return default_endpoint(Tap::Mic).map_err(|e| {
+            format!("no default mic device ({e}) — check Windows sound settings")
+        });
+    };
+    let chosen = resolve_with_grace(pin, inputs)?;
+    let enumerator =
+        enumerator().map_err(|e| format!("could not open the audio device list ({e})"))?;
+    let wide: Vec<u16> = chosen.id.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe { enumerator.GetDevice(PCWSTR(wide.as_ptr())) }.map_err(|e| {
+        format!("the selected microphone \"{}\" could not be opened ({e})", chosen.name)
+    })
+}
+
 /// What each channel would record from right now, for the CLI's preflight.
-pub fn device_names(taps: &[Tap]) -> Result<Vec<(Tap, String)>, String> {
+pub fn device_names(taps: &[Tap], mic_device: Option<&str>) -> Result<Vec<(Tap, String)>, String> {
     let _com = Com::enter();
     let mut names = Vec::new();
     for &tap in taps {
-        let device = default_endpoint(tap)
-            .map_err(|e| format!("no default {} device ({e}) — check Windows sound settings", tap.label()))?;
+        let device = match tap {
+            Tap::Mic => capture_endpoint(mic_device)?,
+            Tap::System => default_endpoint(tap).map_err(|e| {
+                format!("no default {} device ({e}) — check Windows sound settings", tap.label())
+            })?,
+        };
         let name = friendly_name(&device)
             .map_err(|e| format!("could not read the {} device's name ({e})", tap.label()))?;
         names.push((tap, name));
@@ -193,9 +272,13 @@ struct Stream {
 /// crate: Windows converts rate and channel count server-side, the way parec
 /// does on Linux. A client whose `Initialize` was rejected cannot be reused, so
 /// the int16 attempt and the float32 fallback each get a fresh one.
-fn open(tap: Tap) -> Result<Stream, String> {
-    let device = default_endpoint(tap)
-        .map_err(|e| format!("no default {} device ({e}) — check Windows sound settings", tap.label()))?;
+fn open(tap: Tap, mic_device: Option<&str>) -> Result<Stream, String> {
+    let device = match tap {
+        Tap::Mic => capture_endpoint(mic_device)?,
+        Tap::System => default_endpoint(tap).map_err(|e| {
+            format!("no default {} device ({e}) — check Windows sound settings", tap.label())
+        })?,
+    };
     let mut flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
     if tap == Tap::System {
         flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
@@ -236,6 +319,7 @@ fn open(tap: Tap) -> Result<Stream, String> {
 /// Returns the reason it ended abnormally, or `None` for a requested stop.
 pub fn pump(
     tap: Tap,
+    mic_device: Option<&str>,
     framer: Arc<Mutex<Framer>>,
     sink: Arc<FrameSink>,
     stop: Arc<AtomicBool>,
@@ -243,7 +327,7 @@ pub fn pump(
     log: impl Fn(&str),
 ) -> Option<String> {
     let _com = Com::enter();
-    let stream = match open(tap) {
+    let stream = match open(tap, mic_device) {
         Ok(stream) => stream,
         Err(why) => return Some(why),
     };
