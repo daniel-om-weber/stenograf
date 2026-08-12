@@ -60,6 +60,41 @@ Panel {
         hint: "People in the room."
     }
 
+    // Which microphone, under the switch that turns it on. The combo appears
+    // only once Python has listed the devices (the model arrives from a helper
+    // subprocess, and a model swap resets the selection) and only when there is
+    // something to choose between; the hint below it is separate, because a
+    // listing that failed must say so rather than show nothing at all.
+    ColumnLayout {
+        spacing: 6
+        visible: mic.checked
+        Layout.fillWidth: true
+
+        Text {
+            text: "Record from"
+            visible: micDevice.visible
+            color: Theme.text
+            font.pixelSize: 13
+        }
+
+        Combo {
+            id: micDevice
+
+            model: page.screen.state.micDevices
+            visible: page.screen.state.micDevicesReady && page.screen.state.micDevices.length > 1
+            Layout.fillWidth: true
+        }
+
+        Text {
+            text: page.screen.state.micError
+            visible: text.length > 0
+            color: Theme.muted
+            font.pixelSize: 12
+            wrapMode: Text.WordWrap
+            Layout.fillWidth: true
+        }
+    }
+
     Toggle {
         id: system
 
@@ -179,6 +214,9 @@ Panel {
             Layout.fillWidth: true
             onClicked: page.screen.start({
                 "preset": preset.value || "",
+                // || "": an empty model yields undefined, which crosses to
+                // Python as a missing key rather than "no device chosen".
+                "micDevice": micDevice.value || "",
                 "mic": mic.checked,
                 "system": system.checked,
                 "diarize": diarize.checked,

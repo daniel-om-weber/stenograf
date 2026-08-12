@@ -37,9 +37,16 @@ from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlComponent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from stenograf.capture.helper import InputDevice  # noqa: E402
 from stenograf.gui.app import MENU, QML_DIR, build  # noqa: E402
 
 PAGES = ("Home", "Setup", "Meeting", "Transcribe", "Notes", "Settings", "Doctor")
+
+FAKE_INPUTS = [
+    InputDevice(id="builtin", name="Built-in Microphone", is_default=True),
+    InputDevice(id="usb-1", name="Desk Microphone", is_default=False),
+]
+"""What the stubbed helper reports to the setup form's picker."""
 
 
 @pytest.fixture(scope="session")
@@ -63,11 +70,17 @@ def gui(qt_app, monkeypatch):
     navigates to the meeting page starts a meeting — so capture is stubbed out
     by default and each test that wants a real run patches it back."""
     from stenograf import loaders
+    from stenograf.capture import helper as capture_helper
 
     def no_capture(*args, **kwargs):
         raise RuntimeError("capture is not available in tests")
 
     monkeypatch.setattr(loaders, "make_provider", no_capture)
+    # The setup form lists microphones on every visit, and nearly every test
+    # here builds the shell — without this each of them would spawn the real
+    # capture helper two or three times on a daemon thread. The screen imports
+    # the function per call, so the seam is the helper module's attribute.
+    monkeypatch.setattr(capture_helper, "list_input_devices", lambda: list(FAKE_INPUTS))
     engine, shell = build(qt_app)
     yield shell, engine
     # Join any meeting the test left running *before* monkeypatch unwinds. The
@@ -249,6 +262,178 @@ class TestSetupScreen:
         assert meeting.state["profile"] == "local 2"
         assert meeting.state["language"] == "de"
 
+    def test_the_microphone_picker_lists_devices_with_the_default_first(self, gui):
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        pump(lambda: setup.state["micDevicesReady"])
+
+        assert setup.state["micError"] == ""
+        assert setup.state["micDevices"] == [
+            {"label": "System default (Built-in Microphone)", "value": "default"},
+            {"label": "Built-in Microphone (default)", "value": "builtin"},
+            {"label": "Desk Microphone", "value": "usb-1"},
+        ]
+
+    def test_a_configured_microphone_is_the_first_entry(self, gui, tmp_path, monkeypatch):
+        # Index 0 is what a combo starts on, so the standing choice must lead
+        # the list — nothing writes currentIndex.
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text('[capture]\nmic_device = "usb-1"\n', encoding="utf-8")
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        setup.opened()
+        pump(lambda: setup.state["micDevicesReady"])
+
+        assert setup.state["micDevices"][0] == {"label": "Desk Microphone", "value": "usb-1"}
+
+    def test_a_configured_microphone_that_is_gone_says_so_first(self, gui, tmp_path, monkeypatch):
+        # The form must never quietly show "System default" for a run that
+        # would refuse to start.
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text(
+            '[capture]\nmic_device = "studio-mic"\n', encoding="utf-8"
+        )
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        setup.opened()
+        pump(lambda: setup.state["micDevicesReady"])
+
+        assert setup.state["micDevices"][0] == {
+            "label": "studio-mic — not connected",
+            "value": "studio-mic",
+        }
+
+    def test_a_failed_listing_shows_a_hint_and_leaves_start_working(
+        self, gui, tmp_path, monkeypatch
+    ):
+        from stenograf import output
+        from stenograf.capture import helper as capture_helper
+        from stenograf.capture.base import CaptureUnavailableError
+
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+
+        def boom():
+            raise CaptureUnavailableError("the capture helper could not be run")
+
+        monkeypatch.setattr(capture_helper, "list_input_devices", boom)
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        setup.opened()
+        pump(lambda: setup.state["micError"] != "")
+
+        assert not setup.state["micDevicesReady"]  # the picker stays hidden
+        assert "could not be run" in setup.state["micError"]
+
+        setup.start(
+            {
+                "mic": True,
+                "system": False,
+                "diarize": False,
+                "local": -1,
+                "remote": -1,
+                "language": "auto",
+                "title": "",
+                "recordAudio": False,
+                "notes": False,
+            }
+        )
+        assert setup.state["error"] == ""  # a listing failure never blocks Start
+
+    def test_picking_the_system_default_overrides_a_standing_choice(
+        self, gui, tmp_path, monkeypatch
+    ):
+        # The form's own "System default" row must MEAN it. Sending the empty
+        # string would fall through to [capture] mic_device and record the desk
+        # microphone the user just chose against — silently.
+        from stenograf import output
+
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text('[capture]\nmic_device = "usb-1"\n', encoding="utf-8")
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        setup.opened()
+        pump(lambda: setup.state["micDevicesReady"])
+        chosen = next(row for row in setup.state["micDevices"] if "System default" in row["label"])
+
+        seen = {}
+        monkeypatch.setattr(
+            shell.screen("Meeting"), "begin", lambda request: seen.update(request=request)
+        )
+        setup.start({**self._form(), "micDevice": chosen["value"]})
+        assert seen["request"].mic_device is None
+
+    def test_a_form_with_no_picker_keeps_the_standing_choice(self, gui, tmp_path, monkeypatch):
+        # The other half of the same rule: "" is what a form sends when the
+        # listing failed and no picker was shown, and that must not silently
+        # switch the meeting to the system default.
+        from stenograf import output
+
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "settings.toml").write_text('[capture]\nmic_device = "usb-1"\n', encoding="utf-8")
+        monkeypatch.setenv("STENOGRAF_DATA", str(data))
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+
+        shell, _engine = gui
+        seen = {}
+        monkeypatch.setattr(
+            shell.screen("Meeting"), "begin", lambda request: seen.update(request=request)
+        )
+        shell.screen("Setup").start({**self._form(), "micDevice": ""})
+        assert seen["request"].mic_device == "usb-1"
+
+    @staticmethod
+    def _form() -> dict:
+        return {
+            "mic": True,
+            "system": False,
+            "diarize": False,
+            "local": -1,
+            "remote": -1,
+            "language": "auto",
+            "title": "",
+            "recordAudio": False,
+            "notes": False,
+        }
+
+    def test_the_chosen_microphone_reaches_the_request(self, gui, tmp_path, monkeypatch):
+        from stenograf import output
+
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        seen = {}
+        monkeypatch.setattr(
+            shell.screen("Meeting"), "begin", lambda request: seen.update(request=request)
+        )
+
+        setup.start(
+            {
+                "micDevice": "usb-1",
+                "mic": True,
+                "system": False,
+                "diarize": False,
+                "local": -1,
+                "remote": -1,
+                "language": "auto",
+                "title": "",
+                "recordAudio": False,
+                "notes": False,
+            }
+        )
+
+        assert seen["request"].mic_device == "usb-1"
+
     def test_the_meeting_type_picker_offers_the_presets_and_applies_one(
         self, gui, tmp_path, monkeypatch
     ):
@@ -389,9 +574,7 @@ class TestMeetingScreen:
             announced["load_backends"] = announce
             return conftest.FakeASR(), conftest.WholeBufferVAD(), None
 
-        def fake_make_provider(
-            replay, plans, *, paced=False, aec=True, aec_dump=None, announce=None, on_log=None
-        ):
+        def fake_make_provider(replay, plans, *, announce=None, on_log=None, **kwargs):
             announced["make_provider"] = announce
             announced["on_log"] = on_log
             return FileCaptureProvider({Channel.MIC: mic})

@@ -26,9 +26,13 @@ nothing. Extend that harness, not a mock layer.
 Patch `stenograf.output.default_output_home` to a scratch dir first. On a
 machine with audio devices the harness can run the REAL provider + models end
 to end. When a test must fake (CI has no audio), fake at the hardware
-boundary (`capture.windows.default_devices`, the provider class), never at
-`loaders.make_provider`/`load_backends` — faking the orchestration seam is
-exactly what hid the EBADF crash from the UI suite.
+boundary (`capture.windows.default_devices`, `capture.helper.list_input_devices`,
+the provider class), never at `loaders.make_provider`/`load_backends` — faking
+the orchestration seam is exactly what hid the EBADF crash from the UI suite.
+Both device seams take a `mic_device` keyword; a stub that forgets it fails the
+run with a TypeError from a worker thread, which reads as a hang. The setup
+form lists microphones on every visit, so the `gui` fixture must stub
+`list_input_devices` or every GUI test spawns the real helper.
 
 Rendering itself still needs eyes — nothing headless can tell whether the
 live caption screen reads well over half an hour. `QQuickWindow.grabWindow()`

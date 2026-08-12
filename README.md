@@ -188,7 +188,27 @@ steno start --diarization           # separate speakers within each channel (off
 steno start --record-audio          # opt in to keeping the audio (off by default)
 steno start --max-seconds 3600      # stop capture automatically after an hour
 steno start --replay mic.wav        # dev: drive the live pass from a file
+steno start --mic-device "Yeti Stereo Microphone"   # record this microphone
 ```
+
+### Choosing the microphone
+
+By default the microphone channel follows whatever the system calls its default
+input, and it moves with it. To record one specific device instead:
+
+```sh
+steno devices                       # the microphones here, with their ids
+steno start --mic-device usb-0x0d8c # for this meeting (an id or the exact name)
+steno start --mic-device default    # the system default, ignoring the setting
+```
+
+The desktop app's setup form has the same picker, under the Microphone switch.
+To make a choice standing, put it in `settings.toml` (`[capture] mic_device`).
+A chosen device that is **not** connected stops the run with a message naming
+it — the tool never quietly records a different microphone, because that is
+only discovered when the transcript is read. The system-audio channel is not
+selectable: it follows the default output, which is what keeps it with the
+meeting when you plug in a headset.
 
 Both `start` and `transcribe` accept `--format md,json,txt,srt,vtt` (default
 `md,json,txt` — `txt` is the plain prose without speaker labels or timestamps),
@@ -405,6 +425,12 @@ formats = ["md", "json", "txt"]   # default --format list (srt/vtt for subtitles
 glossary_file = "~/steno/glossary.txt"     # --glossary/--attendee flags
 attendees = ["Anja Müller"]
 glossary_threshold = 0.95
+
+[capture]
+mic_device = "Yeti Stereo Microphone"   # record this microphone instead of the
+                                  # system default (`steno devices` prints the
+                                  # ids). Machine-specific: do not copy this key
+                                  # to a machine without that device
 
 [output]
 dir = "~/Documents/Meetings"      # where meeting folders are created (default:

@@ -50,6 +50,50 @@ def _local(url: str) -> Path:
     return Path(QUrl(url).toLocalFile())
 
 
+def _device_entries(devices: list, pinned: str | None) -> list[dict[str, str]]:
+    """The microphone picker's model, **with the entry to select first**.
+
+    Nothing in the app writes a combo's ``currentIndex``: every picker relies on
+    index 0 being the right starting point, and a model that arrives after the
+    first paint resets the index to 0 anyway. Ordering the list here is
+    therefore the whole selection mechanism — and it keeps the choice in one
+    place instead of splitting it between Python and a QML binding.
+
+    A configured device the run could not use still comes first, spelled out as
+    such: the form must never quietly show "System default" for a run that would
+    refuse to start.
+
+    The default row's value is the literal that *clears* a standing selection
+    (:data:`stenograf.flow.DEFAULT_MIC_DEVICE`), not the empty string — empty
+    means "this form chose nothing", which is what a machine with no picker
+    sends, and that must keep the standing selection rather than override it.
+    """
+    from stenograf.capture.helper import match_input_device
+    from stenograf.flow import DEFAULT_MIC_DEVICE
+
+    default = next((device.name for device in devices if device.is_default), "")
+    rows = [
+        {
+            "label": f"System default ({default or 'none configured'})",
+            "value": DEFAULT_MIC_DEVICE,
+        }
+    ]
+    rows += [
+        {
+            "label": f"{device.name} (default)" if device.is_default else device.name,
+            "value": device.id,
+        }
+        for device in devices
+    ]
+    if not pinned:
+        return rows
+    chosen, problem = match_input_device(devices, pinned)
+    if chosen is None:
+        return [{"label": f"{pinned} — {problem}", "value": pinned}, *rows]
+    rows.sort(key=lambda row: row["value"] != chosen.id)  # stable: the pin moves to the front
+    return rows
+
+
 class SetupScreen(Screen):
     """The few choices that matter before capture starts.
 
@@ -64,19 +108,77 @@ class SetupScreen(Screen):
 
     def __init__(self, app: StenografGui) -> None:
         super().__init__(app)
+        self._generation = 0
+        self.set(micDevices=[], micDevicesReady=False, micError="")
         self.opened()
 
     @Slot()
     def opened(self) -> None:
-        from stenograf.flow import standing_settings
+        from stenograf.flow import resolve_mic_device, standing_settings
 
         standing = standing_settings()
+        # Through the same resolution the run uses, so the picker cannot
+        # describe a selection differently from the meeting it starts.
+        pinned = resolve_mic_device(None, standing)
         self.set(
             diarize=standing.speakers.diarization is True,
             recordAudio=standing.output.record_audio is True,
             notes=standing.notes.auto is True,
             presets=self._presets(standing),
             error="",
+        )
+        self._list_microphones(pinned)
+
+    def _list_microphones(self, pinned: str | None) -> None:
+        """Fill the microphone picker, off the GUI thread.
+
+        Listing spawns the capture helper, and ``opened()`` runs on the event
+        loop — a subprocess there would freeze the window on any machine whose
+        sound server is slow to answer.
+
+        The screen outlives its page, and ``opened()`` fires twice on the first
+        visit (construction, then the page's own call) and again on every later
+        one — deliberately, since a device may have been plugged in since. Only
+        the newest answer is kept: an earlier listing that lands late (a slow
+        sound server, or settings edited between two visits) is dropped rather
+        than allowed to overwrite it."""
+        from stenograf.capture.helper import list_input_devices
+
+        self._generation += 1
+        token = self._generation
+        # Hidden until the new list lands: swapping a combo's model resets its
+        # selection, and doing that under a visible control could discard a
+        # choice the user had just made.
+        self.set(micDevicesReady=False)
+        self.work(
+            list_input_devices,
+            done=lambda devices: self._microphones(token, devices, pinned),
+            failed=lambda message: self._no_microphones(token, message),
+            name="gui-devices",
+        )
+
+    def _microphones(self, token: int, devices: list, pinned: str | None) -> None:
+        if token != self._generation:
+            return
+        self.set(
+            micDevices=_device_entries(devices, pinned),
+            micDevicesReady=True,
+            # A machine with nothing to record from says so: the picker has
+            # nothing to show, and the failure would otherwise arrive as a
+            # capture error seconds after Start.
+            micError="" if devices else "No microphone is connected.",
+        )
+
+    def _no_microphones(self, token: int, message: str) -> None:
+        """A listing that failed leaves the picker hidden and says why.
+
+        Start still works: with no entry chosen the run follows the same device
+        it would have without this control, and whatever is wrong with the
+        capture stack will fail the meeting loudly a moment later."""
+        if token != self._generation:
+            return
+        self.set(
+            micDevices=[], micDevicesReady=False, micError=f"Microphones unavailable: {message}"
         )
 
     @staticmethod
@@ -139,6 +241,9 @@ class SetupScreen(Screen):
                 record_audio=bool(form.get("recordAudio")),
                 # "" is the picker's no-preset entry; the library takes None.
                 preset=str(form.get("preset", "")) or None,
+                # "" is the picker's "system default" entry, and also what a
+                # form sends when the listing failed and no picker was shown.
+                mic_device=str(form.get("micDevice", "")) or None,
             )
         except MeetingRequestError as exc:
             self.set(error=str(exc))
