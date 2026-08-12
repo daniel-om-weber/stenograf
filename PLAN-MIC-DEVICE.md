@@ -115,16 +115,24 @@ baseline; the same on the CachyOS notebook (pulse source names) and the Windows
 box (endpoint IDs). D2 stays ASSUMED for the UUID-shaped and pulse/WASAPI IDs
 until then — the two static-string macOS IDs above need no further proof.
 
-**Linux, 2026-08-12: the baseline is taken and the reboot diff is set up, not
-yet run.** `~/.local/share/steno-m2/` (outside the repo, and outside `/tmp`
-because the reboot destroys that) holds `snapshot.sh`, the pre-reboot
-`snap-boot0.txt` and the procedure. This machine's two ids are
-`rnnoise_source` (a filter-chain source, and the default) and
-`alsa_input.pci-0000_c4_00.6.analog-stereo` — both derived from a PCI address
-or a module name rather than from an enumeration order, so the reboot half is
-expected to be clean; the re-plug half is the one that can bite and **cannot be
-run here at all: this machine has no USB audio device**, so that half stays
-not-run rather than passed.
+**Linux, 2026-08-12: the reboot half is MEASURED and clean; the re-plug half is
+not-run.** Across a real reboot the inventory is byte-identical — the two ids,
+their descriptions, the default source and sink, the cards, all unchanged — and
+a pin written *before* the reboot still resolved after it (`steno doctor`
+naming the device), which is the claim in the form a user meets it rather than
+as string equality. That is one reboot on a machine whose ids come from a PCI
+address (`alsa_input.pci-0000_c4_00.6.analog-stereo`) and a module name
+(`rnnoise_source`, a filter-chain source, and the default here) rather than
+from an enumeration order, so it confirms the expected mechanism rather than
+surviving a hostile case.
+
+The re-plug half **cannot be run on this machine at all — it has no USB audio
+device** — and it is the half that can actually bite, since a hot-plugged
+device is where an enumeration index could enter an id. D2 therefore stays
+ASSUMED for hot-plugged pulse ids. The harness for finishing it is
+`~/.local/share/steno-m2/` (outside the repo, and outside `/tmp` because a
+reboot destroys that): `snapshot.sh LABEL` plus the two snapshots and the
+procedure, so the remaining measurement is two snapshots and a `diff`.
 
 The probe (source + binary + baseline) is in this session's scratchpad; it is
 deliberately *not* committed, because `steno devices` (§5.6) replaces it the
