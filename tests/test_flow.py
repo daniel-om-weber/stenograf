@@ -519,3 +519,37 @@ class TestAssignSpeaker:
         (mdir / MEETING_VOICEPRINTS_NAME).unlink()
         with pytest.raises(ValueError, match="profiles enroll"):
             flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=tmp_path / "p.json")
+
+
+class TestMicDeviceResolution:
+    """Which microphone a run records from: flag, then settings, then the OS."""
+
+    @staticmethod
+    def _settings(pinned: str | None):
+        from stenograf.settings import CaptureSettings, Settings
+
+        return Settings(capture=CaptureSettings(mic_device=pinned))
+
+    def test_the_standing_pin_applies_when_nothing_is_chosen(self):
+        from stenograf.flow import resolve_mic_device
+
+        assert resolve_mic_device(None, self._settings("usb-1")) == "usb-1"
+        assert resolve_mic_device("", self._settings("usb-1")) == "usb-1"
+
+    def test_an_explicit_choice_beats_the_standing_pin(self):
+        from stenograf.flow import resolve_mic_device
+
+        assert resolve_mic_device("usb-2", self._settings("usb-1")) == "usb-2"
+
+    def test_the_word_default_clears_a_pin_from_either_side(self):
+        # settings.toml gets copied between machines, so both the flag and the
+        # file must have a one-word way back to the system default.
+        from stenograf.flow import resolve_mic_device
+
+        assert resolve_mic_device("default", self._settings("usb-1")) is None
+        assert resolve_mic_device(None, self._settings("default")) is None
+
+    def test_nothing_configured_means_the_system_default(self):
+        from stenograf.flow import resolve_mic_device
+
+        assert resolve_mic_device(None, self._settings(None)) is None

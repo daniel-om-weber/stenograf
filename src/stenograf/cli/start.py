@@ -76,6 +76,16 @@ _RECORD_DEFAULT = "\0default"
     "count above 1 [default: [speakers] diarization in settings.toml, else off].",
 )
 @click.option(
+    "--mic-device",
+    "mic_device",
+    default=None,
+    metavar="ID|NAME",
+    help="Record the microphone from this device instead of the system default. "
+    "`steno devices` lists the ids and names; `default` uses the system default "
+    "for this run, even when [capture] mic_device names something else. A device "
+    "that is not connected stops the run rather than recording another one.",
+)
+@click.option(
     "--replay",
     "replay",
     default=None,
@@ -194,6 +204,7 @@ def start(
     local_speakers: int | None,
     remote_speakers: int | None,
     diarization_flag: bool | None,
+    mic_device: str | None,
     replay: str | None,
     out: Path | None,
     force: bool,
@@ -223,7 +234,7 @@ def start(
 ) -> None:
     """Start transcribing a meeting (capture → finalize on stop)."""
     from stenograf.capture.base import Channel
-    from stenograf.flow import MeetingRequest, MeetingRun, RunOptions
+    from stenograf.flow import MeetingRequest, MeetingRun, RunOptions, resolve_mic_device
     from stenograf.session import plan_channels
 
     if no_record_audio and record_audio is not None:  # before any model loads
@@ -286,6 +297,7 @@ def start(
         settings=cfg.settings,
         notes=_notes_enabled(notes_flag, cfg.settings),
         record_audio=record_audio is not None,
+        mic_device=resolve_mic_device(mic_device, cfg.settings),
     )
     options = RunOptions(
         replay=replay,

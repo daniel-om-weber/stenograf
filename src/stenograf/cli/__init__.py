@@ -21,6 +21,7 @@ from stenograf import __version__
 # format and run carry no commands but are bound here so every cli submodule
 # is reachable as an attribute of the package (tests patch through them).
 from stenograf.cli import (  # noqa: F401
+    devices,
     doctor,
     format,
     notes,
@@ -178,6 +179,7 @@ def _macos_aqua_session() -> bool | None:
 
 main.add_command(start.start)
 main.add_command(transcribe.transcribe)
+main.add_command(devices.devices)
 main.add_command(doctor.doctor)
 main.add_command(doctor.setup)
 main.add_command(profiles.profiles)

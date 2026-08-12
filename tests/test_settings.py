@@ -356,3 +356,22 @@ def test_empty_string_path_outside_a_preset_is_rejected(tmp_path):
     path.write_text('[notes]\ninstructions = ""\n', encoding="utf-8")
     with pytest.raises(SettingsError, match='must not be ""'):
         load_settings(path)
+
+
+def test_capture_mic_device_parses_and_rejects_a_typo(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text('[capture]\nmic_device = "Yeti Stereo Microphone"\n')
+    assert load_settings(path).capture.mic_device == "Yeti Stereo Microphone"
+
+    path.write_text('[capture]\nmic_devise = "Yeti"\n')
+    with pytest.raises(SettingsError, match="mic_devise"):
+        load_settings(path)
+
+
+def test_a_preset_cannot_pin_a_microphone(tmp_path):
+    # Meeting *types* are portable between machines; a device id is not, so the
+    # key belongs to [capture] alone and a preset naming it must say so.
+    path = tmp_path / "settings.toml"
+    path.write_text('[meetings.jour]\nmic_device = "Yeti"\n')
+    with pytest.raises(SettingsError, match="mic_device"):
+        load_settings(path)

@@ -31,6 +31,7 @@ from stenograf.asr.base import BackendUnavailableError
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
+    from typing import Protocol
 
     from stenograf.asr.base import ASRBackend
     from stenograf.assets import ProgressHook
@@ -42,6 +43,19 @@ if TYPE_CHECKING:
     from stenograf.voiceprints import SpeakerReID
 
     Announce = Callable[[str], None]
+
+    class DeviceQuery(Protocol):
+        """A platform's "what would this record from" preflight.
+
+        Spelled out rather than left as a bare ``Callable`` so the two
+        implementations stay checked against the seam: this signature has
+        already drifted once per platform, and an unchecked callable turns
+        that into a runtime TypeError on a worker thread — which reads as a
+        hang, not an error."""
+
+        def __call__(
+            self, channels: set[Channel], *, mic_device: str | None = None
+        ) -> dict[Channel, str]: ...
 
 
 def _say(announce: Announce | None, message: str) -> None:
@@ -219,6 +233,7 @@ def make_provider(
     aec_dump: Path | None = None,
     announce: Announce | None = None,
     on_log: Announce | None = None,
+    mic_device: str | None = None,
 ) -> CaptureProvider:
     """Build the capture provider: file replay if given, else the native helper.
 
@@ -230,10 +245,17 @@ def make_provider(
     ``on_log`` is the capture transports' diagnostic sink (a :class:`CaptureLog`
     for the Qt meeting screen). ``None`` keeps the transports' stderr on the
     terminal — right for the CLI, invisible in a GUI process.
+
+    ``mic_device`` records the mic channel from one named device instead of the
+    OS default (``[capture] mic_device`` / ``--mic-device``); ``None`` follows
+    the default. A device that is not connected fails the run here rather than
+    recording the wrong microphone.
     """
     from stenograf.capture.base import Channel
 
-    provider = _base_provider(replay, plans, paced=paced, announce=announce, on_log=on_log)
+    provider = _base_provider(
+        replay, plans, paced=paced, announce=announce, on_log=on_log, mic_device=mic_device
+    )
     channels = {plan.channel for plan in plans}
     if (aec or aec_dump is not None) and {Channel.MIC, Channel.SYSTEM} <= channels:
         from stenograf.aec import EchoCancellingProvider
@@ -249,8 +271,15 @@ def _base_provider(
     paced: bool = False,
     announce: Announce | None = None,
     on_log: Announce | None = None,
+    mic_device: str | None = None,
 ) -> CaptureProvider:
     from stenograf.capture.base import Channel
+
+    # A pin is about the microphone, so a run that records no microphone
+    # carries none: it would otherwise cost macOS a preflight subprocess for a
+    # channel that will not exist.
+    if mic_device is not None and Channel.MIC not in {plan.channel for plan in plans}:
+        mic_device = None
 
     if replay is not None:
         from stenograf.capture.file import FileCaptureProvider
@@ -259,6 +288,8 @@ def _base_provider(
         channel_order = [Channel.MIC, Channel.SYSTEM]
         sources = dict(zip(channel_order, paths, strict=False))
         planned = {p.channel for p in plans}
+        if mic_device is not None:
+            _say(announce, "note: --mic-device is ignored while replaying from a file")
         ignored = [ch.value for ch in sources if ch not in planned]
         if ignored:
             _say(
@@ -272,11 +303,19 @@ def _base_provider(
     from stenograf.capture.base import CaptureUnavailableError
 
     if sys.platform == "darwin":
-        from stenograf.capture.helper import HelperCaptureProvider
+        from stenograf.capture.helper import HelperCaptureProvider, query_devices
 
         # A missing helper raises HelperNotFoundError, a CaptureUnavailableError.
-        # No device preflight: the macOS helper owns device selection.
-        return HelperCaptureProvider(on_log=on_log)
+        # The default path runs no preflight — the macOS helper owns device
+        # selection, and a subprocess per meeting start would buy nothing. A
+        # *pinned* run does: it is the one case where the answer can be "that
+        # microphone is not here", and the user must learn that before the
+        # models load rather than from a silent transcript.
+        if mic_device is None:
+            return HelperCaptureProvider(on_log=on_log)
+        return _native_provider(
+            HelperCaptureProvider, query_devices, plans, announce, on_log, mic_device
+        )
 
     if sys.platform.startswith("linux"):
         from stenograf.capture.helper import HelperCaptureProvider, query_devices
@@ -284,12 +323,16 @@ def _base_provider(
         # The undecorated preflight: a monitor's name already says what it is
         # (``….monitor``), so nothing is appended the way Windows adds
         # "(loopback)".
-        return _native_provider(HelperCaptureProvider, query_devices, plans, announce, on_log)
+        return _native_provider(
+            HelperCaptureProvider, query_devices, plans, announce, on_log, mic_device
+        )
 
     if sys.platform == "win32":
         from stenograf.capture.windows import WindowsCaptureProvider, default_devices
 
-        return _native_provider(WindowsCaptureProvider, default_devices, plans, announce, on_log)
+        return _native_provider(
+            WindowsCaptureProvider, default_devices, plans, announce, on_log, mic_device
+        )
 
     raise CaptureUnavailableError(
         "live capture is supported on macOS, Linux, and Windows; here, transcribe "
@@ -299,23 +342,24 @@ def _base_provider(
 
 def _native_provider(
     provider_cls: Callable[..., CaptureProvider],
-    default_devices: Callable[[set[Channel]], dict[Channel, str]],
+    default_devices: DeviceQuery,
     plans: Sequence[ChannelPlan],
     announce: Announce | None = None,
     on_log: Announce | None = None,
+    mic_device: str | None = None,
 ) -> CaptureProvider:
-    """Construct a provider for a platform that offers a device *choice*.
+    """Construct a provider that resolves its devices before capture starts.
 
-    Resolves the default devices up front so a broken audio stack fails before
-    capture (and models) start, and says what will be recorded — the
-    monitor-of-default-sink (Linux) / loopback-of-default-output (Windows)
-    choice is invisible otherwise. macOS has no equivalent: its helper owns
-    device selection.
+    Resolves them up front so a broken audio stack — or a pinned microphone
+    that is not connected — fails before capture (and models) start, and says
+    what will be recorded: the monitor-of-default-sink (Linux) /
+    loopback-of-default-output (Windows) choice is invisible otherwise, and a
+    pinned mic must be named so the user can see the right one was taken.
 
     A broken audio stack raises CaptureUnavailableError from either call.
     """
-    provider = provider_cls(on_log=on_log)
-    devices = default_devices({p.channel for p in plans})
+    provider = provider_cls(on_log=on_log, mic_device=mic_device)
+    devices = default_devices({p.channel for p in plans}, mic_device=mic_device)
     for channel, device in devices.items():
         _say(announce, f"capture: {channel.value} ← {device}")
     return provider

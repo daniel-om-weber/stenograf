@@ -104,6 +104,39 @@ def installed(module: str) -> bool:
         return False
 
 
+def _configured_mic_device() -> str | None:
+    """``[capture] mic_device``, or ``None`` when the file is unusable.
+
+    A broken settings file is the settings check's finding, not the capture
+    check's — it reports the default behaviour rather than a second copy of the
+    same error."""
+    from stenograf.flow import resolve_mic_device
+    from stenograf.settings import SettingsError, load_settings
+
+    try:
+        return resolve_mic_device(None, load_settings())
+    except SettingsError:
+        return None
+
+
+def _pinned_mic_detail(pin: str) -> tuple[bool, str]:
+    """Whether the pinned microphone is connected, and how to say so."""
+    from stenograf.capture.base import CaptureUnavailableError
+    from stenograf.capture.helper import list_input_devices, match_input_device
+
+    try:
+        listed = list_input_devices()
+    except CaptureUnavailableError as exc:
+        return False, f"microphone {pin!r} could not be checked ({exc})"
+    found, problem = match_input_device(listed, pin)
+    if found is None:
+        return False, (
+            f"the configured microphone {pin!r} {problem} — meetings will stop instead of "
+            "recording another one; run `steno devices`, or remove [capture] mic_device"
+        )
+    return True, f"microphone: {found.name}"
+
+
 def _capture_helper_check() -> Check:
     from stenograf.capture.helper import HelperNotFoundError, find_helper
 
@@ -125,27 +158,33 @@ def _capture_helper_check() -> Check:
             detail=f"{path} has no valid code signature ({why}) — macOS refuses audio "
             "permissions to unsigned binaries; rebuild with native/stenocap-macos/build.sh",
         )
-    return Check(
-        name="Capture helper",
-        ok=True,
-        detail=f"{path} — signed; grant the mic + system-audio permission once with `steno setup`",
-    )
+    detail = f"{path} — signed; grant the mic + system-audio permission once with `steno setup`"
+    # Only a configured pin costs a subprocess here: listing devices is not
+    # permission-gated (measured 2026-08-12), but a query nobody asked for on
+    # every doctor run is still a query nobody asked for.
+    pin = _configured_mic_device()
+    if pin:
+        ok, pinned = _pinned_mic_detail(pin)
+        return Check(name="Capture helper", ok=ok, detail=f"{detail}; {pinned}")
+    return Check(name="Capture helper", ok=True, detail=detail)
 
 
 def _linux_capture_check() -> Check:
     """Whether `steno start` can capture here: helper present, server up, defaults set.
 
     Uses the same resolution the provider uses at meeting start — the helper's
-    own ``--devices`` — so an OK here means a meeting would actually record, and
-    names the devices it would record from (the monitor-of-default-sink choice
-    is invisible otherwise).
+    own ``--devices``, with ``[capture] mic_device`` applied — so an OK here
+    means a meeting would actually record, and names the devices it would
+    record from (the monitor-of-default-sink choice is invisible otherwise, and
+    a configured microphone that is not connected fails here rather than at the
+    start of a meeting).
     """
     from stenograf.capture.base import CaptureUnavailableError, Channel
     from stenograf.capture.helper import HelperCaptureProvider, query_devices
 
     try:
         HelperCaptureProvider()  # fails fast when the helper binary is missing
-        devices = query_devices({Channel.MIC, Channel.SYSTEM})
+        devices = query_devices({Channel.MIC, Channel.SYSTEM}, mic_device=_configured_mic_device())
     except CaptureUnavailableError as exc:
         return Check(name="Capture", ok=False, detail=str(exc))
     listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))
@@ -158,9 +197,11 @@ def _windows_capture_check() -> Check:
     """Whether `steno start` can capture here: helper present, defaults set.
 
     Uses the same resolution the provider uses at meeting start — the helper's
-    own ``--devices`` — so an OK here means a meeting would actually record, and
-    names the devices it would record from (the loopback-of-default-output
-    choice is invisible otherwise).
+    own ``--devices``, with ``[capture] mic_device`` applied — so an OK here
+    means a meeting would actually record, and names the devices it would
+    record from (the loopback-of-default-output choice is invisible otherwise,
+    and a configured microphone that is not connected fails here rather than at
+    the start of a meeting).
     """
     from stenograf.capture.base import Channel
     from stenograf.capture.windows import (
@@ -171,7 +212,9 @@ def _windows_capture_check() -> Check:
 
     try:
         WindowsCaptureProvider()  # fails fast when the helper binary is missing
-        devices = default_devices({Channel.MIC, Channel.SYSTEM})
+        devices = default_devices(
+            {Channel.MIC, Channel.SYSTEM}, mic_device=_configured_mic_device()
+        )
     except CaptureUnavailableError as exc:
         return Check(name="Capture", ok=False, detail=str(exc))
     listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))

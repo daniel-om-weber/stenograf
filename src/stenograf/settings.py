@@ -91,6 +91,17 @@ SETTINGS_TEMPLATE = """\
 # glues a term to its neighbour ("Prometheusalord"), only the compound spelling
 # reaches it: list "Prometheus-Alert", not "Alert" on its own.
 
+[capture]
+# mic_device = "Yeti Stereo Microphone"    # record the microphone from THIS device
+#                                          # instead of whatever the system calls
+#                                          # its default input. `steno devices`
+#                                          # lists the ids and names that work
+#                                          # here. Machine-specific: a device that
+#                                          # this machine does not have stops the
+#                                          # meeting rather than recording the
+#                                          # wrong microphone, so do not copy this
+#                                          # key between machines.
+
 [output]
 # dir = "~/Documents/Meetings"             # where meeting folders are created;
 #                                          # the default is Meetings/ in your
@@ -167,6 +178,17 @@ class VocabSettings:
     glossary_file: Path | None = None
     attendees: tuple[str, ...] = ()
     glossary_threshold: float | None = None
+
+
+@dataclass(frozen=True)
+class CaptureSettings:
+    mic_device: str | None = None
+    """Which device the mic channel records from; ``None`` = the OS default.
+
+    A platform-stable id or a device's exact name, resolved by the capture
+    helper (:func:`stenograf.capture.helper.match_input_device` mirrors the
+    rule). The literal ``"default"`` reads as unset, which is how a file copied
+    to a machine without that device is repaired without deleting the key."""
 
 
 @dataclass(frozen=True)
@@ -290,6 +312,7 @@ class MeetingPreset:
 class Settings:
     transcript: TranscriptSettings = field(default_factory=TranscriptSettings)
     vocab: VocabSettings = field(default_factory=VocabSettings)
+    capture: CaptureSettings = field(default_factory=CaptureSettings)
     output: OutputSettings = field(default_factory=OutputSettings)
     speakers: SpeakerSettings = field(default_factory=SpeakerSettings)
     asr: AsrSettings = field(default_factory=AsrSettings)
@@ -328,6 +351,7 @@ def load_settings(path: Path | None = None) -> Settings:
         settings = Settings(
             transcript=_transcript_from_table(top.table("transcript")),
             vocab=_vocab_from_table(top.table("vocab")),
+            capture=_capture_from_table(top.table("capture")),
             output=_output_from_table(top.table("output")),
             speakers=_speakers_from_table(top.table("speakers")),
             asr=_asr_from_table(top.table("asr")),
@@ -452,6 +476,13 @@ def _vocab_from_table(data: dict, label: str = "vocab") -> VocabSettings:
         attendees=t.str_list("attendees"),
         glossary_threshold=t.number("glossary_threshold", 0, 1),
     )
+    t.reject_unknown()
+    return settings
+
+
+def _capture_from_table(data: dict) -> CaptureSettings:
+    t = _Table("capture", data)
+    settings = CaptureSettings(mic_device=t.str_("mic_device"))
     t.reject_unknown()
     return settings
 
@@ -689,6 +720,7 @@ def settings_rows(
             GLOSSARY_THRESHOLD,
             None,
         ),
+        ("capture", "mic_device", settings.capture.mic_device, "(the system default)", None),
         ("output", "dir", settings.output.dir, default_output_home(), None),
         ("output", "record_audio", settings.output.record_audio, False, None),
         ("speakers", "diarization", settings.speakers.diarization, False, None),

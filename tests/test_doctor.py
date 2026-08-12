@@ -215,7 +215,7 @@ def test_linux_capture_check_names_the_devices(monkeypatch):
     monkeypatch.setattr(
         capture_helper,
         "query_devices",
-        lambda channels: {Channel.MIC: "mymic", Channel.SYSTEM: "mysink.monitor"},
+        lambda channels, mic_device=None: {Channel.MIC: "mymic", Channel.SYSTEM: "mysink.monitor"},
     )
     monkeypatch.setattr(doctor.sys, "platform", "linux")
     check = next(c for c in doctor.run_checks() if c.name == "Capture")
@@ -250,7 +250,10 @@ def test_windows_capture_check_names_the_devices(monkeypatch):
     monkeypatch.setattr(
         windows,
         "default_devices",
-        lambda channels: {Channel.MIC: "Headset Mic", Channel.SYSTEM: "Speakers (loopback)"},
+        lambda channels, mic_device=None: {
+            Channel.MIC: "Headset Mic",
+            Channel.SYSTEM: "Speakers (loopback)",
+        },
     )
     monkeypatch.setattr(doctor.sys, "platform", "win32")
     check = next(c for c in doctor.run_checks() if c.name == "Capture")
@@ -425,3 +428,54 @@ def test_doctor_command_runs_and_prints_checks():
     assert result.exit_code in (0, 1)
     assert "Python" in result.output
     assert "ASR backend" in result.output
+
+
+def test_the_capture_check_threads_the_configured_microphone(monkeypatch, tmp_path):
+    """The pin must reach the preflight, or the check blesses a run that fails."""
+    from stenograf.capture import helper as capture_helper
+    from stenograf.capture.base import Channel
+
+    (tmp_path / "settings.toml").write_text('[capture]\nmic_device = "usb-1"\n', encoding="utf-8")
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+    monkeypatch.setattr(capture_helper, "find_helper", lambda: Path("stenocap"))
+    asked = {}
+
+    def query(channels, mic_device=None):
+        asked["mic_device"] = mic_device
+        return {Channel.MIC: "Desk Mic", Channel.SYSTEM: "sink.monitor"}
+
+    monkeypatch.setattr(capture_helper, "query_devices", query)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+
+    check = doctor._linux_capture_check()
+    assert check.ok
+    assert asked["mic_device"] == "usb-1"
+
+
+def test_a_configured_microphone_that_is_absent_fails_the_doctor(monkeypatch, tmp_path):
+    from stenograf.capture.helper import InputDevice
+
+    (tmp_path / "settings.toml").write_text(
+        '[capture]\nmic_device = "studio-mic"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+    from stenograf.capture import helper as capture_helper
+
+    monkeypatch.setattr(
+        capture_helper,
+        "list_input_devices",
+        lambda: [InputDevice(id="builtin", name="Built-in", is_default=True)],
+    )
+
+    ok, detail = doctor._pinned_mic_detail("studio-mic")
+    assert not ok
+    assert "not connected" in detail and "steno devices" in detail
+
+
+def test_the_word_default_is_not_treated_as_a_device(monkeypatch, tmp_path):
+    # `mic_device = "default"` means "follow the system default"; the doctor
+    # must not hunt for a device by that name and then declare it missing.
+    (tmp_path / "settings.toml").write_text('[capture]\nmic_device = "default"\n', encoding="utf-8")
+    monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path))
+
+    assert doctor._configured_mic_device() is None

@@ -237,16 +237,72 @@ def test_native_provider_with_announce_never_touches_click(monkeypatch):
     monkeypatch.setattr(click, "secho", boom)
 
     class FakeProvider:
-        def __init__(self, *, on_log=None):
+        def __init__(self, *, on_log=None, mic_device=None):
             self.on_log = on_log
+            self.mic_device = mic_device
 
     lines = []
     plans = plan_channels(MeetingProfile(local_speakers=1, remote_speakers=1))
     provider = loaders._native_provider(
         FakeProvider,
-        lambda channels: {ch: f"dev-{ch.value}" for ch in sorted(channels)},
+        lambda channels, mic_device=None: {ch: f"dev-{ch.value}" for ch in sorted(channels)},
         plans,
         lines.append,
     )
     assert isinstance(provider, FakeProvider)
     assert lines == ["capture: mic ← dev-mic", "capture: system ← dev-system"]
+
+
+def test_the_macos_provider_preflights_only_when_a_microphone_is_pinned(monkeypatch):
+    # macOS has no preflight by default — its helper owns device selection and
+    # a subprocess per meeting start would buy nothing. A pinned run is the one
+    # case with an answer worth having before the models load: "that microphone
+    # is not here".
+    import sys as sysmod
+
+    from stenograf.capture import helper as capture_helper
+    from stenograf.config import MeetingProfile
+    from stenograf.session import plan_channels
+
+    monkeypatch.setattr(sysmod, "platform", "darwin")
+    monkeypatch.setattr(capture_helper, "find_helper", lambda: "stenocap")
+    asked = []
+    monkeypatch.setattr(
+        capture_helper,
+        "query_devices",
+        lambda channels, mic_device=None: (
+            asked.append(mic_device),
+            {ch: "Fake device" for ch in channels},
+        )[1],
+    )
+    plans = plan_channels(MeetingProfile(local_speakers=1, remote_speakers=1))
+
+    loaders._base_provider(None, plans)
+    assert asked == [], "an unpinned macOS run must spawn no device query"
+
+    loaders._base_provider(None, plans, mic_device="usb-1")
+    assert asked == ["usb-1"]
+
+
+def test_a_run_without_a_microphone_carries_no_pin(monkeypatch):
+    # A system-audio-only meeting has no mic channel to pin, and passing one
+    # would cost macOS a preflight subprocess for a channel that will not exist.
+    import sys as sysmod
+
+    from stenograf.capture import helper as capture_helper
+    from stenograf.config import MeetingProfile
+    from stenograf.session import plan_channels
+
+    monkeypatch.setattr(sysmod, "platform", "darwin")
+    monkeypatch.setattr(capture_helper, "find_helper", lambda: "stenocap")
+    monkeypatch.setattr(
+        capture_helper,
+        "query_devices",
+        lambda channels, mic_device=None: (_ for _ in ()).throw(
+            AssertionError("no device query belongs on a system-only run")
+        ),
+    )
+    plans = plan_channels(MeetingProfile(local_speakers=0, remote_speakers=1))
+
+    provider = loaders._base_provider(None, plans, mic_device="usb-1")
+    assert provider is not None

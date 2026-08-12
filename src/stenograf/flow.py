@@ -93,12 +93,17 @@ class MeetingRequest:
     ``settings`` rides along so the run uses the exact values in force when the
     user pressed Start — not whatever the file says seconds later.
     ``record_audio`` is the CLI's ``--record-audio``: keep the captured audio
-    as the meeting folder's ``audio.opus`` (or :attr:`RunOptions.audio_path`)."""
+    as the meeting folder's ``audio.opus`` (or :attr:`RunOptions.audio_path`).
+    ``mic_device`` is the already-resolved microphone selection
+    (:func:`resolve_mic_device`), ``None`` meaning the OS default — a form
+    control like the rest of this class, not one of ``RunOptions``' tuning
+    flags."""
 
     profile: MeetingProfile
     settings: Settings
     notes: bool
     record_audio: bool
+    mic_device: str | None = None
 
 
 @dataclass(frozen=True)
@@ -157,6 +162,25 @@ class RunOptions:
         return LIVE_FLUSH_INTERVAL_S
 
 
+DEFAULT_MIC_DEVICE = "default"
+"""The one-word way to say "the OS default" and override a standing pin.
+
+A stale ``[capture] mic_device`` copied to a second machine would otherwise
+stop every meeting there, so the failure message names this value and every
+resolution point accepts it — from the flag and from the file alike."""
+
+
+def resolve_mic_device(explicit: str | None, settings: Settings) -> str | None:
+    """The device this run records the microphone from; ``None`` = the default.
+
+    The single point where a per-run choice (a CLI flag, the setup form's
+    picker) meets the standing ``[capture] mic_device``: the explicit value
+    wins, the literal ``"default"`` clears a standing pin for this run, and an
+    empty value means nothing was chosen."""
+    chosen = (explicit or "").strip() or (settings.capture.mic_device or "").strip()
+    return None if chosen in ("", DEFAULT_MIC_DEVICE) else chosen
+
+
 def standing_settings() -> Settings:
     """The settings a setup form's controls start from; a broken file reads as defaults.
 
@@ -181,6 +205,7 @@ def resolve_meeting_request(
     notes: bool = False,
     record_audio: bool = False,
     preset: str | None = None,
+    mic_device: str | None = None,
 ) -> MeetingRequest:
     """Turn a setup form's controls into a runnable :class:`MeetingRequest`.
 
@@ -241,7 +266,11 @@ def resolve_meeting_request(
     except ValueError as exc:  # e.g. both sources switched off
         raise MeetingRequestError(str(exc)) from exc
     return MeetingRequest(
-        profile=profile, settings=settings, notes=notes, record_audio=record_audio
+        profile=profile,
+        settings=settings,
+        notes=notes,
+        record_audio=record_audio,
+        mic_device=resolve_mic_device(mic_device, settings),
     )
 
 
@@ -344,6 +373,7 @@ class MeetingRun:
             paced=options.live,
             aec=options.aec,
             aec_dump=options.aec_dump,
+            mic_device=self.request.mic_device,
             announce=view.status,
             on_log=None if options.transport_stderr else loaders.CaptureLog(view=view),
         )

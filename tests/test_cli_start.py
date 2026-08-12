@@ -345,3 +345,63 @@ def test_start_with_no_speakers_errors_cleanly(tmp_path, monkeypatch):
     assert result.exit_code != 0
     assert "at least one speaker" in result.output
     assert not isinstance(result.exception, ValueError)  # handled as a ClickException
+
+
+def _capture_mic_device(monkeypatch) -> dict:
+    """Record what `make_provider` was told to record the microphone from."""
+    seen: dict = {}
+    real = loaders.make_provider
+
+    def spy(*args, **kwargs):
+        seen["mic_device"] = kwargs.get("mic_device")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(loaders, "make_provider", spy)
+    return seen
+
+
+def test_mic_device_flag_reaches_the_provider(tmp_path, stub_backends, monkeypatch):
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+    seen = _capture_mic_device(monkeypatch)
+
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "start",
+            "--remote", "0",
+            "--mic-device", "Yeti Stereo Microphone",
+            "--replay", str(mic),
+            "--out", str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["mic_device"] == "Yeti Stereo Microphone"
+
+
+def test_settings_pin_applies_and_the_flag_can_undo_it(tmp_path, stub_backends, monkeypatch):
+    # A settings.toml carried to a machine without that device would otherwise
+    # stop every meeting; `--mic-device default` is the documented way back.
+    write_settings('[capture]\nmic_device = "usb-desk-mic"\n')
+    mic = tmp_path / "mic.wav"
+    write_wav(mic)
+
+    seen = _capture_mic_device(monkeypatch)
+    CliRunner().invoke(
+        cli.main,
+        ["start", "--remote", "0", "--replay", str(mic), "--out", str(tmp_path / "a")],
+    )
+    assert seen["mic_device"] == "usb-desk-mic"
+
+    seen = _capture_mic_device(monkeypatch)
+    CliRunner().invoke(
+        cli.main,
+        [
+            "start", "--remote", "0",
+            "--mic-device", "default",
+            "--replay", str(mic),
+            "--out", str(tmp_path / "b"),
+        ],
+    )
+    assert seen["mic_device"] is None

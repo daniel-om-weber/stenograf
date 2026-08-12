@@ -58,8 +58,10 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import IO, TYPE_CHECKING
@@ -134,32 +136,65 @@ def find_helper() -> Path:
     )
 
 
-def query_devices(channels: set[Channel]) -> dict[Channel, str]:
+@dataclass(frozen=True)
+class InputDevice:
+    """One microphone the machine could record from (``--list-inputs``)."""
+
+    id: str
+    """What a selection stores: a platform-stable device id that survives a
+    reboot and a re-plug, unlike the handles the OS hands out per session."""
+    name: str
+    """What a person recognises the device by."""
+    is_default: bool
+
+
+def list_input_devices() -> list[InputDevice]:
+    """Every microphone the helper can see, the default one marked.
+
+    The only way to learn the id a ``[capture] mic_device`` needs, and the
+    picker's model. A different question from :func:`query_devices` — *what
+    could* the mic record from, rather than what *will* this run record — so it
+    has its own flag and its own shape.
+    """
+    result = _ask_helper(
+        ["--list-inputs"],
+        "the capture helper could not list the microphones — check the system sound settings",
+    )
+    try:
+        listed = json.loads(result.decode("utf-8", errors="replace"))
+        return [
+            InputDevice(
+                id=str(item["id"]), name=str(item["name"]), is_default=bool(item["default"])
+            )
+            for item in listed
+        ]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise CaptureUnavailableError(
+            f"the capture helper did not report its microphones ({exc})"
+        ) from exc
+
+
+def query_devices(channels: set[Channel], *, mic_device: str | None = None) -> dict[Channel, str]:
     """What the helper says each channel would record from (``--devices``).
 
     The preflight shared by the platforms whose helper owns device selection
-    (Windows, Linux): it resolves the defaults exactly as its pumps will at
-    start — so a missing binary, a broken audio stack, or an absent default
-    device fails *before* capture (and models) start, and the CLI can name
-    what the meeting will record. macOS has no equivalent; its helper is
-    device-selection-free by design. The platform modules wrap this with
-    whatever only they have (Windows: the privacy consent store, a
-    "(loopback)" suffix).
+    (Windows, Linux): it resolves the devices exactly as its pumps will at
+    start — so a missing binary, a broken audio stack, an absent default device
+    or a ``mic_device`` naming something that is not connected fails *before*
+    capture (and models) start, and the CLI can name what the meeting will
+    record. macOS runs it only when the mic is pinned (:mod:`stenograf.loaders`).
+    The platform modules wrap this with whatever only they have (Windows: the
+    privacy consent store, a "(loopback)" suffix).
     """
-    argv = [str(find_helper()), "--devices"]
+    argv = ["--devices"]
     argv += [_CHANNEL_FLAG[ch] for ch in sorted(channels)]
+    argv += _mic_device_argv(mic_device)
+    payload = _ask_helper(
+        argv,
+        "the capture helper could not resolve the devices — check the system sound settings",
+    )
     try:
-        result = subprocess.run(argv, capture_output=True, timeout=15, check=False)
-    except OSError as exc:
-        raise CaptureUnavailableError(f"the capture helper could not be run ({exc})") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise CaptureUnavailableError(
-            "the capture helper's device query timed out — sound server hung?"
-        ) from exc
-    if result.returncode != 0:
-        raise CaptureUnavailableError(_helper_complaint(result.stderr))
-    try:
-        named = json.loads(result.stdout.decode("utf-8", errors="replace"))
+        named = json.loads(payload.decode("utf-8", errors="replace"))
     except ValueError as exc:
         raise CaptureUnavailableError(
             f"the capture helper did not report its devices ({exc})"
@@ -174,7 +209,41 @@ def query_devices(channels: set[Channel]) -> dict[Channel, str]:
     return devices
 
 
-def _helper_complaint(stderr: bytes) -> str:
+def _mic_device_argv(mic_device: str | None) -> list[str]:
+    """The pin as argv, or nothing at all when the OS default is wanted."""
+    return ["--mic-device", mic_device] if mic_device else []
+
+
+def _ask_helper(argv: list[str], fallback: str) -> bytes:
+    """Run a read-only helper query and return its stdout.
+
+    Every failure — missing binary, hung sound server, a helper too old to know
+    the flag — becomes a :class:`CaptureUnavailableError` the CLI, the doctor
+    and the setup form all already handle.
+    """
+    try:
+        result = subprocess.run(
+            [str(find_helper()), *argv], capture_output=True, timeout=15, check=False
+        )
+    except OSError as exc:
+        raise CaptureUnavailableError(f"the capture helper could not be run ({exc})") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise CaptureUnavailableError(
+            "the capture helper's device query timed out — sound server hung?"
+        ) from exc
+    if result.returncode == 2:
+        # The helper's usage exit, which it also gives for a flag it does not
+        # know: a dev checkout whose binary predates this Python.
+        raise CaptureUnavailableError(
+            f"the capture helper does not understand `{' '.join(argv)}` — it is older than "
+            "this version of stenograf; rebuild it (native/README.md) or reinstall"
+        )
+    if result.returncode != 0:
+        raise CaptureUnavailableError(_helper_complaint(result.stderr, fallback))
+    return result.stdout
+
+
+def _helper_complaint(stderr: bytes, fallback: str | None = None) -> str:
     """The helper's own reason, or a fallback when it died without giving one.
 
     Its diagnostics are ``stenocap: FATAL: <reason>`` lines; the prefixes are
@@ -184,11 +253,46 @@ def _helper_complaint(stderr: bytes) -> str:
     lines = [ln.strip() for ln in stderr.decode("utf-8", errors="replace").splitlines()]
     fatal = next((ln for ln in reversed(lines) if "FATAL" in ln), None)
     if fatal is None:
-        return (
+        return fallback or (
             "the capture helper could not resolve the default devices "
             "— check the system sound settings"
         )
     return fatal.split("FATAL", 1)[1].lstrip(": ").strip()
+
+
+def normalize_device_key(value: str) -> str:
+    """The form both sides of a device comparison take: trimmed and NFC.
+
+    The matching rule the three helpers implement, mirrored here for the one
+    thing Python decides on its own — whether a stored selection is among the
+    devices the picker is about to show. macOS returns device names decomposed,
+    so an unnormalized comparison silently fails on any name with an umlaut.
+    """
+    return unicodedata.normalize("NFC", value.strip())
+
+
+def match_input_device(
+    devices: Sequence[InputDevice], selection: str
+) -> tuple[InputDevice | None, str]:
+    """The device a stored selection names, or why it names none.
+
+    The helpers' rule, mirrored so the picker, the doctor and ``steno devices``
+    describe a selection exactly as the run will treat it: id first, then exact
+    name, and a name two connected devices share is refused rather than
+    guessed. Returns ``(device, "")`` on a match and ``(None, reason)``
+    otherwise — the two failures read differently to a user, since one asks
+    them to plug something in and the other to be more specific.
+    """
+    wanted = normalize_device_key(selection)
+    for device in devices:
+        if normalize_device_key(device.id) == wanted:
+            return device, ""
+    named = [d for d in devices if normalize_device_key(d.name) == wanted]
+    if len(named) == 1:
+        return named[0], ""
+    if not named:
+        return None, "not connected"
+    return None, f"matches {len(named)} connected devices ({', '.join(d.id for d in named)})"
 
 
 class HelperCaptureProvider(CaptureProvider):
@@ -202,6 +306,11 @@ class HelperCaptureProvider(CaptureProvider):
     ``None`` (the CLI) inherits stderr so capture errors land on the terminal
     as ever; the Qt meeting screen installs a sink instead (loaders.CaptureLog)
     — a GUI process has no terminal for a raw stderr write to reach.
+
+    ``mic_device`` pins the mic channel to one device instead of following the
+    OS default; ``None`` follows it. A pin that names nothing connected makes
+    the helper exit before any audio flows, which surfaces here as a
+    :class:`CaptureHelperError` carrying the helper's own reason.
     """
 
     _stop_signal: int | None = signal.SIGINT if sys.platform == "darwin" else None
@@ -225,6 +334,7 @@ class HelperCaptureProvider(CaptureProvider):
         *,
         command: str | Path | list[str] | None = None,
         on_log: Callable[[str], None] | None = None,
+        mic_device: str | None = None,
     ) -> None:
         if command is None:
             self._prefix = [str(find_helper())]
@@ -233,6 +343,7 @@ class HelperCaptureProvider(CaptureProvider):
         else:
             self._prefix = [str(command)]
         self._on_log = on_log
+        self._mic_device = mic_device
         self._proc: subprocess.Popen[bytes] | None = None
         self._queue: queue.SimpleQueue[AudioFrame | Exception | None] | None = None
         self._drainer: threading.Thread | None = None
@@ -263,6 +374,9 @@ class HelperCaptureProvider(CaptureProvider):
         """Launch the helper and its drain/relay threads. Caller holds _stop_lock."""
         argv = list(self._prefix)
         argv += [_CHANNEL_FLAG[ch] for ch in (Channel.MIC, Channel.SYSTEM) if ch in self._channels]
+        # Built per spawn, so the retry-once respawn keeps the same device.
+        if Channel.MIC in self._channels:
+            argv += _mic_device_argv(self._mic_device)
         # stdout is the binary frame stream. stderr (status/errors) is inherited
         # by default so capture errors land on the plain CLI's terminal — but
         # with an on_log sink it is piped and relayed line-by-line instead,

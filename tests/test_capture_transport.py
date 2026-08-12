@@ -337,3 +337,131 @@ class TestQueryDevices:
         monkeypatch.setattr(helper.subprocess, "run", hang)
         with pytest.raises(CaptureUnavailableError, match="timed out"):
             query_devices({Channel.MIC})
+
+
+class TestMicDevice:
+    """Choosing which microphone the mic channel records from."""
+
+    def _helper(self, monkeypatch, *extra):
+        import stenograf.capture.helper as helper
+
+        argv = [*FAKE, *extra]
+        monkeypatch.setattr(helper, "find_helper", lambda: argv[0])
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            helper.subprocess,
+            "run",
+            lambda command, **kw: real_run([*argv, *command[1:]], **kw),
+        )
+
+    def test_lists_what_the_machine_can_record_from(self, monkeypatch):
+        from stenograf.capture.helper import list_input_devices
+
+        self._helper(monkeypatch)
+        listed = list_input_devices()
+        assert [d.id for d in listed] == ["fake-mic-builtin", "fake-mic-usb"]
+        assert [d.is_default for d in listed] == [True, False]
+        assert listed[1].name == "Fake USB Microphone"
+
+    def test_the_preflight_names_the_pinned_device(self, monkeypatch):
+        self._helper(monkeypatch)
+        devices = query_devices({Channel.MIC}, mic_device="fake-mic-usb")
+        assert devices == {Channel.MIC: "Fake USB Microphone"}
+
+    def test_a_pin_that_names_nothing_fails_before_capture(self, monkeypatch):
+        # The whole point of the feature: never quietly record the default
+        # microphone when the user asked for a specific one.
+        self._helper(monkeypatch)
+        with pytest.raises(CaptureUnavailableError, match="not available"):
+            query_devices({Channel.MIC}, mic_device="no-such-microphone")
+
+    def test_a_name_resolves_the_way_a_hand_edited_file_writes_it(self, monkeypatch):
+        # settings.toml holds names as often as ids, spaces and all.
+        self._helper(monkeypatch)
+        assert query_devices({Channel.MIC}, mic_device="  Fake USB Microphone ") == {
+            Channel.MIC: "Fake USB Microphone"
+        }
+
+    def test_the_pin_reaches_the_helper_on_every_spawn(self, monkeypatch, tmp_path):
+        # Including the respawn after a first-attempt crash: a retry that
+        # dropped the flag would record the wrong microphone for the meeting.
+        import stenograf.capture.helper as helper
+
+        spawns = []
+        real_popen = subprocess.Popen
+        monkeypatch.setattr(
+            helper.subprocess,
+            "Popen",
+            lambda argv, **kw: (spawns.append(argv), real_popen(argv, **kw))[1],
+        )
+        marker = tmp_path / "died-once"
+        provider = StdinEofTransport(
+            command=[*FAKE, "--stop-on-stdin", "--die-once", str(marker), "--frames", "2"],
+            mic_device="fake-mic-usb",
+        )
+        provider.start({Channel.MIC})
+        assert sum(1 for _ in provider.frames()) == 2  # the retry produced the frames
+        provider.stop()
+
+        assert len(spawns) == 2, "the first attempt crashed and was retried"
+        for argv in spawns:
+            assert argv[-2:] == ["--mic-device", "fake-mic-usb"]
+
+    def test_an_unpinned_run_passes_no_device_flag(self, monkeypatch):
+        import stenograf.capture.helper as helper
+
+        spawns = []
+        real_popen = subprocess.Popen
+        monkeypatch.setattr(
+            helper.subprocess,
+            "Popen",
+            lambda argv, **kw: (spawns.append(argv), real_popen(argv, **kw))[1],
+        )
+        provider = StdinEofTransport(command=[*FAKE, "--stop-on-stdin", "--frames", "1"])
+        provider.start({Channel.MIC})
+        list(provider.frames())
+        provider.stop()
+        assert "--mic-device" not in spawns[0]
+
+    def test_matching_follows_the_helpers_rule(self):
+        from stenograf.capture.helper import InputDevice, match_input_device
+
+        # The device name is DECOMPOSED, the way macOS reports it, while the
+        # settings file holds the precomposed form a keyboard produces. Without
+        # the NFC step those are different strings and the selection misses.
+        decomposed = "Bu\u0308rgel-Mikrofon"
+        precomposed = "B\u00fcrgel-Mikrofon"
+        devices = [
+            InputDevice(id="usb-1", name="Yeti", is_default=False),
+            InputDevice(id="usb-2", name="Yeti", is_default=False),
+            InputDevice(id="Yeti", name=decomposed, is_default=True),
+        ]
+        assert decomposed != precomposed, "the fixture must really be decomposed"
+
+        # An id wins over a name; surrounding space and normal form do not
+        # matter; case does; and a name two devices share is refused with the
+        # reason the helpers give, not reported as absent.
+        assert match_input_device(devices, " Yeti ")[0].id == "Yeti"
+        assert match_input_device(devices, precomposed)[0].id == "Yeti"
+        assert match_input_device(devices, "yeti") == (None, "not connected")
+        assert match_input_device(devices[:2], "Yeti")[1] == (
+            "matches 2 connected devices (usb-1, usb-2)"
+        )
+
+    def test_a_helper_too_old_for_the_flag_says_so(self, monkeypatch):
+        # The stale dev-checkout case: the binary exits 2 with usage and no
+        # FATAL line. Pointing the user at their sound settings would be a wild
+        # goose chase — the fix is to rebuild the helper.
+        import stenograf.capture.helper as helper
+        from stenograf.capture.helper import list_input_devices
+
+        monkeypatch.setattr(helper, "find_helper", lambda: "stenocap")
+
+        class Old:
+            returncode = 2
+            stdout = b""
+            stderr = b"stenocap: unknown argument --list-inputs\n"
+
+        monkeypatch.setattr(helper.subprocess, "run", lambda *a, **kw: Old())
+        with pytest.raises(CaptureUnavailableError, match="older than this version"):
+            list_input_devices()
