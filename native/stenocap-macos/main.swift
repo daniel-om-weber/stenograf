@@ -99,11 +99,41 @@ final class Emitter: @unchecked Sendable {
     /// stamped with its arrival time — and a spike must never move the
     /// timeline, because it can never be moved back.
     private static let driftWindowSeconds = 2.0
+    /// Parting from wall clock faster than this — seconds per second, in
+    /// either direction — is not a clock drifting, it is a channel being
+    /// resampled from the wrong rate (``noteSlip``). Crystals drift in the
+    /// hundreds of ppm, two orders of magnitude under this; the smallest
+    /// mismatch a device can actually deliver is 44.1 against 48 kHz, twice
+    /// over it. The threshold sits deliberately nearer the mismatch than the
+    /// drift: a dropped buffer is a real loss and counts here in full, and
+    /// rebuilding a healthy channel costs the recording a gap of silence.
+    private static let rateMismatchSlip = 0.04
+    /// Consecutive windows that must slip before the channel is rebuilt. A
+    /// device stalling under load slips for a window or two; a rate mismatch
+    /// slips in every one of them, for the rest of the meeting.
+    private static let rateMismatchWindows = 3
+    /// How often one channel may be rebuilt for this before the helper stops
+    /// trying and only warns — a rebuild that does not fix the rate must not
+    /// become a rebuild every few seconds for the length of the meeting.
+    /// Three rather than one because a rebuild can land while the device is
+    /// still renegotiating and read the rate it is leaving.
+    private static let rateMismatchRebuilds = 3
+    /// Clean windows that give a channel its rebuild budget back — a minute of
+    /// audio that tracks the clock says the earlier trouble is over, and a
+    /// meeting must not spend its whole budget in the first two minutes and
+    /// then run unguarded for hours.
+    private static let rateMismatchForgiveness = 30
 
     /// The extremes of (wall clock − stamped timeline) one channel showed
     /// since its current observation window opened.
     private struct DriftWindow {
         var openedAt: Double
+        /// The drift the window opened on, kept apart from ``minDrift`` so slip
+        /// can be measured as net growth. The extremes are a *range*, and a
+        /// device whose buffers merely arrive unevenly spans one without
+        /// falling behind at all — reading that as a rate error would rebuild a
+        /// healthy meeting.
+        var openedDrift: Double
         var minDrift: Double
         var maxDrift: Double
     }
@@ -115,6 +145,26 @@ final class Emitter: @unchecked Sendable {
     private var floor: [UInt8: Double] = [:]
     private var driftWindows: [UInt8: DriftWindow] = [:]
     private var driftWarned: Set<UInt8> = []
+    private var slippingWindows: [UInt8: Int] = [:]
+    private var cleanWindows: [UInt8: Int] = [:]
+    private var rateRebuilds: [UInt8: Int] = [:]
+    private var rateGaveUp: Set<UInt8> = []
+    private var rateMismatchHandler: (@Sendable (ChannelCode) -> Void)?
+
+    /// Register the owner of every channel's device, to be called on a
+    /// background queue when one of them has been delivering at the wrong
+    /// sample rate for several windows running (``noteSlip``), so it can be
+    /// rebuilt around a fresh rate reading.
+    ///
+    /// Taken under the lock like everything else here, because capture is
+    /// already running when this is registered. The handler is *not* called
+    /// with the lock held, and must not be — a rebuild re-anchors, which takes
+    /// it.
+    func onRateMismatch(_ handler: @escaping @Sendable (ChannelCode) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        rateMismatchHandler = handler
+    }
 
     /// Forget a channel's anchor so its next buffer re-anchors on the shared
     /// clock — used when the channel's device is rebuilt mid-capture (a device
@@ -133,6 +183,12 @@ final class Emitter: @unchecked Sendable {
         emitted[code] = 0
         driftWindows.removeValue(forKey: code)
         driftWarned.remove(code)
+        // Both window runs belong to the stream that just ended; the fresh one
+        // has to earn its own. The *rebuild* count deliberately survives — it
+        // is what stops a device that cannot be fixed from being rebuilt every
+        // few seconds — and is given back by clean windows, not by rebuilds.
+        slippingWindows.removeValue(forKey: code)
+        cleanWindows.removeValue(forKey: code)
     }
 
     /// Append one frame of mono 16 kHz int16 samples for `channel`. `hostTime`
@@ -200,7 +256,8 @@ final class Emitter: @unchecked Sendable {
         let wall = Clock.seconds(since: hostTime)
         let drift = wall - timestamp
         guard var window = driftWindows[code] else {
-            driftWindows[code] = DriftWindow(openedAt: wall, minDrift: drift, maxDrift: drift)
+            driftWindows[code] = DriftWindow(
+                openedAt: wall, openedDrift: drift, minDrift: drift, maxDrift: drift)
             return 0
         }
         window.minDrift = min(window.minDrift, drift)
@@ -210,8 +267,10 @@ final class Emitter: @unchecked Sendable {
             return 0
         }
         let shift = window.minDrift > Self.driftLimit ? window.minDrift : 0
+        noteSlip(code, (drift - window.openedDrift) / (wall - window.openedAt))
         driftWindows[code] = DriftWindow(
-            openedAt: wall, minDrift: drift - shift, maxDrift: drift - shift)
+            openedAt: wall, openedDrift: drift - shift,
+            minDrift: drift - shift, maxDrift: drift - shift)
         if shift > 0 {
             anchor[code] = base + shift
             log("channel \(code) re-anchored +\(Int(shift * 1000)) ms "
@@ -224,6 +283,80 @@ final class Emitter: @unchecked Sendable {
                 + "ahead of wall clock (device delivering too many samples)")
         }
         return 0
+    }
+
+    /// Tell a channel resampled from the wrong rate apart from one that drifts,
+    /// and hand the first to its owner to rebuild.
+    ///
+    /// A device whose buffers are converted as if they arrived faster than they
+    /// do delivers proportionally fewer samples than wall time elapses, every
+    /// window, forever. Measured 2026-08-13: AirPods Pro flip 48 -> 24 kHz when
+    /// their microphone is opened, and the correction above then padded a full
+    /// second of silence into every two for an hour while the audio itself ran
+    /// at double speed — a meeting destroyed in a file whose duration still
+    /// matched the clock. Padding is the right answer to a device that fell
+    /// behind; on one that is being read wrong it only makes the damage look
+    /// like a working recording.
+    ///
+    /// This is the guard that catches the case above, and the only one that
+    /// does. Measured 2026-08-13 on the AirPods: the flip to 24 kHz posts no
+    /// rate-property change at all, so ``TapSupervisor``'s watch — which does
+    /// rebuild within 1.2 s when a device announces itself — never hears it,
+    /// and these six seconds are what the meeting costs instead of an hour.
+    /// Do not delete this for being the slower of the two.
+    ///
+    /// Both directions count. A device delivering *more* samples than assumed
+    /// records the meeting too slow, and the correction above cannot touch
+    /// that at all — the shift it would need is backwards, which is forbidden
+    /// — so a rebuild is the only remedy there rather than the faster one.
+    ///
+    /// `slip` is seconds gained or lost per second of wall clock — the *net*
+    /// change in drift across the window that just closed, which is at least
+    /// ``driftWindowSeconds`` long, so it is never divided by zero.
+    private func noteSlip(_ code: UInt8, _ slip: Double) {  // holding lock
+        guard abs(slip) > Self.rateMismatchSlip else {
+            slippingWindows[code] = 0
+            let clean = cleanWindows[code, default: 0] + 1
+            cleanWindows[code] = clean
+            if clean >= Self.rateMismatchForgiveness {
+                cleanWindows[code] = 0
+                rateRebuilds[code] = 0
+                rateGaveUp.remove(code)
+            }
+            return
+        }
+        cleanWindows[code] = 0
+        let runLength = slippingWindows[code, default: 0] + 1
+        slippingWindows[code] = runLength
+        guard runLength >= Self.rateMismatchWindows else { return }
+        // Re-arm rather than latch: a verdict that changes nothing (no owner,
+        // or the budget spent) must not leave the counter above the threshold,
+        // where it could never equal it again and the channel would fall
+        // silent about a meeting still being ruined.
+        slippingWindows[code] = 0
+        let speed = 1 / (1 - min(slip, 0.99))
+        let pace = speed > 1
+            ? "\(String(format: "%.2f", speed))x too fast"
+            : "\(String(format: "%.2f", 1 / speed))x too slow"
+        let rebuilds = rateRebuilds[code, default: 0]
+        let seconds = Int(Double(Self.rateMismatchWindows) * Self.driftWindowSeconds)
+        guard rebuilds < Self.rateMismatchRebuilds else {
+            if !rateGaveUp.contains(code) {
+                rateGaveUp.insert(code)
+                log("WARNING channel \(code) is still recording \(pace) after "
+                    + "\(rebuilds) rebuilds — its device is left as it is")
+            }
+            return
+        }
+        log("WARNING channel \(code) is recording \(pace) — its device changed sample "
+            + "rate under the resampler and has been off the clock for \(seconds) s; "
+            + "rebuilding it")
+        guard let handler = rateMismatchHandler, let channel = ChannelCode(rawValue: code)
+        else { return }
+        rateRebuilds[code] = rebuilds + 1
+        // Off this thread and out of the lock: the rebuild re-anchors, which
+        // takes it, and this runs inside a device's IO callback.
+        DispatchQueue.global().async { handler(channel) }
     }
 }
 
@@ -333,6 +466,17 @@ func deviceUID(_ id: AudioObjectID) -> String? {
 
 func deviceName(_ id: AudioObjectID) -> String? {
     deviceString(id, kAudioObjectPropertyName)
+}
+
+/// The rate a device is clocked at, or nil if it does not report a usable one.
+/// Every resampler in this file is built from one of these readings.
+func nominalRate(_ id: AudioObjectID) -> Double? {
+    var addr = address(kAudioDevicePropertyNominalSampleRate)
+    var rate = 0.0
+    var size = UInt32(MemoryLayout<Double>.size)
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &rate) == noErr, rate > 0
+    else { return nil }
+    return rate
 }
 
 /// How many input channels a device offers — 0 for a pure output device.
@@ -471,6 +615,14 @@ struct AggSession {
     var aggID: AudioObjectID
     var procID: AudioDeviceIOProcID?
     var outputUID: String
+    /// The output device the aggregate is clocked by, as a handle — the UID
+    /// above identifies it across a re-plug, this addresses its properties
+    /// (``TapSupervisor`` watches its sample rate).
+    var outputID: AudioObjectID
+    /// The rate both of this session's resamplers were built for. Kept so a
+    /// change to it can be recognised as one: it is the number the whole
+    /// session's timeline depends on (``TapSupervisor``).
+    var rate: Double
     /// The pinned microphone riding in this aggregate, if any (``PinnedMic``).
     var micUID: String?
     /// The silent keep-alive holding the output device awake, if any
@@ -604,19 +756,14 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter,
     // buffers as 48 kHz warps the reference by 8 % and walks this channel's
     // sample-counted timestamps off the shared clock (measured: ERLE collapses
     // to ~1 dB and the canceller starves). Trust the device doing the delivering.
-    // Read once per aggregate build; the pinned device *vanishing* rebuilds
-    // this whole session (TapSupervisor), and a rate mismatch on a
-    // still-present pinned device — a Bluetooth device's real clock straying
-    // from its nominal rate — is absorbed by the emitter's drift correction.
+    // Read per build and then *watched*, because it moves under a live session
+    // — a Bluetooth headset entering its call profile halves it, and the
+    // resampler left on the old value records the whole meeting too fast
+    // (`Emitter.noteSlip`, which is what catches that one: the headset changes
+    // rate without announcing it). `TapSupervisor` rebuilds on the changes
+    // that are announced.
     var sampleRate = asbd.mSampleRate
-    var aggRate = 0.0
-    var rateSize = UInt32(MemoryLayout<Double>.size)
-    var rateAddr = AudioObjectPropertyAddress(
-        mSelector: kAudioDevicePropertyNominalSampleRate,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
-    if AudioObjectGetPropertyData(aggID, &rateAddr, 0, nil, &rateSize, &aggRate) == noErr,
-       aggRate > 0, aggRate != sampleRate {
+    if let aggRate = nominalRate(aggID), aggRate != sampleRate {
         log("system buffers arrive at \(aggRate) Hz (aggregate rate), not \(sampleRate) Hz")
         sampleRate = aggRate
     }
@@ -712,7 +859,8 @@ func buildAggregate(tapID: AudioObjectID, tapUUID: String, emitter: Emitter,
     if let micUID {
         log("mic capture started (device \(micUID), through the system aggregate)")
     }
-    return AggSession(aggID: aggID, procID: procID, outputUID: outputUID, micUID: micUID,
+    return AggSession(aggID: aggID, procID: procID, outputUID: outputUID,
+                      outputID: output.deviceID, rate: sampleRate, micUID: micUID,
                       keepAlive: keepAlive)
 }
 
@@ -843,6 +991,11 @@ func tearDownAggregate(_ session: AggSession) {
 /// disappearance costs the mic channel rather than the whole meeting, and its
 /// return picks capture back up. The pin is never resolved to a *different*
 /// microphone.
+///
+/// The last thing watched is the rate the aggregate delivers at, because both
+/// of a session's resamplers are built for the one read at build time and a
+/// device that renegotiates would otherwise warp every channel at once — see
+/// ``buildAggregate``.
 final class TapSupervisor: @unchecked Sendable {
     private let emitter: Emitter
     private let tapID: AudioObjectID
@@ -851,6 +1004,8 @@ final class TapSupervisor: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.stenograf.tap-rebuild")
     private var agg: AggSession?
     private var pending: DispatchWorkItem?
+    private var rateWatch: [(deviceID: AudioObjectID, baseline: Double,
+                             block: AudioObjectPropertyListenerBlock)] = []
     private var lost = false
     private var micLost = false
     private var stopped = false
@@ -869,6 +1024,12 @@ final class TapSupervisor: @unchecked Sendable {
         AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject), &addr, queue
         ) { [weak self] _, _ in self?.schedule() }
+        watchRates(agg)
+    }
+
+    /// Rebuild on demand (``Emitter/onRateMismatch``).
+    func restart(_ reason: String) {
+        queue.async { [weak self] in self?.scheduleRebuild(reason) }
     }
 
     /// Debounce: plugging or unplugging a device fires several list changes.
@@ -879,12 +1040,73 @@ final class TapSupervisor: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
+    /// Debounced, and unconditional: the caller already knows this session is
+    /// wrong, unlike ``schedule`` whose trigger usually concerns other devices.
+    private func scheduleRebuild(_ reason: String) {  // on queue
+        pending?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.rebuild(reason) }
+        pending = work
+        queue.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
     private func rebuildIfVanished() {  // on queue
         guard !stopped else { return }
         if let agg, deviceExists(uid: agg.outputUID), agg.micUID == currentMicUID() {
             return  // nothing we depend on moved — leave the working path alone
         }
-        rebuild()
+        rebuild("a device this capture depends on moved")
+    }
+
+    /// Watch the rate of the device delivering this session's buffers, and of
+    /// the output device it is clocked by — either can be the one to report a
+    /// change, and a notification whose rate did not move costs nothing but a
+    /// read.
+    ///
+    /// Each device is remembered at its own rate. An aggregate and its main
+    /// sub-device need not agree, and comparing both against the one rate the
+    /// resamplers use would leave a standing disagreement satisfying the test
+    /// forever, rebuilding the session on every notification either device
+    /// ever sends.
+    ///
+    /// The listeners belong to one aggregate: the next one is a new
+    /// `AudioObjectID`, so leaving them registered would accumulate a stale
+    /// rebuild trigger per rebuild for the rest of the meeting.
+    private func watchRates(_ session: AggSession) {  // on queue
+        unwatchRates()
+        var addr = address(kAudioDevicePropertyNominalSampleRate)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.rateChanged()
+        }
+        for deviceID in Set([session.aggID, session.outputID]) {
+            // The aggregate's baseline is the rate the resamplers were built
+            // for, not whatever it reports now: those two disagreeing *is* the
+            // fault this watch exists to catch.
+            let baseline = deviceID == session.aggID
+                ? session.rate
+                : nominalRate(deviceID) ?? session.rate
+            AudioObjectAddPropertyListenerBlock(deviceID, &addr, queue, block)
+            rateWatch.append((deviceID: deviceID, baseline: baseline, block: block))
+        }
+    }
+
+    private func unwatchRates() {  // on queue
+        var addr = address(kAudioDevicePropertyNominalSampleRate)
+        for watch in rateWatch {
+            AudioObjectRemovePropertyListenerBlock(watch.deviceID, &addr, queue, watch.block)
+        }
+        rateWatch = []
+    }
+
+    /// A watched rate moved. Only a device that left the rate it was watched at
+    /// is worth a rebuild — building an aggregate around a device settles rates
+    /// on both of them, and reacting to that would rebuild forever.
+    private func rateChanged() {  // on queue
+        guard !stopped, agg != nil else { return }
+        for watch in rateWatch {
+            guard let now = nominalRate(watch.deviceID), now != watch.baseline else { continue }
+            scheduleRebuild("a capture device moved from \(watch.baseline) Hz to \(now) Hz")
+            return
+        }
     }
 
     /// The pinned microphone's UID if it is usable right now, else nil.
@@ -893,8 +1115,9 @@ final class TapSupervisor: @unchecked Sendable {
         return currentInput(micPin).device?.uid
     }
 
-    private func rebuild() {  // on queue
+    private func rebuild(_ reason: String) {  // on queue
         guard !stopped else { return }
+        unwatchRates()
         if let old = agg {
             tearDownAggregate(old)
             agg = nil
@@ -915,14 +1138,16 @@ final class TapSupervisor: @unchecked Sendable {
         if let fresh = buildAggregate(tapID: tapID, tapUUID: tapUUID, emitter: emitter,
                                       micUID: micUID) {
             agg = fresh
-            log("system capture moved to output device \(fresh.outputUID)")
+            watchRates(fresh)
+            log("system capture rebuilt on output device \(fresh.outputUID) "
+                + "at \(fresh.rate) Hz — \(reason)")
             lost = false
         } else {
             if !lost {
                 lost = true
                 log("WARNING system capture lost (output device vanished) — retrying")
             }
-            queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.rebuild() }
+            queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.rebuild(reason) }
         }
     }
 
@@ -930,6 +1155,7 @@ final class TapSupervisor: @unchecked Sendable {
         queue.sync {
             stopped = true
             pending?.cancel()
+            unwatchRates()
             if let agg { tearDownAggregate(agg) }
             agg = nil
             AudioHardwareDestroyProcessTap(tapID)
@@ -1114,11 +1340,7 @@ final class PinnedMic {
         // at whatever the device is clocked to, and resampling 44.1 kHz audio
         // as if it were 48 kHz warps the timeline by 8 % (measured on the
         // system channel, `buildAggregate`).
-        var rate = 0.0
-        var rateSize = UInt32(MemoryLayout<Double>.size)
-        var rateAddr = address(kAudioDevicePropertyNominalSampleRate)
-        guard AudioObjectGetPropertyData(device.deviceID, &rateAddr, 0, nil, &rateSize, &rate)
-            == noErr, rate > 0 else {
+        guard let rate = nominalRate(device.deviceID) else {
             log("mic unavailable: \(device.name) did not report a sample rate")
             return nil
         }
@@ -1197,6 +1419,24 @@ final class PinnedMicSupervisor: @unchecked Sendable {
         AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject), &addr, queue
         ) { [weak self] _, _ in self?.schedule("the device list changed") }
+    }
+
+    /// Rebuild on demand (``Emitter/onRateMismatch``).
+    ///
+    /// Not through ``schedule``: its check is "did the device move?", and the
+    /// caller's whole point is a device that did not move and is nonetheless
+    /// delivering at a rate this mic was not built for.
+    func restart(_ reason: String) {
+        queue.async { [weak self] in
+            guard let self, !self.stopped else { return }
+            self.pending?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.rebuild(reason, resolved: currentInput(self.pin).device)
+            }
+            self.pending = work
+            self.queue.asyncAfter(deadline: .now() + 0.5, execute: work)
+        }
     }
 
     /// Watch the current device's sample rate, and only it.
@@ -1324,6 +1564,13 @@ final class MicSupervisor: @unchecked Sendable {
             guard let self else { return }
             self.queue.async { self.schedule("engine configuration changed") }
         }
+    }
+
+    /// Rebuild on demand (``Emitter/onRateMismatch``). ``schedule``'s own
+    /// trigger is a device change, and this one is a device that did not
+    /// change — but its rebuild is unconditional either way.
+    func restart(_ reason: String) {
+        queue.async { [weak self] in self?.schedule(reason) }
     }
 
     /// Debounce: one device switch fires several change events back-to-back.
@@ -1577,6 +1824,29 @@ if wantMic && !micInAggregate {
         pinnedMic = PinnedMicSupervisor(emitter: emitter, pin: pin, mic: startPinnedMic(pin: pin))
     } else {
         micSupervisor = MicSupervisor(emitter: emitter, engine: startMic(emitter: emitter))
+    }
+}
+
+// The backstop under the rate watches above: a device that changes rate
+// without announcing it announces itself anyway, in a channel that walks off
+// the clock, and the supervisor that owns it rebuilds it around a fresh
+// reading. Frames are already flowing by now, which costs nothing: a verdict
+// takes several closed windows, and the first of them is still filling.
+emitter.onRateMismatch { channel in
+    let reason = "its device changed sample rate without saying so"
+    switch channel {
+    case .system:
+        tapSupervisor?.restart(reason)
+    case .mic:
+        if let pinnedMic {
+            pinnedMic.restart(reason)
+        } else if let micSupervisor {
+            micSupervisor.restart(reason)
+        } else {
+            // A pinned mic inside the aggregate is that session's second
+            // channel, so the tap supervisor owns its rate (`micInAggregate`).
+            tapSupervisor?.restart(reason)
+        }
     }
 }
 startupWatchdog.cancel()
