@@ -1004,6 +1004,7 @@ final class TapSupervisor: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.stenograf.tap-rebuild")
     private var agg: AggSession?
     private var pending: DispatchWorkItem?
+    private var retrying: DispatchWorkItem?
     private var rateWatch: [(deviceID: AudioObjectID, baseline: Double,
                              block: AudioObjectPropertyListenerBlock)] = []
     private var lost = false
@@ -1137,6 +1138,7 @@ final class TapSupervisor: @unchecked Sendable {
         }
         if let fresh = buildAggregate(tapID: tapID, tapUUID: tapUUID, emitter: emitter,
                                       micUID: micUID) {
+            retrying?.cancel()
             agg = fresh
             watchRates(fresh)
             log("system capture rebuilt on output device \(fresh.outputUID) "
@@ -1147,7 +1149,14 @@ final class TapSupervisor: @unchecked Sendable {
                 lost = true
                 log("WARNING system capture lost (output device vanished) — retrying")
             }
-            queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.rebuild(reason) }
+            // One chain only: every trigger arriving while the output device is
+            // away would otherwise start its own, and the survivors would fire
+            // together once it returns — each tearing down an aggregate that
+            // was already working, for a silence-padded gap apiece.
+            retrying?.cancel()
+            let again = DispatchWorkItem { [weak self] in self?.rebuild(reason) }
+            retrying = again
+            queue.asyncAfter(deadline: .now() + 2.0, execute: again)
         }
     }
 
@@ -1155,6 +1164,7 @@ final class TapSupervisor: @unchecked Sendable {
         queue.sync {
             stopped = true
             pending?.cancel()
+            retrying?.cancel()
             unwatchRates()
             if let agg { tearDownAggregate(agg) }
             agg = nil
@@ -1541,6 +1551,7 @@ final class MicSupervisor: @unchecked Sendable {
     private var engine: AVAudioEngine?
     private var observer: NSObjectProtocol?
     private var pending: DispatchWorkItem?
+    private var retrying: DispatchWorkItem?
     private var lost = false
     private var stopped = false
 
@@ -1591,6 +1602,7 @@ final class MicSupervisor: @unchecked Sendable {
         }
         emitter.reanchor(.mic)
         if let fresh = buildMicEngine(emitter: emitter) {
+            retrying?.cancel()
             engine = fresh
             watch(fresh)
             log("mic capture restarted (\(reason))")
@@ -1600,7 +1612,14 @@ final class MicSupervisor: @unchecked Sendable {
                 lost = true
                 log("WARNING mic capture lost (\(reason)) — retrying until an input device returns")
             }
-            queue.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.rebuild(reason) }
+            // One chain only: every device change while the mic is away would
+            // otherwise start its own, and they would all fire together when it
+            // returns — each stopping and restarting an engine that was already
+            // running, for a silence-padded gap apiece.
+            retrying?.cancel()
+            let again = DispatchWorkItem { [weak self] in self?.rebuild(reason) }
+            retrying = again
+            queue.asyncAfter(deadline: .now() + 2.0, execute: again)
         }
     }
 
@@ -1608,6 +1627,7 @@ final class MicSupervisor: @unchecked Sendable {
         queue.sync {
             stopped = true
             pending?.cancel()
+            retrying?.cancel()
             if let observer { NotificationCenter.default.removeObserver(observer) }
             engine?.stop()
             engine = nil
