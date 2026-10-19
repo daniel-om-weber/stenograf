@@ -94,13 +94,17 @@ dependencies = [
     # obligation for this MIT project; a bundled build would not. -Essentials
     # (not the full PySide6) is the QtQuick/QtQml/QtQuickControls2 set the app
     # uses; Addons would add another ~100 MB of modules we never import. Its
-    # wheels set the install floor: macOS 13, glibc 2.34 (x86_64) / 2.39
+    # wheels set the install floor: macOS 14, glibc 2.34 (x86_64) / 2.39
     # (arm64) — old-glibc Linux arm64 can no longer install stenograf at all
-    # (accepted in the step-7 flip, 2026-07-30). Capped below 7: Qt minors
+    # (accepted in the step-7 flip, 2026-07-30). Floored at 6.12: on macOS 27
+    # every Qt before it aborts the app when the menu-bar menu opens — its
+    # status-item observer asks NSApp.currentEvent for a clickCount, and that
+    # event is no longer a mouse event (qtbase 65020b43cd; reproduced on
+    # 6.11.1, gone on 6.12.0, 2026-10-19). Capped below 7: Qt minors
     # have shifted QtQuick/Controls behaviour before, and the QML tree's only
     # automated net is a compile pass — a major jump must be a deliberate
     # bump, not a resolver surprise.
-    "PySide6-Essentials>=6.8,<7",
+    "PySide6-Essentials>=6.12,<7",
     "livekit>=1.1",
     # Bundled static ffmpeg (per-platform wheels), resolved via
     # imageio_ffmpeg.get_ffmpeg_exe(): `steno transcribe` decodes .mov/.m4a/…
