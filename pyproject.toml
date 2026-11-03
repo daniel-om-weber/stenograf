@@ -107,6 +107,12 @@ dependencies = [
     # with no system ffmpeg install, and every platform decodes with the same
     # ffmpeg build. IMAGEIO_FFMPEG_EXE overrides the binary if ever needed.
     "imageio-ffmpeg>=0.6",
+    # The diarization loop clusters with scipy (diarization/loop.py). On macOS
+    # arm64 it arrives transitively via parakeet-mlx → librosa, and CI installs
+    # it through the dev group — so the 0.7.0 Windows wheel shipped without it
+    # and every diarized transcribe died at clustering (found 2026-11-03).
+    # tests/test_dependencies.py keeps runtime imports and this list in step.
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]

@@ -1,20 +1,20 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
-    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
-    "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform == 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
+    "python_full_version >= '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
+    "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform == 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
-    "python_full_version >= '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
 ]
 required-markers = [
@@ -259,8 +259,8 @@ name = "audioread"
 version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "standard-aifc", marker = "python_full_version >= '3.13' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "standard-sunau", marker = "python_full_version >= '3.13' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "standard-aifc", marker = "python_full_version >= '3.13'" },
+    { name = "standard-sunau", marker = "python_full_version >= '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a1/4a/874ecf9b472f998130c2b5e145dcdb9f6131e84786111489103b66772143/audioread-3.1.0.tar.gz", hash = "sha256:1c4ab2f2972764c896a8ac61ac53e261c8d29f0c6ccd652f84e18f08a4cab190", size = 20082, upload-time = "2025-10-26T19:44:13.484Z" }
 wheels = [
@@ -290,7 +290,7 @@ name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529", size = 523588, upload-time = "2025-09-08T23:24:04.541Z" }
 wheels = [
@@ -366,7 +366,7 @@ name = "click"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/d4/81420972a676e8ffea40450d8c8c92943e7218a78fe9b64359836cc9876b/click-8.4.2.tar.gz", hash = "sha256:9a6cea6e60b17ebe0a44c5cc636d94f09bd66142c1cd7d8b4cd731c4917a15f6", size = 338000, upload-time = "2026-06-24T17:45:15.148Z" }
 wheels = [
@@ -452,7 +452,7 @@ name = "cuda-bindings"
 version = "13.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cuda-pathfinder", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval-canary') or (extra != 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "cuda-pathfinder", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval') or extra == 'group-9-stenograf-eval-canary'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/67/5e7dba1ba576dd73da5dee894ca076ca5e959450dfff66d6d510a255d1f7/cuda_bindings-13.3.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c7855c4868aabc0cfae28abbe83d56734bdfbd08f08fc234ac1912a12858bf49", size = 6025351, upload-time = "2026-05-29T23:11:49.685Z" },
@@ -827,10 +827,10 @@ resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
+    "python_full_version >= '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform == 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
-    "python_full_version >= '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/10/a1/ae4e3e5003468d6391d2c77b6fa1cd73bd5d13511d81c642d7b28ac90ed4/fsspec-2026.6.0.tar.gz", hash = "sha256:f5bac145310fe30e16e1471bd6840b2d990d609e872251d7e674241822abf01a", size = 313646, upload-time = "2026-06-16T01:57:28.105Z" }
@@ -1015,7 +1015,7 @@ dependencies = [
     { name = "filelock" },
     { name = "fsspec", version = "2024.12.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval-canary'" },
     { name = "fsspec", version = "2026.6.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
-    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "hf-xet", marker = "platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'" },
     { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval-canary'" },
     { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
     { name = "pyyaml" },
@@ -1415,8 +1415,8 @@ dependencies = [
     { name = "scipy" },
     { name = "soundfile" },
     { name = "soxr" },
-    { name = "standard-aifc", marker = "python_full_version >= '3.13' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "standard-sunau", marker = "python_full_version >= '3.13' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "standard-aifc", marker = "python_full_version >= '3.13'" },
+    { name = "standard-sunau", marker = "python_full_version >= '3.13'" },
     { name = "typing-extensions" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/64/36/360b5aafa0238e29758729e9486c6ed92a6f37fa403b7875e06c115cdf4a/librosa-0.11.0.tar.gz", hash = "sha256:f5ed951ca189b375bbe2e33b2abd7e040ceeee302b9bbaeeffdfddb8d0ace908", size = 327001, upload-time = "2025-03-11T15:09:54.884Z" }
@@ -1562,7 +1562,7 @@ name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mdurl", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "mdurl", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/06/ff/7841249c247aa650a76b9ee4bbaeae59370dc8bfd2f6c01f3630c35eb134/markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49", size = 82454, upload-time = "2026-05-07T12:08:28.36Z" }
 wheels = [
@@ -1745,7 +1745,7 @@ name = "mlx"
 version = "0.31.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mlx-metal", marker = "sys_platform == 'darwin' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "mlx-metal", marker = "sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c3/47/5f33906cb03d6a378a697cd2d2641a26b37dea17ee3d9124d7e39e8eca01/mlx-0.31.2-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:e5067aaf2be1f3d7bba5be52348775804f111173c1ed04639618fd713b1a530f", size = 584863, upload-time = "2026-04-22T03:14:38.211Z" },
@@ -1765,13 +1765,13 @@ name = "mlx-lm"
 version = "0.29.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jinja2", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "mlx", marker = "sys_platform == 'darwin' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "protobuf", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "pyyaml", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "sentencepiece", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "transformers", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "jinja2", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "mlx", marker = "sys_platform == 'darwin'" },
+    { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "protobuf", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "pyyaml", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "sentencepiece", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "transformers", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e3/62/f46e1355256a114808517947f8e83ad6be310c7288c551db0fa678f47923/mlx_lm-0.29.1.tar.gz", hash = "sha256:b99180d8f33d33a077b814e550bfb2d8a59ae003d668fd1f4b3fff62a381d34b", size = 232302, upload-time = "2025-12-16T16:58:27.959Z" }
 wheels = [
@@ -2430,12 +2430,12 @@ name = "onnxruntime-directml"
 version = "1.24.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "flatbuffers", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "numpy", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'win32' and extra == 'group-9-stenograf-eval-canary') or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "protobuf", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "sympy", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval-canary'" },
+    { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "protobuf" },
+    { name = "sympy" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/ea/33814eb0ec96775eda4c1d30b0d86e91d7d2cd0d84c66d3915aef0e06fa3/onnxruntime_directml-1.24.4-cp312-cp312-win_amd64.whl", hash = "sha256:f2ecb68b7b7b259d2ef3112ae760149f9b5a1e7c0fbb73d539da6250a648a614", size = 25111930, upload-time = "2026-03-17T21:47:18.419Z" },
@@ -2494,10 +2494,10 @@ resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
+    "python_full_version >= '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform == 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
-    "python_full_version >= '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
     "python_full_version < '3.13' and extra != 'group-9-stenograf-eval' and extra != 'group-9-stenograf-eval-canary'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d7/f1/e7a6dd94a8d4a5626c03e4e99c87f241ba9e350cd9e6d75123f992427270/packaging-26.2.tar.gz", hash = "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661", size = 228134, upload-time = "2026-04-24T20:15:23.917Z" }
@@ -2546,12 +2546,12 @@ name = "parakeet-mlx"
 version = "0.5.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "dacite", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "huggingface-hub", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "librosa", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "mlx", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "typer", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "dacite", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "huggingface-hub", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "librosa", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "mlx", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "typer", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5b/1a/d7ab33b3e25dcf2d97d0192fd1e718f2c6e69b5775370413e144fef54256/parakeet_mlx-0.5.2.tar.gz", hash = "sha256:6c6ba3c4d42ebf015dde515e5a83858a516add3f5b2c6bd4a7be5c4ba8bd4d02", size = 37791, upload-time = "2026-06-05T07:52:35.473Z" }
 wheels = [
@@ -3065,7 +3065,7 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
     { name = "iniconfig" },
     { name = "packaging", version = "24.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval-canary'" },
     { name = "packaging", version = "26.2", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
@@ -3329,8 +3329,8 @@ name = "rich"
 version = "15.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "pygments", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "markdown-it-py", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "pygments", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
 wheels = [
@@ -3766,8 +3766,8 @@ name = "standard-aifc"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "audioop-lts", marker = "python_full_version >= '3.13' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "standard-chunk", marker = "python_full_version >= '3.13' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
+    { name = "standard-chunk", marker = "python_full_version >= '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c4/53/6050dc3dde1671eb3db592c13b55a8005e5040131f7509cef0215212cb84/standard_aifc-3.13.0.tar.gz", hash = "sha256:64e249c7cb4b3daf2fdba4e95721f811bde8bdfc43ad9f936589b7bb2fae2e43", size = 15240, upload-time = "2024-10-30T16:01:31.772Z" }
 wheels = [
@@ -3788,7 +3788,7 @@ name = "standard-sunau"
 version = "3.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "audioop-lts", marker = "python_full_version >= '3.13' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/e3/ce8d38cb2d70e05ffeddc28bb09bad77cfef979eb0a299c9117f7ed4e6a9/standard_sunau-3.13.0.tar.gz", hash = "sha256:b319a1ac95a09a2378a8442f403c66f4fd4b36616d6df6ae82b8e536ee790908", size = 9368, upload-time = "2024-10-30T16:01:41.626Z" }
 wheels = [
@@ -3803,18 +3803,19 @@ dependencies = [
     { name = "click" },
     { name = "imageio-ffmpeg" },
     { name = "livekit" },
-    { name = "mlx-lm", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "numba", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "numpy" },
     { name = "onnx-asr", extra = ["hub"] },
-    { name = "onnxruntime", marker = "sys_platform != 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "onnxruntime-directml", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "parakeet-mlx", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "onnxruntime", marker = "sys_platform != 'win32'" },
+    { name = "onnxruntime-directml", marker = "sys_platform == 'win32'" },
+    { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "pyside6-essentials" },
+    { name = "scipy" },
     { name = "sentencepiece" },
     { name = "sherpa-onnx" },
     { name = "sherpa-onnx-core" },
-    { name = "transformers", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine != 'arm64' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary') or (sys_platform != 'darwin' and extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "transformers", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
 ]
 
 [package.dev-dependencies]
@@ -3855,6 +3856,7 @@ requires-dist = [
     { name = "onnxruntime-directml", marker = "sys_platform == 'win32'", specifier = ">=1.24" },
     { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.2" },
     { name = "pyside6-essentials", specifier = ">=6.8,<7" },
+    { name = "scipy", specifier = ">=1.11" },
     { name = "sentencepiece", specifier = ">=0.2" },
     { name = "sherpa-onnx", specifier = ">=1.13.4,<1.14" },
     { name = "sherpa-onnx-core", specifier = ">=1.13.4,<1.14" },
@@ -4093,7 +4095,7 @@ name = "tqdm"
 version = "4.68.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/87/d7/0535a28b1f5f24f6612fb3ff1e89fb1a8d160fee0f976e0aa6803862134b/tqdm-4.68.3.tar.gz", hash = "sha256:00dfa48452b6b6cfae3dd9885636c23d3422d1ec97c66d96818cbd5e0821d482", size = 170596, upload-time = "2026-06-17T07:36:52.105Z" }
 wheels = [
@@ -4168,10 +4170,10 @@ name = "typer"
 version = "0.26.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-doc", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "colorama", marker = "(sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary') or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
-    { name = "rich", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
-    { name = "shellingham", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or (sys_platform == 'emscripten' and extra == 'group-9-stenograf-eval') or (sys_platform == 'emscripten' and extra != 'group-9-stenograf-eval-canary') or (sys_platform == 'win32' and extra == 'group-9-stenograf-eval') or (sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary')" },
+    { name = "annotated-doc", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "colorama", marker = "(sys_platform == 'win32' and extra != 'group-9-stenograf-eval-canary') or (extra == 'group-9-stenograf-eval' and extra == 'group-9-stenograf-eval-canary')" },
+    { name = "rich", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
+    { name = "shellingham", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7c/f7/68adc395201b20b872d68e975386832e8005ffeacedd43a1d837a32815be/typer-0.26.8.tar.gz", hash = "sha256:c244a6bd558886fe3f8780efb6bdd28bb9aff005a94eedebaa5cb32926fe2f7e", size = 202097, upload-time = "2026-06-26T09:22:45.705Z" }
 wheels = [
