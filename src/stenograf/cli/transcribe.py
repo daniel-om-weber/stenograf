@@ -120,6 +120,13 @@ from stenograf.output import prepare_output, write_transcript
     help="A human-readable title for this transcription (recorded in the "
     "transcript and used by the notes prompt and the combined-note export).",
 )
+@click.option(
+    "--part-minutes",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Diarize a long file in parts of about this length, linking speakers by "
+    "voice, so memory stays bounded (default 30, 0 turns it off).",
+)
 @_reid_format_options
 @_vocab_options
 @_notes_options
@@ -136,6 +143,7 @@ def transcribe(
     out: Path | None,
     force: bool,
     title: str | None,
+    part_minutes: int | None,
     use_reid: bool,
     reid_threshold: float | None,
     formats: str | None,
@@ -265,7 +273,12 @@ def transcribe(
         transcript = meeting_result.transcript
         speaker_embeddings: dict[str, np.ndarray] = dict(meeting_result.speaker_embeddings)
     else:
-        from stenograf.pipeline import STAGE_ASR, STAGE_DIARIZATION, finalize_file
+        from stenograf.pipeline import (
+            PART_SECONDS,
+            STAGE_ASR,
+            STAGE_DIARIZATION,
+            finalize_file,
+        )
 
         try:
             samples = load_audio(audio_file)
@@ -317,6 +330,7 @@ def transcribe(
             glossary_threshold=glossary_threshold,
             on_progress=progress,
             on_embeddings=speaker_embeddings.update,
+            part_seconds=PART_SECONDS if part_minutes is None else part_minutes * 60.0,
         )
         elapsed = time.monotonic() - started
 

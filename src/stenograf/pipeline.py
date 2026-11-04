@@ -351,8 +351,7 @@ def fold_excess_clusters(
         if len(embedded) < 2:
             return turns, embeddings
         sim, a, b = max(
-            (float(embeddings[x] @ embeddings[y]), x, y)
-            for x, y in combinations(embedded, 2)
+            (float(embeddings[x] @ embeddings[y]), x, y) for x, y in combinations(embedded, 2)
         )
         if sim < FOLD_PAIR_SIMILARITY:
             b = min(embedded, key=lambda c: durations[c])
@@ -409,6 +408,116 @@ def assemble_transcript(
     )
 
 
+PART_SECONDS = 1800.0
+"""Length of the parts a long diarized file is finalized in. Clustering is
+quadratic in the (chunk, speaker) pairs and diarization holds the whole
+recording's chunks: a 2 h 20 min file ran a 16 GB machine out of memory in
+``linkage`` while 38 min finished fine, so a long file goes through in parts of
+about this length. ``None`` or 0 turns parting off."""
+
+_PART_TRIGGER = 1.5
+"""Only a file this many parts long is split: just over one part is cheaper
+whole than it is as two."""
+
+_CUT_SEARCH_S = 60.0
+"""A cut lands on the quietest moment within this distance of the even split."""
+
+_CUT_WINDOW_S = 0.1
+
+PART_LINK_SIMILARITY = 0.6
+"""Two parts' clusters are one voice from this cosine up. The same boundary as
+:data:`COLLAPSE_SIMILARITY`, whose measured gap (one voice 0.73+, two voices
+≤0.39) is the same question asked across parts; not measured separately."""
+
+
+def cut_points(samples: np.ndarray, part_seconds: float) -> list[int]:
+    """Sample offsets splitting ``samples`` into parts of about ``part_seconds``,
+    each on the quietest moment near the even split so no word is cut."""
+    total = len(samples)
+    parts = max(1, round(total / (part_seconds * SAMPLE_RATE)))
+    step = int(_CUT_WINDOW_S * SAMPLE_RATE)
+    search = int(_CUT_SEARCH_S * SAMPLE_RATE)
+    cuts = []
+    for index in range(1, parts):
+        target = total * index // parts
+        low = max(0, target - search)
+        usable = (min(total, target + search) - low) // step * step
+        energy = np.square(samples[low : low + usable].reshape(-1, step)).mean(axis=1)
+        cuts.append(low + int(np.argmin(energy)) * step + step // 2)
+    return cuts
+
+
+def _link_clusters(
+    clusters: dict[str, np.ndarray], voices: dict[str, np.ndarray]
+) -> dict[str, str]:
+    """One part's labels → the run's labels, updating ``voices`` in place.
+
+    Profile names are already global. A raw ``S<n>`` is per part, so it joins
+    the most similar voice no other cluster of this part took, or opens a new
+    one. Greedy by similarity: the best-supported pairing goes first."""
+    mapping = {label: label for label in clusters if not _RAW_CLUSTER.fullmatch(label)}
+    taken = set(mapping)
+    raw = [label for label in clusters if label not in mapping]
+    pairs = sorted(
+        (
+            (float(np.dot(l2_normalize(clusters[label]), l2_normalize(vector))), label, voice)
+            for label in raw
+            for voice, vector in voices.items()
+        ),
+        key=lambda pair: pair[0],
+        reverse=True,
+    )
+    for similarity, label, voice in pairs:
+        if similarity >= PART_LINK_SIMILARITY and label not in mapping and voice not in taken:
+            mapping[label] = voice
+            taken.add(voice)
+    opened = sum(1 for voice in voices if _RAW_CLUSTER.fullmatch(voice))
+    for label in raw:
+        if label not in mapping:
+            mapping[label] = f"S{opened}"
+            opened += 1
+    for label, vector in clusters.items():
+        voice = mapping[label]
+        voices[voice] = l2_normalize(voices[voice] + vector) if voice in voices else vector
+    return mapping
+
+
+def _finalize_parts(
+    samples: np.ndarray,
+    cuts: list[int],
+    *,
+    language: Language | None,
+    asr: ASRBackend,
+    vad: SileroVAD | None,
+    diarizer: Diarizer,
+    num_speakers: int | None,
+    reid: SpeakerResolver | None,
+    on_progress: ProgressCallback | None,
+) -> tuple[list[TranscriptEntry], dict[str, np.ndarray]]:
+    """:func:`finalize_channel` part by part: entries on the file's clock with
+    one set of labels, and the voices behind them."""
+    entries: list[TranscriptEntry] = []
+    voices: dict[str, np.ndarray] = {}
+    bounds = [0, *cuts, len(samples)]
+    for start, end in zip(bounds, bounds[1:], strict=False):
+        clusters: dict[str, np.ndarray] = {}
+        part = finalize_channel(
+            samples[start:end],
+            asr=asr,
+            language=language,
+            vad=vad,
+            diarizer=diarizer,
+            num_speakers=num_speakers,
+            reid=reid,
+            on_progress=on_progress,
+            on_embeddings=clusters.update,
+        )
+        mapping = _link_clusters(clusters, voices)
+        offset = start / SAMPLE_RATE
+        entries += [_shift_entry(e, offset, mapping.get(e.speaker, e.speaker)) for e in part]
+    return entries, voices
+
+
 def finalize_file(
     samples: np.ndarray,
     *,
@@ -421,6 +530,7 @@ def finalize_file(
     glossary_threshold: float | None = None,
     on_progress: ProgressCallback | None = None,
     on_embeddings: Callable[[dict[str, np.ndarray]], None] | None = None,
+    part_seconds: float | None = PART_SECONDS,
 ) -> Transcript:
     """One mixed audio stream → a finished transcript (``steno transcribe``).
 
@@ -432,19 +542,34 @@ def finalize_file(
     ``Speaker <n>`` template and provenance is recorded under a single
     ``"audio"`` channel. ``profile.language`` is the *given*
     language (``None`` = detect); the returned transcript carries the resolved
-    one."""
+    one. A diarized file well over ``part_seconds`` goes through in parts
+    (:data:`PART_SECONDS`), its speakers linked across them by voice."""
     captured: dict[str, np.ndarray] = {}
-    raw = finalize_channel(
-        samples,
-        asr=asr,
-        language=profile.language,
-        vad=vad,
-        diarizer=diarizer,
-        num_speakers=num_speakers,
-        reid=reid,
-        on_progress=on_progress,
-        on_embeddings=captured.update if on_embeddings is not None else None,
-    )
+    diarized = diarizer is not None and num_speakers != 1
+    if diarized and part_seconds and len(samples) > _PART_TRIGGER * part_seconds * SAMPLE_RATE:
+        raw, captured = _finalize_parts(
+            samples,
+            cut_points(samples, part_seconds),
+            language=profile.language,
+            asr=asr,
+            vad=vad,
+            diarizer=diarizer,
+            num_speakers=num_speakers,
+            reid=reid,
+            on_progress=on_progress,
+        )
+    else:
+        raw = finalize_channel(
+            samples,
+            asr=asr,
+            language=profile.language,
+            vad=vad,
+            diarizer=diarizer,
+            num_speakers=num_speakers,
+            reid=reid,
+            on_progress=on_progress,
+            on_embeddings=captured.update if on_embeddings is not None else None,
+        )
     mapping = raw_label_map(raw, "Speaker {n}")
     entries = [replace(e, speaker=mapping.get(e.speaker, e.speaker)) for e in raw]
     if on_embeddings is not None and captured:
@@ -468,6 +593,16 @@ def _shift(seg: Segment, offset: float) -> Segment:
         start=seg.start + offset,
         end=seg.end + offset,
         words=tuple(replace(w, start=w.start + offset, end=w.end + offset) for w in seg.words),
+    )
+
+
+def _shift_entry(entry: TranscriptEntry, offset: float, speaker: str) -> TranscriptEntry:
+    return replace(
+        entry,
+        speaker=speaker,
+        start=entry.start + offset,
+        end=entry.end + offset,
+        words=tuple(replace(w, start=w.start + offset, end=w.end + offset) for w in entry.words),
     )
 
 
