@@ -7,7 +7,9 @@ from stenograf.audio import SAMPLE_RATE
 from stenograf.config import Language, MeetingProfile, Provenance
 from stenograf.diarization.base import SpeakerTurn
 from stenograf.pipeline import (
+    _link_clusters,
     collapse_single_voice,
+    cut_points,
     finalize_channel,
     finalize_file,
     fold_excess_clusters,
@@ -699,7 +701,78 @@ class TestOnEmbeddings:
             num_speakers=2,
             on_embeddings=captured.update,
         )
-        assert set(captured) == {e.speaker for e in transcript.entries} <= {
-            "Speaker 1",
-            "Speaker 2",
-        }
+        assert (
+            set(captured)
+            == {e.speaker for e in transcript.entries}
+            <= {
+                "Speaker 1",
+                "Speaker 2",
+            }
+        )
+
+
+class TestLongFileParts:
+    def test_cut_lands_on_the_quiet_moment(self):
+        samples = np.ones(SAMPLE_RATE * 200, dtype=np.float32)
+        quiet = SAMPLE_RATE * 110
+        samples[quiet : quiet + SAMPLE_RATE] = 0.0
+        (cut,) = cut_points(samples, 100.0)
+        assert quiet <= cut <= quiet + SAMPLE_RATE
+
+    def test_short_audio_has_no_cut(self):
+        assert cut_points(np.zeros(SAMPLE_RATE * 10, dtype=np.float32), 100.0) == []
+
+    def test_linking_keeps_a_voice_and_opens_a_new_one(self):
+        first = np.array([1.0, 0.0], np.float32)
+        second = np.array([0.0, 1.0], np.float32)
+        voices: dict[str, np.ndarray] = {}
+        assert _link_clusters({"S0": first}, voices) == {"S0": "S0"}
+        # Part labels are per part: this part's S0 is the run's new voice.
+        assert _link_clusters({"S0": second, "S1": first}, voices) == {"S0": "S1", "S1": "S0"}
+
+    def test_linking_gives_one_voice_to_one_cluster(self):
+        voice = np.array([1.0, 0.0], np.float32)
+        voices = {"S0": voice}
+        mapping = _link_clusters({"S0": voice, "S1": voice}, voices)
+        assert sorted(mapping.values()) == ["S0", "S1"]
+
+    def test_profile_names_pass_through(self):
+        voices: dict[str, np.ndarray] = {}
+        vector = np.array([1.0, 0.0], np.float32)
+        assert _link_clusters({"MS": vector}, voices) == {"MS": "MS"}
+
+    def test_parts_share_labels_and_the_file_clock(self):
+        diarizer = EmbeddingDiarizer(
+            [turn("S0", 0.0, 1.0), turn("S1", 1.2, 2.0)],
+            {
+                "S0": np.array([1.0, 0.0], np.float32),
+                "S1": np.array([0.0, 1.0], np.float32),
+            },
+        )
+        whole = finalize_file(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            profile=MeetingProfile(),
+            asr=FakeASR(),
+            diarizer=diarizer,
+            num_speakers=2,
+        )
+        parted = finalize_file(
+            np.zeros(SAMPLE_RATE * 4, dtype=np.float32),
+            profile=MeetingProfile(),
+            asr=FakeASR(),
+            diarizer=diarizer,
+            num_speakers=2,
+            part_seconds=2.0,
+        )
+        assert {e.speaker for e in parted.entries} == {e.speaker for e in whole.entries}
+        assert len(parted.entries) == 2 * len(whole.entries)
+        assert parted.entries[-1].end > whole.entries[-1].end
+
+    def test_no_parts_without_a_diarizer(self):
+        transcript = finalize_file(
+            np.zeros(SAMPLE_RATE * 4, dtype=np.float32),
+            profile=MeetingProfile(),
+            asr=FakeASR(),
+            part_seconds=1.0,
+        )
+        assert len({e.speaker for e in transcript.entries}) == 1

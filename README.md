@@ -223,6 +223,10 @@ If you know how many people spoke in a recording, tell `steno transcribe` with
 the biggest diarization accuracy lever (omitted, the count is estimated
 whenever diarization runs).
 
+A long file with diarization goes through in parts of about 30 minutes, cut at
+quiet moments, with speakers linked across parts by voice, so memory stays
+bounded. `--part-minutes N` changes the length; `--part-minutes 0` turns it off.
+
 `steno transcribe` recognizes 2-channel recordings whose channels are separate
 voice feeds — a `--record-audio` tee (mic left, system right) or a
 dual-channel call recording — and transcribes them per channel through the
