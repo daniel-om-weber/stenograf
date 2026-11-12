@@ -47,8 +47,8 @@ channel's speaker labels. The first run ever also downloads the models and
 compiles them (minutes, then cached per machine)."""
 
 DEFAULT_MODE = "coreml" if sys.platform == "darwin" else "cpu"
-"""stenodiar execution mode: CoreML on macOS, ONNX Runtime CPU elsewhere
-(GPU execution providers are a later opt-in, mirroring the ASR backend)."""
+"""stenodiar execution mode: CoreML on macOS, speakrs' native CPU backend
+elsewhere (GPU backends are a later opt-in, mirroring the ASR backend)."""
 
 
 class DiarizerHelperNotFoundError(RuntimeError):

@@ -62,7 +62,7 @@ jobs:
           workspaces: native/stenocap
       - run: cargo test --locked
 
-  # Type-check the stenodiar helper (vendored speakrs) in the default CPU
+  # Type-check the stenodiar helper in the default CPU
   # config plus each platform's acceleration feature — coreml is macOS-only,
   # cuda is the Linux/Windows GPU opt-in. cargo check only: building or
   # running the models in CI is not worth the minutes.

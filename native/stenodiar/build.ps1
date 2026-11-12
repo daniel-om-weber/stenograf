@@ -5,9 +5,9 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-# Default features = ORT CPU (matches the shipped Linux/Windows path); CUDA is a
-# manual opt-in — cargo build --release --features cuda (nvidia-*-cu12 DLLs +
-# onnxruntime_providers_cuda.dll on PATH). CoreML is macOS-only (build.sh).
+# Default features = speakrs' native CPU backend (matches the shipped
+# Linux/Windows path); CUDA is a manual opt-in — cargo build --release
+# --features cuda. CoreML is macOS-only (build.sh).
 cargo build --release --locked
 Copy-Item target\release\stenodiar.exe stenodiar.exe -Force
 
