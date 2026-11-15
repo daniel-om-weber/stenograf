@@ -1,62 +1,20 @@
 # Native helpers
 
-Two helpers live here — **stenocap**, which captures, and **stenodiar**, which
-diarizes — both speaking simple pipes to the Python core and both honoring the
-same rule: **meeting audio never touches disk**. stenocap has two
-implementations, `stenocap-macos/` (Swift) and `stenocap/` (Rust, one crate
-with a WASAPI backend for Windows and a PulseAudio-protocol backend for
-Linux), speaking one wire protocol; stenodiar is one crate built for every
-platform stenograf ships a wheel for. Plus
+One helper lives here — **stenocap**, which captures — speaking a simple pipe
+to the Python core under the rule **meeting audio never touches disk**. It has
+two implementations, `stenocap-macos/` (Swift) and `stenocap/` (Rust, one
+crate with a WASAPI backend for Windows and a PulseAudio-protocol backend for
+Linux), speaking one wire protocol. Three platform wheels carry it (macOS
+arm64, win_amd64, manylinux_2_28 x86_64); the Linux floor is stenocap's own,
+since it links only libpulse, and `release.yml` asserts the highest glibc
+symbol on the built wheel. Platforms with no tagged wheel (musl, Linux arm64)
+install the pure `py3-none-any` wheel and have no live capture. Plus
 `appbundle/`, which is not a helper at all but the sources for the macOS
 desktop launcher `Stenograf.app`. It breaks this directory's convention on
 purpose: its product is *committed* (`src/stenograf/assets/Stenograf.app`)
 rather than built at install time, because macOS pins the app's microphone
 grant to the bundle's exact bytes. Read `appbundle/README.md` before touching
 anything in it.
-
-`stenodiar/` holds the **diarization helper**, a Rust CLI around
-[speakrs](https://github.com/avencera/speakrs) (the pyannote community-1
-pipeline with VBx clustering, CoreML). It exists because sherpa's threshold
-clustering cannot *estimate* a speaker count (it over-splits absurdly), while
-VBx can; stenograf routes estimate-mode diarization through it and known
-counts through sherpa (see `stenograf/diarization/speakrs.py`). Raw mono
-16 kHz s16le PCM goes in on stdin, JSON speaker turns come out on stdout.
-Build with `stenodiar/build.sh` (needs a Rust toolchain: `brew install rust`);
-on Windows use `stenodiar/build.ps1` (rustup + VS Build Tools; CPU/ORT default,
-CUDA a manual `--features cuda` opt-in); no signing needed — it touches no
-TCC-guarded resource. The first run per
-machine downloads models and compiles them for CoreML (minutes; `--warmup`
-does it eagerly). Without the binary, stenograf silently falls back to
-sherpa-only diarization.
-
-Unlike stenocap it is not macOS-only, and users never build it: three
-platform wheels carry it (macOS arm64 with CoreML, manylinux_2_39 x86_64 and
-win_amd64 with ORT CPU), because at ~15 MB compressed the bytes are cheaper
-than a documented download nobody performs — the alternative that was
-considered and dropped. Linux x86_64 older than glibc 2.39 resolves the
-manylinux_2_28 wheel instead, which carries **stenocap only**: live capture
-survives on the distros stenodiar's floor shuts out, and diarization keeps
-the sherpa-only fallback there. Platforms with no tagged wheel at all (musl,
-Linux arm64) install the pure `py3-none-any` wheel.
-
-The Linux binary is the delicate one: it must start on distros it was not
-built on. Two things fix its floor, and only one of them is our choice.
-
-- **glibc 2.39, not ours.** The onnxruntime static library `ort-sys`
-  downloads references `__isoc23_strtol` and `__libc_single_threaded` — glibc
-  2.38 symbols — so an older image cannot link stenodiar at all
-  (manylinux_2_28 was tried, and fails at the link step, not at runtime).
-  `release.yml` therefore pins `ubuntu-24.04` (glibc 2.39) and tags the wheel
-  to match; measured, the binary itself needs only 2.38 and GLIBCXX_3.4.30.
-- **OpenSSL, ours.** `stenodiar/Cargo.toml` vendors it statically so the
-  helper never depends on the user's OpenSSL version. Note the flag reaches
-  only the *runtime* graph: `ort-sys`'s build script pulls its own
-  `openssl-sys` through a build-dependency, which cargo resolves with a
-  separate feature set, so the build machine still needs `libssl-dev` (and a
-  full `perl`, which is what compiles the vendored copy).
-
-`release.yml` asserts all of it on the built wheel — highest glibc symbol,
-libstdc++ against the runner's own, and no `libssl` in `ldd`.
 
 `stenocap-macos/` holds **stenocap**, the ad-hoc-signed Swift binary that feeds
 live audio to the Python core. It captures
@@ -237,8 +195,7 @@ is granted mic + system-audio permission once. The Windows build is plain
 
 Both are **mandatory** where they apply, which is why `hatch_build.py` fails the
 wheel if either fails to build: without one there is no live capture on that
-platform at all. That is the opposite of stenodiar, whose absence only downgrades
-speaker-count estimation.
+platform at all.
 
 Reference implementations this was built from:
 

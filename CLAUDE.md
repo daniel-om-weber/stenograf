@@ -15,8 +15,9 @@ never into one front-end, or the Qt app and the CLI drift.
 steps shipped; the app is the default UI, installed as
 `~/Applications/Stenograf.app` by `steno setup`, and lives in the menu bar).
 What remains there: step 1's watt half (deferred to a quiet machine), the
-step-7 observation gates still to run on this Mac, the open platform items
-and the declined list. Step 5's bundle is FROZEN: its bytes are every user's
+step-7 observation gates still to run on this Mac, the open platform items,
+what the Nemotron switch left (the room-mic watch, WebGPU, the release
+preconditions) and the declined list. Step 5's bundle is FROZEN: its bytes are every user's
 microphone grant, so read `native/appbundle/README.md` before touching
 anything under it or under `src/stenograf/assets/` — new sibling files there
 are fine, the `.app` tree is not. Everything
@@ -36,10 +37,10 @@ PipeWire through pipewire-pulse) speaking the frame format
 platforms share (the per-platform provider modules folded into it 2026-08-02;
 only `capture/windows.py` remains, for the consent store and the loopback
 suffix); `soundcard`, `parec`, `FAR_END_LAG_S`, `SessionClock` and
-`far_end_lag_s` itself are all deleted. The wheel matrix carries it: win_amd64
-and manylinux_2_39 bundle both helpers, and a low-floor **manylinux_2_28 wheel
-carries stenocap alone** so Ubuntu 22.04 / Debian 12 / RHEL 9 keep live
-capture (stenodiar's glibc-2.39 floor is onnxruntime's, not capture's).
+`far_end_lag_s` itself are all deleted. The wheel matrix carries it: macOS
+arm64, win_amd64 and **one manylinux_2_28 Linux wheel**, so Ubuntu 22.04 /
+Debian 12 / RHEL 9 keep live capture (the manylinux_2_39 wheel existed only for
+the diarization helper's glibc floor and went with it, 2026-11-15).
 `PLAN-CAPTURE-HELPER.md` closed and was deleted that day
 (`git log --follow -p PLAN-CAPTURE-HELPER.md`) — **read its history before
 touching capture, `aec.py`, or `hatch_build.py` on any platform**: vendoring
@@ -52,19 +53,28 @@ room), and the livekit re-ask whose trigger — the helper everywhere — has no
 fired. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
 twelve seconds.
 
-**The diarization + speaker re-ID program CLOSED 2026-08-09 — no live
-side-plan remains.** All five steps of `PLAN-DIARIZATION.md` were measured to
-a verdict and the file was deleted (`git log --follow -p PLAN-DIARIZATION.md`
-for the step record). Before touching `diarization/`, `voiceprints.py`,
-`eval/der.py`, or evaluating any diarization or speaker-embedding model, read
-`eval/diarization-sota-2026.md` (the research record) and `eval/README.md`'s
-corpus-harness sections (every shipped default's numbers, and every declined
-candidate's); the declined list — Sortformer, joint SA-ASR, TS-VAD,
-AS-Norm-by-default, pyannote.audio-as-dependency, DiariZen meeting-base, both
-embedding-upgrade candidates, stride >1 s, automatic profile updates — now
-lives in PLAN.md with measured reasons and re-open triggers.
+**Nemotron 3 is the one diarizer (2026-11-15).** NVIDIA Nemotron 3
+Diarization (fp16 ONNX on the onnxruntime the wheel already ships, CPU only)
+replaced both the owned clustering loop and the stenodiar/speakrs helper: it
+counts the speakers itself, a stated count is applied afterwards as a cap, and
+count 1 still skips the diarizer. Re-ID is unchanged in kind — ERes2Net
+voiceprints (`diarization/embedding.py`, model-bound to the embedder, not the
+diarizer) matched at 0.56 — with two additions from the migration: a profile
+matches by the *median* of its entries' scores, and `steno profiles assign`
+refuses a voice below the threshold unless `--force`d. The migration plan
+closed and was deleted (`git log --follow -p PLAN-NEMOTRON.md`); what it left —
+watching the first real hybrid meetings on a shared room mic, WebGPU as an
+optional extra — is in PLAN.md. Before touching `diarization/`,
+`voiceprints.py`, `eval/der.py`, or evaluating any diarization or
+speaker-embedding model, read `eval/diarization-sota-2026.md` (the research
+record) and `eval/README.md`'s corpus-harness and Nemotron sections (every
+shipped default's numbers, and every declined candidate's); the declined list —
+joint SA-ASR, TS-VAD, AS-Norm-by-default, pyannote.audio-as-dependency,
+DiariZen meeting-base, both embedding-upgrade candidates, automatic profile
+updates, custom GPU kernels — lives in PLAN.md with measured reasons and
+re-open triggers.
 
-**Seven side-plans closed and were deleted; their evidence is in git history,
+**Nine side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 (2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`
 (2026-07-27): five of six items green — the `.lnk` launcher, the
@@ -91,9 +101,12 @@ four jobs (structure, sanitizing, truncation detection, refusal detection) and
 which replacement covers each is not guessable from the code. Their leftovers —
 two Ollama gates that need a non-macOS box and Gate A's read — are in PLAN.md.
 `PLAN-DIARIZATION.md` (2026-08-09, all five steps measured): the AMI/ICSI
-harness, the owned ward+gated-fold loop as production, profile store v2 +
-rename-once enrollment, the 0.56 threshold — and DiariZen meeting-base
-declined at the fair k+1+fold boundary (`eval/README.md`).
+harness, the owned ward+gated-fold loop (production until 2026-11-15),
+profile store v2 + rename-once enrollment, the 0.56 threshold — and DiariZen
+meeting-base declined at the fair k+1+fold boundary (`eval/README.md`).
+`PLAN-DIARIZATION-SPEED.md` (closed 2026-11-15 with the loop it was speeding
+up; its surviving facts are in PLAN.md) and `PLAN-NEMOTRON.md` (2026-11-15,
+all six steps: the migration above, step by step with its gates).
 Retrieve any of them with `git log --follow -p <file>`. Measured evidence for the shipped defaults is in
 `eval/README.md`; design rationale lives in the code's own docstrings. Use the
 `verify` skill to run/observe the tool without live capture hardware.
@@ -184,7 +197,8 @@ both dispatch gates by design.
   CC-BY-NC — unshippable; its `meeting-base` checkpoint is MIT (trained only
   on AMI/AISHELL-4/AliMeeting), was measured on the harness 2026-08-09 and
   declined on accuracy (`eval/README.md`).
-  speakrs (cross-platform: CoreML on mac, ORT elsewhere) is the chosen
-  auto-count estimator, still immature at v0.5.0 — **vendored with two
-  CPU-throughput patches** in `native/stenodiar/vendor/` (see VENDOR.md;
-  upstream candidates, re-check on every speakrs release).
+  Nemotron 3 Diarization is OpenMDW-1.1 (use, modification and commercial use
+  without field-of-use limits, nothing on outputs); redistributing the weights
+  would owe licence and origin notices, so stenograf downloads them at first
+  run (`assets.NEMOTRON`, pinned by revision and sha256) and never bundles
+  them — the README names the licence, which is all that is owed.

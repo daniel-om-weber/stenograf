@@ -8,12 +8,14 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**Two side-plans are live.** `PLAN-MIC-DEVICE.md` (built 2026-08-12: the mic
+**One side-plan is live.** `PLAN-MIC-DEVICE.md` (built 2026-08-12: the mic
 channel records from a chosen device on all three platforms — `[capture]
 mic_device`, `steno devices`, `--mic-device`, and the setup form's picker;
 what remains is §7's hardware gates, and its §4a is superseded by the measured
-macOS design in `native/README.md`), and `PLAN-NEMOTRON.md`, the migration to
-Nemotron 3 as the one diarizer. `PLAN-DIARIZATION-SPEED.md` closed 2026-11-15
+macOS design in `native/README.md`). `PLAN-NEMOTRON.md`, the migration to
+Nemotron 3 as the one diarizer, closed 2026-11-15 (`git log --follow -p
+PLAN-NEMOTRON.md`; what it left is in the Diarization section below), and
+`PLAN-DIARIZATION-SPEED.md` closed the same day
 when the owned loop and stenodiar it was speeding up were deleted
 (`git log --follow -p PLAN-DIARIZATION-SPEED.md`; numbers in
 `eval/README.md`). Two of its facts outlive it: the shared-trunk embedding
@@ -625,49 +627,36 @@ never run on, and was deleted on 2026-07-26 with nothing open:
 
 ---
 
-## Diarization: Nemotron 3 as the one diarizer — measured, gates open (2026-11-15)
+## Diarization: Nemotron 3 — shipped 2026-11-15, two things left
 
-The candidate: NVIDIA Nemotron 3 Diarization (ONNX, run on the onnxruntime the
-wheel already ships; the `onnxruntime-ep-webgpu` plugin optional) replacing
-*both* partitioners — the owned loop for stated counts and stenodiar for
-estimated ones — with a stated count kept only as a post-hoc cap, count 1
-still skipping the diarizer, and re-ID unchanged (ERes2Net voiceprints per
-speaker → the profile store; profiles are model-bound to the embedder, not the
-diarizer, so none would be lost). On AMI's held-out evaluation meetings it beat
-the owned loop *given the true count* on transcript attribution (97.1 vs
-95.1 % mean, worst channel 94.0 vs 76.0) at ~6× the speed, without being told
-the count. Evidence, method and caveats: `eval/README.md`, "The estimate path,
-and Nemotron 3 Diarization as the one diarizer".
+NVIDIA Nemotron 3 Diarization is the one diarizer; the owned loop, stenodiar
+and the manylinux_2_39 wheel are deleted. The migration record is
+`git log --follow -p PLAN-NEMOTRON.md`; the evidence is `eval/README.md`, "The
+estimate path, and Nemotron 3 Diarization as the one diarizer" and the
+sections under it. Not released yet — that is the next version bump + tag,
+once CI is green on all three platforms for the push that carries the
+deletion, and a `workflow_dispatch` dry run of `release.yml` has built and
+smoked the single manylinux_2_28 wheel.
 
-Gates before it can ship, in order:
+1. **Watch the first real hybrid meetings on a shared room mic.** Held-out
+   AMI, the user's own one-to-one calls and two-remote-voices dialogues are
+   measured; what no free reference covers is several people on one room
+   microphone, the hybrid case that is common and diarization-critical. Look
+   for people merged into one speaker, crosstalk phantoms, and a profile
+   naming the wrong person. A labelled room recording, if one ever exists,
+   replaces this with a number.
+2. **WebGPU, as an optional extra.** CPU runs 17 s per audio-hour on the M4
+   Max. The `onnxruntime-ep-webgpu` plugin loads a second onnxruntime copy
+   beside the wheel's on macOS and segfaulted on a second session in one
+   process; revisit once the CPU path has shipped in a release.
 
-1. **A shared room mic.** Two-speaker audio off AMI is measured (below); what no
-   free reference covers is several people on one room microphone, the hybrid
-   case that is common and diarization-critical. Until a labelled room recording
-   exists, the first real hybrid meetings after the switch are the check.
-2. **Enrollment hygiene without a count.** Re-ID on Nemotron's turns passed
-   with the count applied (below); without one, a phantom crosstalk cluster
-   assigned to a person poisons the mean-cosine profile (FIO084: 0.84 → 0.41,
-   rejected). Before "no count" can be the default, `steno profiles assign`
-   needs a guard against storing an entry that disagrees with the profile it
-   joins — or the count cap stays mandatory whenever profiles are in use.
-3. **Packaging:** read OpenMDW-1.1 properly; a numpy 128-band mel front end
-   (the reference processor imports torch); the fp16 export is 199 MB against
-   speakrs' 295 MB of models; one WebGPU session per process (a second one
-   segfaulted), and on macOS the plugin loads a second onnxruntime copy beside
-   the wheel's (warned, not crashed).
+Out of scope: streaming diarization in live captions — Nemotron has an online
+mode, but live captions carry no speaker labels.
 
-The held-out set is now complete on every arm, and the macOS runtime is
-measured (2026-11-15, `eval/README.md`, "The held-out set on macOS, every
-arm"): TS3003 leaves the owned loop's picture unchanged, the stenodiar estimate
-over-counts every multi-speaker channel and attributes worst of all, and
-Nemotron on an M4 Max runs at stenodiar-on-CoreML speed on plain CPU and faster
-on WebGPU. Re-ID on its turns is measured too (same section, "Re-ID"): with the
-count applied it names every known trial right and no stranger at every
-threshold 0.45–0.70, so 0.56 holds; the owned loop's known IS1009 misnaming
-disappears. Off AMI, on the user's own calls labelled by channel (same file,
-"Two speakers off AMI"), Nemotron beats the owned loop at k=2 on every call and
-every two-remote-voices dialogue (98.6 vs 89.7 % on the latter).
+Measured for the record (`eval/README.md`, "A real finalize, and its peak
+memory"): diarizing a 1 h 45 min meeting raises the finalize's peak memory
+from 6.9 to 11.2 GB on the M4 Max. Diarization is off by default, so only
+users who turn it on pay it; an 8–16 GB machine is the unmeasured case.
 
 ---
 
@@ -706,21 +695,22 @@ Kept here so future sessions don't re-open them.
   candidate measured.** `PLAN-DIARIZATION.md` deleted
   (`git log --follow -p PLAN-DIARIZATION.md` for the step record); evidence
   is in `eval/README.md`'s corpus-harness sections, the research record in
-  `eval/diarization-sota-2026.md`. What ships: the owned ward+gated-fold
-  loop, overlap-clean embeddings, the solo-channel bypass with
+  `eval/diarization-sota-2026.md`. What it shipped and still ships:
+  overlap-clean embeddings, the solo-channel bypass with
   `Diarizer.channel_embedding` for 1:1 profiles, profile store v2 +
-  rename-once enrollment, threshold 0.56. The heavy clustering fallback
-  stays scoped, deferred not closed: two-covariance PLDA via WeSpeaker +
-  stock VBx (`eval/diarization-loop-spec.md` §3, ranked option A, with
-  starting hyperparameters); trigger = a Phase-B-style clustering residual
-  the fold-gate audit can't explain.
+  rename-once enrollment, threshold 0.56. Its owned ward+gated-fold loop
+  was production until Nemotron 3 replaced it on 2026-11-15, and with no
+  clustering stage left, the heavy clustering fallback it kept scoped
+  (two-covariance PLDA + VBx, `eval/diarization-loop-spec.md` §3) is closed
+  rather than deferred.
   Declined with numbers, and what would reopen each:
   - **DiariZen meeting-base (2026-08-09):** loses the fair k+1+production-fold
     frame on loops (+1.3 mean / +1.2 median paired ΔDER, wins 4/20, sign
     p≈0.012, attribution −1.1) and the near-field duos (+2.0/+1.3, 3/20);
     its own hyperparameters swept and exonerated. The ONNX-export program
     never opens. Trigger: the meeting mix shifts toward many-speaker rooms —
-    it won all four ICSI k=4–8 loops while their k=2 duos flipped back.
+    it won all four ICSI k=4–8 loops while their k=2 duos flipped back — and
+    re-opening now means beating Nemotron 3, not the loop it lost to.
   - **Embedding upgrade (2026-08-07):** ERes2NetV2-zh and ResNet34-LM both
     regress clustering (6.6/7.6 pts attribution) and *collapse* the
     short-turn axis (FAR0 thresholds 0.82/0.88 vs 0.605); English ERes2NetV2
@@ -731,25 +721,14 @@ Kept here so future sessions don't re-open them.
     earlier candidates); an export attempt of
     `eres2net_large_sv_en_voxceleb_16k` only if a step is actually limited
     by full-duration embedding accuracy — today none is.
-  - **Stride >1 s (2026-08-07):** 2.1×/3.1× speedups cost naming purity (the
-    FAR0 threshold jumps 0.592→~0.78, silently invalidating the calibration).
-    Trigger: finalize latency becomes binding — then the shared-trunk route
-    first (one trunk pass over long blocks, masked statistics pooling per
-    pair — the closed `PLAN-DIARIZATION-SPEED.md`'s step 5 L1, which is SDBench's
-    "per-chunk" method as its "mask at stat-pooling" indicates; disambiguated
-    2026-08-09 because the phrase also reads as one-pass-per-10-s-window,
-    and THAT variant is backwards for our sole-speaker-cropping loop:
-    ~147 s vs 93 s at the reference channel's 1.05 pairs/chunk, flipping
-    only above ~1.7), and any stride change re-runs the threshold
-    calibration in its gate.
   - **Automatic profile updates (2026-08-07, reaffirmed post-ward):**
     ungateable wrong updates above every implementable bar while the oracle
     ties no-update everywhere; growth stays user-confirmed. Re-run
     `eval/auto_update.py` as part of any future diarization change's gate
     (likewise `eval/threshold_pick.py`).
   - **Sortformer** — superseded: its successor Nemotron 3 removes two of
-    the three reasons (8 speakers, a working ONNX/CPU path) and is the open
-    candidate above; **joint/LLM SA-ASR** (trigger: a permissive,
+    the three reasons (8 speakers, a working ONNX/CPU path) and is the
+    shipped diarizer; **joint/LLM SA-ASR** (trigger: a permissive,
     CPU-practical joint model beating the modular cascade on meeting
     benchmarks with real non-oracle diarization); **TS-VAD** (trigger: an
     Apache/MIT ONNX implementation, or Personal-VAD-class open weights —

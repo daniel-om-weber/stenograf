@@ -480,4 +480,7 @@ for the model-evaluation and AEC-scoring harnesses.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The models are not part of the package: `steno setup`
+downloads them on first run, each under its own licence. The diarizer,
+[NVIDIA Nemotron 3 Diarization](https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX),
+is under OpenMDW-1.1.

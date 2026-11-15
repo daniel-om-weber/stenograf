@@ -1461,6 +1461,49 @@ cost is one trial of 68. Small: 3 meetings, the same 68 trials reused across
 every bad entry, all AMI headsets. Shipped: the median, for surviving more than
 one bad entry once profiles grow.
 
+**A real finalize, and its peak memory** (the `verify` skill's stored-meeting
+recipe, 2026-11-15, M4 Max, 48 GB). One stored meeting of the user's, 1 h 45 min,
+mic + system tap, replayed unpaced (`--no-live`: ASR decodes everything at stop)
+and measured with `/usr/bin/time -l` on the venv's `steno` itself:
+
+| run | wall | peak memory footprint | max resident |
+|---|---|---|---|
+| `--no-diarization` | 108 s | 6.9 GB | 2.9 GB |
+| `--diarization`, no count (both channels) | 180 s | 11.2 GB | 6.7 GB |
+| Nemotron alone, system channel (`diarize`) | 29 s | 1.8 GB | 1.8 GB |
+| … plus the cluster voiceprints (`diarize_with_embeddings`) | 31 s | 2.7 GB | 2.8 GB |
+
+Diarizing costs this meeting 72 s and 4.3 GB of peak. Alone, the diarizer
+needs 2.7 GB on the 105-minute channel; in the pipeline it stacks on top of the
+resident ASR weights and the meeting's buffers rather than replacing them,
+which is most of the 4.3 — the remaining ~1.6 GB is not attributed. Resident
+size undercounts the pipeline runs by 4–5 GB (MLX's unified-memory buffers):
+read the footprint. It found 1 local and 6 remote speakers on a meeting with no
+labels, so the count is unscored; three of the six hold 1–2 transcript entries
+each, the shape of crosstalk phantoms, unverified. One meeting — a lead on the
+memory cost, not a law; a 48 GB machine has room, an 8–16 GB one with the
+desktop open may not, and nothing has measured one.
+
+Where the stop's peak comes from (same meeting and machine, same day; a probe
+that decodes both channels with the finalize windows — the live pass decodes
+the same ones — then calls `MeetingRecorder.finalize` with those words as
+`live_words`, so the stop never touches the ASR; footprint sampled every 50 ms,
+its maximum within 1 % of `/usr/bin/time -l` on every run; notes and glossary
+off):
+
+| before the stop | footprint when the stop starts | stop's peak |
+|---|---|---|
+| ASR kept, as shipped | 5.7 GB | 10.2 GB |
+| `mx.clear_cache()`, weights kept | 3.5 GB | 8.2 GB |
+| ASR unloaded (`unload()` = drop weights + clear cache) | 2.2 GB | 6.2 GB |
+
+After decoding, the ASR holds ~3.4 GB that the stop never uses: ~2.1 GB of
+MLX's buffer cache and ~1.3 GB of weights. The stop itself then adds 4.0–4.6 GB
+whatever was released first, and keeps it to the end of the process. Unloaded
+first, the whole run's peak moves into the decode (6.8 GB) — in a real meeting
+that decode is spread over the recording, and whether the live pass reaches
+the same 6.8 GB is not measured. Speakers came out identical in all three.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

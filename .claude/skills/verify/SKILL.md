@@ -68,6 +68,34 @@ uv run steno start --local 1 --remote 1 --no-aec \
   checks can safely invoke it to assert the dispatch, but use `steno start`
   to run a meeting.
 
+## A real meeting through the diarized finalize — and its peak memory
+
+The fastest honest check of the diarizer is a stored meeting, not TTS: every
+meeting folder recorded with audio holds `audio.opus` with the mic left and
+the system tap right, both after echo cancellation. Split it and replay it
+unpaced:
+
+```bash
+ffmpeg -i <meeting>/audio.opus -filter_complex \
+  "[0:a]channelsplit=channel_layout=stereo[l][r]" \
+  -map "[l]" -ar 16000 -c:a pcm_s16le mic.wav \
+  -map "[r]" -ar 16000 -c:a pcm_s16le sys.wav
+/usr/bin/time -l uv run steno start --replay mic.wav,sys.wav --no-live \
+  --diarization --no-notes --no-aec --out <tmpdir>
+```
+
+- `--no-live` makes the replay unpaced and decodes everything at stop, so an
+  hour of audio finalizes in minutes; the live pass is the one thing it skips.
+- `--diarization` with no `--local/--remote` count is the heaviest path: the
+  diarizer counts both channels itself. `--no-aec` because the stored audio
+  is already cancelled.
+- `/usr/bin/time -l` reports the largest child's "maximum resident set size"
+  and the "peak memory footprint" — read both; MLX's unified-memory buffers
+  are not guaranteed to show up in resident size.
+- Re-ID reads the user's real profile store, so speakers may come back named
+  — it only reads, never writes, but the output folder is then personal data:
+  keep it in the scratchpad.
+
 ## Test audio
 
 Synthesize speech with macOS TTS; Silero VAD and parakeet handle it fine:
