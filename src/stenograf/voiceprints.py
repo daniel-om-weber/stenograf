@@ -109,15 +109,21 @@ class MeetingEmbedding:
 @dataclass(frozen=True, eq=False)
 class SpeakerProfile:
     """A named voice: up to :data:`MAX_EMBEDDINGS` per-meeting embeddings under
-    one model, matched by *score averaging* — the mean cosine against the
-    stored set — rather than by collapsing the set to a mean vector. Modern
-    speaker embeddings measurably lose accuracy when averaged into one vector
-    (the i-vector-era rule is retracted; 2.05 % vs 2.85 % EER for score vs
-    embedding averaging — ``eval/diarization-sota-2026.md``); on
-    our own harness the two are within single-trial noise, so the store keeps
-    the form the literature favors and later steps need — per-meeting entries
-    are what rename-once enrollment appends to and what gated updates can
-    evict without poisoning a mean.
+    one model, matched by combining per-entry *scores* — the median cosine
+    against the stored set — rather than by collapsing the set to a mean
+    vector. Modern speaker embeddings measurably lose accuracy when averaged
+    into one vector (2.05 % vs 2.85 % EER for score vs embedding averaging —
+    ``eval/diarization-sota-2026.md``).
+
+    The median, not the mean, because one bad entry (a crosstalk phantom, a
+    wrong person, a weak sample admitted with ``--force``) moves a mean by
+    (bad − good) / n and leaves a median of three or more where it was:
+    measured 2026-11-15 on AMI's held-out meetings, a 4-entry profile with
+    one bad entry named 24–46 % of its person's 3 s turns under the mean and
+    49–66 % under the median, against 51–68 % clean; full-length turns, wrong
+    names and clean profiles were unchanged (``eval/README.md``, "A robust
+    profile score"). Below three entries the two are the same number, which
+    is why ``ProfileStore.assign`` guards each entry on the way in.
     """
 
     name: str
@@ -125,9 +131,9 @@ class SpeakerProfile:
     embeddings: tuple[MeetingEmbedding, ...]
 
     def similarity(self, embedding: np.ndarray) -> float:
-        """Mean cosine similarity against the stored per-meeting embeddings."""
+        """Median cosine similarity against the stored per-meeting embeddings."""
         other = l2_normalize(np.asarray(embedding, dtype=np.float32))
-        return float(np.mean([float(e.vector @ other) for e in self.embeddings]))
+        return float(np.median([float(e.vector @ other) for e in self.embeddings]))
 
     def _to_json(self) -> dict:
         return {
@@ -290,9 +296,9 @@ class ProfileStore:
         to know. Returns ``(profile, created)``.
 
         Reinforcing refuses an entry scoring below the naming threshold against
-        the profile (:class:`VoiceMismatchError`; ``force`` admits it). Score
-        averaging lets one disagreeing entry drag every later match, and it
-        does not matter whose voice it is: on AMI's held-out meetings
+        the profile (:class:`VoiceMismatchError`; ``force`` admits it). While a
+        profile holds one or two entries its median is their mean, so one
+        disagreeing entry drags every later match, whoever's voice it is: on AMI's held-out meetings
         (2026-11-15, ``eval/README.md``) a crosstalk phantom, a wrong person
         and a genuine 2–3 s sample of the right person all cost that person
         their later short turns once admitted (named 10 → 1 for genuine

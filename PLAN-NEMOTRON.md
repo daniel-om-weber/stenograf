@@ -78,8 +78,11 @@ Settled by measurement before the plan (2026-11-15):
    admitted, entries below 0.56 cost that person their later short turns
    whoever's voice they are (`eval/README.md`, "The assign guard"). Not
    covered: `steno profiles enroll --reinforce`, and a profile whose *first*
-   entry is the bad one (nothing to compare against). Next: whether a median
-   over the stored entries makes larger profiles shrug off one bad entry.
+   entry is the bad one (nothing to compare against). Measured next the same
+   day: a median, or the mean without the lowest score, keeps a 4-entry
+   profile with one bad entry as good as clean on 3 s turns, where the mean
+   loses a third to two thirds (`eval/README.md`, "A robust profile score").
+   Daniel chose the median; the store matches by it since that day.
 5. **The old diarizers go.** `diarization/loop.py` (owned loop), the sherpa
    diarizer class, `diarization/speakrs.py`, `fold_excess_clusters`,
    `FOLD_PAIR_SIMILARITY`, `collapse_single_voice` and `COLLAPSE_SIMILARITY`

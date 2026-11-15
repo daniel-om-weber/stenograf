@@ -57,11 +57,17 @@ class TestSpeakerProfile:
         assert p.similarity(vec(5.0, 0.0, 0.0)) == pytest.approx(1.0)  # scale-invariant
         assert p.similarity(ANNA) == pytest.approx(0.0, abs=1e-6)
 
-    def test_similarity_averages_scores_over_the_stored_set(self):
-        # Score averaging: the mean of the per-meeting cosines, NOT the cosine
-        # against a mean vector — DANIEL and ANNA average to 0.5 toward DANIEL.
+    def test_similarity_combines_scores_over_the_stored_set(self):
+        # Per-entry scores, NOT the cosine against a mean vector: with two
+        # entries the median is their mean — DANIEL and ANNA give 0.5.
         p = profile("Daniel", MODEL, DANIEL, ANNA)
         assert p.similarity(DANIEL) == pytest.approx(0.5, abs=1e-6)
+
+    def test_one_bad_entry_does_not_move_a_median_of_three_or_more(self):
+        p = profile("Daniel", MODEL, DANIEL, DANIEL_AGAIN, ANNA)
+        # The mean would be (1 + 0.97 + 0) / 3 ≈ 0.66, a near-miss at the
+        # naming threshold; the median is the good middle entry.
+        assert p.similarity(DANIEL) == pytest.approx(float(DANIEL @ DANIEL_AGAIN), abs=1e-6)
 
 
 class TestProfileStore:

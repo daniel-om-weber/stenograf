@@ -1421,6 +1421,36 @@ the right person's weak samples too (`--force` admits them). Small: 3
 meetings, profiles of one to three entries — a larger profile dilutes one bad
 entry more; all AMI headsets.
 
+**A robust profile score** (`eval/profile_median.py`, 2026-11-15). A profile is
+matched by the mean of its entries' cosines, which one bad entry moves by
+(bad − good) / n. Leave one session out on the held-out meetings: a person's
+profile is their genuine mic + loop clusters from the other three sessions
+(45 of 48 profiles hold 3 entries, 3 hold 2 and are skipped — mean and median
+agree below 3), trials are the held-out session's genuine clusters, count
+applied; one bad entry joins one profile at a time, paired against the same
+profile clean. Own trials named right at 0.56, trials cut to their first 3 s
+(at full length every rule names 100 % in every condition; max alone falsely
+names 6.4 % of other people's trials once a wrong person's entry is in):
+
+| bad entry | mean | median | mean without the lowest | max |
+|---|---|---|---|---|
+| none (68 trials) | 61.8 % | 60.3 % | 61.8 % | 61.8 % |
+| wrong person | 61.8 → 24.0 | 60.3 → 58.8 | 61.8 → 61.8 | 61.8 → 61.8 |
+| crosstalk phantom | 50.8 → 26.2 | 50.8 → 49.2 | 50.8 → 50.8 | 50.8 → 59.0 |
+| own 2 s sample below 0.56 | 68.3 → 45.7 | 67.2 → 66.1 | 68.3 → 68.3 | 68.3 → 68.3 |
+
+Other people named as the owner stay at 0.0–0.5 % for mean, median and
+mean-without-lowest in every condition; max reaches 5.8–7.2 %. Both robust
+rules keep a 4-entry profile with one bad entry where it was clean; the mean
+loses a third to two thirds of the short turns. Mean-without-lowest is exact
+here partly by construction — with one bad entry it drops exactly that one —
+and it survives only one bad entry at any size, where a median of 8 survives
+three; profiles of 5–8 entries, and two bad entries, are untested (these
+meetings give a person at most 3 sessions to enroll from). The median's clean
+cost is one trial of 68. Small: 3 meetings, the same 68 trials reused across
+every bad entry, all AMI headsets. Shipped: the median, for surviving more than
+one bad entry once profiles grow.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

@@ -17,7 +17,8 @@ Two enrollment sources, as `rename_once.py` defines them:
   trial clusters alone.
 - ``clusters`` — what ``steno profiles assign`` would store: the arm's own
   session-a clusters (mic + loop channels) under their reference-majority name,
-  multi-entry profiles scored by mean cosine. A participant the arm fused away
+  multi-entry profiles scored by mean cosine (as shipped then; the store
+  now takes the median, `profile_median.py`). A participant the arm fused away
   in session a has nothing to assign and is a stranger in later trials.
 
 Every arm's cluster embedding is recomputed from its final turns with
