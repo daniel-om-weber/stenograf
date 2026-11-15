@@ -1230,8 +1230,9 @@ Per group, all 24 multi-speaker channels for Nemotron: IS1009 96.8 %, ES2004
 extra speaker's speech sits ≥ 60 % inside a meeting participant who is *not* on
 that channel — headset crosstalk the channel reference does not list (IS1009's
 loud Idiap headsets account for 8). Counting those as explained, its count is
-right on 24/24, and on 10/12 single-speaker channels (ES2004c and IS1009a.mic
-get an unexplained extra). Applying the true count afterwards (keep the k most
+right on 24/24, and on 12/12 single-speaker channels (corrected 2026-11-15:
+the extras on ES2004c and IS1009a.mic hold under 1 % of the speech and had been
+subtracted twice, so they scored as missing speakers). Applying the true count afterwards (keep the k most
 active slots, give orphaned frames to the most probable kept slot) moves
 attribution only on 7 channels, 6 of them IS1009: duo 97.6 → 98.2 % (worst
 94.0 → 97.2), loop 97.1 → 97.3, mic 99.9 → 100. A count can only remove
@@ -1345,12 +1346,14 @@ not move beyond the spread the reference runs already show among themselves:
 
 | held-out set, 36 channels | mic count ok(expl) / attr | duo | loop | s / audio-hour |
 |---|---|---|---|---|
-| reference fp16 CPU | 6(9) / 99.9 % | 7(12) / 97.6 % | 7(12) / 97.0 % | 17 |
-| reference fp32 CPU (and WebGPU) | 7(10) / 99.9 % | 7(12) / 97.6 % | 7(12) / 97.1 % | 15 |
-| library fp16 CPU | 7(10) / 99.9 % | 7(11) / 97.6 % | 7(12) / 97.1 % | 17 |
+| reference fp16 CPU | 6(12) / 99.9 % | 7(12) / 97.6 % | 7(12) / 97.0 % | 17 |
+| reference fp32 CPU (and WebGPU) | 7(12) / 99.9 % | 7(12) / 97.6 % | 7(12) / 97.1 % | 15 |
+| library fp16 CPU | 7(12) / 99.9 % | 7(12) / 97.6 % | 7(12) / 97.1 % | 17 |
 | library fp16 CPU, true count applied after | 12(12) / 100.0 % | 12(12) / 98.2 % | 12(12) / 97.3 % | 17 |
 
-The count-capped row equals the fp16 reference's to the decimal; confusion is
+Every extra is crosstalk-explained in every row (rescored 2026-11-15, after
+`heldout.py score` stopped subtracting a sub-1 % extra twice). The
+count-capped row equals the fp16 reference's to the decimal; confusion is
 0.0 / 0.3 / 0.4 % without the cap and 0.0 / 0.2 / 0.2 % with it in every row.
 A bit-exact numpy front end was not pursued: torch's own float32 STFT and GEMM
 differ by platform, and even the range a frame is computed in changes its last
@@ -1376,10 +1379,7 @@ of the speech), and merged pair-5d729adf-c637582b's two speakers at cosine 0.646
 the one collapse that helped (0.645), and the user's own calls reach 0.579. All
 five single-speaker extras are another participant's crosstalk (≥ 60 % inside
 an off-channel speaker's speech), not a split of the wearer — so the rule had
-nothing to fix, and the pipeline no longer runs it. `heldout.py score`'s
-"count ok(expl)" undercounts this: a crosstalk slot under 1 % of the speech is
-subtracted twice (once as negligible, once as explained), which is why the
-library row above reads 7(10) for the mic channels rather than 7(12).
+nothing to fix, and the pipeline no longer runs it.
 
 ## Echo cancellation
 

@@ -59,7 +59,8 @@ Settled by measurement before the plan (2026-11-15):
    and help text stop calling an unstated count "less accurate".
    **Done 2026-11-15.** The collapse is dropped: on Nemotron's uncapped turns
    it fixed one count and no attribution, and merged one real two-voice pair
-   (81.7 → 50.2 %); the "2 of 12" over-counts were a scoring quirk — all five
+   (81.7 → 50.2 %); the "2 of 12" over-counts were a scoring quirk (fixed in `heldout.py
+   score`) — all five
    single-speaker extras are crosstalk (`eval/README.md`, "No single-voice
    collapse behind Nemotron"). `steno setup` fetches and `doctor` checks the
    Nemotron files in place of the pyannote segmentation model; the doctor's

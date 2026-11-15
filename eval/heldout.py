@@ -275,12 +275,16 @@ def _row(cid: str, k: int, ref: list[Turn], hyp: list[dict]) -> dict:
     for t in hyp:
         speech[t["speaker"]] = speech.get(t["speaker"], 0.0) + t["end"] - t["start"]
     total = sum(speech.values()) or 1.0
+    audible = {s for s, v in speech.items() if v > 0.01 * total}
     der = score_der(ref, [Turn(t["speaker"], t["start"], t["end"]) for t in hyp])
     return {
         "k": k,
         "found": len(speech),
-        "found_1pct": sum(v > 0.01 * total for v in speech.values()),
-        "explained": explained_extras(cid, ref, hyp),
+        "found_1pct": len(audible),
+        # Explained among the audible speakers only: a crosstalk slot under 1 %
+        # of the speech is already out of found_1pct, and counting it here too
+        # subtracted it twice.
+        "explained": explained_extras(cid, ref, [t for t in hyp if t["speaker"] in audible]),
         "attribution": attribution(ref, hyp),
         "der": der.der,
         "miss": der.missed,
