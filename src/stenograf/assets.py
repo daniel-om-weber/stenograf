@@ -10,7 +10,6 @@ pinned by URL and digest. Files land in one cache directory
 from __future__ import annotations
 
 import hashlib
-import tarfile
 import tempfile
 import urllib.request
 from collections.abc import Callable, Iterator
@@ -38,25 +37,16 @@ class ModelAsset:
     """Filename inside the cache directory."""
     url: str
     sha256: str
-    """Digest of the downloaded bytes (the archive itself for tar assets),
-    verified before the file can reach the cache: without it, any
-    complete-looking download — a CDN error page saved as ``.onnx``, a
-    corrupted transfer — would pass the ``exists()`` check forever."""
-    archive_member: str | None = None
-    """For tar archives: the member to extract as ``name``."""
+    """Digest of the downloaded bytes, verified before the file can reach the
+    cache: without it, any complete-looking download — a CDN error page saved
+    as ``.onnx``, a corrupted transfer — would pass the ``exists()`` check
+    forever."""
 
 
 SILERO_VAD = ModelAsset(
     name="silero_vad_v5.onnx",
     url=f"{_RELEASES}/asr-models/silero_vad_v5.onnx",
     sha256="6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396",
-)
-
-PYANNOTE_SEGMENTATION = ModelAsset(
-    name="pyannote-segmentation-3-0.onnx",
-    url=f"{_RELEASES}/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
-    sha256="24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
-    archive_member="sherpa-onnx-pyannote-segmentation-3-0/model.onnx",
 )
 
 SPEAKER_EMBEDDING = ModelAsset(
@@ -132,10 +122,7 @@ def fetch(asset: ModelAsset, progress: ProgressHook | None = None) -> Path:
 
     with _staged(target) as tmp_path:
         _download(asset, tmp_path, progress)
-        if asset.archive_member is not None:
-            _extract_member(tmp_path, asset.archive_member, target)
-        else:
-            tmp_path.replace(target)
+        tmp_path.replace(target)
     return target
 
 
@@ -158,18 +145,3 @@ def _download(asset: ModelAsset, dest: Path, progress: ProgressHook | None) -> N
             f"(sha256 {digest.hexdigest()}, expected {asset.sha256}). The server "
             "may have sent an error page or the transfer was corrupted; re-run to retry."
         )
-
-
-def _extract_member(archive: Path, member: str, target: Path) -> None:
-    with _staged(target) as tmp_path:
-        with tarfile.open(archive) as tar:
-            try:
-                src = tar.extractfile(member)  # KeyError if the name is absent
-            except KeyError:
-                src = None
-            if src is None:  # missing, or the name is a directory/link
-                raise RuntimeError(f"{archive.name}: no member {member!r}")
-            with src, open(tmp_path, "wb") as dst:
-                while chunk := src.read(1 << 20):
-                    dst.write(chunk)
-        tmp_path.replace(target)

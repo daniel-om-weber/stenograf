@@ -7,7 +7,6 @@ code), so it is loaded by path rather than imported.
 import importlib.util
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -65,21 +64,6 @@ def test_release_flag_selects_the_platform_tag(
     assert hook_module._off_macos_wheel_tag() == getattr(hook_module, tag_attr)
 
 
-def test_capture_flag_selects_the_low_floor_linux_tag(hook_module, monkeypatch):
-    monkeypatch.setenv(hook_module.BUNDLE_ENV, "capture")
-    monkeypatch.setattr(hook_module.sys, "platform", "linux")
-    monkeypatch.setattr(hook_module.platform, "machine", lambda: "x86_64")
-    assert hook_module._off_macos_wheel_tag() == hook_module.LINUX_CAPTURE_TAG
-
-
-def test_capture_flag_off_linux_raises(hook_module, monkeypatch):
-    monkeypatch.setenv(hook_module.BUNDLE_ENV, "capture")
-    monkeypatch.setattr(hook_module.sys, "platform", "win32")
-    monkeypatch.setattr(hook_module.platform, "machine", lambda: "AMD64")
-    with pytest.raises(RuntimeError, match="low-floor Linux capture wheel"):
-        hook_module._off_macos_wheel_tag()
-
-
 def test_release_flag_on_an_unsupported_platform_raises(hook_module, monkeypatch):
     # Better a failed build than a wheel tagged manylinux_2_28_x86_64 with an
     # aarch64 binary in it — or with nothing in it at all.
@@ -100,9 +84,9 @@ def _fake_build(tmp_path):
         names = {
             "stenocap-macos": ["stenocap"],
             # One crate, two platforms: produce both products so the same fake
-            # serves the Linux wheels and the Windows one.
+            # serves the Linux wheel and the Windows one.
             "stenocap": ["stenocap", "stenocap.exe"],
-        }.get(script.parent.name, ["stenodiar.exe" if sys.platform == "win32" else "stenodiar"])
+        }[script.parent.name]
         for name in names:
             binary = script.parent / name
             binary.parent.mkdir(parents=True, exist_ok=True)
@@ -113,15 +97,12 @@ def _fake_build(tmp_path):
     return fake
 
 
-def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch):
+def test_bundles_the_capture_helper_on_macos_arm64(hook_module, tmp_path, monkeypatch):
     # Say which platform is being *built for*, as the wheel tests below do:
-    # `_build` picks build.sh over build.ps1 by it, and so does the fake that
-    # stands in for cargo. Left at the host's value this test builds a macOS
-    # wheel through Windows' toolchain and looks for `stenodiar` where the
-    # PowerShell branch wrote `stenodiar.exe`.
+    # `_build` picks build.sh over build.ps1 by it. Left at the host's value
+    # this test builds a macOS wheel through Windows' toolchain.
     monkeypatch.setattr(hook_module.sys, "platform", "darwin")
     monkeypatch.setattr(hook_module, "_macos_arm64", lambda: True)
-    monkeypatch.setattr(hook_module, "_cargo_available", lambda: True)
     monkeypatch.setattr(hook_module.subprocess, "run", _fake_build(tmp_path))
     data = build_data()
     make_hook(hook_module, tmp_path).initialize("standard", data)
@@ -129,15 +110,12 @@ def test_bundles_both_helpers_on_macos_arm64(hook_module, tmp_path, monkeypatch)
     assert data["pure_python"] is False
     assert data["tag"] == hook_module.MACOS_TAG
     helper = tmp_path / "native" / "stenocap-macos" / "stenocap"
-    stenodiar = tmp_path / "native" / "stenodiar" / "stenodiar"
-    assert data["force_include"][str(helper)] == "stenograf/bin/stenocap"
-    assert data["force_include"][str(stenodiar)] == f"stenograf/bin/{stenodiar.name}"
+    assert data["force_include"] == {str(helper): "stenograf/bin/stenocap"}
     if os.name == "posix":  # exec bits don't exist on Windows
-        for binary in (helper, stenodiar):
-            assert binary.stat().st_mode & 0o111 == 0o111
+        assert helper.stat().st_mode & 0o111 == 0o111
 
 
-def test_linux_release_wheel_carries_both_helpers(hook_module, tmp_path, monkeypatch):
+def test_linux_release_wheel_carries_the_capture_helper(hook_module, tmp_path, monkeypatch):
     monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
     monkeypatch.setattr(hook_module.sys, "platform", "linux")
     monkeypatch.setattr(hook_module, "_off_macos_wheel_tag", lambda: hook_module.LINUX_TAG)
@@ -147,26 +125,6 @@ def test_linux_release_wheel_carries_both_helpers(hook_module, tmp_path, monkeyp
 
     assert data["pure_python"] is False
     assert data["tag"] == hook_module.LINUX_TAG
-    assert sorted(data["force_include"].values()) == [
-        "stenograf/bin/stenocap",
-        "stenograf/bin/stenodiar",
-    ]
-
-
-def test_linux_capture_wheel_carries_only_stenocap(hook_module, tmp_path, monkeypatch):
-    # The low-floor wheel exists to carry capture onto machines stenodiar's
-    # glibc floor shuts out; stenodiar in it would drag the floor back up.
-    monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
-    monkeypatch.setattr(hook_module.sys, "platform", "linux")
-    monkeypatch.setattr(
-        hook_module, "_off_macos_wheel_tag", lambda: hook_module.LINUX_CAPTURE_TAG
-    )
-    monkeypatch.setattr(hook_module.subprocess, "run", _fake_build(tmp_path))
-    data = build_data()
-    make_hook(hook_module, tmp_path).initialize("standard", data)
-
-    assert data["pure_python"] is False
-    assert data["tag"] == hook_module.LINUX_CAPTURE_TAG
     assert list(data["force_include"].values()) == ["stenograf/bin/stenocap"]
 
 
@@ -181,15 +139,11 @@ def test_windows_release_wheel_carries_the_capture_helper(hook_module, tmp_path,
     make_hook(hook_module, tmp_path).initialize("standard", data)
 
     assert data["tag"] == hook_module.WINDOWS_TAG
-    assert sorted(data["force_include"].values()) == [
-        "stenograf/bin/stenocap.exe",
-        "stenograf/bin/stenodiar.exe",
-    ]
+    assert list(data["force_include"].values()) == ["stenograf/bin/stenocap.exe"]
 
 
 def test_a_windows_wheel_fails_rather_than_ship_without_capture(hook_module, tmp_path, monkeypatch):
-    # stenocap is built first and its failure is fatal, so there is no path to
-    # a platform-tagged Windows wheel carrying only the optional helper.
+    # A failed stenocap build is fatal: no platform-tagged wheel without it.
     monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
     monkeypatch.setattr(hook_module.sys, "platform", "win32")
     monkeypatch.setattr(hook_module, "_off_macos_wheel_tag", lambda: hook_module.WINDOWS_TAG)
@@ -206,11 +160,9 @@ def test_a_windows_wheel_fails_rather_than_ship_without_capture(hook_module, tmp
 
 def test_missing_toolchain_off_macos_fails_the_wheel(hook_module, tmp_path, monkeypatch):
     # Off macOS the flag *is* the request for a bundling wheel, so a failing
-    # build must not degrade to a platform-tagged wheel with nothing in it —
-    # unlike macOS, where a missing cargo is the ordinary source-install case.
+    # build must not degrade to a platform-tagged wheel with nothing in it.
     monkeypatch.setattr(hook_module, "_macos_arm64", lambda: False)
     monkeypatch.setattr(hook_module, "_off_macos_wheel_tag", lambda: hook_module.LINUX_TAG)
-    monkeypatch.setattr(hook_module, "_cargo_available", lambda: False)
 
     def fail(cmd, check):
         raise subprocess.CalledProcessError(127, cmd)
@@ -218,17 +170,6 @@ def test_missing_toolchain_off_macos_fails_the_wheel(hook_module, tmp_path, monk
     monkeypatch.setattr(hook_module.subprocess, "run", fail)
     with pytest.raises(RuntimeError, match="install a Rust toolchain"):
         make_hook(hook_module, tmp_path).initialize("standard", build_data())
-
-
-def test_missing_cargo_skips_stenodiar_but_still_ships(hook_module, tmp_path, monkeypatch):
-    monkeypatch.setattr(hook_module, "_macos_arm64", lambda: True)
-    monkeypatch.setattr(hook_module, "_cargo_available", lambda: False)
-    monkeypatch.setattr(hook_module.subprocess, "run", _fake_build(tmp_path))
-    data = build_data()
-    make_hook(hook_module, tmp_path).initialize("standard", data)
-
-    assert data["pure_python"] is False  # the wheel is still platform-tagged
-    assert list(data["force_include"].values()) == ["stenograf/bin/stenocap"]
 
 
 def test_failed_build_raises_not_silently_pure(hook_module, tmp_path, monkeypatch):
@@ -239,23 +180,6 @@ def test_failed_build_raises_not_silently_pure(hook_module, tmp_path, monkeypatc
 
     monkeypatch.setattr(hook_module.subprocess, "run", fail)
     with pytest.raises(RuntimeError, match="Xcode Command Line Tools"):
-        make_hook(hook_module, tmp_path).initialize("standard", build_data())
-
-
-def test_failed_stenodiar_build_raises_when_cargo_present(hook_module, tmp_path, monkeypatch):
-    # A present-but-broken Rust toolchain is an environment error, not an
-    # optional to skip: stenocap builds, stenodiar's build.sh fails.
-    monkeypatch.setattr(hook_module, "_macos_arm64", lambda: True)
-    monkeypatch.setattr(hook_module, "_cargo_available", lambda: True)
-    ok = _fake_build(tmp_path)
-
-    def fake(cmd, check):
-        if Path(cmd[-1]).parent.name == "stenodiar":
-            raise subprocess.CalledProcessError(1, cmd)
-        return ok(cmd, check)
-
-    monkeypatch.setattr(hook_module.subprocess, "run", fake)
-    with pytest.raises(RuntimeError, match="Rust toolchain"):
         make_hook(hook_module, tmp_path).initialize("standard", build_data())
 
 

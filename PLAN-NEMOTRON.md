@@ -94,6 +94,18 @@ Settled by measurement before the plan (2026-11-15):
    arms run the owned loop or stenodiar lose those arms — their numbers stay in
    `eval/README.md` and git history; scripts that only embed switch to step 1's
    module.
+   **Done 2026-11-15.** Also gone: `sherpa.py`'s base class (nothing
+   subclassed it any more) and the tar-archive extraction in `assets.py`,
+   whose only user was the segmentation asset. Platform wheels now carry
+   stenocap alone: macOS arm64, win_amd64, and one manylinux_2_28 Linux wheel,
+   smoke-tested on a current runner and on Ubuntu 22.04. Thirteen eval scripts
+   that measured only the deleted pieces were removed (listed in
+   `eval/README.md`'s corpus-harness section); `diarize.py`, `solo_arms.py`,
+   `split_recovery.py`, `heldout.py`, `owncalls.py` and `naming_gate.py`
+   lost their old arms and run Nemotron where they run a diarizer at all.
+   `PLAN-DIARIZATION-SPEED.md` closed and was deleted; its two facts that
+   outlive it are in `PLAN.md`. Not verified: the release workflow, which
+   only a tag or a `workflow_dispatch` dry run exercises.
 6. **Docs and observation.** README, `CLAUDE.md`, `native/README.md`, the
    `verify` skill, `PLAN.md`'s Nemotron section (the gates it lists close; the
    shared-room-mic check becomes "watch the first real hybrid meetings"), the

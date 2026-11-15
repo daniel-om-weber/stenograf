@@ -1,7 +1,7 @@
 """Backend and capture-provider factory: settings/env in, loaded objects out.
 
 One place turns backend *names* into loaded backend objects with the
-committed defaults (parakeet, Silero VAD, sherpa+speakrs diarization) and
+committed defaults (parakeet, Silero VAD, Nemotron diarization) and
 builds the platform capture provider, so ``start``, ``transcribe``,
 ``setup``, ``profiles enroll`` and the app can never disagree about
 selection, gating, or first-run downloads. User errors raise the library's

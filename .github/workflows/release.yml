@@ -18,9 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8.3.2
-      # The runner image ships Rust (stenodiar); fail early and loudly if that
-      # ever changes rather than in the wheel-verify step.
-      - run: cargo --version
       - run: uv build --wheel
       - name: Verify the wheel bundles a signed helper for macOS 14.4+
         run: |
@@ -28,14 +25,6 @@ jobs:
           unzip -o dist/*.whl 'stenograf/bin/stenocap' -d /tmp/whl
           otool -l /tmp/whl/stenograf/bin/stenocap | grep -q 'minos 14.4'
           codesign -v /tmp/whl/stenograf/bin/stenocap
-      - name: Verify the wheel bundles the stenodiar diarization helper
-        # The build hook skips stenodiar when the runner lacks Rust rather
-        # than failing every source install — but a *published* wheel without
-        # it silently degrades estimated speaker counts, so refuse it here.
-        run: |
-          unzip -o dist/*.whl 'stenograf/bin/stenodiar' -d /tmp/whl
-          test -x /tmp/whl/stenograf/bin/stenodiar
-          /tmp/whl/stenograf/bin/stenodiar --help
       - uses: actions/upload-artifact@v7
         with:
           name: dist-macos
@@ -43,8 +32,8 @@ jobs:
 
   build-pure:
     # pure py3-none-any wheel + the sdist — what every platform without a
-    # specific wheel below installs: no helpers, and estimated speaker counts
-    # fall back to sherpa there. Since the GUI default flip this no longer
+    # specific wheel below installs: no capture helper, so no live capture.
+    # Since the GUI default flip this no longer
     # buys musl or old-glibc Linux arm64 an install at all: PySide6-Essentials
     # is a base dependency and ships no wheels for them (glibc floor 2.34
     # x86_64 / 2.39 arm64, no musllinux).
@@ -58,7 +47,7 @@ jobs:
         # No STENOGRAF_BUNDLE_HELPERS here, so the hook must stay a no-op.
         run: |
           ls dist/*py3-none-any.whl dist/*.tar.gz
-          if unzip -l dist/*.whl | grep -qE 'stenocap|stenodiar'; then
+          if unzip -l dist/*.whl | grep -q stenocap; then
             echo "pure wheel must not contain native helpers" >&2
             exit 1
           fi
@@ -68,102 +57,15 @@ jobs:
           path: dist/
 
   build-linux-x86_64:
-    # manylinux wheel bundling both helpers, pinned to the oldest runner whose
-    # glibc the build can actually use. That floor is not ours to choose: the
-    # onnxruntime static library ort-sys downloads references __isoc23_strtol
-    # and friends, glibc 2.38 symbols, so the link fails outright in an older
-    # image (manylinux_2_28 was tried and cannot build this at all). Ubuntu
-    # 24.04 is glibc 2.39, hence the tag; anything older resolves the
-    # low-floor capture wheel (build-linux-capture) and keeps sherpa-only
-    # diarization. Pin the version rather than ubuntu-latest — when that label
-    # moves, the floor must move deliberately, with the tag in hatch_build.py,
-    # not silently under users.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      STENOGRAF_BUNDLE_HELPERS: "1"
-    steps:
-      - uses: actions/checkout@v7
-      # All named rather than assumed from the runner image, because the
-      # failure modes are silent until the link step.
-      # libpulse-dev is stenocap's one system dependency.
-      # libssl-dev is for the *build scripts*, not for us: ort-sys downloads
-      # onnxruntime over TLS at build time, and cargo resolves build-deps with
-      # their own feature set, so stenodiar's vendored-OpenSSL flag never
-      # reaches that copy of openssl-sys. The system OpenSSL links into a
-      # throwaway build script; the shipped helper carries the vendored one, as
-      # the ldd check asserts. perl (not perl-base) is what *builds* that
-      # vendored OpenSSL — its Configure wants FindBin, IPC::Cmd and Time::Piece.
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y libpulse-dev libssl-dev perl
-      # The runner image ships Rust; fail early and loudly if that ever
-      # changes rather than inside the build hook.
-      - run: cargo --version
-      - uses: astral-sh/setup-uv@v8.3.2
-      - run: uv build --wheel
-      - name: Verify the wheel bundles a working stenocap
-        # The load-bearing helper: without it the wheel installs and cannot
-        # record a meeting, which is exactly the failure a platform tag is
-        # supposed to rule out. Same symbol-floor check as stenodiar below;
-        # libpulse is linked dynamically on purpose (it is on any desktop with
-        # audio, and pipewire-pulse provides the same ABI).
-        run: |
-          ls dist/*manylinux_2_39_x86_64.whl
-          unzip -o dist/*.whl 'stenograf/bin/stenocap' -d /tmp/whl
-          test -x /tmp/whl/stenograf/bin/stenocap
-          ldd /tmp/whl/stenograf/bin/stenocap | grep -q libpulse.so.0
-          max=$(objdump -T /tmp/whl/stenograf/bin/stenocap |
-                grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-          echo "highest glibc symbol: $max"
-          test "$(printf '%s\n%s\n' "$max" GLIBC_2.39 | sort -V | tail -1)" = GLIBC_2.39
-          /tmp/whl/stenograf/bin/stenocap --help
-      - name: Verify the wheel bundles a portable stenodiar
-        run: |
-          ls dist/*manylinux_2_39_x86_64.whl
-          unzip -o dist/*.whl 'stenograf/bin/stenodiar' -d /tmp/whl
-          test -x /tmp/whl/stenograf/bin/stenodiar
-          ldd /tmp/whl/stenograf/bin/stenodiar
-          # Three ways a helper built here dies on a user's machine.
-          # 1. A glibc symbol newer than the tag promises.
-          max=$(objdump -T /tmp/whl/stenograf/bin/stenodiar |
-                grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-          echo "highest glibc symbol: $max"
-          test "$(printf '%s\n%s\n' "$max" GLIBC_2.39 | sort -V | tail -1)" = GLIBC_2.39
-          # 2. A libstdc++ newer than this runner's — measured rather than
-          #    hardcoded, so the claim is "runs anywhere with a libstdc++ at
-          #    least as new as the one we built against".
-          needed=$(objdump -T /tmp/whl/stenograf/bin/stenodiar |
-                   grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1)
-          have=$(objdump -T /usr/lib/x86_64-linux-gnu/libstdc++.so.6 |
-                 grep -o 'GLIBCXX_[0-9.]*' | sort -uV | tail -1)
-          echo "libstdc++: needs $needed, runner provides $have"
-          test "$(printf '%s\n%s\n' "$needed" "$have" | sort -V | tail -1)" = "$have"
-          # 3. The build machine's OpenSSL — stenodiar vendors it statically
-          #    precisely so a user's OpenSSL version is never in the picture.
-          if ldd /tmp/whl/stenograf/bin/stenodiar | grep -qE 'libssl|libcrypto'; then
-            echo "stenodiar must not depend on the build machine's OpenSSL" >&2
-            exit 1
-          fi
-          /tmp/whl/stenograf/bin/stenodiar --help
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist-linux-x86_64
-          path: dist/
-
-  build-linux-capture:
-    # The low-floor Linux wheel: stenocap only, built in the oldest manylinux
-    # image still maintained (AlmaLinux 8, glibc 2.28). It exists because the
-    # full wheel's 2.39 floor is *stenodiar's* (ort-sys needs glibc 2.38
-    # symbols to link) while stenocap links only libpulse — without this wheel,
-    # Ubuntu 22.04 / Debian 12 / RHEL 9 would fall to the pure wheel and
-    # silently lose live capture. pip ranks newer manylinux tags first, so
-    # glibc ≥ 2.39 machines still resolve the full wheel.
+    # The Linux wheel, built in the oldest manylinux image still maintained
+    # (AlmaLinux 8, glibc 2.28): stenocap links only libpulse, so that floor is
+    # its own, and Ubuntu 22.04 / Debian 12 / RHEL 9 get live capture rather
+    # than falling to the pure wheel.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container: quay.io/pypa/manylinux_2_28_x86_64
     env:
-      STENOGRAF_BUNDLE_HELPERS: "capture"
+      STENOGRAF_BUNDLE_HELPERS: "1"
     steps:
       - uses: actions/checkout@v7
       - run: dnf install -y pulseaudio-libs-devel unzip binutils
@@ -174,15 +76,13 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           /opt/python/cp313-cp313/bin/python -m pip install build
           /opt/python/cp313-cp313/bin/python -m build --wheel
-      - name: Verify the wheel bundles stenocap and nothing heavier
-        # stenodiar in this wheel would drag the glibc floor back up to the
-        # exact machines the wheel exists to serve.
+      - name: Verify the wheel bundles a working stenocap
+        # Without it the wheel installs and cannot record a meeting, which is
+        # exactly the failure a platform tag is supposed to rule out. libpulse
+        # is linked dynamically on purpose (it is on any desktop with audio,
+        # and pipewire-pulse provides the same ABI).
         run: |
           ls dist/*manylinux_2_28_x86_64.whl
-          if unzip -l dist/*.whl | grep -q stenodiar; then
-            echo "the capture wheel must not carry stenodiar" >&2
-            exit 1
-          fi
           unzip -o dist/*.whl 'stenograf/bin/stenocap' -d /tmp/whl
           test -x /tmp/whl/stenograf/bin/stenocap
           ldd /tmp/whl/stenograf/bin/stenocap | grep -q libpulse.so.0
@@ -193,12 +93,12 @@ jobs:
           /tmp/whl/stenograf/bin/stenocap --help
       - uses: actions/upload-artifact@v7
         with:
-          name: dist-linux-capture
+          name: dist-linux-x86_64
           path: dist/
 
   build-windows:
-    # win_amd64 wheel bundling both helpers: stenocap (WASAPI capture) and
-    # stenodiar (ORT CPU). Both are cargo + MSVC.
+    # win_amd64 wheel bundling stenocap (WASAPI capture), built with cargo +
+    # MSVC.
     runs-on: windows-latest
     timeout-minutes: 60
     env:
@@ -210,16 +110,14 @@ jobs:
       # changes rather than inside the build hook.
       - run: cargo --version
       - run: uv build --wheel
-      - name: Verify the wheel bundles both helpers
-        # stenocap is the load-bearing one: without it the wheel installs and
-        # cannot record a meeting, which is exactly the failure a platform tag
-        # is supposed to rule out.
+      - name: Verify the wheel bundles the capture helper
+        # Without it the wheel installs and cannot record a meeting, which is
+        # exactly the failure a platform tag is supposed to rule out.
         shell: bash
         run: |
           ls dist/*win_amd64.whl
           unzip -o dist/*.whl 'stenograf/bin/*' -d /tmp/whl
           /tmp/whl/stenograf/bin/stenocap.exe --help
-          /tmp/whl/stenograf/bin/stenodiar.exe --help
       - uses: actions/upload-artifact@v7
         with:
           name: dist-windows
@@ -259,9 +157,8 @@ jobs:
 
   smoke-linux:
     # Installs the manylinux wheel the way a user does — `uv tool install`,
-    # not a checkout — and makes the helper reach the network: the statically
-    # vendored OpenSSL has to find this machine's CA bundle before the model
-    # download can work at all, and nothing earlier in the pipeline proves it.
+    # not a checkout — on a current distro, downloads every model, and opens
+    # the desktop app's interface from the installed wheel.
     needs: build-linux-x86_64
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -275,20 +172,17 @@ jobs:
       # For doctor's desktop-app check below — the runner image's gap, the same
       # one ci.yml installs against, not the wheel's.
       - run: sudo apt-get install -y libegl1
-      - run: uv tool install -p 3.13 ./dist/stenograf-*manylinux_2_39_x86_64.whl
+      - run: uv tool install -p 3.13 ./dist/stenograf-*manylinux_2_28_x86_64.whl
       - run: steno --version
       - run: steno setup --models-only
-      - name: The installed helpers are found and stenodiar's TLS reaches HuggingFace
-        # --warmup downloads the diarization models and nothing else, so it is
-        # the cheapest end-to-end proof that the vendored OpenSSL build talks
-        # to the network on a foreign distro. doctor exits 1 on a runner (no
-        # sound server), so what is asserted is the helper lines: the capture
-        # check must fail with the *helper's own* complaint about the sound
-        # server, not because the wheel shipped without a capture helper.
+      - name: The installed helper is found and the interface loads
+        # doctor exits 1 on a runner (no sound server), so what is asserted is
+        # the helper line: the capture check must fail with the *helper's own*
+        # complaint about the sound server, not because the wheel shipped
+        # without a capture helper.
         run: |
           steno doctor > doctor.txt 2>&1 || true
           cat doctor.txt
-          grep -q "stenograf/bin/stenodiar" doctor.txt
           # The QML tree loads from the installed wheel — the desktop app is
           # the default UI, and no other leg of this pipeline opens it.
           grep -q "Qt loads and the interface compiles" doctor.txt
@@ -296,23 +190,20 @@ jobs:
             echo "the installed wheel is missing a helper" >&2
             exit 1
           fi
-          unzip -o dist/*.whl 'stenograf/bin/stenodiar' -d /tmp/whl
-          /tmp/whl/stenograf/bin/stenodiar --warmup
 
-  smoke-linux-capture:
-    # The population the low-floor wheel exists for: a glibc-2.35 distro
-    # (Ubuntu 22.04) where the full wheel's manylinux_2_39 tag does not even
-    # apply. Installs the wheel the way a user's resolver would land on it and
-    # proves the bundled helper actually starts against that glibc and its
-    # libpulse — the two things the tag promises.
-    needs: build-linux-capture
+  smoke-linux-old-glibc:
+    # The oldest population the wheel's tag serves: a glibc-2.35 distro
+    # (Ubuntu 22.04). Installs the wheel the way a user's resolver would land
+    # on it and proves the bundled helper actually starts against that glibc
+    # and its libpulse — the two things the tag promises.
+    needs: build-linux-x86_64
     runs-on: ubuntu-latest
     container: ubuntu:22.04
     timeout-minutes: 30
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: dist-linux-capture
+          name: dist-linux-x86_64
           path: dist
       - run: |
           apt-get update
@@ -324,12 +215,9 @@ jobs:
       - name: The bundled helper runs and doctor reaches it
         # No sound server in the container, so the capture check must fail
         # with the helper's own connection complaint — proof the binary ran —
-        # and never with a missing-helper message. stenodiar is absent from
-        # this wheel *on purpose*, and doctor says so with its own "not found"
-        # line, so the guard matches the capture helper's failure messages
-        # ("capture helper 'stenocap' not found", "the capture helper could
-        # not be run") rather than "not found" at large — the working path's
-        # complaint comes from the helper itself and never names it.
+        # and never with a missing-helper message ("capture helper 'stenocap'
+        # not found", "the capture helper could not be run"); the working
+        # path's complaint comes from the helper itself and never names it.
         run: |
           steno doctor > doctor.txt 2>&1 || true
           cat doctor.txt
@@ -382,8 +270,6 @@ jobs:
           # A Windows install whose Qt cannot load its style plugin is exactly
           # the failure this line exists to catch (2026-08-11).
           grep -q "Qt loads and the interface compiles" doctor.txt
-          # The installed wheel's own helpers, not a stray build in the checkout.
-          grep -qi "stenodiar.exe" doctor.txt
           # The capture check cannot *pass* on a runner — there is no audio
           # endpoint — but it must fail for that reason and not because the
           # wheel shipped without a capture helper, which is the regression a
@@ -416,7 +302,7 @@ jobs:
     # build-pure is listed explicitly: no smoke leg installs the pure wheel any
     # more (each platform now smokes its own), but PyPI still needs it and the
     # sdist, and download-artifact below collects whatever has finished.
-    needs: [build-pure, smoke-macos, smoke-linux, smoke-linux-capture, smoke-windows]
+    needs: [build-pure, smoke-macos, smoke-linux, smoke-linux-old-glibc, smoke-windows]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15

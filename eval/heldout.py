@@ -1,4 +1,4 @@
-"""AMI's held-out evaluation meetings: production's diarization arms vs Nemotron 3.
+"""AMI's held-out evaluation meetings: Nemotron 3 diarization, scored for a reader.
 
 The corpus harness (`eval/ami.py`) is built mostly from AMI training meetings,
 which Nemotron 3 Diarization trained on, so its numbers flatter that model.
@@ -27,6 +27,9 @@ Scoring is about what a reader of the transcript gets:
   Nemotron, the true count applied afterwards (keep the k most active speakers,
   give orphaned frames to the most probable kept one).
 
+``score`` scores every ``turns_*.json`` in the output directory, so turn files
+other diarizers left there stay comparable.
+
 Usage (``eval/nemotron_arm.py run`` produces the reference Nemotron turns; the
 ``library`` arm runs ``stenograf.diarization.nemotron`` on the same channels,
 and with ``--reference-features`` — written by ``eval/nemotron_arm.py
@@ -34,8 +37,6 @@ features`` — feeds its chunk loop the reference processor's features instead
 of its own, which isolates the port from the front end)::
 
     uv run --group eval eval/heldout.py fetch
-    uv run --group eval eval/heldout.py run --arm known
-    uv run --group eval eval/heldout.py run --arm estimate
     uv run --group eval eval/heldout.py run --arm library [--reference-features DIR]
     uv run --group eval eval/heldout.py score [--detail]
 """
@@ -152,42 +153,6 @@ def cmd_library(out: Path, features: Path | None) -> int:
         }
         path.write_text(json.dumps(result))
         print(f"{cid} {name}: {secs:.1f} s, {len({t.speaker for t in turns})} speakers", flush=True)
-    return 0
-
-
-def cmd_run(out: Path, arm: str) -> int:
-    """Production's arms as `pipeline.finalize_channel` calls them: the owned loop at
-    k+1 folded to k (count 1 skips the diarizer), or the estimate seat + collapse."""
-    from stenograf.diarization import build_diarizer
-    from stenograf.diarization.loop import OwnDiarizer
-    from stenograf.pipeline import collapse_single_voice, fold_excess_clusters
-
-    diarizer = OwnDiarizer() if arm == "known" else build_diarizer()
-    path = out / f"turns_{arm}.json"
-    result = json.loads(path.read_text()) if path.exists() else {}
-    for channel in json.loads((out / "channels.json").read_text()):
-        cid, k = channel["id"], channel["num_speakers"]
-        if cid in result:
-            continue  # resumable: a channel already in the file is kept
-        pcm = read_pcm16(ami.CHANNELS_DIR / f"{cid}.wav")
-        started = time.monotonic()
-        if arm == "known" and k == 1:
-            turns = [{"speaker": "S0", "start": 0.0, "end": round(len(pcm) / 16000, 2)}]
-        else:
-            res = diarizer.diarize_with_embeddings(pcm, k + 1 if arm == "known" else None)
-            if arm == "known":
-                kept, _ = fold_excess_clusters(res.turns, res.embeddings, k)
-            else:
-                kept, _ = collapse_single_voice(res.turns, res.embeddings)
-            turns = [{"speaker": t.speaker, "start": t.start, "end": t.end} for t in kept]
-        result[cid] = {
-            "turns": turns,
-            "secs": round(time.monotonic() - started, 1),
-            "audio_s": round(len(pcm) / 16000, 1),
-        }
-        path.write_text(json.dumps(result))
-        found = len({t["speaker"] for t in turns})
-        print(f"{cid} {arm}: {result[cid]['secs']} s, {found} speakers")
     return 0
 
 
@@ -359,16 +324,14 @@ def main() -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch")
     run = sub.add_parser("run")
-    run.add_argument("--arm", choices=["known", "estimate", "library"], required=True)
+    run.add_argument("--arm", choices=["library"], default="library")
     run.add_argument("--reference-features", type=Path, help="library arm only")
     sub.add_parser("score").add_argument("--detail", action="store_true")
     args = parser.parse_args()
     if args.cmd == "fetch":
         return cmd_fetch(args.out)
-    if args.cmd == "run" and args.arm == "library":
-        return cmd_library(args.out, args.reference_features)
     if args.cmd == "run":
-        return cmd_run(args.out, args.arm)
+        return cmd_library(args.out, args.reference_features)
     return cmd_score(args.out, args.detail)
 
 

@@ -1,7 +1,6 @@
 import dataclasses
 import hashlib
 import io
-import tarfile
 from pathlib import Path
 
 import pytest
@@ -95,64 +94,4 @@ def test_fetch_rejects_a_corrupted_download(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="integrity"):
         assets.fetch(assets.SILERO_VAD)
     assert assets.cached_path(assets.SILERO_VAD) is None
-    assert not list(tmp_path.glob("*.part"))
-
-
-def test_fetch_extracts_archive_member(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
-    inner = b"segmentation-onnx"
-
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:bz2") as tar:
-        info = tarfile.TarInfo(assets.PYANNOTE_SEGMENTATION.archive_member)
-        info.size = len(inner)
-        tar.addfile(info, io.BytesIO(inner))
-    archive = buffer.getvalue()
-    asset = asset_for(assets.PYANNOTE_SEGMENTATION, archive)  # digest covers the archive
-
-    serve(monkeypatch, archive)
-    path = assets.fetch(asset)
-    assert path == tmp_path / asset.name
-    assert path.read_bytes() == inner  # the member, not the archive
-
-
-def test_fetch_missing_member_raises(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
-
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:bz2") as tar:
-        info = tarfile.TarInfo("unexpected/other.onnx")
-        info.size = 3
-        tar.addfile(info, io.BytesIO(b"abc"))
-    archive = buffer.getvalue()
-    asset = asset_for(assets.PYANNOTE_SEGMENTATION, archive)
-
-    serve(monkeypatch, archive)
-    with pytest.raises(RuntimeError):
-        assets.fetch(asset)
-    # The failed download left nothing behind the "already cached" check.
-    assert assets.cached_path(asset) is None
-    assert not list(tmp_path.glob("*.part"))  # no extraction temp left behind
-
-
-def test_interrupted_extraction_leaves_no_truncated_model(monkeypatch, tmp_path):
-    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
-
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:bz2") as tar:
-        info = tarfile.TarInfo(assets.PYANNOTE_SEGMENTATION.archive_member)
-        payload = b"x" * (1 << 16)
-        info.size = len(payload)
-        tar.addfile(info, io.BytesIO(payload))
-    # Cut the archive mid-stream: decompression dies while the member is being
-    # written out, exactly the crash window the atomic rename protects. The
-    # digest matches the truncated bytes so the failure is extraction's, not
-    # the integrity check's.
-    truncated = buffer.getvalue()[: buffer.tell() // 2]
-    asset = asset_for(assets.PYANNOTE_SEGMENTATION, truncated)
-
-    serve(monkeypatch, truncated)
-    with pytest.raises(Exception):  # noqa: B017 - bz2 raises OSError/EOFError variants
-        assets.fetch(asset)
-    assert assets.cached_path(asset) is None  # nothing behind the "already cached" check
     assert not list(tmp_path.glob("*.part"))

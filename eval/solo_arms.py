@@ -5,11 +5,9 @@
 shipped behavior against the two arms it replaces, on every single-speaker
 corpus channel:
 
-- ``k1``  — the same diarizer forced to one cluster.
-- ``est`` — the diarizer left to estimate the count, which is what a user who
-  never states a count gets. On a machine with the stenodiar helper this is
-  speakrs' estimator (the shipped estimate path); ``--no-helper`` measures
-  the loop threshold cut instead, the stenodiar-less estimate path.
+- ``k1``  — the production diarizer (``build_diarizer``) capped at one speaker.
+- ``est`` — the same diarizer left to estimate the count, which is what a user
+  who never states a count gets.
 
 Word times are read back from the matrix's own hypotheses, so no arm re-runs
 ASR — only the diarization and the word→turn merge are recomputed, which is
@@ -56,17 +54,11 @@ def _arm(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--segments", help="comma-separated channel ids (default: every solo one)")
-    parser.add_argument(
-        "--no-helper",
-        action="store_true",
-        help="estimate with the loop threshold cut even if stenodiar is built",
-    )
     args = parser.parse_args()
 
     import ami
-    from diarize import _build_diarizer
 
-    from stenograf.diarization.loop import OwnDiarizer
+    from stenograf.diarization import build_diarizer
 
     wanted = set(args.segments.split(",")) if args.segments else None
     channels = [
@@ -78,9 +70,8 @@ def main() -> int:
         raise SystemExit("no solo corpus channels — run `eval/ami.py fetch` first")
 
     hyp_dir = OUT_DIR / "diar" / "ami"
-    sherpa = OwnDiarizer()
-    estimator = _build_diarizer(no_helper=args.no_helper)
-    estimator_name = type(estimator).__name__
+    diarizer = build_diarizer()
+    diarizer_name = type(diarizer).__name__
 
     rows: list[tuple[str, dict[str, tuple[DiarizationScore, AttributionScore, int]]]] = []
     for channel in channels:
@@ -94,8 +85,8 @@ def main() -> int:
         pcm = read_pcm16(channel.wav_path)
 
         arms = {"shipped": _arm(parse_rttm(shipped_path), words, ref)}
-        arms["k1"] = _arm(sherpa.diarize(pcm, num_speakers=1), words, ref)
-        arms["est"] = _arm(estimator.diarize(pcm, num_speakers=None), words, ref)
+        arms["k1"] = _arm(diarizer.diarize(pcm, num_speakers=1), words, ref)
+        arms["est"] = _arm(diarizer.diarize(pcm, num_speakers=None), words, ref)
         rows.append((channel.id, arms))
         print(
             f"[{channel.id}] "
@@ -109,8 +100,8 @@ def main() -> int:
     lines = [
         "# Solo-channel arms — is the count-1 diarizer bypass right?",
         "",
-        f"Estimator: {estimator_name}. `shipped` = no diarizer (ASR/VAD spans, one label);",
-        "`k1` = diarizer forced to one cluster; `est` = diarizer estimating the count.",
+        f"Diarizer: {diarizer_name}. `shipped` = no diarizer (ASR/VAD spans, one label);",
+        "`k1` = diarizer capped at one speaker; `est` = diarizer estimating the count.",
         "",
         "| Channel | shipped DER | k1 DER | est DER | shipped words | k1 words "
         "| est words | est k |",

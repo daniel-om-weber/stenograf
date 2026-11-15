@@ -13,15 +13,14 @@ A. **The cliff, on our stack.** Every known-count trial cluster's clean audio
 
 B. **The shipped path.** Clean durations of the known-count matrix clusters,
    and the re-ID operating points with under-bar trials forced to reject.
-   Known-count folding leaves few small clusters, so this is expected to be a
+   A known count leaves few small clusters, so this is expected to be a
    near-no-op — that is the non-regression evidence, not the motivation.
 
 C. **Estimate mode, where short clusters actually live.** The cached
-   estimate-mode clusters (``out/diar/ami-est``, sessions b–d + ICSI) are
-   embedded fresh, run through ``collapse_single_voice`` (the shipped order),
-   and matched against all enrolled profiles at the shipped threshold. Per
-   candidate cutoff: how many wrong namings the gate prevents vs how many
-   correct namings (merge-at-naming recoveries included) it loses.
+   estimate-mode clusters (``split_recovery.EST_DIR``, sessions b–d + ICSI)
+   are embedded fresh and matched against all enrolled profiles at the shipped
+   threshold. Per candidate cutoff: how many wrong namings the gate prevents vs
+   how many correct namings (merge-at-naming recoveries included) it loses.
 
 Requires the cached matrix outputs (``eval/ami.py run``) and the est-mode
 cache (``eval/split_recovery.py``)::
@@ -45,7 +44,6 @@ CUTOFFS = (1.0, 2.0, 3.0, 5.0)
 DURATIONS = (1.0, 2.0, 3.0, 5.0, 8.0, None)
 """Section A truncation targets (s); None = the cluster's full clean audio."""
 
-EST_DIR = OUT_DIR / "diar" / "ami-est"
 HYP_DIR = OUT_DIR / "diar" / "ami"
 
 
@@ -233,13 +231,13 @@ def section_b(clusters: list[Cluster], trials: list[Trial]) -> list[str]:
 
 
 def section_c(channels, galleries, embed) -> list[str]:
-    """Estimate mode through the shipped order (collapse, then naming at the
-    shipped threshold): what each cutoff would have gated, and at what cost."""
+    """Estimate-mode clusters named at the shipped threshold: what each cutoff
+    would have gated, and at what cost."""
     import ami
+    from split_recovery import EST_DIR
 
     from stenograf.diarization.base import SpeakerTurn
     from stenograf.diarization.embedding import cluster_embeddings
-    from stenograf.pipeline import collapse_single_voice
     from stenograf.voiceprints import DEFAULT_THRESHOLD
 
     profiles = {name: emb for gallery in galleries.values() for name, emb in gallery.items()}
@@ -254,7 +252,6 @@ def section_c(channels, galleries, embed) -> list[str]:
             SpeakerTurn(t.speaker, t.start, t.end) for t in parse_rttm(rttm_path)
         ]
         embeddings = cluster_embeddings(turns, pcm, embed)
-        turns, embeddings = collapse_single_voice(turns, embeddings)
         ref = parse_rttm(channel.ref_path)
         by_cluster: dict[str, list] = {}
         for t in turns:
@@ -282,7 +279,7 @@ def section_c(channels, galleries, embed) -> list[str]:
 
     named = [o for o in outcomes if o[1] != "unnamed"]
     lines = [
-        "### C. Estimate mode (collapsed clusters, shipped threshold "
+        "### C. Estimate mode (shipped threshold "
         f"{DEFAULT_THRESHOLD})",
         "",
         f"{len(outcomes)} clusters reach naming; "

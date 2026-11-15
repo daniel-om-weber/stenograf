@@ -8,7 +8,7 @@
 # with `git commit --no-verify` for a WIP or docs-only commit.
 #
 # Two things this does NOT cover, both of which still only fail in CI: the
-# pytest run on Linux/Windows, and the `stenodiar` cargo checks. It also checks
+# pytest run on Linux/Windows, and the `stenocap` cargo tests. It also checks
 # the working tree, not the index — a partially staged commit can pass here and
 # still be broken on its own.
 set -eu

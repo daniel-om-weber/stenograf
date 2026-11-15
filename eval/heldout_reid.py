@@ -23,10 +23,10 @@ Two enrollment sources, as `rename_once.py` defines them:
 
 Every arm's cluster embedding is recomputed from its final turns with
 production's ``cluster_embeddings`` (overlap-cleaned, ERes2Net through
-sherpa-onnx). Production's known-count arm instead carries the fold's
-duration-weighted mean of its k+1 cluster embeddings; recomputing keeps all arms
-on one rule. Trials are also re-embedded from their first 3 s and 2 s of clean
-speech, the short-cluster regime where scores collapse.
+sherpa-onnx). The owned-loop arm's turns were folded from k+1 clusters, whose
+embeddings were duration-weighted means; recomputing keeps all arms on one
+rule. Trials are also re-embedded from their first 3 s and 2 s of clean speech,
+the short-cluster regime where scores collapse.
 
     uv run --group eval eval/heldout_reid.py          # writes out/heldout/reid.md
 """

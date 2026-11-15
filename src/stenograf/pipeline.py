@@ -12,7 +12,6 @@ import time
 from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import replace
-from itertools import combinations
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -197,10 +196,10 @@ def _attribute(
         words = [Word(text=seg.text, start=seg.start, end=seg.end) for seg in segments]
     if not words:
         # No speech on this channel: nothing to diarize, so skip it. Diarizing
-        # here is not just wasted work — sherpa can raise on empty/near-silent
-        # input forced to num_clusters > 1, and that exception would otherwise
-        # sink the whole meeting's finalize (a silent remote or a dead second
-        # mic is reachable in hybrid mode).
+        # here is not just wasted work — a diarizer can raise on empty or
+        # near-silent input, and that exception would otherwise sink the whole
+        # meeting's finalize (a silent remote or a dead second mic is reachable
+        # in hybrid mode).
         return []
 
     if on_progress is not None:
@@ -239,8 +238,7 @@ def _entry_embeddings(
     """Cluster embeddings under the labels the entries carry.
 
     Several clusters resolving to one profile name (merge-at-naming) merge to
-    their duration-weighted mean — the same rule :func:`fold_excess_clusters`
-    uses for a merged cluster's embedding."""
+    their duration-weighted mean."""
     durations: dict[str, float] = {}
     for t in turns:
         durations[t.speaker] = durations.get(t.speaker, 0.0) + (t.end - t.start)
@@ -254,121 +252,6 @@ def _entry_embeddings(
         for label, total in sums.items()
         if float(np.linalg.norm(total)) > 0.0
     }
-
-
-COLLAPSE_SIMILARITY = 0.6
-"""An estimated-count channel collapses to one speaker when every pair of its
-cluster embeddings is at least this similar. Measured 2026-08-06 on the corpus
-harness with overlap-clean embeddings (``eval/README.md``): channels that
-really hold one voice but were split 2–3 ways sit at min pairwise cosine
-0.73–0.98 (10/10 recovered), true two-speaker channels at ≤0.39 (0/24 falsely
-collapsed), larger groups at ≤0.16. 0.6 sits in the empty band, deliberately
-nearer its solo edge: the false collapse (two real speakers merged) is the
-unrecoverable failure, so it gets the larger margin. At THIS boundary only the
-everything-is-one-voice collapse is safe: merging individual similar pairs on
-a multi-speaker estimate-mode channel measurably destroys attribution
-(cross-speaker cluster means reach 0.95 there, 2026-08-06). The known-count
-fold's pair merge is a different regime with its own measured boundary —
-:data:`FOLD_PAIR_SIMILARITY` (cross pairs ≤0.697 at k+1 fold steps,
-2026-08-07)."""
-
-
-def collapse_single_voice(
-    turns: list[SpeakerTurn],
-    embeddings: dict[str, np.ndarray],
-) -> tuple[list[SpeakerTurn], dict[str, np.ndarray]]:
-    """Undo an estimator's split of a single voice into several "speakers".
-
-    Only the eval harness calls this, on the owned loop's and speakrs'
-    clusters; Nemotron's turns go uncollapsed (see ``_attribute``).
-
-    Count estimation splits a genuinely single-speaker channel 2–3 ways on
-    every corpus channel measured (a monologue chopped across "Speaker 1/2/3",
-    −22 pts word attribution — the cost of nobody stating a count). When *all*
-    clusters are mutually at least :data:`COLLAPSE_SIMILARITY` similar, they
-    are one voice: everything folds to one cluster. Any cluster without an
-    embedding, or any pair under the bar, leaves the result untouched.
-    """
-    labels = {t.speaker for t in turns}
-    if len(labels) < 2 or not labels <= embeddings.keys():
-        return turns, embeddings
-    if any(
-        float(embeddings[a] @ embeddings[b]) < COLLAPSE_SIMILARITY
-        for a, b in combinations(sorted(labels), 2)
-    ):
-        return turns, embeddings
-    return fold_excess_clusters(turns, embeddings, 1)
-
-
-FOLD_PAIR_SIMILARITY = 0.8
-"""A fold merges the most-similar cluster pair outright at or above this
-cosine; below it, the smallest-by-duration spare folds into its best partner.
-Measured 2026-08-07 at fold granularity (80 k+1→k fold steps, 40 loop + duo
-channels × complete and ward partitioners — ``eval/README.md``): cross-speaker
-fold pairs reach at most 0.697, while every merge the gate exists to admit — a
-dominant talker the partitioner split in two — sits at 0.846–0.923. 0.8 gives
-the unrecoverable failure (fusing two real speakers) the larger margin, the
-same asymmetry rule ``COLLAPSE_SIMILARITY`` follows. On complete-linkage
-clusters the gate changes no measured outcome (worst cross pair 0.595); its
-wins are ward's split repairs (Bmr025 37.7 → 16.2 % DER, mean 15.0 → 13.2)."""
-
-
-def fold_excess_clusters(
-    turns: list[SpeakerTurn],
-    embeddings: dict[str, np.ndarray],
-    num_speakers: int,
-) -> tuple[list[SpeakerTurn], dict[str, np.ndarray]]:
-    """Fold clusters until ``num_speakers`` remain: the most-similar pair when
-    it clears :data:`FOLD_PAIR_SIMILARITY`, else the smallest into its
-    most-similar partner.
-
-    Only the eval harness calls this, on the owned loop's clusters; Nemotron
-    applies a stated count itself, as a cap.
-
-    A known-count channel is diarized at one cluster *over* the stated count,
-    then folded back here: the spare cluster gives the clustering room to keep
-    two genuinely different voices apart that an exact-count run would fuse
-    (measured 2026-08-06 on the corpus harness: +2.3 pts mean word attribution,
-    one channel +20.8, worst channel −0.3 — ``eval/README.md``), and the fold
-    returns exactly the count the user stated, so no phantom speaker appears.
-    At or above the gate the max pair is one voice the partitioner split — the
-    duration spare structurally cannot repair a split of the *largest* cluster
-    (measured 2026-08-07: ward splits dominant talkers; the gated merge is the
-    whole difference between 37.7 and 16.2 % DER on Bmr025). Below the gate
-    the spare is identified by *duration* and only its partner by similarity,
-    so a wrong partner choice can never cost more than the spare's own speech;
-    folding the most-similar pair UNGATED stays declined (24.7 vs 16.5 % mean
-    DER on complete clusters, remeasured 2026-08-07, confirming 2026-08-06).
-    The merged cluster keeps the longer side's label; its embedding
-    is the duration-weighted mean. Clusters without an embedding cannot be
-    folded; if too few clusters have one, the remainder is returned unfolded
-    (real backends always embed — see ``DiarizationResult.embeddings``).
-    """
-    turns = list(turns)
-    embeddings = dict(embeddings)
-    while len({t.speaker for t in turns}) > num_speakers:
-        durations: dict[str, float] = {}
-        for t in turns:
-            durations[t.speaker] = durations.get(t.speaker, 0.0) + (t.end - t.start)
-        embedded = [c for c in durations if c in embeddings]
-        if len(embedded) < 2:
-            return turns, embeddings
-        sim, a, b = max(
-            (float(embeddings[x] @ embeddings[y]), x, y)
-            for x, y in combinations(embedded, 2)
-        )
-        if sim < FOLD_PAIR_SIMILARITY:
-            b = min(embedded, key=lambda c: durations[c])
-            a = max(
-                (c for c in embedded if c != b),
-                key=lambda c: float(embeddings[c] @ embeddings[b]),
-            )
-        keep, fold = (a, b) if durations[a] >= durations[b] else (b, a)
-        turns = [replace(t, speaker=keep) if t.speaker == fold else t for t in turns]
-        merged = embeddings[keep] * durations[keep] + embeddings[fold] * durations[fold]
-        embeddings[keep] = l2_normalize(merged)
-        del embeddings[fold]
-    return turns, embeddings
 
 
 def assemble_transcript(

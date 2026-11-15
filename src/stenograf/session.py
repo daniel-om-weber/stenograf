@@ -1166,7 +1166,7 @@ class MeetingRecorder:
         """Finalize one channel, never letting its failure lose another channel.
 
         Diarization is the fragile step (a real backend can raise on unexpected
-        audio, as the sherpa path is otherwise untested). On failure, retry
+        audio). On failure, retry
         without diarization so the channel's *text* still survives — attributed
         to a single speaker rather than dropped. If even the un-diarized pass
         fails, skip this channel and keep the rest of the meeting.

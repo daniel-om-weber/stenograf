@@ -11,7 +11,7 @@ German calls through a laptop mic and a call codec.
 
 What it is not: stenograf never diarizes this mix (the channels are separate in
 production), and a laptop mic against a call codec separates by channel colour
-alone — both diarizers sit at the ceiling on it. ``pairs`` builds the harder
+alone — a diarizer can sit at the ceiling on it. ``pairs`` builds the harder
 set: two remote people from different calls, both through the system tap,
 taking turns — close to the product's two-remote-people channel. Neither covers
 a shared room mic, which has no free reference.
@@ -27,11 +27,10 @@ All outputs — audio mixes, references, the meeting list — stay in
 
     uv run --group eval eval/owncalls.py select [--limit N]
     uv run --group eval eval/owncalls.py build
-    uv run --group eval eval/owncalls.py run --arm known
     uv run eval/nemotron_arm.py run --device webgpu --out eval/out/owncalls \
         --audio-dir eval/out/owncalls/audio
     uv run --group eval eval/owncalls.py score
-    uv run --group eval eval/owncalls.py pairs        # then run / nemotron / score
+    uv run --group eval eval/owncalls.py pairs        # then nemotron / score
     # with --set pairs (nemotron: --out/--audio-dir eval/out/owncalls/pairs[/audio])
 """
 
@@ -43,9 +42,7 @@ import json
 import shutil
 import sqlite3
 import subprocess
-import sys
 import tempfile
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -258,37 +255,6 @@ def _write_wav(path: Path, pcm: np.ndarray) -> None:
         w.writeframes(pcm.tobytes())
 
 
-def cmd_run(arm: str, root: Path) -> int:
-    """The owned loop as production calls it for a stated count of 2: k+1, folded."""
-    from common import read_pcm16
-
-    from stenograf.diarization.loop import OwnDiarizer
-    from stenograf.pipeline import fold_excess_clusters
-
-    if arm != "known":
-        print("only --arm known runs here; Nemotron runs via nemotron_arm.py", file=sys.stderr)
-        return 2
-    diarizer = OwnDiarizer()
-    path = root / "turns_known.json"
-    result = json.loads(path.read_text()) if path.exists() else {}
-    for c in json.loads((root / "channels.json").read_text()):
-        cid = c["id"]
-        if cid in result:
-            continue
-        pcm = read_pcm16(root / "audio" / f"{cid}.wav")
-        started = time.monotonic()
-        res = diarizer.diarize_with_embeddings(pcm, 3)
-        kept, _ = fold_excess_clusters(res.turns, res.embeddings, 2)
-        result[cid] = {
-            "turns": [{"speaker": t.speaker, "start": t.start, "end": t.end} for t in kept],
-            "secs": round(time.monotonic() - started, 1),
-            "audio_s": round(len(pcm) / 16000, 1),
-        }
-        path.write_text(json.dumps(result))
-        print(f"{cid} known: {result[cid]['secs']} s", flush=True)
-    return 0
-
-
 def cmd_score(root: Path) -> int:
     channels = json.loads((root / "channels.json").read_text())
     systems: dict[str, dict[str, dict]] = {}
@@ -421,9 +387,6 @@ def main() -> int:
     sub.add_parser("select").add_argument("--limit", type=int)
     sub.add_parser("build")
     sub.add_parser("pairs")
-    run = sub.add_parser("run")
-    run.add_argument("--arm", choices=["known"], required=True)
-    run.add_argument("--set", choices=["calls", "pairs"], default="calls")
     sub.add_parser("score").add_argument("--set", choices=["calls", "pairs"], default="calls")
     args = parser.parse_args()
     if args.cmd == "select":
@@ -432,10 +395,7 @@ def main() -> int:
         return cmd_build()
     if args.cmd == "pairs":
         return cmd_pairs()
-    root = OUT / "pairs" if args.set == "pairs" else OUT
-    if args.cmd == "run":
-        return cmd_run(args.arm, root)
-    return cmd_score(root)
+    return cmd_score(OUT / "pairs" if args.set == "pairs" else OUT)
 
 
 if __name__ == "__main__":

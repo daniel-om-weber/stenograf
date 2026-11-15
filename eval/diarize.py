@@ -20,13 +20,14 @@ Usage::
 
     uv run eval/diarize.py                       # hypotheses for all segments
     uv run eval/diarize.py --segments de-1,de-2  # a subset
-    uv run eval/diarize.py --num-speakers 3      # force the count (default: estimate)
+    uv run eval/diarize.py --num-speakers 3      # cap the count (default: estimate)
     uv run eval/diarize.py --bootstrap           # seed refs/<id>.draft.rttm
     uv run eval/diarize.py --ami                 # the AMI/ICSI channels (eval/ami.py)
 
 The AMI mode covers the corpus channels ``eval/ami.py fetch`` built: per-channel
-known speaker counts (the production topology's signal), plus a per-cluster
-embedding file for the re-ID trials. Each channel is diarized once —
+known speaker counts (the production topology's signal, passed to the diarizer
+as its cap exactly as ``finalize_channel`` passes a stated count), plus a
+per-cluster embedding file for the re-ID trials. Each channel is diarized once —
 ``finalize_channel`` gets the turns back through a frozen diarizer.
 """
 
@@ -43,31 +44,10 @@ from rttm import Turn, write_rttm
 from stenograf import assets
 from stenograf.asr.parakeet import ParakeetMLXBackend
 from stenograf.config import Language
+from stenograf.diarization import build_diarizer
 from stenograf.diarization.base import Diarizer, SpeakerTurn
-from stenograf.diarization.loop import OwnDiarizer
 from stenograf.pipeline import finalize_channel
 from stenograf.vad import SileroVAD
-
-
-def _build_diarizer(*, no_helper: bool = False):
-    """The production stack (stenodiar for estimated counts when built) —
-    mirrors ``build_diarizer``. ``no_helper`` pins the stenodiar-less install
-    (the owned loop's threshold estimate mode)."""
-    from stenograf.diarization.speakrs import (
-        DiarizerHelperNotFoundError,
-        SpeakrsCliDiarizer,
-        find_stenodiar,
-    )
-
-    own = OwnDiarizer()
-    if no_helper:
-        return own
-    try:
-        find_stenodiar()
-    except DiarizerHelperNotFoundError:
-        print("stenodiar not built — threshold estimate mode", file=sys.stderr)
-        return own
-    return SpeakrsCliDiarizer(own)
 
 
 def _words_json(entries) -> dict:
@@ -106,7 +86,6 @@ def run_ami(
     *,
     embedding: Path | None = None,
     out_name: str = "ami",
-    cluster_method: str = "ward",
 ) -> None:
     """Diarize + finalize every corpus channel; write hypotheses for both scorers.
 
@@ -119,21 +98,24 @@ def run_ami(
     spans), so the mic hypothesis is those entry spans, and its re-ID embedding
     is computed from them the way a count>1 cluster's would be. What that
     bypass costs against a diarizer that *is* run on a solo channel is
-    ``solo_arms.py``. Known-count channels likewise mirror the shipped path:
-    diarized at k+1 and folded back (``pipeline.fold_excess_clusters``), so the
-    hypotheses, embeddings and re-ID trials all reflect what a user gets."""
+    ``solo_arms.py``. Count>1 channels take the shipped path too: the known
+    count goes in as the diarizer's cap, so the hypotheses, embeddings and
+    re-ID trials all reflect what a user who states the count gets."""
     import time
 
     import ami
 
-    from stenograf.diarization.embedding import cluster_embeddings
-    from stenograf.pipeline import fold_excess_clusters
+    from stenograf.diarization.embedding import VoiceEmbedder
+    from stenograf.diarization.nemotron import NemotronDiarizer
 
     channels = [c for c in ami.load_channels() if channel_ids is None or c.id in channel_ids]
     if not channels:
         raise SystemExit("no corpus channels — run `eval/ami.py fetch` first")
 
-    diarizer = OwnDiarizer(embedding_model=embedding, cluster_method=cluster_method)
+    if embedding is None:
+        diarizer = build_diarizer()
+    else:
+        diarizer = NemotronDiarizer(embedder=VoiceEmbedder(embedding))
     asr = ParakeetMLXBackend()
     asr_loaded = False
     vad = SileroVAD(assets.fetch(assets.SILERO_VAD))
@@ -147,14 +129,12 @@ def run_ami(
         turns: list[SpeakerTurn] = []
         embeddings = {}
         if not solo:
-            result = diarizer.diarize_with_embeddings(pcm, channel.num_speakers + 1)
-            folded = fold_excess_clusters(result.turns, result.embeddings, channel.num_speakers)
-            turns, embeddings = list(folded[0]), folded[1]
+            result = diarizer.diarize_with_embeddings(pcm, channel.num_speakers)
+            turns, embeddings = list(result.turns), result.embeddings
 
         if not asr_loaded:
             # After the diarization peak, so the resident MLX weights are not
-            # stacked on top of it — that margin is what decided which loop
-            # channel's process got killed back when sherpa leaked.
+            # stacked on top of it.
             asr.load()
             asr_loaded = True
         entries = finalize_channel(
@@ -174,7 +154,8 @@ def run_ami(
                 [(w.start, w.end) for e in entries for w in e.words], ami.MERGE_GAP_S
             )
             turns = [SpeakerTurn("S0", s, e) for s, e in spans]
-            embeddings = cluster_embeddings(turns, pcm, diarizer.embed)
+            voice = diarizer.channel_embedding(pcm, turns)
+            embeddings = {} if voice is None else {"S0": voice}
 
         write_rttm(
             out_dir / f"{channel.id}.rttm",
@@ -198,7 +179,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--segments", help="comma-separated segment ids (default: all)")
     parser.add_argument(
-        "--num-speakers", type=int, help="force the speaker count (default: estimate)"
+        "--num-speakers", type=int, help="cap the speaker count (default: estimate)"
     )
     parser.add_argument(
         "--bootstrap",
@@ -220,11 +201,6 @@ def main() -> int:
         default="ami",
         help="--ami only: output dir under out/diar/ (keeps candidate runs off the baseline)",
     )
-    parser.add_argument(
-        "--cluster",
-        default="ward",
-        help="--ami only: clustering method (complete | average | ward | nmesc)",
-    )
     args = parser.parse_args()
 
     if args.ami:
@@ -232,7 +208,6 @@ def main() -> int:
             set(args.segments.split(",")) if args.segments else None,
             embedding=args.embedding,
             out_name=args.out_name,
-            cluster_method=args.cluster,
         )
         return 0
 
@@ -244,7 +219,7 @@ def main() -> int:
         print("no extracted segments — run eval/extract.py first", file=sys.stderr)
         return 1
 
-    diarizer = _build_diarizer()
+    diarizer = build_diarizer()
     asr = vad = None
     if not args.bootstrap:  # the transcript (word attribution) is only needed for hypotheses
         asr = ParakeetMLXBackend()

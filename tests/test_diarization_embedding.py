@@ -121,7 +121,7 @@ def test_overlap_with_another_cluster_is_excluded():
 def test_fully_overlapped_cluster_falls_back_to_raw_turns():
     # S1 speaks only while S0 does: no clean audio at all. It still gets an
     # embedding (from its raw, contaminated turn) — an absent one would block
-    # naming, the collapse and the fold.
+    # naming and enrollment.
     turns = _turns(("S0", 0.0, 3.0), ("S1", 1.0, 2.0))
     embeddings = cluster_embeddings(
         turns,

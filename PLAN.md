@@ -12,19 +12,18 @@ defaults is in `eval/README.md` and in the code's own docstrings.
 channel records from a chosen device on all three platforms — `[capture]
 mic_device`, `steno devices`, `--mic-device`, and the setup form's picker;
 what remains is §7's hardware gates, and its §4a is superseded by the measured
-macOS design in `native/README.md`). `PLAN-DIARIZATION-SPEED.md`, where **only
-step 5's L1 is still open** (scoped and executed 2026-08-09/08-11: the pool
-shipped at 2.86× with bit-exact gates, the notes warmer shipped with its
-honest 2.3 s number, L2/L3 seconds-removal declined at kill-test, the x86
-session measured the whole wait and **declined the online worker on its
-thermal gate**, and the finalize watts it owed are measured). Two results from
-that session reach beyond the plan: **stenodiar's estimate path is 1.66–1.90×
-more expensive than the owned loop off macOS** (helper 242–279 s on ORT CPU vs
-3.4 s on CoreML), inverting the macOS-only assumption that only
-count-stating users benefit from diarization speed work; and repeats of one
-config on that box span 11–21 %, so any future timing ladder on a handheld
+macOS design in `native/README.md`), and `PLAN-NEMOTRON.md`, the migration to
+Nemotron 3 as the one diarizer. `PLAN-DIARIZATION-SPEED.md` closed 2026-11-15
+when the owned loop and stenodiar it was speeding up were deleted
+(`git log --follow -p PLAN-DIARIZATION-SPEED.md`; numbers in
+`eval/README.md`). Two of its facts outlive it: the shared-trunk embedding
+route (one embedder trunk pass over long blocks, masked statistics pooling per
+span — SDBench's "per-chunk" method) now reaches only the re-ID embeddings,
+measured at ~10–15 s per channel (2026-08-09), and it is still the only way to
+put the embedder on an execution provider, because sherpa's bundled
+onnxruntime silently ignores the provider it is given; and repeats of one
+config on the x86 handheld span 11–21 %, so any future timing ladder there
 must interleave its arms and treat anything under ~15 % as unmeasured.
-Evidence: `eval/README.md`.
 `PLAN-DIARIZATION.md` (2026-08-09, all five steps
 measured to a verdict — the declined list below carries the survivors; read
 `eval/diarization-sota-2026.md` and `eval/README.md`'s corpus-harness
@@ -624,13 +623,6 @@ the evidence, the decisions and the container ladder for the desktops it has
 never run on, and was deleted on 2026-07-26 with nothing open:
 `git log --follow -p PLAN-LINUX.md`.
 
-**stenodiar off macOS — done 2026-07-26, nothing open.** The
-release-attachment plan was dropped for platform wheels; `release.yml` cut all
-four artifacts and passed every smoke leg on a `workflow_dispatch` dry run,
-which is everything a tag does except publish. Why the floor is
-manylinux_2_39 and not lower — it is upstream onnxruntime's, not ours — is in
-`native/README.md` with the rest of the design.
-
 ---
 
 ## Diarization: Nemotron 3 as the one diarizer — measured, gates open (2026-11-15)
@@ -676,18 +668,6 @@ threshold 0.45–0.70, so 0.56 holds; the owned loop's known IS1009 misnaming
 disappears. Off AMI, on the user's own calls labelled by channel (same file,
 "Two speakers off AMI"), Nemotron beats the owned loop at k=2 on every call and
 every two-remote-voices dialogue (98.6 vs 89.7 % on the latter).
-
-If it ships, stenodiar, the vendored speakrs and the manylinux_2_39 floor's
-reason go with it. If it does not, two cheap fixes to today's helper are
-owed: the batched-embedding lookup asks for a `-b64` model the HF repo does not
-ship (`vendor/speakrs/src/inference/embedding/load/sessions.rs:162`), so it
-never batches; and ORT's intra-op threads should be the physical core count. A
-Python port with both on ORT 1.31 ran the estimate path in 165 s vs 316 s at
-one-frame parity — how much of that the Rust helper recovers is unmeasured.
-The `speakrs-0.7` branch stays unmerged either way: its native CPU backend is
-2× slower than today on Linux stock, and still ~1.3× slower than ORT on 4-core
-machines with four upstreamable patches (numbers in the same `eval/README.md`
-section).
 
 ---
 
@@ -755,7 +735,7 @@ Kept here so future sessions don't re-open them.
     FAR0 threshold jumps 0.592→~0.78, silently invalidating the calibration).
     Trigger: finalize latency becomes binding — then the shared-trunk route
     first (one trunk pass over long blocks, masked statistics pooling per
-    pair — `PLAN-DIARIZATION-SPEED.md` step 5 L1, which is SDBench's
+    pair — the closed `PLAN-DIARIZATION-SPEED.md`'s step 5 L1, which is SDBench's
     "per-chunk" method as its "mask at stat-pooling" indicates; disambiguated
     2026-08-09 because the phrase also reads as one-pass-per-10-s-window,
     and THAT variant is backwards for our sole-speaker-cropping loop:

@@ -232,6 +232,16 @@ gitignored (private content).
 
 ### The corpus harness (AMI/ICSI, no hand labels)
 
+> **The owned loop, the sherpa diarizer, stenodiar and the fold/collapse rules
+> were deleted on 2026-11-15** (Nemotron 3 is the one diarizer). The numbers
+> below stand as measured; the scripts that measured only those pieces —
+> `loop_arm`, `loop_freeze`, `loop_parity`, `fold_sweep`, `fold_gate_audit`,
+> `linkage_sweep`, `pool_parity`, `embed_units`, `kplus1`, `cluster_ab`,
+> `collapse_probe`, `nemotron_collapse`, `diarizen_arm` — live in git history
+> (`git log --diff-filter=D -- eval/<name>.py`). `diarize.py`, `solo_arms.py`
+> and `split_recovery.py` now run Nemotron, so their published numbers
+> describe the diarizers they ran then, not a rerun today.
+
 The `PLAN-DIARIZATION.md` step-0 harness sidesteps hand-labelling: `ami.py`
 downloads per-speaker headset audio for five recurring groups — AMI ES2003,
 ES2007, IS1009, TS3010 (all three recording sites; ES2007/TS3010 joined

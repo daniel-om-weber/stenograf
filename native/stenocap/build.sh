@@ -6,9 +6,9 @@
 # signing: Linux gates nothing per binary — unlike macOS, where the signature
 # *is* the microphone grant.
 #
-# The wheel build hook runs this script too (hatch_build.py), and unlike
-# stenodiar a failure here fails the wheel: without this binary there is no
-# live capture at all on Linux.
+# The wheel build hook runs this script too (hatch_build.py), and a failure
+# here fails the wheel: without this binary there is no live capture at all
+# on Linux.
 set -e
 cd "$(dirname "$0")"
 

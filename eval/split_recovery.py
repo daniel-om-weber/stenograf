@@ -1,8 +1,9 @@
 """Can estimate-mode over-splits be recovered downstream, and by what rule?
 
-The estimator splits every single-speaker corpus channel 2–3 ways
-(`solo_arms.py`, −22 pts word attribution). Recovery candidates, each measured
-here on estimate-mode diarization of *all twenty* corpus channels:
+An estimator that splits a single speaker costs word attribution
+(`solo_arms.py` measures it on the solo channels). Recovery candidates, each
+measured here on the production diarizer's estimate mode (``build_diarizer``,
+no count) over *all twenty* corpus channels:
 
 - ``reid 1:1`` — today's resolve: one cluster per profile, so a split speaker
   keeps at most one of their clusters named and the rest stay separate.
@@ -10,8 +11,7 @@ here on estimate-mode diarization of *all twenty* corpus channels:
   profile takes its name, so the split collapses for an enrolled speaker.
 - ``self``    — profile-free analog: clusters whose embeddings are mutually
   ≥ the same threshold merge with each other (union-find), covering the
-  speaker who has no profile. The plan's other unprofiled candidate — the
-  estimator's own confidence — does not exist: stenodiar emits turns only.
+  speaker who has no profile.
 
 Discriminator stats per channel (est k vs true k, top-cluster dominance
 share, pairwise cluster-embedding similarities) say whether any rule can
@@ -25,9 +25,9 @@ enrollment source and is excluded from the re-ID arms; Bmr enrolls from
 Bmr021 since 2026-08-07 — its unenrolled attendees are the unprofiled case,
 alongside each group's convention stranger). Word times are read back
 from the matrix's hypotheses (run ``eval/ami.py run`` first); estimate-mode
-turns and embeddings are cached under ``out/diar/ami-est/``.
+turns and embeddings are cached under ``EST_DIR``.
 
-    uv run --group eval eval/split_recovery.py [--no-helper]
+    uv run --group eval eval/split_recovery.py
 """
 
 from __future__ import annotations
@@ -47,7 +47,9 @@ from stenograf.asr.base import Word as PipelineWord
 from stenograf.pipeline import merge_words_turns
 from stenograf.voiceprints import DEFAULT_THRESHOLD
 
-EST_DIR = OUT_DIR / "diar" / "ami-est"
+EST_DIR = OUT_DIR / "diar" / "ami-est-nemotron"
+"""Keyed by estimator: ``ami-est`` holds the turns of an estimator no longer
+shipped, and this cache would read them back as Nemotron's without a word."""
 
 
 def _resolve(
@@ -151,20 +153,15 @@ def _est_result(channel, estimator, embed) -> tuple[list[Turn], dict[str, np.nda
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--no-helper",
-        action="store_true",
-        help="estimate with the loop threshold cut even if stenodiar is built",
-    )
-    args = parser.parse_args()
+    parser.parse_args()
 
     import ami
-    from diarize import _build_diarizer
 
+    from stenograf.diarization import build_diarizer
     from stenograf.diarization.embedding import VoiceEmbedder
 
     embedder = VoiceEmbedder()
-    estimator = _build_diarizer(no_helper=args.no_helper)
+    estimator = build_diarizer()
     galleries = ami.build_galleries(embedder.embed)
     hyp_dir = OUT_DIR / "diar" / "ami"
 

@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from conftest import EmbeddingDiarizer, FakeASR, FakeDiarizer, GermanASR, RaisingDiarizer
 
 from stenograf.asr.base import Segment, Word
@@ -7,10 +6,8 @@ from stenograf.audio import SAMPLE_RATE
 from stenograf.config import Language, MeetingProfile, Provenance
 from stenograf.diarization.base import SpeakerTurn
 from stenograf.pipeline import (
-    collapse_single_voice,
     finalize_channel,
     finalize_file,
-    fold_excess_clusters,
     group_words,
     merge_words_turns,
     relabel_speakers,
@@ -333,8 +330,8 @@ class TestFinalizeChannelReuse:
 
     def test_silent_channel_skips_diarization(self):
         # No speech → no words. Diarizing an empty channel is wasted work and can
-        # throw (sherpa forced to num_clusters > 1 on near-silent input), which
-        # would otherwise sink the whole meeting's finalize. Skip it instead.
+        # throw on near-silent input, which would otherwise sink the whole
+        # meeting's finalize. Skip it instead.
         asr = SilentASR()
         diarizer = RaisingDiarizer()
         samples = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
@@ -362,123 +359,6 @@ class TestFinalizeChannelReuse:
         assert len(entries) == 1
         assert entries[0].text == "ganzer satz"
         assert entries[0].speaker == "S1"
-
-
-class TestFoldExcessClusters:
-    def _unit(self, *components: float) -> np.ndarray:
-        v = np.asarray(components, dtype=np.float32)
-        return v / np.linalg.norm(v)
-
-    def test_folds_smallest_cluster_into_its_most_similar_partner(self):
-        # S1 is the spare (least speech); of S0/S2 it is closest to S0, and the
-        # merge keeps the longer side's label.
-        turns = [turn("S0", 0.0, 4.0), turn("S1", 4.0, 5.0), turn("S2", 5.0, 8.0)]
-        embeddings = {
-            "S0": self._unit(1.0, 0.0),
-            "S1": self._unit(0.9, 0.44),
-            "S2": self._unit(0.0, 1.0),
-        }
-        folded_turns, folded_emb = fold_excess_clusters(turns, embeddings, 2)
-        assert [t.speaker for t in folded_turns] == ["S0", "S0", "S2"]
-        assert set(folded_emb) == {"S0", "S2"}
-        assert np.linalg.norm(folded_emb["S0"]) == pytest.approx(1.0)
-
-    def test_pair_below_gate_falls_to_duration_spare(self):
-        # Similar-but-below-the-gate long clusters stay apart: only the
-        # smallest cluster may fold, so a wrong partner can never cost more
-        # than the spare's own speech (cross-speaker fold pairs measured
-        # ≤0.697, 2026-08-07 — the gate sits above every one of them).
-        turns = [turn("S0", 0.0, 4.0), turn("S1", 4.0, 8.0), turn("S2", 8.0, 9.0)]
-        embeddings = {
-            "S0": self._unit(1.0, 0.0, 0.0),
-            "S1": self._unit(0.7, 0.714, 0.0),  # cosine 0.7 to S0: under the gate
-            "S2": self._unit(0.0, 0.0, 1.0),  # the spare, similar to nothing
-        }
-        folded_turns, _ = fold_excess_clusters(turns, embeddings, 2)
-        assert len({t.speaker for t in folded_turns}) == 2
-        assert {"S0", "S1"} <= {t.speaker for t in folded_turns}  # long pair untouched
-
-    def test_pair_above_gate_merges_as_one_voice(self):
-        # At or above FOLD_PAIR_SIMILARITY the max pair IS one voice the
-        # partitioner split (needed repairs measured 0.846–0.923, cross pairs
-        # ≤0.697, 2026-08-07); the duration spare cannot repair a split of the
-        # largest cluster. Supersedes the 2026-08-06 duration-only rule, which
-        # was measured on complete-linkage clusters where the spare is junk.
-        # S0 outlasts S1 so the surviving label is pinned, not a tie-break.
-        turns = [turn("S0", 0.0, 5.0), turn("S1", 5.0, 9.0), turn("S2", 9.0, 10.0)]
-        embeddings = {
-            "S0": self._unit(1.0, 0.0, 0.0),
-            "S1": self._unit(0.98, 0.2, 0.0),  # near-duplicate of S0
-            "S2": self._unit(0.0, 0.0, 1.0),  # a real third voice, kept
-        }
-        folded_turns, folded_emb = fold_excess_clusters(turns, embeddings, 2)
-        assert {t.speaker for t in folded_turns} == {"S0", "S2"}  # split halves merged
-        assert np.linalg.norm(folded_emb["S0"]) == pytest.approx(1.0)
-
-    def test_at_or_below_count_is_untouched(self):
-        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)]
-        embeddings = {"S0": self._unit(1.0, 0.0), "S1": self._unit(0.0, 1.0)}
-        folded_turns, folded_emb = fold_excess_clusters(turns, embeddings, 2)
-        assert folded_turns == turns
-        assert folded_emb == embeddings
-
-    def test_folds_repeatedly_down_to_count(self):
-        turns = [turn(f"S{i}", float(i), float(i + 1)) for i in range(4)]
-        embeddings = {f"S{i}": self._unit(1.0, 0.01 * i) for i in range(4)}
-        folded_turns, _ = fold_excess_clusters(turns, embeddings, 1)
-        assert len({t.speaker for t in folded_turns}) == 1
-
-    def test_unembedded_clusters_cannot_fold(self):
-        # One embedded cluster among three: no pair to compare, so the excess
-        # stays — better an extra label than an arbitrary merge.
-        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0), turn("S2", 2.0, 3.0)]
-        folded_turns, _ = fold_excess_clusters(turns, {"S0": self._unit(1.0, 0.0)}, 2)
-        assert [t.speaker for t in folded_turns] == ["S0", "S1", "S2"]
-
-
-class TestCollapseSingleVoice:
-    def _unit(self, *components: float) -> np.ndarray:
-        v = np.asarray(components, dtype=np.float32)
-        return v / np.linalg.norm(v)
-
-    def test_mutually_similar_clusters_collapse_to_one(self):
-        turns = [turn("S0", 0.0, 3.0), turn("S1", 3.0, 4.0), turn("S0", 4.0, 6.0)]
-        embeddings = {"S0": self._unit(1.0, 0.1), "S1": self._unit(1.0, 0.3)}  # cosine ~0.98
-        collapsed_turns, collapsed_emb = collapse_single_voice(turns, embeddings)
-        assert len({t.speaker for t in collapsed_turns}) == 1
-        assert len(collapsed_emb) == 1
-
-    def test_one_distant_pair_blocks_the_collapse(self):
-        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0), turn("S2", 2.0, 3.0)]
-        embeddings = {
-            "S0": self._unit(1.0, 0.1),
-            "S1": self._unit(1.0, 0.3),
-            "S2": self._unit(0.0, 1.0),  # a genuinely different voice
-        }
-        collapsed_turns, collapsed_emb = collapse_single_voice(turns, embeddings)
-        assert collapsed_turns == turns
-        assert collapsed_emb == embeddings
-
-    def test_unembedded_cluster_blocks_the_collapse(self):
-        turns = [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)]
-        collapsed_turns, _ = collapse_single_voice(turns, {"S0": self._unit(1.0, 0.0)})
-        assert collapsed_turns == turns
-
-    def test_estimated_count_channel_collapses_in_finalize(self):
-        # The estimator split one voice into two clusters; num_speakers=None
-        # (nobody stated a count) triggers the collapse and one speaker remains.
-        diarizer = EmbeddingDiarizer(
-            [turn("S0", 0.0, 1.0), turn("S1", 1.0, 2.0)],
-            {"S0": self._unit(1.0, 0.1), "S1": self._unit(1.0, 0.3)},
-        )
-        entries = finalize_channel(
-            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
-            asr=FakeASR(),
-            language=None,
-            diarizer=diarizer,
-            num_speakers=None,
-        )
-        assert len({e.speaker for e in entries}) == 1
 
 
 class MappingReID:
@@ -644,8 +524,8 @@ class TestOnEmbeddings:
         assert set(captured) == {"S0"}
 
     def test_merge_at_naming_merges_by_duration(self):
-        # Two clusters resolving to one profile merge like fold_excess_clusters
-        # merges: duration-weighted mean, re-normalized. S0 speaks 3 s, S1 1 s.
+        # Two clusters resolving to one profile merge to their duration-weighted
+        # mean, re-normalized. S0 speaks 3 s, S1 1 s.
         diarizer = EmbeddingDiarizer(
             [turn("S0", 0.0, 3.0), turn("S1", 4.0, 5.0)],
             {

@@ -29,21 +29,14 @@ they are skipped when a cluster has any longer span, and used only as a last
 resort (see :func:`cluster_embeddings`)."""
 
 _MAX_THREADS = 8
-"""Two jobs: intra-op cap for the sherpa monolith (`eval/loop_parity.py`'s
-reference arm; measured 2026-07-12, 12-core box: 48.7 s at 1 thread vs
-17.9 s at 8, plateau ~8) and the pool's fallback worker cap where physical
-cores are unknowable. The shipped path runs every ORT session at ONE
-intra-op thread and parallelizes across calls instead — see
-:func:`_pool_workers`."""
+"""The pool's fallback worker cap where physical cores are unknowable. Every
+ORT session runs at ONE intra-op thread and the pool parallelizes across
+calls instead — see :func:`_pool_workers`."""
 
 _MAX_POOL = 16
 """Hard ceiling on pool workers: efficiency decays past the physical core
 count (2026-08-09: 12 workers ≈ 8 on 16 logical CPUs) and a many-core
 server gains nothing this workload can use."""
-
-
-def _num_threads() -> int:
-    return min(_MAX_THREADS, os.cpu_count() or 1)
 
 
 def _pool_workers() -> int:
@@ -214,8 +207,8 @@ def cluster_embeddings(
     ``eval/diarization-sota-2026.md``). Spans shorter than
     :data:`MIN_EMBED_SECONDS` are skipped unless they are all a cluster has;
     a cluster whose speech is entirely overlapped falls back to its raw turns
-    (a contaminated embedding still serves naming and the collapse/fold rules,
-    an absent one blocks them). Each embedding is L2-normalized,
+    (a contaminated embedding still serves naming and enrollment, an absent
+    one blocks them). Each embedding is L2-normalized,
     duration-weighted, and averaged, and the mean re-normalized. A cluster
     with no embeddable audio is omitted. ``pool`` runs the embed calls
     concurrently (order-preserving, so each cluster's weighted mean sums in

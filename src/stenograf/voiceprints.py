@@ -19,10 +19,8 @@ Two facts shape the design:
   corrupts the library.
 
 The store and the cosine match live here, in the core — deliberately *not* in the
-diarizer ([[phase3-verified-library-constraints]]): sherpa's
-``OfflineSpeakerDiarization`` exposes no embeddings, so the diarizer's job ends at
-``diarize_with_embeddings`` handing back a per-cluster mean vector; turning those
-into names is this module's job.
+diarizer: the diarizer's job ends at ``diarize_with_embeddings`` handing back a
+per-cluster mean vector; turning those into names is this module's job.
 """
 
 from __future__ import annotations

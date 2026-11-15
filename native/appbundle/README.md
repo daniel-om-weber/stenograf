@@ -3,7 +3,7 @@
 The macOS desktop launcher `steno setup` installs into `~/Applications`
 (Phase 8 step 5). Sources live here; the built product is committed at
 `src/stenograf/assets/Stenograf.app` and ships inside the wheel, which is the
-opposite of how `helper/` and `stenodiar/` work — and the reason is the whole
+opposite of how `helper/` and `stenocap/` work — and the reason is the whole
 design.
 
 ## Why it is frozen
