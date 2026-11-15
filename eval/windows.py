@@ -2,7 +2,7 @@
 
 Decodes eval segments exactly the way a meeting's finalize pass does — Silero
 VAD → ``pack_windows`` → one batch Parakeet decode per window (the same code
-path ``pipeline._decode`` runs, and byte-identical audio slices) — and records
+path ``pipeline.decode_channel`` runs, and byte-identical audio slices) — and records
 *which window produced which words*. That provenance is what a plain
 ``transcribe.py --backend parakeet`` run cannot give: it feeds the model the
 whole segment at once, so its output says nothing about how the product's
@@ -54,7 +54,7 @@ def read_mono16k(path: Path) -> np.ndarray:
 
 
 def decode_windowed(asr, vad: SileroVAD, samples: np.ndarray, language):
-    """pipeline._decode, with the window spans kept.
+    """pipeline.decode_channel, with the window spans kept.
 
     The decode arithmetic — the context slice (``context_start``), the window's
     claim (``claim_start``) and the context-word clipping

@@ -1504,6 +1504,12 @@ first, the whole run's peak moves into the decode (6.8 GB) — in a real meeting
 that decode is spread over the recording, and whether the live pass reaches
 the same 6.8 GB is not measured. Speakers came out identical in all three.
 
+Shipped the same day: `MeetingRecorder.finalize` decodes every channel that
+needs it, unloads the ASR, then diarizes. Re-measured through the real
+`steno start --no-live --diarization` on the same meeting: peak footprint
+11.2 → 7.9 GB, wall unchanged (180 s), and the transcript identical entry for
+entry (speaker, start, text) to the run before the change.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

@@ -31,6 +31,7 @@ from stenograf.session import (
     resolve_parameters,
 )
 from stenograf.transcript import TranscriptEntry
+from stenograf.view import LiveView
 from stenograf.voiceprints import MeetingEmbedding, ProfileStore, SpeakerProfile, SpeakerReID
 
 
@@ -716,6 +717,96 @@ class TestMeetingRecorder:
         assert second.speaker_counts == first.speaker_counts
         # Detection never locks onto the recorder — the configured language stays unset.
         assert recorder.language is None
+
+
+class _LoggedASR(FakeASR):
+    """Logs decodes and unloads into a shared event list; fails on demand."""
+
+    def __init__(self, log: list[str], *, fail_first: bool = False) -> None:
+        super().__init__()
+        self.log = log
+        self.fail_first = fail_first
+
+    def transcribe(self, samples, language):
+        self.log.append("decode")
+        if self.fail_first and len(self.calls) == 0:
+            self.calls.append(len(samples))
+            raise RuntimeError("asr exploded")
+        return super().transcribe(samples, language)
+
+    def unload(self) -> None:
+        self.log.append("unload")
+
+
+class _LoggedDiarizer(FakeDiarizer):
+    def __init__(self, log: list[str], *, fail: bool = False) -> None:
+        super().__init__([SpeakerTurn("S0", 0.0, 1.0)])
+        self.log = log
+        self.fail = fail
+
+    def diarize(self, samples, num_speakers=None):
+        self.log.append("diarize")
+        if self.fail:
+            raise RuntimeError("diarizer exploded")
+        return super().diarize(samples, num_speakers)
+
+
+class _ErrorView(LiveView):
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    def error(self, message: str) -> None:
+        self.errors.append(message)
+
+
+class TestFinalizeReleasesTheASR:
+    """The stop decodes every channel first, releases the ASR, then diarizes:
+    diarization never stacks on the ASR's weights and buffer cache."""
+
+    def _store(self) -> SessionStore:
+        store = SessionStore({Channel.MIC, Channel.SYSTEM})
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        store.append(frame(Channel.MIC, 0.0, pcm))
+        store.append(frame(Channel.SYSTEM, 0.0, pcm))
+        return store
+
+    def _recorder(self, asr, diarizer) -> tuple[MeetingRecorder, list]:
+        profile = MeetingProfile(local_speakers=2, remote_speakers=2)
+        return MeetingRecorder(profile, asr=asr, diarizer=diarizer), plan_channels(profile)
+
+    def test_every_channel_decodes_before_the_release_and_the_first_diarize(self):
+        log: list[str] = []
+        recorder, plans = self._recorder(_LoggedASR(log), _LoggedDiarizer(log))
+        result = recorder.finalize(self._store(), plans)
+        assert log == ["decode", "decode", "unload", "diarize", "diarize"]
+        assert {e.speaker for e in result.transcript.entries} == {"Local-1", "Remote-1"}
+
+    def test_reused_live_words_never_decode_and_still_release(self):
+        log: list[str] = []
+        recorder, plans = self._recorder(_LoggedASR(log), _LoggedDiarizer(log))
+        words = (Word("wort", 0.1, 0.5),)
+        recorder.finalize(
+            self._store(), plans, live_words={Channel.MIC: words, Channel.SYSTEM: words}
+        )
+        assert log == ["unload", "diarize", "diarize"]
+
+    def test_failed_diarization_falls_back_without_decoding_again(self):
+        # The un-diarized retry reuses the stop's own decode: the ASR is
+        # already released by then, and the text must still survive.
+        log: list[str] = []
+        recorder, plans = self._recorder(_LoggedASR(log), _LoggedDiarizer(log, fail=True))
+        result = recorder.finalize(self._store(), plans, view=_ErrorView())
+        assert log == ["decode", "decode", "unload", "diarize", "diarize"]
+        assert [e.text for e in result.transcript.entries] == ["wort", "wort"]
+
+    def test_a_channel_whose_decode_fails_is_skipped_and_the_rest_survives(self):
+        log: list[str] = []
+        view = _ErrorView()
+        recorder, plans = self._recorder(_LoggedASR(log, fail_first=True), _LoggedDiarizer(log))
+        result = recorder.finalize(self._store(), plans, view=view)
+        assert log == ["decode", "decode", "unload", "diarize"]
+        assert {e.speaker for e in result.transcript.entries} == {"Remote-1"}
+        assert view.errors == ["mic: finalize failed (asr exploded); skipping channel"]
 
 
 class TestShieldInterrupt:

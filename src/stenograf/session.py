@@ -35,7 +35,7 @@ from difflib import SequenceMatcher
 
 import numpy as np
 
-from stenograf.asr.base import ASRBackend, Word
+from stenograf.asr.base import ASRBackend, Segment, Word
 from stenograf.audio import to_float32
 from stenograf.capture.base import (
     ORDER_TOLERANCE_SAMPLES,
@@ -56,6 +56,7 @@ from stenograf.live import StreamingUpdate, WindowedLiveDecoder
 from stenograf.pipeline import (
     SpeakerResolver,
     assemble_transcript,
+    decode_channel,
     finalize_channel,
     group_words,
     raw_label_map,
@@ -1010,6 +1011,13 @@ class MeetingRecorder:
         diarization/merge. A channel missing from the dict (or the dict being
         None — direct calls, batch mode, ``--full-finalize``) re-decodes.
 
+        Every channel's words are in before any diarizer runs, and the ASR is
+        then released: the stop never decodes again, and its weights plus MLX's
+        buffer cache are ~3.4 GB that diarization would otherwise stack on
+        (2026-11-15, 1 h 45 min meeting: the stop's peak 10.2 → 6.2 GB,
+        ``eval/README.md``). The backends load again on their next transcribe,
+        so a recorder finalized twice still works.
+
         ``reference_gap_s`` is how long the canceller ran without its far-end
         reference (the run modes measure it via :func:`_reference_gap`); the
         echo-text backstop arms on it. ``None`` means unknown — no canceller
@@ -1021,10 +1029,31 @@ class MeetingRecorder:
         by_channel: dict[Channel, list[TranscriptEntry]] = {}
         counts: list[SpeakerCount] = []
         speaker_embeddings: dict[str, np.ndarray] = {}
+        plans = [p for p in plans if p.channel in store.channels()]
+        decoded: dict[Channel, list[Segment] | None] = {}
         for plan in plans:
-            if plan.channel not in store.channels():
+            if live_words is not None and plan.channel in live_words:
                 continue
+            view.status(f"transcribing {plan.channel}")
+            try:
+                decoded[plan.channel] = decode_channel(
+                    store.samples(plan.channel),
+                    asr=self.asr,
+                    language=self.language,
+                    vad=self.vad,
+                    on_progress=None,
+                )
+            except Exception as exc:  # noqa: BLE001 — resilience across channels is the point
+                view.error(f"{plan.channel}: finalize failed ({exc}); skipping channel")
+                decoded[plan.channel] = None
+        self.asr.unload()
+        for plan in plans:
             reused = live_words.get(plan.channel) if live_words is not None else None
+            segments = decoded.get(plan.channel)
+            if reused is None and segments is None:
+                by_channel[plan.channel] = []
+                counts.append(SpeakerCount(plan.channel, plan.num_speakers, 0))
+                continue
             note = ", reusing live decodes" if reused is not None else ""
             view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)}{note})")
             diarizer = None if plan.num_speakers == 1 else self.diarizer
@@ -1033,17 +1062,21 @@ class MeetingRecorder:
             # one embedding over its transcribed speech, so a 1:1 counterpart
             # is named and `steno profiles assign` has something to enroll from.
             solo_voice = plan.num_speakers == 1 and self.diarizer is not None
-            # Audio is read only by a re-decode (no live words to reuse) or by
-            # an embedding/diarization pass over actual speech; the plain
-            # single-speaker reuse path regroups the words alone. Don't
-            # concatenate a full-meeting buffer it would just discard.
-            needs_audio = reused is None or (
-                (diarizer is not None or solo_voice) and bool(reused)
-            )
+            # Audio is read only by an embedding/diarization pass over actual
+            # speech; the plain single-speaker path regroups the words alone.
+            # Don't concatenate a full-meeting buffer it would just discard.
+            has_speech = bool(reused) or bool(segments)
+            needs_audio = (diarizer is not None or solo_voice) and has_speech
             samples = store.samples(plan.channel) if needs_audio else np.zeros(0, np.float32)
             embedded: dict[str, np.ndarray] = {}
             raw = self._finalize_channel_safe(
-                samples, diarizer, plan, view, reused_words=reused, on_embeddings=embedded.update
+                samples,
+                diarizer,
+                plan,
+                view,
+                reused_words=reused,
+                segments=segments,
+                on_embeddings=embedded.update,
             )
             if solo_voice and raw:
                 raw, embedded = self._name_solo_channel(samples, raw, view, plan)
@@ -1161,6 +1194,7 @@ class MeetingRecorder:
         view: LiveView,
         *,
         reused_words: tuple[Word, ...] | None = None,
+        segments: list[Segment] | None = None,
         on_embeddings: Callable[[dict[str, np.ndarray]], None] | None = None,
     ) -> list[TranscriptEntry]:
         """Finalize one channel, never letting its failure lose another channel.
@@ -1181,6 +1215,7 @@ class MeetingRecorder:
                 num_speakers=plan.num_speakers,
                 reid=self.reid,
                 precomputed_words=reused_words,
+                precomputed_segments=segments,
                 on_embeddings=on_embeddings,
             )
         except Exception as exc:  # noqa: BLE001 — resilience across channels is the point
@@ -1199,6 +1234,7 @@ class MeetingRecorder:
                     diarizer=None,
                     num_speakers=1,
                     precomputed_words=reused_words,
+                    precomputed_segments=segments,
                 )
             except Exception as exc2:  # noqa: BLE001
                 view.error(f"{plan.channel}: finalize failed ({exc2}); skipping channel")

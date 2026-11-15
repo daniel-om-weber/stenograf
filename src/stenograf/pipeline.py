@@ -69,6 +69,7 @@ def finalize_channel(
     on_progress: ProgressCallback | None = None,
     on_embeddings: Callable[[dict[str, np.ndarray]], None] | None = None,
     precomputed_words: tuple[Word, ...] | None = None,
+    precomputed_segments: list[Segment] | None = None,
 ) -> list[TranscriptEntry]:
     """Transcribe one channel; returns entries with raw ``S<n>`` speaker labels.
 
@@ -91,6 +92,10 @@ def finalize_channel(
     finalize-identical (:class:`~stenograf.live.WindowedLiveDecoder`); only
     diarization and merging run here. An empty tuple means the channel had no
     speech. ``asr``/``vad``/``language`` are ignored in that case.
+
+    ``precomputed_segments`` is :func:`decode_channel`'s output for this
+    channel, decoded earlier: everything then runs exactly as if the decode
+    had happened here, without touching ``asr``.
     """
     if precomputed_words is not None:
         if diarizer is None or num_speakers == 1:
@@ -98,7 +103,13 @@ def finalize_channel(
         words = list(precomputed_words)
         segments: list[Segment] = []
     else:
-        segments = _decode(samples, asr=asr, language=language, vad=vad, on_progress=on_progress)
+        segments = (
+            precomputed_segments
+            if precomputed_segments is not None
+            else decode_channel(
+                samples, asr=asr, language=language, vad=vad, on_progress=on_progress
+            )
+        )
         if diarizer is None or num_speakers == 1:
             return [
                 TranscriptEntry(
@@ -119,7 +130,7 @@ def finalize_channel(
     )
 
 
-def _decode(
+def decode_channel(
     samples: np.ndarray,
     *,
     asr: ASRBackend,
