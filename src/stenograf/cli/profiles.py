@@ -155,7 +155,15 @@ def _choose_cluster(
     is_flag=True,
     help="Use the newest meeting folder in the output home.",
 )
-def profiles_assign(label: str, name: str, meeting: Path | None, last: bool) -> None:
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Add the voice to NAME's profile even when it does not match the voice "
+    "already stored there.",
+)
+def profiles_assign(
+    label: str, name: str, meeting: Path | None, last: bool, force: bool
+) -> None:
     """Name speaker LABEL of a meeting as NAME, and enroll that voice.
 
     LABEL is a speaker as the meeting's transcript shows it (``Remote-1``,
@@ -164,6 +172,9 @@ def profiles_assign(label: str, name: str, meeting: Path | None, last: bool) -> 
     speaker's voice from that meeting joins NAME's profile — created if new —
     so future meetings name the voice automatically, and the transcript files
     are rewritten with the name. One correction per person is enough.
+
+    A voice that does not match NAME's existing profile is refused and nothing
+    changes: a mismatched sample makes NAME harder to recognize later.
     """
     from stenograf.flow import assign_speaker
 
@@ -179,7 +190,7 @@ def profiles_assign(label: str, name: str, meeting: Path | None, last: bool) -> 
             raise click.ClickException(f"no finished meetings in {home}")
         click.echo(f"meeting: {meeting}")  # say which one --last picked
     try:
-        result = assign_speaker(meeting, label, name)
+        result = assign_speaker(meeting, label, name, force=force)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     verb = "enrolled" if result.created else "reinforced"

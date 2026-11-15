@@ -496,10 +496,41 @@ class TestAssignSpeaker:
         mdir = self._meeting(tmp_path)
         store_path = tmp_path / "profiles.json"
         store = ProfileStore(store_path)
-        store.enroll("Anna", np.array([0.0, 1.0], np.float32), self.MODEL, date="2026-07-01")
+        store.enroll("Anna", np.array([0.9, 0.3], np.float32), self.MODEL, date="2026-07-01")
         store.save()
         result = flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path)
         assert not result.created and result.samples == 2
+
+    def test_a_mismatched_voice_is_refused_and_nothing_changes(self, tmp_path):
+        from stenograf.output import load_transcript
+        from stenograf.voiceprints import ProfileStore, load_meeting_voiceprints
+
+        mdir = self._meeting(tmp_path)
+        store_path = tmp_path / "profiles.json"
+        store = ProfileStore(store_path)
+        store.enroll("Anna", np.array([0.0, 1.0], np.float32), self.MODEL, date="2026-07-01")
+        store.save()
+        before = (mdir / "transcript.md").read_text(encoding="utf-8")
+        with pytest.raises(ValueError, match="--force"):
+            flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path)
+        stored = ProfileStore.load(store_path).get("Anna", self.MODEL)
+        assert stored is not None and len(stored.embeddings) == 1
+        assert (mdir / "transcript.md").read_text(encoding="utf-8") == before
+        transcript, _, _ = load_transcript(mdir)
+        assert "Remote-1" in {e.speaker for e in transcript.entries}
+        assert set(load_meeting_voiceprints(mdir).speakers) == {"Remote-1"}
+
+    def test_force_admits_a_mismatched_voice(self, tmp_path):
+        from stenograf.voiceprints import ProfileStore
+
+        mdir = self._meeting(tmp_path)
+        store_path = tmp_path / "profiles.json"
+        store = ProfileStore(store_path)
+        store.enroll("Anna", np.array([0.0, 1.0], np.float32), self.MODEL, date="2026-07-01")
+        store.save()
+        result = flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path, force=True)
+        assert not result.created and result.samples == 2
+        assert result.rewritten
 
     def test_confirming_an_automatch_reinforces_without_rewrite(self, tmp_path):
         mdir = self._meeting(tmp_path, {"Anna": np.array([1.0, 0.0], np.float32)})

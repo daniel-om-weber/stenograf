@@ -177,6 +177,25 @@ def test_profiles_assign_enrolls_from_the_meeting(tmp_path):
     assert "reinforced 'Anna' (2 sample(s))" in again.output
 
 
+def test_profiles_assign_refuses_a_mismatched_voice_until_forced(tmp_path):
+    import numpy as np
+
+    from stenograf import assets
+    from stenograf.voiceprints import ProfileStore
+
+    mdir = _assignable_meeting(tmp_path)
+    store = ProfileStore.load()
+    store.enroll("Anna", np.array([0.0, 1.0, 0.0], np.float32), assets.SPEAKER_EMBEDDING.name)
+    store.save()
+    args = ["profiles", "assign", "Remote-1", "Anna", str(mdir)]
+    refused = CliRunner().invoke(cli.main, args)
+    assert refused.exit_code != 0
+    assert "--force" in refused.output
+    forced = CliRunner().invoke(cli.main, [*args, "--force"])
+    assert forced.exit_code == 0, forced.output
+    assert "reinforced 'Anna' (2 sample(s))" in forced.output
+
+
 def test_profiles_assign_needs_a_meeting_or_last(tmp_path):
     result = CliRunner().invoke(cli.main, ["profiles", "assign", "Remote-1", "Anna"])
     assert result.exit_code != 0

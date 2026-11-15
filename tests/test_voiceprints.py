@@ -21,6 +21,7 @@ from stenograf.voiceprints import (
     ProfileStore,
     SpeakerProfile,
     SpeakerReID,
+    VoiceMismatchError,
     default_store_path,
 )
 
@@ -280,6 +281,33 @@ class TestAssign:
         store.assign("Anna", ANNA, MODEL, date="2026-08-01")
         p, created = store.assign("Anna", ANNA, MODEL, date="2026-08-06")
         assert not created
+        assert len(p.embeddings) == 2
+
+    def test_a_voice_below_the_naming_threshold_is_refused(self):
+        store = ProfileStore(profiles=[profile("Daniel", MODEL, DANIEL)])
+        with pytest.raises(VoiceMismatchError) as caught:
+            store.assign("Daniel", ANNA, MODEL)
+        assert caught.value.similarity == pytest.approx(0.0, abs=1e-6)
+        assert len(store.get("Daniel", MODEL).embeddings) == 1  # untouched
+
+    def test_the_guard_uses_the_store_threshold_and_admits_at_it(self):
+        mid = unit(0.6, 0.8, 0.0)  # cosine 0.6 with DANIEL
+        assert ProfileStore(profiles=[profile("D", MODEL, DANIEL)], threshold=0.6).assign(
+            "D", mid, MODEL
+        )[1] is False
+        with pytest.raises(VoiceMismatchError):
+            ProfileStore(profiles=[profile("D", MODEL, DANIEL)], threshold=0.7).assign(
+                "D", mid, MODEL
+            )
+
+    def test_force_admits_a_mismatched_voice(self):
+        store = ProfileStore(profiles=[profile("Daniel", MODEL, DANIEL)])
+        p, created = store.assign("Daniel", ANNA, MODEL, force=True)
+        assert not created and len(p.embeddings) == 2
+
+    def test_a_matching_voice_reinforces(self):
+        store = ProfileStore(profiles=[profile("Daniel", MODEL, DANIEL)])
+        p, _ = store.assign("Daniel", DANIEL_AGAIN, MODEL)
         assert len(p.embeddings) == 2
 
     def test_scoped_to_the_embedding_model(self):

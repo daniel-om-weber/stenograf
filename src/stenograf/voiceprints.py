@@ -55,6 +55,22 @@ score 0.870+, far above. Override per run with ``--reid-threshold``
 
 _STORE_VERSION = 2
 
+
+class VoiceMismatchError(ValueError):
+    """An entry disagrees with the profile it would join (:meth:`ProfileStore.assign`)."""
+
+    def __init__(self, name: str, similarity: float, threshold: float) -> None:
+        super().__init__(
+            f"this voice does not match {name!r}'s profile (similarity {similarity:.2f}, "
+            f"below the {threshold:.2f} that names a speaker): adding it would make "
+            f"{name!r} harder to recognize in later meetings. If it is {name!r}, add it "
+            f"anyway with --force; if the profile itself holds the wrong voice, remove it "
+            f"(steno profiles remove) and assign again."
+        )
+        self.name = name
+        self.similarity = similarity
+        self.threshold = threshold
+
 MAX_EMBEDDINGS = 8
 """Per-meeting embeddings a profile retains; adding one beyond the cap evicts
 the oldest meeting first. Bounds the store's growth and match cost while
@@ -259,16 +275,35 @@ class ProfileStore:
         return updated
 
     def assign(
-        self, name: str, embedding: np.ndarray, model: str, *, date: str | None = None
+        self,
+        name: str,
+        embedding: np.ndarray,
+        model: str,
+        *,
+        date: str | None = None,
+        force: bool = False,
     ) -> tuple[SpeakerProfile, bool]:
         """Enroll ``name`` from ``embedding``, or reinforce the existing profile.
 
         The store operation behind "this speaker is NAME": one gesture must
         work whether NAME is new or already enrolled, so the caller never has
-        to know. Returns ``(profile, created)``."""
+        to know. Returns ``(profile, created)``.
+
+        Reinforcing refuses an entry scoring below the naming threshold against
+        the profile (:class:`VoiceMismatchError`; ``force`` admits it). Score
+        averaging lets one disagreeing entry drag every later match, and it
+        does not matter whose voice it is: on AMI's held-out meetings
+        (2026-11-15, ``eval/README.md``) a crosstalk phantom, a wrong person
+        and a genuine 2–3 s sample of the right person all cost that person
+        their later short turns once admitted (named 10 → 1 for genuine
+        entries at 0.30–0.45), while entries at or above the threshold barely
+        moved it (72 → 70). A new profile has nothing to check against."""
         existing = self.get(name, model)
         if existing is None:
             return self.enroll(name, embedding, model, date=date), True
+        similarity = existing.similarity(embedding)
+        if not force and similarity < self.threshold:
+            raise VoiceMismatchError(name, similarity, self.threshold)
         return self.reinforce(existing, embedding, date=date), False
 
     def rename(self, profile: SpeakerProfile, new_name: str) -> SpeakerProfile:

@@ -72,6 +72,14 @@ Settled by measurement before the plan (2026-11-15):
    entries is below the naming threshold. The held-out phantom (0.046 against
    FIO084's real cluster) must be refused and genuine second entries pass;
    check the threshold on the harness's session-a clusters before shipping.
+   **Done 2026-11-15**, at the naming threshold. The phantom scores 0.053 and
+   every full-length genuine entry passes (lowest 0.72); a weak genuine
+   sample (2–3 s) is refused about half the time, and measured right to be:
+   admitted, entries below 0.56 cost that person their later short turns
+   whoever's voice they are (`eval/README.md`, "The assign guard"). Not
+   covered: `steno profiles enroll --reinforce`, and a profile whose *first*
+   entry is the bad one (nothing to compare against). Next: whether a median
+   over the stored entries makes larger profiles shrug off one bad entry.
 5. **The old diarizers go.** `diarization/loop.py` (owned loop), the sherpa
    diarizer class, `diarization/speakrs.py`, `fold_excess_clusters`,
    `FOLD_PAIR_SIMILARITY`, `collapse_single_voice` and `COLLAPSE_SIMILARITY`

@@ -776,7 +776,12 @@ class AssignResult:
 
 
 def assign_speaker(
-    target: Path, label: str, name: str, *, store_path: Path | None = None
+    target: Path,
+    label: str,
+    name: str,
+    *,
+    store_path: Path | None = None,
+    force: bool = False,
 ) -> AssignResult:
     """Name a meeting's speaker and enroll that voice — the rename-once loop.
 
@@ -790,8 +795,11 @@ def assign_speaker(
     user saw the wrong name. One correction per colleague is the whole
     enrollment chore: later meetings name the voice automatically.
 
-    Raises :class:`ValueError` with a user-facing message for every way this
-    can fail (no transcript, no sidecar, unknown label)."""
+    A voice that disagrees with NAME's existing profile is refused before
+    anything is written (:meth:`~stenograf.voiceprints.ProfileStore.assign`;
+    ``force`` admits it). Raises :class:`ValueError` with a user-facing
+    message for every way this can fail (no transcript, no sidecar, unknown
+    label, a refused voice)."""
     from stenograf.transcript import FORMATS
     from stenograf.voiceprints import (
         MEETING_VOICEPRINTS_NAME,
@@ -818,7 +826,11 @@ def assign_speaker(
 
     store = ProfileStore.load(store_path)
     profile, created = store.assign(
-        name, voiceprints.speakers[label], voiceprints.embedding_model, date=voiceprints.date
+        name,
+        voiceprints.speakers[label],
+        voiceprints.embedding_model,
+        date=voiceprints.date,
+        force=force,
     )
     store.save()
 

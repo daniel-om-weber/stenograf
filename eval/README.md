@@ -1381,6 +1381,46 @@ five single-speaker extras are another participant's crosstalk (≥ 60 % inside
 an off-channel speaker's speech), not a split of the wearer — so the rule had
 nothing to fix, and the pipeline no longer runs it.
 
+**The assign guard** (`eval/assign_guard.py`, 2026-11-15). `steno profiles
+assign` adds a meeting's voice to a named profile; a guard refuses an entry
+whose mean cosine to the profile is below a bar. Held-out meetings, the
+library's turns, profiles from the raw session-a headset (clean) or from
+session-a clusters as `assign` would build them; entries are sessions b–d. A
+phantom is a cluster ≥ 60 % inside off-channel speech (the crosstalk rule —
+overlap with the labelled speaker alone calls crosstalk genuine, since it
+co-occurs with the wearer's own speech); genuine entries are also re-embedded
+from their first 3 s and 2 s of clean speech. No count, headset profiles,
+entries refused:
+
+| bar | genuine, full | genuine, 3 s | genuine, 2 s | phantom | wrong person |
+|---|---|---|---|---|---|
+| 0.30 | 0/54 | 7/54 | 13/54 | 10/11 | 123/162 |
+| 0.45 | 0/54 | 15/54 | 21/54 | 10/11 | 159/162 |
+| 0.56 (naming) | 0/54 | 24/54 | 28/54 | 11/11 | 162/162 |
+
+Full-length genuine entries score 0.72–0.97, phantoms ≤ 0.50, wrong people
+≤ 0.53, so 0.56 separates every full-length case; the session-a phantom
+(`IS1009a.loop/S3`) scores 0.053. With the count applied there are no phantoms
+and the same separation. The bar is set by what an admitted entry *does*:
+each candidate added alone to its person's profile, that person's clusters
+from other sessions re-scored at 0.56 (headset profiles, no count; cluster
+profiles and the capped arm agree):
+
+| entry admitted | similarity | later full-length named | later 3 s named |
+|---|---|---|---|
+| genuine 2 s | < 0.30 | 38 → 4 | 11 → 1 |
+| genuine 2 s | 0.30–0.45 | 26 → 26 | 10 → 1 |
+| genuine 2 s | 0.45–0.56 | 23 → 23 | 12 → 7 |
+| genuine 2 s | ≥ 0.56 | 83 → 83 | 64 → 59 |
+| genuine 3 s | ≥ 0.56 | 97 → 97 | 72 → 70 |
+| phantom | < 0.30 | 29 → 3 | 13 → 0 |
+
+An entry below the naming threshold costs its person their later short turns
+whoever's voice it is, so the guard sits at the naming threshold and refuses
+the right person's weak samples too (`--force` admits them). Small: 3
+meetings, profiles of one to three entries — a larger profile dilutes one bad
+entry more; all AMI headsets.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
