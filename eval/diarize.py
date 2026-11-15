@@ -126,7 +126,7 @@ def run_ami(
 
     import ami
 
-    from stenograf.diarization.sherpa import cluster_embeddings
+    from stenograf.diarization.embedding import cluster_embeddings
     from stenograf.pipeline import fold_excess_clusters
 
     channels = [c for c in ami.load_channels() if channel_ids is None or c.id in channel_ids]

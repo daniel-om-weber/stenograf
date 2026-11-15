@@ -223,7 +223,7 @@ def main() -> int:
     from naming_gate import embed_spans, load_clusters, truncate_spans
     from rename_once import cluster_galleries
 
-    from stenograf.diarization.loop import OwnDiarizer
+    from stenograf.diarization.embedding import VoiceEmbedder
     from stenograf.voiceprints import DEFAULT_THRESHOLD
 
     if not HYP_DIR.exists():
@@ -297,7 +297,7 @@ def main() -> int:
         *stranger_accepts(trials, DEFAULT_THRESHOLD),
     ]
 
-    embed = OwnDiarizer().embed
+    embed = VoiceEmbedder().embed
     clusters = load_clusters(HYP_DIR, eval_channels)
     pcms = {
         cid: read_pcm16(ami.CHANNELS_DIR / f"{cid}.wav")

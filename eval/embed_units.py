@@ -47,8 +47,8 @@ from loop_freeze import freeze_dir
 from rttm import Turn, parse_rttm
 
 from stenograf.audio import to_float32
+from stenograf.diarization.embedding import cluster_embeddings
 from stenograf.diarization.loop import FRAMES, RF_SHIFT, OwnDiarizer, _cluster, _runs
-from stenograf.diarization.sherpa import cluster_embeddings
 from stenograf.pipeline import fold_excess_clusters
 
 BASELINE = "ami-loop-ward-sv08"

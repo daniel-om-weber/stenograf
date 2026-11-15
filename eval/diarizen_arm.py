@@ -106,8 +106,7 @@ from rttm import Turn, parse_rttm, write_rttm
 
 from stenograf.asr.base import Word
 from stenograf.diarization.base import SpeakerTurn
-from stenograf.diarization.loop import OwnDiarizer
-from stenograf.diarization.sherpa import cluster_embeddings
+from stenograf.diarization.embedding import VoiceEmbedder, cluster_embeddings
 from stenograf.pipeline import fold_excess_clusters, merge_words_turns
 
 BASELINE = "ami"
@@ -437,7 +436,7 @@ def main() -> int:
 
     failures = []
     if not args.rescore:
-        embedder = OwnDiarizer()
+        embedder = VoiceEmbedder()
         for channel in channels:
             try:
                 run_channel(channel, args.mode, out_dir, args.device, embedder)

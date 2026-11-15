@@ -61,7 +61,7 @@ ward's losses) — a focus table that only shows a candidate's wins misleads
 def main() -> int:
     import ami
 
-    from stenograf.diarization.loop import OwnDiarizer
+    from stenograf.diarization.embedding import VoiceEmbedder
     from stenograf.voiceprints import DEFAULT_THRESHOLD
 
     channels = ami.load_channels()
@@ -75,7 +75,7 @@ def main() -> int:
         print(f"incomplete arms (first: {missing[0]}) — run the arm matrices", file=sys.stderr)
         return 1
 
-    embed = OwnDiarizer().embed
+    embed = VoiceEmbedder().embed
     summary = [
         "| arm | loop DER | miss | FA | confusion | loop attribution | mic attribution "
         f"| DIR@FAR0 full (thr) | DIR/FAR/FRR @{DEFAULT_THRESHOLD:g} |",

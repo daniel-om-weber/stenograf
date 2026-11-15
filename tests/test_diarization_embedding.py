@@ -1,7 +1,7 @@
-"""Unit coverage for the sherpa embedding base's pure-python aggregation.
+"""Unit coverage for the voice embedder's pure-python aggregation.
 
 The real-backend test (``test_diarization_loop_real.py``) is gated on cached
-ONNX models + private audio, so on a fresh checkout / Linux CI ``sherpa.py``
+ONNX models + private audio, so on a fresh checkout / Linux CI ``embedding.py``
 executes zero test lines — yet its aggregation feeds every platform's re-ID.
 These drive ``cluster_embeddings`` and ``l2_normalize`` through the real
 ``embed`` with a fake ``SpeakerEmbeddingExtractor``, so the aggregation logic
@@ -23,8 +23,7 @@ import pytest
 
 from stenograf.audio import SAMPLE_RATE, l2_normalize
 from stenograf.diarization.base import SpeakerTurn
-from stenograf.diarization.loop import OwnDiarizer
-from stenograf.diarization.sherpa import cluster_embeddings
+from stenograf.diarization.embedding import VoiceEmbedder, cluster_embeddings
 
 
 class _FakeStream:
@@ -55,13 +54,11 @@ class _SeqExtractor:
 
 
 def _embed(vectors: list):
-    """The real ``embed`` (slice guard + extractor protocol + l2) over fakes.
-
-    ``OwnDiarizer`` is the one concrete diarizer; only its inherited extractor
-    seam is replaced, no ONNX loads."""
-    d = OwnDiarizer()
-    d._extractor = _SeqExtractor(vectors)
-    return d.embed
+    """The real ``embed`` (slice guard + extractor protocol + l2) over fakes:
+    only the extractor seam is replaced, no ONNX loads."""
+    embedder = VoiceEmbedder()
+    embedder._extractor = _SeqExtractor(vectors)
+    return embedder.embed
 
 
 def _turns(*specs: tuple[str, float, float]) -> list[SpeakerTurn]:
@@ -135,7 +132,7 @@ def test_fully_overlapped_cluster_falls_back_to_raw_turns():
 
 
 def test_overlap_spans_ignore_self_overlap_and_touching_turns():
-    from stenograf.diarization.sherpa import _overlap_spans
+    from stenograf.diarization.embedding import _overlap_spans
 
     def turns(speaker, *spans):
         return [SpeakerTurn(speaker, s, e) for s, e in spans]
@@ -151,7 +148,7 @@ def test_overlap_spans_ignore_self_overlap_and_touching_turns():
 
 
 def test_subtract_spans_splits_and_clips():
-    from stenograf.diarization.sherpa import _subtract_spans
+    from stenograf.diarization.embedding import _subtract_spans
 
     assert _subtract_spans([(0.0, 5.0)], [(1.0, 2.0), (3.0, 4.0)]) == [
         (0.0, 1.0),
@@ -171,14 +168,14 @@ def test_l2_normalize_guards_the_zero_vector():
 def test_pool_workers_falls_back_when_probes_fail(monkeypatch):
     # sysctl dead (macOS branch) and /proc/cpuinfo unreadable (Linux branch)
     # must land on the capped logical-count fallback, never raise.
-    from stenograf.diarization import sherpa
+    from stenograf.diarization import embedding
 
     def broken_run(*args, **kwargs):
         raise OSError("no sysctl here")
 
-    monkeypatch.setattr(sherpa.subprocess, "run", broken_run)
-    workers = sherpa._pool_workers()
-    assert 1 <= workers <= sherpa._MAX_POOL
-    ceiling = min(sherpa._MAX_THREADS, os.cpu_count() or 1)
+    monkeypatch.setattr(embedding.subprocess, "run", broken_run)
+    workers = embedding._pool_workers()
+    assert 1 <= workers <= embedding._MAX_POOL
+    ceiling = min(embedding._MAX_THREADS, os.cpu_count() or 1)
     if sys.platform not in ("darwin",) and not sys.platform.startswith("linux"):
         assert workers <= ceiling

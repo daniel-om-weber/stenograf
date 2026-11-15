@@ -37,8 +37,8 @@ from rttm import Turn, parse_rttm, write_rttm
 
 from stenograf.asr.base import Word
 from stenograf.audio import SAMPLE_RATE
+from stenograf.diarization.embedding import cluster_embeddings
 from stenograf.diarization.loop import OwnDiarizer, _cluster
-from stenograf.diarization.sherpa import cluster_embeddings
 from stenograf.pipeline import fold_excess_clusters, merge_words_turns
 
 BASELINE = "ami-loop"

@@ -1,0 +1,303 @@
+"""The voice embedder: ERes2Net via sherpa-onnx's ``SpeakerEmbeddingExtractor``.
+
+Re-ID voiceprints must come from one embedding model whichever diarizer
+produced the turns — saved profiles are cosine-matched against
+``assets.SPEAKER_EMBEDDING`` vectors (see that asset for why not CAM++), so a
+second embedding model would silently break every enrolled profile. Hence one
+:class:`VoiceEmbedder`, one :func:`cluster_embeddings`, and one worker pool
+that every diarization stage submits into."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import numpy as np
+
+from stenograf import assets
+from stenograf.audio import SAMPLE_RATE, l2_normalize, to_float32
+from stenograf.diarization.base import SpeakerTurn
+
+MIN_EMBED_SECONDS = 0.5
+"""Speech spans shorter than this are too brief for a reliable voice embedding;
+they are skipped when a cluster has any longer span, and used only as a last
+resort (see :func:`cluster_embeddings`)."""
+
+_MAX_THREADS = 8
+"""Two jobs: intra-op cap for the sherpa monolith (`eval/loop_parity.py`'s
+reference arm; measured 2026-07-12, 12-core box: 48.7 s at 1 thread vs
+17.9 s at 8, plateau ~8) and the pool's fallback worker cap where physical
+cores are unknowable. The shipped path runs every ORT session at ONE
+intra-op thread and parallelizes across calls instead — see
+:func:`_pool_workers`."""
+
+_MAX_POOL = 16
+"""Hard ceiling on pool workers: efficiency decays past the physical core
+count (2026-08-09: 12 workers ≈ 8 on 16 logical CPUs) and a many-core
+server gains nothing this workload can use."""
+
+
+def _num_threads() -> int:
+    return min(_MAX_THREADS, os.cpu_count() or 1)
+
+
+def _pool_workers() -> int:
+    """Worker threads for the diarization pool: one per core worth using.
+
+    Outer call-level threading at one intra-op thread each beats intra-op
+    threading on this workload (2026-08-09, M4 Max, 37.6-min channel:
+    intra-op scaling caps at 1.5× over single-thread while a pool of
+    intra-op-1 workers reaches 2.5–2.6× over the 8-intra-op-thread config,
+    bit-exact against the sequential intra-op-1 reference; the pool wins by
+    less on x86, where intra-op threading scales better — `eval/README.md`).
+    Logical CPUs oversubscribe — hyperthreads and E-cores measured to add
+    nothing (12 workers ≈ 8 on 16 logical CPUs) — so: P-cores via sysctl on
+    macOS, physical cores via /proc/cpuinfo on Linux (bounded by the
+    scheduler affinity mask, so a cgroup-quota'd container never spawns a
+    host-sized pool), logical count capped at :data:`_MAX_THREADS`
+    elsewhere; every branch capped at :data:`_MAX_POOL`.
+
+    The Linux branch counts every physical core, fast or not, where macOS
+    asks for performance cores specifically — no counterpart is universally
+    available here (`cpu_capacity`, `cpuinfo_max_freq` and the PMU's
+    `cpu_core` list each cover only some machines). Measured 2026-08-11 on a
+    4+8 hybrid: counting all 12 is indistinguishable from 8 once arms are
+    interleaved. That was a same-ISA split (Zen5 + Zen5c, clock and cache
+    only); hybrid Intel, where E-cores differ more, is untested."""
+    affinity = None
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)  # Linux-only
+    if sched_getaffinity is not None:
+        try:
+            affinity = len(sched_getaffinity(0))
+        except OSError:
+            affinity = None
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["/usr/sbin/sysctl", "-n", "hw.perflevel0.physicalcpu"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        if out.isdigit() and int(out) > 0:
+            return max(1, min(int(out), _MAX_POOL))
+    if sys.platform.startswith("linux"):
+        cores: set[tuple[str, str]] = set()
+        try:
+            package = ""
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                if line.startswith("physical id"):
+                    package = line.split(":", 1)[1].strip()
+                elif line.startswith("core id"):
+                    cores.add((package, line.split(":", 1)[1].strip()))
+        except OSError:
+            cores.clear()
+        if cores:
+            return max(1, min(len(cores), affinity or len(cores), _MAX_POOL))
+    fallback = min(_MAX_THREADS, os.cpu_count() or 1)
+    if affinity is not None:
+        fallback = min(fallback, affinity)
+    return max(1, fallback)
+
+
+class VoiceEmbedder:
+    """The extractor (lazy), the shared worker pool, and per-cluster voices.
+
+    ``model`` overrides the fetched ``assets.SPEAKER_EMBEDDING`` (eval A/Bs);
+    ``workers`` sizes the pool (default :func:`_pool_workers`)."""
+
+    def __init__(
+        self,
+        model: Path | None = None,
+        *,
+        workers: int | None = None,
+        progress: assets.ProgressHook | None = None,
+    ) -> None:
+        self._model = model
+        self._progress = progress
+        self._extractor = None
+        self._workers = workers if workers is not None else _pool_workers()
+        self._pool: ThreadPoolExecutor | None = None
+        self._init_lock = threading.Lock()  # guards every lazy field
+
+    def pool(self) -> ThreadPoolExecutor:
+        """The shared worker pool for embedding and diarizer model calls.
+
+        One pool, sized once (:func:`_pool_workers`) — every stage submits
+        into the same budget, so concurrent stages or channels can never
+        oversubscribe the machine. ``workers=1`` is the sequential reference
+        the parity gate compares against; results are bit-identical at any
+        worker count because each call is independent and every ORT session
+        runs single-threaded."""
+        if self._pool is None:
+            with self._init_lock:
+                if self._pool is None:
+                    self._pool = ThreadPoolExecutor(
+                        max_workers=self._workers, thread_name_prefix="diar"
+                    )
+        return self._pool
+
+    def cluster_embeddings(
+        self, turns: list[SpeakerTurn], samples: np.ndarray
+    ) -> dict[str, np.ndarray]:
+        """:func:`cluster_embeddings` through this embedder and its pool."""
+        return cluster_embeddings(turns, samples, self.embed, pool=self.pool())
+
+    def channel_embedding(
+        self, samples: np.ndarray, turns: list[SpeakerTurn]
+    ) -> np.ndarray | None:
+        """One voice over a single-speaker channel's speech ``turns`` (see
+        :meth:`~stenograf.diarization.base.Diarizer.channel_embedding`)."""
+        if not turns:
+            return None
+        return self.cluster_embeddings(turns, samples).get(turns[0].speaker)
+
+    def embed(self, audio: np.ndarray) -> np.ndarray | None:
+        """L2-normalized voice embedding of a mono 16 kHz float32 slice, or None
+        when the slice is empty or the extractor cannot form an embedding."""
+        if len(audio) == 0:
+            return None
+        extractor = self._load()
+        stream = extractor.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, np.ascontiguousarray(audio, dtype=np.float32))
+        stream.input_finished()
+        if not extractor.is_ready(stream):
+            return None
+        return l2_normalize(np.asarray(extractor.compute(stream), dtype=np.float32))
+
+    def _load(self):
+        # ONE shared extractor at ONE intra-op thread, used from every pool
+        # worker concurrently: ORT's Run is thread-safe, per-call fbank state
+        # lives in create_stream(), and sharing was measured bit-exact and as
+        # fast as per-worker copies (which cost 26 MB of weights each) at 8
+        # workers, 2026-08-09. Intra-op stays 1 even for one-off embed()
+        # callers (enroll): parallelism belongs to the pool, and a fixed
+        # thread count is what keeps results identical across all paths.
+        if self._extractor is None:
+            with self._init_lock:
+                if self._extractor is None:
+                    import sherpa_onnx
+
+                    embedding = self._model or assets.fetch(
+                        assets.SPEAKER_EMBEDDING, self._progress
+                    )
+                    self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+                        sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                            model=str(embedding), num_threads=1
+                        )
+                    )
+        return self._extractor
+
+
+def cluster_embeddings(
+    turns: list[SpeakerTurn],
+    samples: np.ndarray,
+    embed: Callable[[np.ndarray], np.ndarray | None],
+    *,
+    pool: ThreadPoolExecutor | None = None,
+) -> dict[str, np.ndarray]:
+    """A duration-weighted mean voice embedding per cluster of ``turns``.
+
+    ``embed`` is :meth:`VoiceEmbedder.embed` in production (eval passes
+    others). Spans where a *different* cluster is active too are excluded
+    before embedding: overlapped audio measurably worsens the embedding
+    (12.84 → 14.11 % EER with overlap included, and frame-level identity in
+    overlap is near-chance — the research record in
+    ``eval/diarization-sota-2026.md``). Spans shorter than
+    :data:`MIN_EMBED_SECONDS` are skipped unless they are all a cluster has;
+    a cluster whose speech is entirely overlapped falls back to its raw turns
+    (a contaminated embedding still serves naming and the collapse/fold rules,
+    an absent one blocks them). Each embedding is L2-normalized,
+    duration-weighted, and averaged, and the mean re-normalized. A cluster
+    with no embeddable audio is omitted. ``pool`` runs the embed calls
+    concurrently (order-preserving, so each cluster's weighted mean sums in
+    the sequential order and the result is bit-identical)."""
+    audio = to_float32(samples)
+    by_cluster: dict[str, list[SpeakerTurn]] = {}
+    for turn in turns:
+        by_cluster.setdefault(turn.speaker, []).append(turn)
+    overlap = _overlap_spans(by_cluster)
+
+    jobs: list[tuple[str, float, np.ndarray]] = []  # (cluster, weight, audio slice)
+    for speaker, cluster_turns in by_cluster.items():
+        raw = [(t.start, t.end) for t in cluster_turns]
+        spans = _subtract_spans(raw, overlap) or raw
+        long = [s for s in spans if s[1] - s[0] >= MIN_EMBED_SECONDS]
+        for start, end in long or spans:
+            slice_ = audio[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)]
+            jobs.append((speaker, end - start, slice_))
+
+    mapper = pool.map if pool is not None else map
+    results = list(mapper(embed, [slice_ for _, _, slice_ in jobs]))
+
+    vectors: dict[str, list[np.ndarray]] = {}
+    weights: dict[str, list[float]] = {}
+    for (speaker, weight, _), vector in zip(jobs, results, strict=True):
+        if vector is not None:
+            vectors.setdefault(speaker, []).append(vector)
+            weights.setdefault(speaker, []).append(weight)
+    embeddings: dict[str, np.ndarray] = {}
+    for speaker, cluster_vectors in vectors.items():
+        mean = np.average(cluster_vectors, axis=0, weights=weights[speaker])
+        embeddings[speaker] = l2_normalize(mean)
+    return embeddings
+
+
+def _overlap_spans(by_cluster: dict[str, list[SpeakerTurn]]) -> list[tuple[float, float]]:
+    """Spans where at least two clusters speak at once, sorted and disjoint.
+
+    Each cluster's turns are unioned first, so a cluster overlapping itself
+    (back-to-back or re-emitted turns) never counts as overlapped speech."""
+    events: list[tuple[float, int]] = []
+    for cluster_turns in by_cluster.values():
+        merged: list[tuple[float, float]] = []
+        for t in sorted(cluster_turns, key=lambda t: t.start):
+            if merged and t.start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], t.end))
+            else:
+                merged.append((t.start, t.end))
+        for start, end in merged:
+            events += [(start, 1), (end, -1)]
+
+    events.sort()  # ends before starts at equal times: touching spans never overlap
+    spans: list[tuple[float, float]] = []
+    depth = 0
+    overlap_start = 0.0
+    for time_, delta in events:
+        was = depth
+        depth += delta
+        if was < 2 <= depth:
+            overlap_start = time_
+        elif was >= 2 > depth:
+            spans.append((overlap_start, time_))
+    return spans
+
+
+def _subtract_spans(
+    spans: list[tuple[float, float]], cuts: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """``spans`` minus ``cuts`` (both lists of (start, end); cuts sorted, disjoint)."""
+    result = []
+    for start, end in spans:
+        cursor = start
+        for cut_start, cut_end in cuts:
+            if cut_end <= cursor:
+                continue
+            if cut_start >= end:
+                break
+            if cut_start > cursor:
+                result.append((cursor, cut_start))
+            cursor = max(cursor, cut_end)
+            if cursor >= end:
+                break
+        if cursor < end:
+            result.append((cursor, end))
+    return result

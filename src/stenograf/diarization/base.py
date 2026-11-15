@@ -53,7 +53,7 @@ class Diarizer(ABC):
 
         Non-abstract so existing backends keep working: the default runs
         :meth:`diarize` and returns no embeddings. A backend that can embed
-        overrides this (see :class:`~stenograf.diarization.sherpa.SherpaOnnxDiarizer`)."""
+        overrides this (see :class:`~stenograf.diarization.embedding.VoiceEmbedder`)."""
         return DiarizationResult(self.diarize(samples, num_speakers), {})
 
     def channel_embedding(

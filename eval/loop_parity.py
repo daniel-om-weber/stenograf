@@ -59,7 +59,7 @@ class _SherpaReference:
         from stenograf import assets
         from stenograf.audio import to_float32
         from stenograf.diarization.base import SpeakerTurn
-        from stenograf.diarization.sherpa import _num_threads
+        from stenograf.diarization.embedding import _num_threads
 
         if self._pipeline is None or self._num_clusters != num_speakers:
             config = sherpa_onnx.OfflineSpeakerDiarizationConfig(

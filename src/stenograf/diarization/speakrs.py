@@ -10,10 +10,9 @@ exactly the estimate case and delegates known counts to the owned loop —
 whose accuracy with an explicit count was never the problem.
 
 Audio is piped to the helper as raw PCM (meeting audio never touches disk) and
-turns come back as JSON. Re-ID voiceprints keep coming from sherpa's
-``SpeakerEmbeddingExtractor`` no matter which backend diarized: saved speaker
-profiles are cosine-matched against ``assets.SPEAKER_EMBEDDING`` vectors, so a
-second embedding model would silently break every enrolled profile.
+turns come back as JSON. Re-ID voiceprints keep coming from the one
+:class:`~stenograf.diarization.embedding.VoiceEmbedder` no matter which
+backend diarized.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ import numpy as np
 
 from stenograf.audio import to_int16
 from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
-from stenograf.diarization.sherpa import SherpaOnnxDiarizer, cluster_embeddings
+from stenograf.diarization.sherpa import SherpaOnnxDiarizer
 
 HELPER_NAME = "stenodiar"
 _HELPER_FILENAME = HELPER_NAME + (".exe" if sys.platform == "win32" else "")
@@ -109,12 +108,7 @@ class SpeakrsCliDiarizer(Diarizer):
         self, samples: np.ndarray, num_speakers: int | None = None
     ) -> DiarizationResult:
         turns = self.diarize(samples, num_speakers)
-        return DiarizationResult(
-            turns=turns,
-            embeddings=cluster_embeddings(
-                turns, samples, self._loop.embed, pool=self._loop._executor()
-            ),
-        )
+        return DiarizationResult(turns, self._loop.embedder.cluster_embeddings(turns, samples))
 
     def channel_embedding(
         self, samples: np.ndarray, turns: list[SpeakerTurn]

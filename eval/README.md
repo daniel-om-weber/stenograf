@@ -711,7 +711,7 @@ models + eval audio).
 
 The loop's two model stages and `cluster_embeddings` submit into one shared
 `ThreadPoolExecutor` sized to physical performance cores
-(`sherpa.py::_pool_workers`), every ORT session at ONE intra-op thread, one
+(`embedding.py::_pool_workers`), every ORT session at ONE intra-op thread, one
 shared extractor (measured bit-exact and as fast as per-worker copies at 8
 workers; per-worker copies cost 26 MB each). `eval/pool_parity.py`, M4 Max,
 ES2003c.loop 37.6 min:

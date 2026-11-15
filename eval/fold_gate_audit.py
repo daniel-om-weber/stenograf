@@ -31,8 +31,8 @@ from fold_sweep import _durations, _merge
 from loop_freeze import FREEZE_DIR, load_emb_cache, save_emb_cache
 from rttm import Turn, parse_rttm
 
+from stenograf.diarization.embedding import cluster_embeddings
 from stenograf.diarization.loop import OwnDiarizer, _cluster
-from stenograf.diarization.sherpa import cluster_embeddings
 from stenograf.pipeline import FOLD_PAIR_SIMILARITY
 
 PARTITIONERS = ("complete", "ward")

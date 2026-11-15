@@ -18,6 +18,7 @@ import pytest
 
 from stenograf.audio import SAMPLE_RATE
 from stenograf.diarization.base import DiarizationResult, SpeakerTurn
+from stenograf.diarization.embedding import cluster_embeddings
 from stenograf.diarization.speakrs import (
     DiarizerHelperNotFoundError,
     SpeakrsCliDiarizer,
@@ -52,11 +53,22 @@ def _fake_helper(tmp_path, *, stdout=_TURNS_JSON, exit_code=0, stderr=""):
     return [sys.executable, str(script)]
 
 
+class _StubEmbedder:
+    """The real aggregation over an ``embed`` that returns a fixed unit vector."""
+
+    def cluster_embeddings(self, turns, samples):
+        return cluster_embeddings(turns, samples, self.embed)
+
+    def embed(self, audio):
+        return np.array([1.0, 0.0], dtype=np.float32) if len(audio) else None
+
+
 class _StubSherpa:
-    """Records routing; ``embed`` returns a fixed unit vector."""
+    """Records routing; embeds through :class:`_StubEmbedder`."""
 
     def __init__(self):
         self.calls = []
+        self.embedder = _StubEmbedder()
 
     def diarize(self, samples, num_speakers=None):
         self.calls.append(num_speakers)
@@ -64,12 +76,6 @@ class _StubSherpa:
 
     def diarize_with_embeddings(self, samples, num_speakers=None):
         return DiarizationResult(self.diarize(samples, num_speakers), {})
-
-    def embed(self, audio):
-        return np.array([1.0, 0.0], dtype=np.float32) if len(audio) else None
-
-    def _executor(self):
-        return None  # cluster_embeddings(pool=None) maps sequentially
 
 
 _AUDIO = np.ones(8 * SAMPLE_RATE, dtype=np.int16)
@@ -110,12 +116,12 @@ def test_unparseable_output_raises(tmp_path):
         d.diarize(_AUDIO)
 
 
-def test_embeddings_come_from_sherpa_extractor(tmp_path):
+def test_embeddings_come_from_the_shared_embedder(tmp_path):
     d = SpeakrsCliDiarizer(_StubSherpa(), command=_fake_helper(tmp_path))
     result = d.diarize_with_embeddings(_AUDIO)
 
     assert {t.speaker for t in result.turns} == {"S0", "S1"}
-    assert set(result.embeddings) == {"S0", "S1"}  # embedded via _StubSherpa.embed
+    assert set(result.embeddings) == {"S0", "S1"}  # embedded via _StubEmbedder.embed
     for vector in result.embeddings.values():
         assert np.linalg.norm(vector) == pytest.approx(1.0, abs=1e-6)
 

@@ -607,11 +607,11 @@ def build_galleries(embed, session: str = ENROLL_SESSION) -> dict[str, dict[str,
     of theirs is a stranger trial by construction — and the Bmr group adds
     *natural* strangers on top, participants who simply were not at the
     enrollment meeting. ``embed`` is the production embedding callable
-    (``OwnDiarizer.embed``). ``session`` defaults to the trial
+    (``VoiceEmbedder.embed``). ``session`` defaults to the trial
     convention's enrollment session; multi-meeting profile experiments enroll
     further sessions (``eval/store_v2.py``)."""
     from stenograf.diarization.base import SpeakerTurn
-    from stenograf.diarization.sherpa import cluster_embeddings
+    from stenograf.diarization.embedding import cluster_embeddings
 
     annotations = RAW_DIR / "annotations"
     meetings_map = parse_meetings_xml(annotations / "corpusResources" / "meetings.xml")
@@ -689,9 +689,9 @@ def build_trials() -> None:
     stranger by construction) and are reported separately."""
     from reid_score import Trial, save_trials
 
-    from stenograf.diarization.loop import OwnDiarizer
+    from stenograf.diarization.embedding import VoiceEmbedder
 
-    galleries = build_galleries(OwnDiarizer().embed)
+    galleries = build_galleries(VoiceEmbedder().embed)
 
     hyp_dir = OUT_DIR / "diar" / "ami"
     trials: list[Trial] = []

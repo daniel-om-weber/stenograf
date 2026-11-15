@@ -54,7 +54,7 @@ def clean_spans(turns_by_cluster: dict[str, list]) -> dict[str, list[tuple[float
 
     Mirrors what production embeds (``cluster_embeddings``): a cluster whose
     speech is entirely overlapped keeps its raw spans as the fallback."""
-    from stenograf.diarization.sherpa import _overlap_spans, _subtract_spans
+    from stenograf.diarization.embedding import _overlap_spans, _subtract_spans
 
     overlap = _overlap_spans(turns_by_cluster)
     spans = {}
@@ -85,7 +85,7 @@ def embed_spans(pcm: np.ndarray, spans: list[tuple[float, float]], embed) -> np.
     """Duration-weighted mean embedding of ``spans`` — the tail of
     ``cluster_embeddings`` for one cluster (long-span preference included)."""
     from stenograf.audio import SAMPLE_RATE, l2_normalize
-    from stenograf.diarization.sherpa import MIN_EMBED_SECONDS
+    from stenograf.diarization.embedding import MIN_EMBED_SECONDS
 
     long = [s for s in spans if s[1] - s[0] >= MIN_EMBED_SECONDS]
     vectors, weights = [], []
@@ -238,7 +238,7 @@ def section_c(channels, galleries, embed) -> list[str]:
     import ami
 
     from stenograf.diarization.base import SpeakerTurn
-    from stenograf.diarization.sherpa import cluster_embeddings
+    from stenograf.diarization.embedding import cluster_embeddings
     from stenograf.pipeline import collapse_single_voice
     from stenograf.voiceprints import DEFAULT_THRESHOLD
 
@@ -311,7 +311,7 @@ def section_c(channels, galleries, embed) -> list[str]:
 def main() -> int:
     import ami
 
-    from stenograf.diarization.loop import OwnDiarizer
+    from stenograf.diarization.embedding import VoiceEmbedder
 
     trials_path = OUT_DIR / "reid" / "trials.json"
     if not trials_path.exists() or not HYP_DIR.exists():
@@ -319,7 +319,7 @@ def main() -> int:
         return 1
     channels = [c for c in ami.load_channels() if c.session != ami.ENROLL_SESSION]
 
-    embed = OwnDiarizer().embed
+    embed = VoiceEmbedder().embed
     galleries = ami.build_galleries(embed)
     clusters = load_clusters(HYP_DIR, channels)
 

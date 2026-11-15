@@ -102,7 +102,7 @@ def participants(meeting: str) -> dict[str, tuple[str, str]]:
 
 
 def headset_gallery(meeting: str, embed, pool) -> dict[str, list[np.ndarray]]:
-    from stenograf.diarization.sherpa import cluster_embeddings
+    from stenograf.diarization.embedding import cluster_embeddings
 
     gallery = {}
     who = participants(meeting)
@@ -119,7 +119,7 @@ def channel_vectors(
     cid: str, turns: list[SpeakerTurn], embed, pool
 ) -> dict[str, tuple[str | None, dict[float | None, np.ndarray | None]]]:
     """cluster → (true speaker, budget → embedding)."""
-    from stenograf.diarization.sherpa import cluster_embeddings
+    from stenograf.diarization.embedding import cluster_embeddings
 
     pcm = read_pcm16(ami.CHANNELS_DIR / f"{cid}.wav")
     ref = parse_rttm(ami.AMI_REFS_DIR / f"{cid}.rttm")
@@ -164,15 +164,15 @@ def table(rows: list[tuple[str, list[Trial]]]) -> list[str]:
 
 
 def main() -> int:
-    from stenograf.diarization.loop import OwnDiarizer
+    from stenograf.diarization.embedding import VoiceEmbedder
 
     arms = arm_turns()
     if not arms:
         print("no held-out turns — run heldout.py / nemotron_arm.py first", file=sys.stderr)
         return 1
     channels = json.loads((OUT / "channels.json").read_text())
-    diarizer = OwnDiarizer()
-    embed, pool = diarizer.embed, diarizer._executor()
+    embedder = VoiceEmbedder()
+    embed, pool = embedder.embed, embedder.pool()
     meetings = sorted({c["id"].split(".")[0] for c in channels})
     groups = sorted({c["group"] for c in channels})
 

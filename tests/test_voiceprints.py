@@ -2,7 +2,7 @@
 
 Pure unit tests on synthetic unit vectors — no models, no audio. The real
 embedding path (``diarize_with_embeddings``) is covered by
-``test_diarization_sherpa.py``; here we test the store, the model-bound scoping,
+``test_diarization_loop_real.py``; here we test the store, the model-bound scoping,
 the cosine threshold, persistence (v1 migration included), and
 merge-at-naming cluster→profile matching.
 """

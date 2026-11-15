@@ -120,7 +120,7 @@ def _est_result(channel, estimator, embed) -> tuple[list[Turn], dict[str, np.nda
     embedding-computation change) re-embeds the cached turns without re-running
     the estimator, so the turns stay fixed across embedding experiments."""
     from stenograf.diarization.base import SpeakerTurn
-    from stenograf.diarization.sherpa import cluster_embeddings
+    from stenograf.diarization.embedding import cluster_embeddings
 
     rttm_path = EST_DIR / f"{channel.id}.rttm"
     emb_path = EST_DIR / f"{channel.id}.emb.json"
@@ -161,11 +161,11 @@ def main() -> int:
     import ami
     from diarize import _build_diarizer
 
-    from stenograf.diarization.loop import OwnDiarizer
+    from stenograf.diarization.embedding import VoiceEmbedder
 
-    sherpa = OwnDiarizer()
+    embedder = VoiceEmbedder()
     estimator = _build_diarizer(no_helper=args.no_helper)
-    galleries = ami.build_galleries(sherpa.embed)
+    galleries = ami.build_galleries(embedder.embed)
     hyp_dir = OUT_DIR / "diar" / "ami"
 
     est_rows, risk_rows = [], []
@@ -176,7 +176,7 @@ def main() -> int:
             continue
         ref = parse_rttm(channel.ref_path)
         words = _load_word_times(words_path)
-        turns, embeddings = _est_result(channel, estimator, sherpa.embed)
+        turns, embeddings = _est_result(channel, estimator, embedder.embed)
         gallery = galleries.get(channel.group) if channel.session != ami.ENROLL_SESSION else None
 
         durations = {c: sum(t.end - t.start for t in turns if t.speaker == c) for c in embeddings}

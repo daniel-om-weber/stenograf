@@ -30,6 +30,12 @@ Settled by measurement before the plan (2026-11-15):
    and the eval harness no longer reach the embedder through a diarizer class
    (`OwnDiarizer().embed` is used across `eval/`). Pure move — embeddings
    bit-identical.
+   **Done 2026-11-15:** `VoiceEmbedder` + `cluster_embeddings` in
+   `diarization/embedding.py`; the sherpa class delegates to it, embed-only
+   eval scripts construct it directly. Gate: on 4 min of Bmr021's mic channel,
+   the loop's pair vectors, the three cluster voices, the channel voice and 20
+   raw slice embeddings were exactly equal (`np.array_equal`) before and after,
+   through both the diarizer and the standalone embedder.
 2. **`diarization/nemotron.py`, not yet wired in.** Numpy 128-band log-mel
    front end (preemphasis 0.97, n_fft 512, win 400, hop 160; parity fixture
    generated once from the reference processor so tests need no torch), the
