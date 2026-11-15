@@ -1332,6 +1332,30 @@ What it does not show: the dialogues are spliced (no overlap, no backchannels,
 uniform gaps), the two voices still come from different calls, and a shared
 room mic — the hybrid-meeting case — has no free reference here.
 
+**The library port** (`diarization/nemotron.py`, 2026-11-15, M4 Max,
+onnxruntime 1.27.0, fp16, `heldout.py run --arm library`). Its chunk loop and
+speaker cache are exact: fed the reference processor's features
+(`--reference-features`, written by `nemotron_arm.py features`), its turns are
+identical to `nemotron_arm.py`'s on 36/36 channels. Its own numpy log-mel front
+end (no torch) is not bit-equal to the processor — 3e-4 worst, 1e-7 mean, 90 %
+of values bit-equal on IS1009a.duo — and the speaker cache's near-tied
+keep/drop choices amplify that: end-to-end turns are identical on 1/36
+channels, first diverging minutes in (IS1009a.duo: at 308 s). The scores do
+not move beyond the spread the reference runs already show among themselves:
+
+| held-out set, 36 channels | mic count ok(expl) / attr | duo | loop | s / audio-hour |
+|---|---|---|---|---|
+| reference fp16 CPU | 6(9) / 99.9 % | 7(12) / 97.6 % | 7(12) / 97.0 % | 17 |
+| reference fp32 CPU (and WebGPU) | 7(10) / 99.9 % | 7(12) / 97.6 % | 7(12) / 97.1 % | 15 |
+| library fp16 CPU | 7(10) / 99.9 % | 7(11) / 97.6 % | 7(12) / 97.1 % | 17 |
+| library fp16 CPU, true count applied after | 12(12) / 100.0 % | 12(12) / 98.2 % | 12(12) / 97.3 % | 17 |
+
+The count-capped row equals the fp16 reference's to the decimal; confusion is
+0.0 / 0.3 / 0.4 % without the cap and 0.0 / 0.2 / 0.2 % with it in every row.
+A bit-exact numpy front end was not pursued: torch's own float32 STFT and GEMM
+differ by platform, and even the range a frame is computed in changes its last
+bits (a one-frame range is a matrix-vector product).
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

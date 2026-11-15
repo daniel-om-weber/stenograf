@@ -55,6 +55,8 @@ Usage::
 
     uv run eval/nemotron_arm.py check [--device webgpu]     # parity vs PyTorch
     uv run eval/nemotron_arm.py run --device webgpu --precision fp16
+    uv run eval/nemotron_arm.py fixture   # the library front end's parity fixture
+    uv run eval/nemotron_arm.py features --to DIR   # for heldout.py's --reference-features
 """
 
 from __future__ import annotations
@@ -355,6 +357,49 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+FIXTURE = EVAL_DIR.parent / "tests" / "data" / "nemotron_logmel.npz"
+FIXTURE_REVISION = "353b6f8ad2cac3580e982d7fbdf0a010786b0406"
+"""The export revision ``stenograf.assets.NEMOTRON`` pins."""
+
+
+def cmd_fixture(args: argparse.Namespace) -> int:
+    """The reference processor's features on a deterministic signal — chirp, noise and
+    a stretch of digital silence at an odd length, so the masked last frame and the
+    log guard are both exercised — for ``tests/test_diarization_nemotron.py``."""
+    from transformers import AutoProcessor
+
+    processor = AutoProcessor.from_pretrained(ONNX_REPO, revision=FIXTURE_REVISION)
+    rng = np.random.RandomState(0)  # the legacy generator's stream is frozen across numpy versions
+    n = 16_483
+    t = np.arange(n) / 16000
+    signal = 0.3 * np.sin(2 * np.pi * (200 + 1500 * t) * t) + 0.05 * rng.standard_normal(n)
+    signal[6000:9000] = 0.0
+    pcm = np.clip(np.round(signal * 32768), -32768, 32767).astype(np.int16)
+    inputs = processor(pcm.astype(np.float32) / 32768.0, sampling_rate=16000, return_tensors="np")
+    FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        FIXTURE, pcm=pcm, features=inputs["input_features"][0], mask=inputs["attention_mask"][0]
+    )
+    print(f"wrote {FIXTURE}")
+    return 0
+
+
+def cmd_features(args: argparse.Namespace) -> int:
+    """The reference processor's features per held-out channel (~0.17 GB per audio-hour),
+    so the library's chunk loop can be run on exactly what ``run`` fed this one."""
+    from transformers import AutoProcessor
+
+    processor = AutoProcessor.from_pretrained(ONNX_REPO, revision=FIXTURE_REVISION)
+    args.to.mkdir(parents=True, exist_ok=True)
+    for channel in json.loads((args.out / "channels.json").read_text()):
+        target = args.to / f"{channel['id']}.features.npy"
+        if not target.exists():
+            features, _, _ = features_of(processor, args.audio_dir / f"{channel['id']}.wav")
+            np.save(target, features)
+            print(target, flush=True)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -368,8 +413,14 @@ def main() -> int:
     check.add_argument("--frames", type=int, default=6001, help="mel frames (10 ms) to compare")
     sub.choices["run"].add_argument("--out", type=Path, default=OUT_DIR)
     sub.choices["run"].add_argument("--audio-dir", type=Path, default=AUDIO_DIR)
+    sub.add_parser("fixture")
+    features = sub.add_parser("features")
+    features.add_argument("--to", type=Path, required=True)
+    features.add_argument("--out", type=Path, default=OUT_DIR)
+    features.add_argument("--audio-dir", type=Path, default=AUDIO_DIR)
     args = parser.parse_args()
-    return cmd_check(args) if args.cmd == "check" else cmd_run(args)
+    commands = {"check": cmd_check, "run": cmd_run, "fixture": cmd_fixture}
+    return {**commands, "features": cmd_features}[args.cmd](args)
 
 
 if __name__ == "__main__":

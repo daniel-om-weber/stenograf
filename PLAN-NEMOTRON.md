@@ -45,6 +45,11 @@ Settled by measurement before the plan (2026-11-15):
    the fp16 export + `config.json` from `onnx-community/Nemotron-3-Diarization-ONNX`,
    pinned by revision and sha256. Gate: library turns identical to
    `nemotron_arm.py`'s on the held-out set.
+   **Done 2026-11-15**, gate as amended by Daniel the same day: the turns are
+   identical only given the reference's features (36/36), because the numpy
+   front end is not bit-equal to torch's and the speaker cache amplifies the
+   difference (1/36 end to end); the held-out scores are unchanged.
+   Numbers: `eval/README.md`, "The library port".
 3. **The switch.** `build_diarizer()` returns Nemotron; `pipeline._attribute`
    and `cli/profiles.py` pass the stated count straight through as the cap
    and stop diarizing at k+1 / folding. Decide `collapse_single_voice` by

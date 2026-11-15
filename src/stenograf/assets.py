@@ -1,8 +1,9 @@
 """Download and cache for the small ONNX model assets (VAD, diarization).
 
 The ASR backends manage their own weights (parakeet-mlx pulls from
-HuggingFace); this module covers the sherpa-onnx assets, which have no
-built-in downloader. Files land in one cache directory
+HuggingFace); this module covers the plain-file assets with no downloader of
+their own — the sherpa-onnx models and the Nemotron diarization export, each
+pinned by URL and digest. Files land in one cache directory
 (:func:`stenograf.paths.cache_dir`; ``$STENOGRAF_CACHE`` overrides it).
 """
 
@@ -67,6 +68,39 @@ SPEAKER_EMBEDDING = ModelAsset(
     url=f"{_RELEASES}/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
     sha256="c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
 )
+
+
+_NEMOTRON = (
+    "https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX/resolve/"
+    "353b6f8ad2cac3580e982d7fbdf0a010786b0406"
+)
+_NEMOTRON_DIR = "nemotron-3-diarization-onnx"
+"""One directory for the three files: onnxruntime resolves the graph's
+external weights by their stored filename, next to the graph."""
+
+NEMOTRON_GRAPH = ModelAsset(
+    name=f"{_NEMOTRON_DIR}/model_fp16.onnx",
+    url=f"{_NEMOTRON}/onnx/model_fp16.onnx",
+    sha256="286f56d64d80755eb0c84f9158c3620c9eccccb84ec53b48942c3795cf5a0c7b",
+)
+
+NEMOTRON_WEIGHTS = ModelAsset(
+    name=f"{_NEMOTRON_DIR}/model_fp16.onnx_data",
+    url=f"{_NEMOTRON}/onnx/model_fp16.onnx_data",
+    sha256="affecf841c462d78c86b56a6eee6216b119809285bcbdb4d5c4d541810e9d317",
+)
+
+NEMOTRON_CONFIG = ModelAsset(
+    name=f"{_NEMOTRON_DIR}/config.json",
+    url=f"{_NEMOTRON}/config.json",
+    sha256="a758bf59867e27a7d92cf7a9149cae6dfc212b408b2ba74bfb87994708a803c5",
+)
+
+NEMOTRON = (NEMOTRON_GRAPH, NEMOTRON_WEIGHTS, NEMOTRON_CONFIG)
+"""NVIDIA Nemotron 3 Diarization, fp16 ONNX export (OpenMDW-1.1; downloaded,
+never redistributed). fp16 over fp32: half the size (199 vs 398 MB),
+attribution within 0.1 pt on the held-out AMI set (2026-11-15,
+``eval/README.md``)."""
 
 
 def cached_path(asset: ModelAsset) -> Path | None:

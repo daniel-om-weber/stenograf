@@ -27,11 +27,16 @@ Scoring is about what a reader of the transcript gets:
   Nemotron, the true count applied afterwards (keep the k most active speakers,
   give orphaned frames to the most probable kept one).
 
-Usage (``eval/nemotron_arm.py run`` produces the Nemotron turns)::
+Usage (``eval/nemotron_arm.py run`` produces the reference Nemotron turns; the
+``library`` arm runs ``stenograf.diarization.nemotron`` on the same channels,
+and with ``--reference-features`` — written by ``eval/nemotron_arm.py
+features`` — feeds its chunk loop the reference processor's features instead
+of its own, which isolates the port from the front end)::
 
     uv run --group eval eval/heldout.py fetch
     uv run --group eval eval/heldout.py run --arm known
     uv run --group eval eval/heldout.py run --arm estimate
+    uv run --group eval eval/heldout.py run --arm library [--reference-features DIR]
     uv run --group eval eval/heldout.py score [--detail]
 """
 
@@ -107,6 +112,46 @@ def cmd_fetch(out: Path) -> int:
     (out / "channels.json").write_text(json.dumps(manifest, indent=1))
     (out / "clipping_per_million.json").write_text(json.dumps(clipping, indent=1))
     print(f"{len(channels)} channels → {out / 'channels.json'}")
+    return 0
+
+
+def cmd_library(out: Path, features: Path | None) -> int:
+    """The library's Nemotron with no count: turns, plus probabilities so ``score``
+    adds the count-capped row. Same file layout as ``eval/nemotron_arm.py run``."""
+    from stenograf.diarization import nemotron
+
+    current: dict[str, np.ndarray] = {}
+    if features is not None:
+        # The reference features are what nemotron_arm.py fed its loop, frame for frame.
+        def reference_log_mel(audio, start=0, stop=None):
+            return np.ascontiguousarray(current["features"][start:stop])
+
+        nemotron.log_mel = reference_log_mel
+    name = "nemotron_library" + ("_reference_features" if features is not None else "")
+    diarizer = nemotron.NemotronDiarizer()
+    path = out / f"turns_{name}.json"
+    probs_dir = out / f"probs_{name}"
+    probs_dir.mkdir(exist_ok=True)
+    result = json.loads(path.read_text()) if path.exists() else {}
+    for channel in json.loads((out / "channels.json").read_text()):
+        cid = channel["id"]
+        if cid in result:
+            continue  # resumable
+        pcm = read_pcm16(ami.CHANNELS_DIR / f"{cid}.wav")
+        if features is not None:
+            current["features"] = np.load(features / f"{cid}.features.npy", mmap_mode="r")
+        started = time.monotonic()
+        probs = diarizer.probabilities(pcm)
+        secs = time.monotonic() - started
+        np.save(probs_dir / f"{cid}.npy", probs.astype(np.float16))
+        turns = nemotron.turns_from_probs(probs)
+        result[cid] = {
+            "turns": [{"speaker": t.speaker, "start": t.start, "end": t.end} for t in turns],
+            "secs": round(secs, 2),
+            "audio_s": len(pcm) / 16000,
+        }
+        path.write_text(json.dumps(result))
+        print(f"{cid} {name}: {secs:.1f} s, {len({t.speaker for t in turns})} speakers", flush=True)
     return 0
 
 
@@ -309,11 +354,15 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=OUT_DIR)
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch")
-    sub.add_parser("run").add_argument("--arm", choices=["known", "estimate"], required=True)
+    run = sub.add_parser("run")
+    run.add_argument("--arm", choices=["known", "estimate", "library"], required=True)
+    run.add_argument("--reference-features", type=Path, help="library arm only")
     sub.add_parser("score").add_argument("--detail", action="store_true")
     args = parser.parse_args()
     if args.cmd == "fetch":
         return cmd_fetch(args.out)
+    if args.cmd == "run" and args.arm == "library":
+        return cmd_library(args.out, args.reference_features)
     if args.cmd == "run":
         return cmd_run(args.out, args.arm)
     return cmd_score(args.out, args.detail)
