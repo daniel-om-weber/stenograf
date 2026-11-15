@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from stenograf.view import LiveView
 
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.audio import SAMPLE_RATE, l2_normalize, sample_index
+from stenograf.audio import SAMPLE_RATE, merge_voices, sample_index
 from stenograf.config import Language, MeetingProfile, ResolvedParameters, resolve_value
 from stenograf.diarization.base import Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD, apply_glossary
@@ -246,23 +246,15 @@ def _entry_embeddings(
     embeddings: dict[str, np.ndarray],
     names: dict[str, str],
 ) -> dict[str, np.ndarray]:
-    """Cluster embeddings under the labels the entries carry.
-
-    Several clusters resolving to one profile name (merge-at-naming) merge to
-    their duration-weighted mean."""
+    """Cluster embeddings under the labels the entries carry; several clusters
+    resolving to one profile name (merge-at-naming) merge by turn duration."""
     durations: dict[str, float] = {}
     for t in turns:
         durations[t.speaker] = durations.get(t.speaker, 0.0) + (t.end - t.start)
-    sums: dict[str, np.ndarray] = {}
-    for cluster, vector in embeddings.items():
-        label = names.get(cluster, cluster)
-        weighted = vector * durations.get(cluster, 0.0)
-        sums[label] = sums[label] + weighted if label in sums else weighted
-    return {
-        label: l2_normalize(total)
-        for label, total in sums.items()
-        if float(np.linalg.norm(total)) > 0.0
-    }
+    return merge_voices(
+        (names.get(cluster, cluster), vector, durations.get(cluster, 0.0))
+        for cluster, vector in embeddings.items()
+    )
 
 
 def assemble_transcript(

@@ -55,6 +55,32 @@ def test_profiles_enroll_duplicate_then_reinforce(tmp_path, monkeypatch):
     assert "2 samples" in again.output
 
 
+def test_profiles_enroll_reinforce_refuses_a_mismatched_voice_until_forced(
+    tmp_path, monkeypatch
+):
+    # The same guard `profiles assign` has: a wrong voice in a one-entry
+    # profile drags every later match.
+    audio = tmp_path / "a.wav"
+    write_wav(audio)
+    _patch_diarizer(monkeypatch, EnrollmentDiarizer({"S0": [1.0, 0, 0]}))
+    CliRunner().invoke(cli.main, ["profiles", "enroll", "Daniel", str(audio)])
+
+    _patch_diarizer(monkeypatch, EnrollmentDiarizer({"S0": [0, 1.0, 0]}))
+    refused = CliRunner().invoke(
+        cli.main, ["profiles", "enroll", "Daniel", str(audio), "--reinforce"]
+    )
+    assert refused.exit_code != 0
+    assert "--force" in refused.output
+    listing = CliRunner().invoke(cli.main, ["profiles", "list"])
+    assert "(1 sample)" in listing.output
+
+    forced = CliRunner().invoke(
+        cli.main, ["profiles", "enroll", "Daniel", str(audio), "--reinforce", "--force"]
+    )
+    assert forced.exit_code == 0, forced.output
+    assert "2 samples" in forced.output
+
+
 def test_profiles_enroll_multispeaker_needs_speaker_choice(tmp_path, monkeypatch):
     diar = EnrollmentDiarizer(
         {"S0": [1.0, 0, 0], "S1": [0, 1.0, 0]},

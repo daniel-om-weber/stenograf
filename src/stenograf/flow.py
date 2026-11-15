@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -771,8 +772,18 @@ class AssignResult:
     samples: int
     """Embeddings now on the profile."""
     rewritten: list[Path]
-    """Transcript files rewritten with the name (empty when LABEL == NAME —
-    confirming an auto-match reinforces the profile without touching files)."""
+    """Transcript files (and the notes) rewritten with the name (empty when
+    LABEL == NAME — confirming an auto-match reinforces the profile without
+    touching files)."""
+
+
+def rename_speaker_in_text(text: str, label: str, name: str) -> str:
+    """``label`` → ``name`` in free text (the notes) wherever it stands as a
+    whole label: ``Remote-1`` never touches ``Remote-10``, ``Dan`` never
+    ``Daniel``. A model that already guessed the name ("Local-1 (Daniel)")
+    gets the bare name, not "Daniel (Daniel)"."""
+    whole = rf"(?<![\w-]){re.escape(label)}(?![\w-])"
+    return re.sub(rf"{whole}(?: \({re.escape(name)}\))?", lambda _: name, text)
 
 
 def assign_speaker(
@@ -791,8 +802,10 @@ def assign_speaker(
     own sidecar joins ``name``'s profile — created if new, reinforced
     otherwise; measured as good as enrolling from a clean sample, and better
     on short clusters (``eval/README.md``, 2026-08-06) — and the meeting's
-    transcript files are rewritten so the correction is visible where the
-    user saw the wrong name. One correction per colleague is the whole
+    transcript files and the notes beside them are rewritten so the
+    correction is visible where the user saw the wrong name (a copy already
+    exported to ``[notes.export] dir`` is not: its filename is not
+    recoverable from the meeting). One correction per colleague is the whole
     enrollment chore: later meetings name the voice automatically.
 
     A voice that disagrees with NAME's existing profile is refused before
@@ -800,7 +813,8 @@ def assign_speaker(
     ``force`` admits it). Raises :class:`ValueError` with a user-facing
     message for every way this can fail (no transcript, no sidecar, unknown
     label, a refused voice)."""
-    from stenograf.transcript import FORMATS
+    from stenograf.audio import merge_voices
+    from stenograf.transcript import FORMATS, speech_seconds
     from stenograf.voiceprints import (
         MEETING_VOICEPRINTS_NAME,
         ProfileStore,
@@ -846,10 +860,21 @@ def assign_speaker(
             if path.is_file():
                 output.atomic_write_text(path, render(updated))
                 rewritten.append(path)
+        notes_path = meeting_dir / f"{output.TRANSCRIPT_STEM}.notes.md"
+        if notes_path.is_file():
+            notes = notes_path.read_text(encoding="utf-8")
+            renamed = rename_speaker_in_text(notes, label, name)
+            if renamed != notes:
+                output.atomic_write_text(notes_path, renamed)
+                rewritten.append(notes_path)
         # The sidecar follows the transcript, so the next assign sees the
         # labels the user now reads (and this one is not repeatable by accident).
-        speakers = dict(voiceprints.speakers)
-        speakers[name] = speakers.pop(label)
+        # A name already in it (an over-split person named twice) merges.
+        seconds = speech_seconds(transcript.entries)
+        speakers = merge_voices(
+            (name if speaker == label else speaker, vector, seconds.get(speaker, 0.0))
+            for speaker, vector in voiceprints.speakers.items()
+        )
         write_meeting_voiceprints(
             meeting_dir, speakers, voiceprints.embedding_model, date=voiceprints.date
         )

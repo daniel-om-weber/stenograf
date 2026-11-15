@@ -411,6 +411,35 @@ class TestMeetingRecorder:
         assert {e.speaker for e in result.transcript.entries} == {"Anna"}
         assert set(result.speaker_embeddings) == {"Anna"}
 
+    def test_one_profile_matched_on_both_channels_merges_its_voices(self):
+        # The sidecar holds one vector per label: a profile matched on the mic
+        # and on the system channel must keep both voices, not the last one.
+        model = "eres2net-voxceleb-16k.onnx"
+        store = ProfileStore(
+            profiles=[
+                SpeakerProfile(
+                    "Anna", model, (MeetingEmbedding(np.array([1.0, 0.0], np.float32)),)
+                )
+            ]
+        )
+        voices = iter([np.array([0.8, 0.6], np.float32), np.array([0.8, -0.6], np.float32)])
+
+        class PerChannelVoice(EmbeddingDiarizer):
+            def channel_embedding(self, samples, turns):
+                return next(voices)
+
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.MIC, 0.0, pcm), frame(Channel.SYSTEM, 0.0, pcm)])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=1, diarization=True),
+            asr=FakeASR(),
+            diarizer=PerChannelVoice([], {}),
+            reid=SpeakerReID(store, model),
+        )
+        result = recorder.run(provider)
+        assert set(result.speaker_embeddings) == {"Anna"}
+        np.testing.assert_allclose(result.speaker_embeddings["Anna"], [1.0, 0.0], atol=1e-6)
+
     def test_solo_channel_without_a_match_keeps_its_label_and_voice(self):
         pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
         provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])

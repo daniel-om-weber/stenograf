@@ -72,8 +72,19 @@ def profiles_list() -> None:
     is_flag=True,
     help="Fold this sample into an existing profile's voiceprint instead of creating a new one.",
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    help="With --reinforce: add the sample even when it does not match the voice "
+    "already stored in the profile.",
+)
 def profiles_enroll(
-    name: str, audio_file: Path, speakers: int, cluster: str | None, reinforce: bool
+    name: str,
+    audio_file: Path,
+    speakers: int,
+    cluster: str | None,
+    reinforce: bool,
+    force: bool,
 ) -> None:
     """Enroll speaker NAME from a voice sample in AUDIO_FILE.
 
@@ -85,7 +96,7 @@ def profiles_enroll(
     """
     from stenograf import assets
     from stenograf.audio import load_audio
-    from stenograf.voiceprints import ProfileStore
+    from stenograf.voiceprints import ProfileStore, VoiceMismatchError
 
     samples = load_audio(audio_file)
     diarizer = loaders.load_diarizer()
@@ -107,7 +118,10 @@ def profiles_enroll(
             raise click.ClickException(
                 f"no profile named {name!r} to reinforce; drop --reinforce to create it."
             )
-        updated = store.reinforce(existing, embedding)
+        try:  # assign, not a bare reinforce: the same wrong-voice guard as `profiles assign`
+            updated, _ = store.assign(name, embedding, model, force=force)
+        except VoiceMismatchError as exc:
+            raise click.ClickException(str(exc)) from exc
         store.save()
         click.echo(f"reinforced {name!r} ({len(updated.embeddings)} samples)")
         return

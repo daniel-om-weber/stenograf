@@ -155,6 +155,14 @@ formats`` setting — adding a renderer here makes it available everywhere at
 once."""
 
 
+def speech_seconds(entries: list[TranscriptEntry]) -> dict[str, float]:
+    """Each speaker's transcribed speech time: the weights for ``audio.merge_voices``."""
+    seconds: dict[str, float] = {}
+    for e in entries:
+        seconds[e.speaker] = seconds.get(e.speaker, 0.0) + (e.end - e.start)
+    return seconds
+
+
 def _language_from_json(value: str | None) -> Language | None:
     return Language(value) if value is not None else None
 

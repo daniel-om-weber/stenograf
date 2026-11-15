@@ -208,7 +208,7 @@ def load_reid(
     Returns ``None`` when re-ID is turned off or the store holds no profiles for
     the active embedding model — so the finalize pass is byte-for-byte unchanged
     without enrolled profiles (match-only, zero behaviour change).
-    ``threshold=None`` uses the store default (0.5). ``store_path``
+    ``threshold=None`` keeps the store's own. ``store_path``
     (``--profile-store`` / ``MeetingProfile.speaker_profile_store``) overrides the
     default store location.
     """

@@ -538,6 +538,50 @@ class TestAssignSpeaker:
         result = flow.assign_speaker(mdir, "Anna", "Anna", store_path=store_path)
         assert result.created and result.rewritten == []
 
+    def test_assign_renames_the_speaker_in_the_notes(self, tmp_path):
+        mdir = self._meeting(tmp_path)
+        notes = mdir / "transcript.notes.md"
+        notes.write_text(
+            "Remote-1 (Anna) opened. **Remote-1** agreed; Remote-10 and Local-1 did not.\n",
+            encoding="utf-8",
+        )
+        result = flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=tmp_path / "p.json")
+        assert notes in result.rewritten
+        assert notes.read_text(encoding="utf-8") == (
+            "Anna opened. **Anna** agreed; Remote-10 and Local-1 did not.\n"
+        )
+
+    def test_two_labels_named_alike_merge_their_voices(self, tmp_path):
+        # An over-split person (Remote-1 and Remote-2 are both Anna): the
+        # sidecar's "Anna" is both voices, weighted by speech time, not the
+        # second one alone.
+        from stenograf.config import MeetingProfile
+        from stenograf.output import write_transcript
+        from stenograf.transcript import Transcript, TranscriptEntry
+        from stenograf.voiceprints import load_meeting_voiceprints, write_meeting_voiceprints
+
+        mdir = tmp_path / "meeting-20260801-120000"
+        entries = [
+            TranscriptEntry(speaker="Remote-1", text="lang", start=0.0, end=3.0),
+            TranscriptEntry(speaker="Remote-2", text="kurz", start=3.0, end=4.0),
+        ]
+        write_transcript(
+            Transcript(language=None, profile=MeetingProfile(), entries=entries),
+            mdir,
+            "transcript",
+        )
+        a, b = np.array([0.95, 0.31], np.float32), np.array([0.95, -0.31], np.float32)
+        write_meeting_voiceprints(
+            mdir, {"Remote-1": a, "Remote-2": b}, self.MODEL, date="2026-08-01"
+        )
+        store_path = tmp_path / "profiles.json"
+        flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path)
+        flow.assign_speaker(mdir, "Remote-2", "Anna", store_path=store_path)
+        speakers = load_meeting_voiceprints(mdir).speakers
+        assert set(speakers) == {"Anna"}
+        expected = (3 * a + 1 * b) / np.linalg.norm(3 * a + 1 * b)
+        np.testing.assert_allclose(speakers["Anna"], expected, atol=1e-6)
+
     def test_unknown_label_names_the_available_ones(self, tmp_path):
         mdir = self._meeting(tmp_path)
         with pytest.raises(ValueError, match="Remote-1"):

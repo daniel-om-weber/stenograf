@@ -36,7 +36,7 @@ from difflib import SequenceMatcher
 import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.audio import to_float32
+from stenograf.audio import merge_voices, to_float32
 from stenograf.capture.base import (
     ORDER_TOLERANCE_SAMPLES,
     SAMPLE_RATE,
@@ -62,7 +62,7 @@ from stenograf.pipeline import (
     raw_label_map,
     relabel_speakers,
 )
-from stenograf.transcript import Transcript, TranscriptEntry
+from stenograf.transcript import Transcript, TranscriptEntry, speech_seconds
 from stenograf.vad import SileroVAD
 from stenograf.view import LiveView
 
@@ -1028,7 +1028,7 @@ class MeetingRecorder:
         view = view or LiveView()  # the bare base class is the null view
         by_channel: dict[Channel, list[TranscriptEntry]] = {}
         counts: list[SpeakerCount] = []
-        speaker_embeddings: dict[str, np.ndarray] = {}
+        voices: list[tuple[str, np.ndarray, float]] = []
         plans = [p for p in plans if p.channel in store.channels()]
         decoded: dict[Channel, list[Segment] | None] = {}
         for plan in plans:
@@ -1082,9 +1082,13 @@ class MeetingRecorder:
                 raw, embedded = self._name_solo_channel(samples, raw, view, plan)
             labeled = relabel_speakers(raw, plan.label_template)
             mapping = raw_label_map(raw, plan.label_template)
-            speaker_embeddings.update(
-                {mapping.get(label, label): v for label, v in embedded.items()}
-            )
+            # Merged, not overwritten, across channels: one profile can match
+            # a voice on both (a person who moved, an echo leak re-ID named).
+            seconds = speech_seconds(labeled)
+            voices += [
+                (mapping.get(label, label), v, seconds.get(mapping.get(label, label), 0.0))
+                for label, v in embedded.items()
+            ]
             detected = len({e.speaker for e in labeled})
             counts.append(SpeakerCount(plan.channel, plan.num_speakers, detected))
             if plan.num_speakers is None:
@@ -1096,7 +1100,7 @@ class MeetingRecorder:
             speaker_counts=counts,
             dropped_echo_lines=dropped,
             reference_gap_s=reference_gap_s,
-            speaker_embeddings=speaker_embeddings,
+            speaker_embeddings=merge_voices(voices),
         )
 
     def _apply_echo_backstop(

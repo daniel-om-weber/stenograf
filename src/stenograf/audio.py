@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import subprocess
 import wave
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,28 @@ def l2_normalize(vector: np.ndarray) -> np.ndarray:
     """Unit-norm a vector (voice embeddings); the zero vector passes through."""
     norm = float(np.linalg.norm(vector))
     return vector / norm if norm > 0 else vector
+
+
+def merge_voices(parts: Iterable[tuple[str, np.ndarray, float]]) -> dict[str, np.ndarray]:
+    """``(label, voice embedding, speech seconds)`` parts → one unit vector per label.
+
+    The one rule for a person whose voice arrives under several labels —
+    clusters re-ID names alike, a profile matched on both channels, two
+    transcript labels assigned the same name: the duration-weighted mean, so
+    the longer stretch of speech dominates. A label whose parts all weigh
+    nothing averages them unweighted; one whose sum cancels to zero is dropped."""
+    weighted: dict[str, np.ndarray] = {}
+    plain: dict[str, np.ndarray] = {}
+    for label, vector, seconds in parts:
+        weighted[label] = weighted.get(label, 0.0) + vector * seconds
+        plain[label] = plain.get(label, 0.0) + vector
+    merged = {}
+    for label, total in weighted.items():
+        if float(np.linalg.norm(total)) == 0.0:
+            total = plain[label]
+        if float(np.linalg.norm(total)) > 0.0:
+            merged[label] = l2_normalize(total)
+    return merged
 
 
 def sample_index(seconds: float) -> int:
