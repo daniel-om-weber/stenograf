@@ -70,7 +70,11 @@ audio hardware identical to Edinburgh's, its known caveats are video-only).
 The probe also measured what the problems table does not list: Idiap
 candidates IS1004/IS1006 ship with clipped headset samples (up to 263 per
 million; site-wide ~20 dB hotter gain), so they were dropped despite clean
-table entries. ES2002/IS1000 stay out (documented headset faults)."""
+table entries. ES2002/IS1000 stay out (documented headset faults). A
+full-length probe (2026-11-15) shows the 72 s one under-read Idiap: IS1009
+clips too, on every headset of every session, up to 281 per million
+(IS1009d, FIO089) — while AMI's other evaluation-split groups ES2004 and
+TS3003 (not in this dict) stay at ≤ 3 per million."""
 ICSI_GROUP = "Bmr"
 ICSI_SESSIONS = {"a": "Bmr021", "b": "Bmr024", "c": "Bmr025", "d": "Bmr030"}
 """The ICSI Bmr series is one recurring group (the Meeting Recorder project's

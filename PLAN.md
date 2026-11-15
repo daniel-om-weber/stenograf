@@ -633,6 +633,53 @@ manylinux_2_39 and not lower — it is upstream onnxruntime's, not ours — is i
 
 ---
 
+## Diarization: Nemotron 3 as the one diarizer — measured, gates open (2026-11-15)
+
+The candidate: NVIDIA Nemotron 3 Diarization (ONNX, run on the onnxruntime the
+wheel already ships; the `onnxruntime-ep-webgpu` plugin optional) replacing
+*both* partitioners — the owned loop for stated counts and stenodiar for
+estimated ones — with a stated count kept only as a post-hoc cap, count 1
+still skipping the diarizer, and re-ID unchanged (ERes2Net voiceprints per
+speaker → the profile store; profiles are model-bound to the embedder, not the
+diarizer, so none would be lost). On AMI's held-out evaluation meetings it beat
+the owned loop *given the true count* on transcript attribution (97.1 vs
+95.1 % mean, worst channel 94.0 vs 76.0) at ~6× the speed, without being told
+the count. Evidence, method and caveats: `eval/README.md`, "The estimate path,
+and Nemotron 3 Diarization as the one diarizer".
+
+Gates before it can ship, in order:
+
+1. **Non-AMI 2-speaker audio.** Everything measured is AMI headset mixes, and
+   published results put the best hybrid ahead of Nemotron at k=2 — the
+   product's commonest channel. Real calls with corrected labels, scored on
+   transcript attribution against the owned loop at the true count.
+2. **Re-ID on Nemotron's turns.** DIR/FAR and the threshold curve
+   (`eval/reid_score.py`, `eval/threshold_pick.py`, `eval/auto_update.py`) on
+   the held-out groups (enroll session a, trial b–d) — 0.56 was calibrated on
+   ward clusters and has moved with clustering before.
+3. **The two missing arms** on the held-out set: the owned loop on TS3003, and
+   the stenodiar estimate (`eval/heldout.py run --arm known|estimate`; both
+   resume, and the estimate arm runs on CoreML on macOS).
+4. **Packaging:** read OpenMDW-1.1 properly; a numpy 128-band mel front end
+   (the reference processor imports torch); the fp16 export is 199 MB against
+   speakrs' 295 MB of models; one WebGPU session per process (a second one
+   segfaulted); macOS runtime unmeasured (CPU or ORT's CoreML EP vs today's
+   3.4 s CoreML stenodiar).
+
+If it ships, stenodiar, the vendored speakrs and the manylinux_2_39 floor's
+reason go with it. If it does not, two cheap fixes to today's helper are
+owed: the batched-embedding lookup asks for a `-b64` model the HF repo does not
+ship (`vendor/speakrs/src/inference/embedding/load/sessions.rs:162`), so it
+never batches; and ORT's intra-op threads should be the physical core count. A
+Python port with both on ORT 1.31 ran the estimate path in 165 s vs 316 s at
+one-frame parity — how much of that the Rust helper recovers is unmeasured.
+The `speakrs-0.7` branch stays unmerged either way: its native CPU backend is
+2× slower than today on Linux stock, and still ~1.3× slower than ORT on 4-core
+machines with four upstreamable patches (numbers in the same `eval/README.md`
+section).
+
+---
+
 ## Deferred and declined
 
 Kept here so future sessions don't re-open them.
@@ -686,9 +733,13 @@ Kept here so future sessions don't re-open them.
   - **Embedding upgrade (2026-08-07):** ERes2NetV2-zh and ResNet34-LM both
     regress clustering (6.6/7.6 pts attribution) and *collapse* the
     short-turn axis (FAR0 thresholds 0.82/0.88 vs 0.605); English ERes2NetV2
-    was never released. Watch: ReDimNet2 with a CC-BY vox2 checkpoint + working ONNX;
-    an export attempt of `eres2net_large_sv_en_voxceleb_16k` only if a step
-    is actually limited by full-duration embedding accuracy — today none is.
+    was never released. Watch: ReDimNet2 with a CC-BY vox2 checkpoint + working ONNX
+    (2026-11-15: the VoxCeleb2-only checkpoints are released; the only proven
+    ONNX export is of the VoxBlink2+VoxCeleb2 B6, non-commercial data, at a
+    fixed 6 s input — half the trigger, and short-turn collapse sank both
+    earlier candidates); an export attempt of
+    `eres2net_large_sv_en_voxceleb_16k` only if a step is actually limited
+    by full-duration embedding accuracy — today none is.
   - **Stride >1 s (2026-08-07):** 2.1×/3.1× speedups cost naming purity (the
     FAR0 threshold jumps 0.592→~0.78, silently invalidating the calibration).
     Trigger: finalize latency becomes binding — then the shared-trunk route
@@ -705,17 +756,28 @@ Kept here so future sessions don't re-open them.
     ties no-update everywhere; growth stays user-confirmed. Re-run
     `eval/auto_update.py` as part of any future diarization change's gate
     (likewise `eval/threshold_pick.py`).
-  - **Sortformer** (broken ONNX+CPU path, 4-speaker cap, can't consume a
-    known count — no trigger); **joint/LLM SA-ASR** (trigger: a permissive,
+  - **Sortformer** — superseded: its successor Nemotron 3 removes two of
+    the three reasons (8 speakers, a working ONNX/CPU path) and is the open
+    candidate above; **joint/LLM SA-ASR** (trigger: a permissive,
     CPU-practical joint model beating the modular cascade on meeting
     benchmarks with real non-oracle diarization); **TS-VAD** (trigger: an
-    Apache/MIT ONNX implementation, or Personal-VAD-class open weights);
+    Apache/MIT ONNX implementation, or Personal-VAD-class open weights —
+    nomo-pvad, Apache-2.0, examined 2026-11-15 and not pursued: one pass per
+    enrolled profile, PyTorch only, no published benchmark, degrades on
+    far-field and Opus audio);
     **AS-Norm** (degraded the strongest open-set models; trigger: an
     unsatisfying threshold curve, and QMF-style duration-aware calibration
     goes first); **EEND-TA** (watch — no code or weights; trigger: a
     release); **pyannote.audio as a dependency** (opt-out telemetry, ORT
     dropped, paid-SDK pull — weights keep getting extracted, the package
     never imports here).
+- **Custom GPU kernels and second inference engines for diarization —
+  declined 2026-11-13.** A hand-written WGSL/wgpu backend, IREE, Burn and
+  ncnn were each measured on the ResNet34 embedder; ORT's WebGPU plugin
+  reaches a cross-vendor GPU on the engine already shipped with no kernel
+  code, so none of them earns its maintenance (numbers in `eval/README.md`,
+  the Nemotron 3 section). Triton is not a route: no Vulkan/D3D12 backend,
+  so it misses the integrated GPUs most users have.
 - **Repair-only overhang — the one open accuracy idea.** Default decode stays
   the exact current slice; overhang fires only on a detected ≥1.5 s speech
   hole. It is the salvage from the reverted cut-overlap work, structurally

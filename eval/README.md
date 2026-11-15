@@ -1128,6 +1128,128 @@ and fold/collapse gate recalibrations. The loss closes step 5 with nothing
 owed: production diarization is unchanged, so the 0.56 threshold and the
 auto-update decline stand unmodified.
 
+#### The estimate path, and Nemotron 3 Diarization as the one diarizer, measured on x86 (2026-11-12 – 11-15)
+
+Box: Ryzen AI 9 HX 370 (4 Zen 5 + 8 Zen 5c, 24 threads), Radeon 890M iGPU
+(RDNA 3.5, Mesa RADV Vulkan, no ROCm), Linux, mains, `balanced` profile.
+Single runs unless a repeat is given — the 11–21 % repeat spread of the
+2026-08-11 x86 datapoint applies. The held-out comparison reproduces with
+`eval/heldout.py` (fetch, production's arms, scoring) and
+`eval/nemotron_arm.py` (the Nemotron arm and its parity check against the
+PyTorch reference); the other measurements' scripts were throwaway, so their
+decision-relevant numbers are all here.
+
+**The estimate path is the less accurate one, not only the slower one.** ES2003c
+through production code on `main` (stenodiar estimate + `collapse_single_voice`
+vs the owned loop at k+1 + fold), DER at the 0.25 s collar:
+
+| channel (k) | estimate: speakers / DER | known count: speakers / DER |
+|---|---|---|
+| loop (3) | 5 / 13.3 % | 3 / 5.5 % |
+| duo (2) | 4 / 11.9 % | 2 / 5.0 % |
+| mic (1) | 2 → collapsed to 1 / 5.7 % | (count 1 skips the diarizer) |
+
+The extra error is speaker confusion (7.5–7.9 pts vs 0.2–0.6). Every phantom
+cluster is made of fragments — mean turn 0.7–1.4 s against 7–15 s for the real
+speakers — and two of the four are mixtures of all speakers, so the
+cosine ≥ 0.8 gated merge fixes the duo (2 speakers, 6.0 %) but not the loop.
+Dissolving clusters with a mean turn under 2 s into the time-nearest surviving
+turn simulated to 6.4 % / 4.8 % with both counts right — one meeting, and the
+2 s was picked after seeing these clusters, so it is a lead, not a result;
+its failure mode (a participant who only backchannels) is untested.
+
+**Estimate-path speed.** stenodiar `--mode cpu` takes 316 s for the 37.6-min
+ES2003c.mic (1837 s CPU). It never batches embeddings:
+`native/stenodiar/vendor/speakrs/src/inference/embedding/load/sessions.rs:162`
+asks for `wespeaker-multimask-tail-b64.onnx`, the HF repo ships only `-b32`,
+and the batch-1 model runs one chunk per call. A Python port of the same
+`--mode cpu` pipeline on onnxruntime 1.31 with batched segmentation, fbank and
+embeddings reproduces it (clip300 identical; full file 1 turn 16 ms early — one
+frame whose two top segmentation scores differ by 6.7e-6, decided the other way
+by the newer ORT) in **165 s** at intra-op 12 (2 repeats, 165.5/165.2; 1934 s
+CPU) — ORT's default of 24 threads is slower (181 s) at double the CPU.
+Embeddings are 81 % of it (59.5 ms/chunk), fbank 7.6, segmentation 6.2;
+clustering and reconstruction under 0.5 s.
+
+**speakrs 0.7's native CPU backend is a Linux regression.** The `speakrs-0.7`
+branch (stock) takes 676 s on that channel (551 s of it system time:
+`matrixmultiply` threads inside 4 workers oversubscribe). Four output-neutral
+patches — the `gemm` crate off macOS, a worker budget of 12, a CPU multi-mask
+batch of 24, a conv im2col tile of 256 columns — bring it to 266 s, ~1.2×
+faster than best-pinned ORT on this 12-core chip but ~1.3× slower than ORT on a
+4-core/8-thread or 4-slow-core emulation (`taskset`), because the win is
+parallelism, not efficiency (the matmuls run at ~105–132 GFLOP/s per thread
+single-threaded, 46–59 at 12 workers). The chip's sustained fp32 FMA peak is
+1.15 TFLOP/s all-core (AVX2 ≈ AVX-512: 256-bit datapaths); the workload is
+2.49 TFLOP per audio-minute.
+
+**GPU routes for the ResNet34 multimask embedder** (ms per 10-s chunk; ORT 1.31
+CPU at batch 32 = 61.9, all fp32 outputs checked against it): the
+`onnxruntime-ep-webgpu` plugin (Microsoft, MIT, 0.5.0) 42.1 fp32 / 30.4 fp16,
+numerically exact in fp32, 5 s CPU instead of 392 s; ncnn Vulkan 17.7 fp16 for
+the trunk (a second engine, CPU path slower than ORT, no D3D12); IREE 3.13 →
+Vulkan 100 at batch 1 with channels-last + im2col (368 default; batch 32 needs a
+4.37 GB allocation over the 4 GB limit); Burn 0.22 165 at batch 1, device lost
+at batch 32. A hand-written WGSL implicit-GEMM 3×3 conv (the 128-channel stage)
+ran 3.9× ORT's single-conv time at ~2 TFLOP/s against the iGPU's 6.3 TFLOP/s
+FMA peak — feasible, and declined because the plugin needs no kernel code.
+The segmentation LSTM is 14× slower on WebGPU than on CPU.
+
+**Nemotron 3 Diarization** (NVIDIA, 2026-09-23, OpenMDW-1.1, ~100 M params,
+end-to-end, up to 8 speakers, no known-count input). Run through the
+onnx-community ONNX export with a numpy port of transformers 5.23's offline
+chunk loop and speaker cache, it matches the PyTorch reference to 5.6e-6 on CPU
+and WebGPU. Three traps: the ONNX `attention_mask` is per *encoder* frame
+(cached + chunk), not per mel frame; the processor marks the last mel frame
+invalid, which masks the last encoder frame and moves the final chunk by up to
+0.06 if ignored; the fp16 export keeps fp32 inputs/outputs. A second WebGPU
+session in the same process segfaulted. Per 37.6-min channel: **25 s CPU, 14 s
+iGPU fp32, 8.3 s iGPU fp16** (identical output fp32; fp16 flips one of ~48k
+frame decisions on a 60 s clip).
+
+On ES2003c it counts right (3 / 2) with **0.0 % speaker confusion**; its 23–26 %
+DER is all missed speech — pauses the AMI segment-level references label as
+speech, the mismatch NVIDIA's card warns about (it scores against
+forced-alignment labels). `merge_words_turns` gives a word outside every turn
+the nearest turn's speaker, so that miss does not reach the transcript. ES2003
+is in AMI train, which Nemotron trained on, so the comparison that counts is
+AMI's evaluation split — **IS1009, ES2004, TS3003, sessions a–d** (12 meetings,
+36 channels), fetched with `ami.py`'s own functions but *not* added to
+`AMI_GROUPS` (unvetted), scored on **transcript attribution**: the share of
+single-speaker reference time the nearest-turn rule assigns to the right
+speaker under the best one-to-one mapping (a phantom speaker's time counts as
+wrong):
+
+| 16 multi-speaker channels both arms ran | attribution mean (min) | speaker confusion | speed |
+|---|---|---|---|
+| owned loop, true k (production) | 95.1 % (76.0) | 1.9 % | 136 s / audio-hour (CPU) |
+| **Nemotron 3, no count** | **97.1 % (94.0)** | **0.4 %** | 23 s / audio-hour (iGPU fp32) |
+
+Per group, all 24 multi-speaker channels for Nemotron: IS1009 96.8 %, ES2004
+97.4 %, TS3003 97.9 %. It over-counts by exactly one on 10 of them; on each, the
+extra speaker's speech sits ≥ 60 % inside a meeting participant who is *not* on
+that channel — headset crosstalk the channel reference does not list (IS1009's
+loud Idiap headsets account for 8). Counting those as explained, its count is
+right on 24/24, and on 10/12 single-speaker channels (ES2004c and IS1009a.mic
+get an unexplained extra). Applying the true count afterwards (keep the k most
+active slots, give orphaned frames to the most probable kept slot) moves
+attribution only on 7 channels, 6 of them IS1009: duo 97.6 → 98.2 % (worst
+94.0 → 97.2), loop 97.1 → 97.3, mic 99.9 → 100. A count can only remove
+speakers; Nemotron never under-counted here.
+
+What this does not show: it is all AMI headset mixes; attribution is a proxy on
+reference speech, not an ASR word run; the known-count arm is missing 11
+TS3003 channels and the stenodiar-estimate arm was not run on the held-out set.
+The literature cuts the other way at k=2 — the strongest hybrid (DiariZen
+large, CC-BY-NC) beats Nemotron there on a provisional third-party benchmark
+(7.29 vs 10.31 DER; NVIDIA's own card shows Sortformer v2.1 ahead on 2-speaker
+CALLHOME, 5.68 vs 5.98) — so non-AMI 2-speaker audio is the open gate
+(`PLAN.md`). The architecture for cross-meeting names is settled practice
+either way: diarize, embed each speaker with a separate voiceprint model, match
+a profile store (pyannoteAI identification, NVIDIA's cascaded pipeline,
+AssemblyAI's TitaNet recipe); no released model does both jobs, and
+Nemotron's speaker-cache states are not voiceprints.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
