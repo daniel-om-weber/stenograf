@@ -653,10 +653,12 @@ Gates before it can ship, in order:
    published results put the best hybrid ahead of Nemotron at k=2 — the
    product's commonest channel. Real calls with corrected labels, scored on
    transcript attribution against the owned loop at the true count.
-2. **Re-ID on Nemotron's turns.** DIR/FAR and the threshold curve
-   (`eval/reid_score.py`, `eval/threshold_pick.py`, `eval/auto_update.py`) on
-   the held-out groups (enroll session a, trial b–d) — 0.56 was calibrated on
-   ward clusters and has moved with clustering before.
+2. **Enrollment hygiene without a count.** Re-ID on Nemotron's turns passed
+   with the count applied (below); without one, a phantom crosstalk cluster
+   assigned to a person poisons the mean-cosine profile (FIO084: 0.84 → 0.41,
+   rejected). Before "no count" can be the default, `steno profiles assign`
+   needs a guard against storing an entry that disagrees with the profile it
+   joins — or the count cap stays mandatory whenever profiles are in use.
 3. **Packaging:** read OpenMDW-1.1 properly; a numpy 128-band mel front end
    (the reference processor imports torch); the fp16 export is 199 MB against
    speakrs' 295 MB of models; one WebGPU session per process (a second one
@@ -668,7 +670,10 @@ measured (2026-11-15, `eval/README.md`, "The held-out set on macOS, every
 arm"): TS3003 leaves the owned loop's picture unchanged, the stenodiar estimate
 over-counts every multi-speaker channel and attributes worst of all, and
 Nemotron on an M4 Max runs at stenodiar-on-CoreML speed on plain CPU and faster
-on WebGPU.
+on WebGPU. Re-ID on its turns is measured too (same section, "Re-ID"): with the
+count applied it names every known trial right and no stranger at every
+threshold 0.45–0.70, so 0.56 holds; the owned loop's known IS1009 misnaming
+disappears.
 
 If it ships, stenodiar, the vendored speakrs and the manylinux_2_39 floor's
 reason go with it. If it does not, two cheap fixes to today's helper are

@@ -1275,6 +1275,38 @@ there are 2 or 3 — and only 3 duo extras are crosstalk-explained; single-speak
 channels it gets right (12/12). Under WebGPU macOS warns that two onnxruntime
 copies are loaded (the wheel's and the plugin's) — no crash in these runs.
 
+**Re-ID** (`eval/heldout_reid.py`, same day): galleries enroll from session a
+(alphabetically-last participant per meeting unenrolled), every b–d cluster is a
+trial against its own meeting's gallery, each arm's embeddings recomputed from
+its final turns with production's `cluster_embeddings`. Cluster enrollment
+(what `steno profiles assign` stores), full duration:
+
+| arm | known / stranger trials | DIR / FAR / FRR @ 0.56 | FAR-0 threshold |
+|---|---|---|---|
+| owned loop, true k | 41 / 13 | 87.8 / 0 / 0 % | 0.593 |
+| stenodiar estimate | 67 / 27 | 97.0 / 3.7 / 1.5 % | 0.595 |
+| Nemotron, no count | 49 / 15 | 73.5 / 0 / 26.5 % | 0.377 |
+| Nemotron, count applied after | 41 / 13 | **100 / 0 / 0 %** | 0.720 |
+
+With the count applied, Nemotron is perfect at every threshold from 0.45 to
+0.70, so 0.56 needs no move. The owned loop's five errors are all IS1009's quiet
+FIO084 *named* FIO087 at 0.67–0.82 (the impure-enrollment pathology
+`rename_once.py` found on the harness); Nemotron's session-a clusters are clean
+enough that it does not occur. Without a count, Nemotron names nobody wrongly
+but leaves a quarter of known trials unnamed, for two reasons, both checked: its
+extra clusters are crosstalk carrying an on-channel reference label (all 8
+headset-enrollment failures are those, 1–67 s each), and one such cluster in
+session a (`IS1009a.loop/S3`, 42 s, cosine 0.046 to FIO084's real cluster)
+joins FIO084's profile and drags the mean — removing it lifts FIO084's later
+clusters from 0.41 to 0.84–0.85. Short clusters still collapse for every arm
+(DIR at 0.56 of 34–55 % at 3 s / 2 s clean; FAR-0 points 0.25–0.45), the regime
+`store_v2.py` already measured. Small: 3 meetings, 3 strangers, so one stranger
+trial is 7.7 points of FAR; all AMI headsets. Count-1 channels in
+`turns_known.json` are one channel-long turn, and the embedder's memory is
+linear in slice length (~14 MB per second — 26 GB before the guard killed the
+first attempt), so the script embeds their reference speech segments instead,
+standing in for the transcript entries production embeds.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`
