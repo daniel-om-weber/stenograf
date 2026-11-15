@@ -1237,10 +1237,10 @@ attribution only on 7 channels, 6 of them IS1009: duo 97.6 → 98.2 % (worst
 94.0 → 97.2), loop 97.1 → 97.3, mic 99.9 → 100. A count can only remove
 speakers; Nemotron never under-counted here.
 
-What this does not show: it is all AMI headset mixes; attribution is a proxy on
-reference speech, not an ASR word run; the known-count arm is missing 11
-TS3003 channels and the stenodiar-estimate arm was not run on the held-out set.
-The literature cuts the other way at k=2 — the strongest hybrid (DiariZen
+What this does not show: it is all AMI headset mixes, and attribution is a proxy on
+reference speech, not an ASR word run. (The x86 known-count arm stopped short of
+11 TS3003 channels and the estimate arm never ran here; both are complete in the
+macOS run below.) The literature cuts the other way at k=2 — the strongest hybrid (DiariZen
 large, CC-BY-NC) beats Nemotron there on a provisional third-party benchmark
 (7.29 vs 10.31 DER; NVIDIA's own card shows Sortformer v2.1 ahead on 2-speaker
 CALLHOME, 5.68 vs 5.98) — so non-AMI 2-speaker audio is the open gate
@@ -1249,6 +1249,31 @@ either way: diarize, embed each speaker with a separate voiceprint model, match
 a profile store (pyannoteAI identification, NVIDIA's cascaded pipeline,
 AssemblyAI's TitaNet recipe); no released model does both jobs, and
 Nemotron's speaker-cache states are not voiceprints.
+
+#### The held-out set on macOS, every arm (2026-11-15)
+
+M4 Max (12 P + 4 E cores), 48 GB, macOS 27.2, mains; single runs, one arm at a
+time. Same scripts and channels; production's arms on `main` with sherpa-onnx
+1.13.8. The known-count arm's turns are byte-identical to 1.13.4's on the 28
+channels both ran — the floor change in `pyproject.toml` is a memory fix only.
+Nemotron's port matches the PyTorch reference here too: 7.6e-6 on CPU, 3.1e-6 on
+WebGPU (Metal), no flipped decisions.
+
+| all 24 multi-speaker channels | attribution mean (min) | speaker confusion | count right | s / audio-hour |
+|---|---|---|---|---|
+| stenodiar estimate (CoreML) + collapse | 86.5 % (66.6) | 7.9 % | 0 / 24 | 10.6 |
+| owned loop, true k (production) | 95.7 % (76.3) | 1.5 % | 24 / 24 (given) | 55 |
+| Nemotron 3, no count, CPU | 97.4 % (94.0) | 0.3 % | 14 / 24 (24 explained) | 15 |
+| Nemotron 3, true count applied after | 97.8 % (95.0) | 0.2 % | 24 / 24 | 15 |
+
+Nemotron on WebGPU scores identically to CPU at 5.5 s / audio-hour. Its numbers
+reproduce x86's to the rounding (groups IS1009 96.7, ES2004 97.4, TS3003 97.9 %);
+TS3003 does not change the owned loop's picture (96.9 % on its 8 channels; the
+76.3 % worst is IS1009a.loop, as on x86). **The estimate arm over-counts every
+multi-speaker channel** — by 1 on 9, by 2–5 on 15, 3–7 speakers found where
+there are 2 or 3 — and only 3 duo extras are crosstalk-explained; single-speaker
+channels it gets right (12/12). Under WebGPU macOS warns that two onnxruntime
+copies are loaded (the wheel's and the plugin's) — no crash in these runs.
 
 ## Echo cancellation
 

@@ -657,14 +657,18 @@ Gates before it can ship, in order:
    (`eval/reid_score.py`, `eval/threshold_pick.py`, `eval/auto_update.py`) on
    the held-out groups (enroll session a, trial b–d) — 0.56 was calibrated on
    ward clusters and has moved with clustering before.
-3. **The two missing arms** on the held-out set: the owned loop on TS3003, and
-   the stenodiar estimate (`eval/heldout.py run --arm known|estimate`; both
-   resume, and the estimate arm runs on CoreML on macOS).
-4. **Packaging:** read OpenMDW-1.1 properly; a numpy 128-band mel front end
+3. **Packaging:** read OpenMDW-1.1 properly; a numpy 128-band mel front end
    (the reference processor imports torch); the fp16 export is 199 MB against
    speakrs' 295 MB of models; one WebGPU session per process (a second one
-   segfaulted); macOS runtime unmeasured (CPU or ORT's CoreML EP vs today's
-   3.4 s CoreML stenodiar).
+   segfaulted), and on macOS the plugin loads a second onnxruntime copy beside
+   the wheel's (warned, not crashed).
+
+The held-out set is now complete on every arm, and the macOS runtime is
+measured (2026-11-15, `eval/README.md`, "The held-out set on macOS, every
+arm"): TS3003 leaves the owned loop's picture unchanged, the stenodiar estimate
+over-counts every multi-speaker channel and attributes worst of all, and
+Nemotron on an M4 Max runs at stenodiar-on-CoreML speed on plain CPU and faster
+on WebGPU.
 
 If it ships, stenodiar, the vendored speakrs and the manylinux_2_39 floor's
 reason go with it. If it does not, two cheap fixes to today's helper are
