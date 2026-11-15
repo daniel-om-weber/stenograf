@@ -255,16 +255,16 @@ class TestFinalizeChannel:
         assert entries[0].speaker == "S0"
         assert entries[0].text == "wort"
 
-    def test_diarizer_receives_one_over_the_stated_count(self):
-        # A known count is requested at k+1; fold_excess_clusters returns the
-        # stated k afterwards, so the extra cluster never reaches the user.
+    def test_diarizer_receives_the_stated_count_as_is(self):
+        # The diarizer applies a stated count itself, as a cap: no headroom
+        # cluster is requested and nothing is folded afterwards.
         asr = FakeASR()
         diarizer = FakeDiarizer([turn("S1", 0.0, 2.0)])
         samples = np.zeros(SAMPLE_RATE * 2, dtype=np.float32)
         entries = finalize_channel(
             samples, asr=asr, language=None, diarizer=diarizer, num_speakers=3
         )
-        assert diarizer.seen_num_speakers == 4
+        assert diarizer.seen_num_speakers == 3
         assert entries[0].speaker == "S1"
 
     def test_num_speakers_one_skips_diarization(self):
@@ -298,7 +298,7 @@ class TestFinalizeChannelReuse:
             precomputed_words=words,
         )
         assert asr.calls == []  # no re-decode — the whole point of reuse
-        assert diarizer.seen_num_speakers == 3  # diarization still runs (at k+1)
+        assert diarizer.seen_num_speakers == 2  # diarization still runs, count as the cap
         assert [e.text for e in entries] == ["hallo welt"]
         assert entries[0].speaker == "S1"
 
@@ -533,8 +533,8 @@ class TestFinalizeChannelReID:
         assert entries[0].speaker == "S0"
 
     def test_no_reid_still_takes_embeddings_path(self):
-        # Even without re-ID the known-count path needs per-cluster embeddings:
-        # they are what folds the k+1 request back to the stated count.
+        # Even without re-ID diarization takes the embeddings path: the
+        # meeting's voiceprint sidecar (post-meeting enrollment) needs them.
         diarizer = EmbeddingDiarizer([turn("S0", 0.0, 2.0)], {})
         finalize_channel(
             self._samples(),

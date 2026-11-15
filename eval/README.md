@@ -1356,6 +1356,31 @@ A bit-exact numpy front end was not pursued: torch's own float32 STFT and GEMM
 differ by platform, and even the range a frame is computed in changes its last
 bits (a one-frame range is a matrix-vector product).
 
+**No single-voice collapse behind Nemotron** (`eval/nemotron_collapse.py`,
+2026-11-15). `pipeline.collapse_single_voice` folds an uncounted channel to one
+speaker when all its cluster voices are ≥ 0.6 alike — measured against the owned
+estimators, which split every monologue 2–3 ways. Run on Nemotron's uncapped
+turns (library probabilities for the held-out set, the evaluation's for the
+user's calls and dialogues), ERes2Net voices as in production:
+
+| set | channels | over-counted | collapse fired | attribution before → after |
+|---|---|---|---|---|
+| held-out, one speaker (mic) | 12 | 5 | 1 (count fixed) | 99.9 → 99.9 % |
+| held-out, 2–3 speakers (duo, loop) | 24 | 10 | 0 | 97.3 → 97.3 % |
+| own calls, 2 speakers | 17 | 1 | 0 | 99.3 → 99.3 % |
+| two remote voices, spliced | 22 | 0 | 1 (**real pair merged**) | 98.6 → 97.2 % |
+
+It fixed one count and no attribution (IS1009a.mic: the extra slot holds 0.5 %
+of the speech), and merged pair-5d729adf-c637582b's two speakers at cosine 0.646
+(81.7 → 50.2 %). No threshold separates the two cases: the real pair sits above
+the one collapse that helped (0.645), and the user's own calls reach 0.579. All
+five single-speaker extras are another participant's crosstalk (≥ 60 % inside
+an off-channel speaker's speech), not a split of the wearer — so the rule had
+nothing to fix, and the pipeline no longer runs it. `heldout.py score`'s
+"count ok(expl)" undercounts this: a crosstalk slot under 1 % of the speech is
+subtracted twice (once as negligible, once as explained), which is why the
+library row above reads 7(10) for the mic channels rather than 7(12).
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

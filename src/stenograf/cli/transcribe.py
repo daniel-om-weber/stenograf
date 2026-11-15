@@ -58,9 +58,9 @@ from stenograf.output import prepare_output, write_transcript
     "--speakers",
     type=click.IntRange(1, _FILE_MAX_SPEAKERS),
     default=None,
-    help="Known speaker count (the biggest diarization accuracy lever); "
-    "a count above 1 turns diarization on, 1 skips it, omitted the count "
-    "is estimated when diarization runs. Mixed single stream only — "
+    help="Known speaker count: a count above 1 turns diarization on and caps "
+    "the speakers it finds (dropping stray voices such as crosstalk), 1 skips "
+    "it, omitted the diarizer counts them itself. Mixed single stream only — "
     "with split voice channels give --local/--remote instead.",
 )
 @click.option(

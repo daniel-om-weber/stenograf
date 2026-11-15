@@ -219,9 +219,9 @@ diarizer model is never loaded — it costs minutes on some machines;
 default), and `--print` to echo the transcript to stdout.
 
 If you know how many people spoke in a recording, tell `steno transcribe` with
-`--speakers N` — a count above 1 turns diarization on, and a known count is
-the biggest diarization accuracy lever (omitted, the count is estimated
-whenever diarization runs).
+`--speakers N` — a count above 1 turns diarization on and caps the speakers it
+finds, which drops stray voices such as crosstalk from a neighbour's headset
+(omitted, the diarizer counts the speakers itself).
 
 `steno transcribe` recognizes 2-channel recordings whose channels are separate
 voice feeds — a `--record-audio` tee (mic left, system right) or a

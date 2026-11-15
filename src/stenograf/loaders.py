@@ -371,7 +371,7 @@ def prefetch_models() -> None:
     from stenograf.asr import backend_model_id, create_backend, get_spec
     from stenograf.doctor import installed
 
-    for asset in (assets.SILERO_VAD, assets.PYANNOTE_SEGMENTATION, assets.SPEAKER_EMBEDDING):
+    for asset in (assets.SILERO_VAD, *assets.NEMOTRON, assets.SPEAKER_EMBEDDING):
         if assets.cached_path(asset) is not None:
             click.echo(f"model: {asset.name} already cached")
         else:

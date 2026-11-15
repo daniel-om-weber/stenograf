@@ -1,11 +1,7 @@
 """Diarization interface (who-spoke-when within one channel).
 
 Diarization runs per channel: never across mic + system together, so it only
-has to separate voices *within* a channel and can be given an exact speaker
-count — the biggest single accuracy lever.
-
-Planned implementations: speakrs (pyannote community-1 pipeline, CoreML) on
-macOS; sherpa-onnx elsewhere.
+has to separate voices *within* a channel.
 """
 
 from __future__ import annotations
@@ -43,8 +39,8 @@ class DiarizationResult:
 class Diarizer(ABC):
     @abstractmethod
     def diarize(self, samples: np.ndarray, num_speakers: int | None = None) -> list[SpeakerTurn]:
-        """Segment mono 16 kHz PCM by speaker. ``num_speakers=None`` lets the
-        pipeline estimate the count (less accurate than providing it)."""
+        """Segment mono 16 kHz PCM by speaker. ``num_speakers=None`` leaves
+        the count to the diarizer; a stated one caps it."""
 
     def diarize_with_embeddings(
         self, samples: np.ndarray, num_speakers: int | None = None

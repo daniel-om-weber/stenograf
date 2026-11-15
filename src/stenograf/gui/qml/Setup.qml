@@ -144,7 +144,7 @@ Panel {
         }
 
         Text {
-            text: "Auto-detect works; exact counts label speakers better."
+            text: "Auto-detect counts speakers well; an exact count drops stray voices."
             color: Theme.muted
             font.pixelSize: 12
         }

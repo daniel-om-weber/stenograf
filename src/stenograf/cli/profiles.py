@@ -55,8 +55,8 @@ def profiles_list() -> None:
     type=click.IntRange(1, 16),
     default=1,
     show_default=True,
-    help="How many speakers are in the clip; it is diarized into this many and one "
-    "cluster is enrolled.",
+    help="How many speakers are in the clip; it is diarized into at most this many "
+    "and one cluster is enrolled.",
 )
 @click.option(
     "--speaker",
@@ -88,19 +88,10 @@ def profiles_enroll(
 
     samples = load_audio(audio_file)
     diarizer = loaders.load_diarizer()
-    if speakers > 1:
-        # Mirror the meeting path: diarize one over the stated count and fold
-        # back (pipeline.fold_excess_clusters), so a fused cluster cannot
-        # poison the enrollment. A single-voice clip stays at exact count —
-        # there is nothing to separate, and a short clip forced to two
-        # clusters is a failure mode this command never had.
-        from stenograf.pipeline import fold_excess_clusters
-
-        result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers + 1)
-        turns, embeddings = fold_excess_clusters(result.turns, result.embeddings, speakers)
-    else:
-        result = diarizer.diarize_with_embeddings(samples, num_speakers=1)
-        turns, embeddings = result.turns, result.embeddings
+    # The meeting path's rule: the stated count caps the speakers found, so a
+    # single-voice clip comes back as one cluster even if crosstalk got a slot.
+    result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers)
+    turns, embeddings = result.turns, result.embeddings
     if not embeddings:
         raise click.ClickException(
             f"no embeddable speech found in {audio_file.name}; is it silent or too short?"

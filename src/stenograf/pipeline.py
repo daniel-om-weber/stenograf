@@ -80,9 +80,8 @@ def finalize_channel(
     "this speaker is …" corrections after the meeting. Never called when no
     diarizer ran: a solo channel has no cluster embedding.
 
-    Diarization always runs with per-cluster voice embeddings: a known count is
-    requested one high and folded back (:func:`fold_excess_clusters`), an
-    estimated one may collapse to a single voice (:func:`collapse_single_voice`).
+    Diarization always runs with per-cluster voice embeddings; a stated
+    ``num_speakers`` goes to the diarizer as a cap on the speakers it finds.
     With ``reid`` given, matched clusters carry persistent speaker-profile names
     instead of ``S<n>`` (cross-meeting re-ID) — several clusters resolving to the
     same profile is the over-split recovery, not an error. Unmatched clusters
@@ -206,13 +205,11 @@ def _attribute(
 
     if on_progress is not None:
         on_progress(STAGE_DIARIZATION, 0, 1)
-    requested = num_speakers if num_speakers is None else num_speakers + 1
-    result = diarizer.diarize_with_embeddings(samples, requested)
+    # No single-voice collapse after an uncapped run: on Nemotron's turns it
+    # fixed no attribution and merged a real two-voice pair (81.7 → 50.2 %,
+    # 2026-11-15, `eval/README.md`).
+    result = diarizer.diarize_with_embeddings(samples, num_speakers)
     turns, embeddings = result.turns, result.embeddings
-    if num_speakers is not None:
-        turns, embeddings = fold_excess_clusters(turns, embeddings, num_speakers)
-    else:
-        turns, embeddings = collapse_single_voice(turns, embeddings)
     names = reid.resolve(embeddings) if reid is not None else {}
     entries = merge_words_turns(words, turns)
     if names:
@@ -282,6 +279,9 @@ def collapse_single_voice(
 ) -> tuple[list[SpeakerTurn], dict[str, np.ndarray]]:
     """Undo an estimator's split of a single voice into several "speakers".
 
+    Only the eval harness calls this, on the owned loop's and speakrs'
+    clusters; Nemotron's turns go uncollapsed (see ``_attribute``).
+
     Count estimation splits a genuinely single-speaker channel 2–3 ways on
     every corpus channel measured (a monologue chopped across "Speaker 1/2/3",
     −22 pts word attribution — the cost of nobody stating a count). When *all*
@@ -321,6 +321,9 @@ def fold_excess_clusters(
     """Fold clusters until ``num_speakers`` remain: the most-similar pair when
     it clears :data:`FOLD_PAIR_SIMILARITY`, else the smallest into its
     most-similar partner.
+
+    Only the eval harness calls this, on the owned loop's clusters; Nemotron
+    applies a stated count itself, as a cap.
 
     A known-count channel is diarized at one cluster *over* the stated count,
     then folded back here: the spare cluster gives the clustering room to keep

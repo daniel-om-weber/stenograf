@@ -57,15 +57,25 @@ Settled by measurement before the plan (2026-11-15):
    held-out mic channels): keep it only if it fixes those without merging a
    real pair. `steno setup` / `doctor` fetch and check the new model; settings
    and help text stop calling an unstated count "less accurate".
+   **Done 2026-11-15.** The collapse is dropped: on Nemotron's uncapped turns
+   it fixed one count and no attribution, and merged one real two-voice pair
+   (81.7 → 50.2 %); the "2 of 12" over-counts were a scoring quirk — all five
+   single-speaker extras are crosstalk (`eval/README.md`, "No single-voice
+   collapse behind Nemotron"). `steno setup` fetches and `doctor` checks the
+   Nemotron files in place of the pyannote segmentation model; the doctor's
+   stenodiar check went now, since it would have reported an unused helper.
+   End to end, `steno transcribe` on 3 min of ES2004b.duo found the same two
+   speakers with `--speakers 2` and with no count.
 4. **Enrollment guard.** `steno profiles assign` refuses (clear message,
    `--force` to override) an entry whose cosine to the profile's existing
    entries is below the naming threshold. The held-out phantom (0.046 against
    FIO084's real cluster) must be refused and genuine second entries pass;
    check the threshold on the harness's session-a clusters before shipping.
 5. **The old diarizers go.** `diarization/loop.py` (owned loop), the sherpa
-   diarizer class, `diarization/speakrs.py`, `fold_excess_clusters` and
-   `FOLD_PAIR_SIMILARITY`, the pyannote segmentation asset, `native/stenodiar/`
-   with the vendored speakrs, its doctor check, CI job, pre-commit hook mention
+   diarizer class, `diarization/speakrs.py`, `fold_excess_clusters`,
+   `FOLD_PAIR_SIMILARITY`, `collapse_single_voice` and `COLLAPSE_SIMILARITY`
+   (production stopped calling all four in step 3; only eval arms still do), the pyannote segmentation asset, `native/stenodiar/`
+   with the vendored speakrs (its doctor check already went in step 3), CI job, pre-commit hook mention
    and `hatch_build.py` branches; the manylinux_2_39 wheel goes and
    manylinux_2_28 becomes the only Linux wheel. `PLAN-DIARIZATION-SPEED.md`'s
    open item (stenodiar's estimate speed) closes with it. Eval scripts whose

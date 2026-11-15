@@ -138,7 +138,7 @@ def test_prefetch_models_downloads_missing_and_loads_asr(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor, "installed", lambda module: True)  # deps "present" (any OS)
     monkeypatch.setattr(asr, "create_backend", lambda name=None, **kw: PrefetchASR())
     loaders.prefetch_models()
-    assert set(fetched) == {assets.PYANNOTE_SEGMENTATION.name, assets.SPEAKER_EMBEDDING.name}
+    assert set(fetched) == {a.name for a in assets.NEMOTRON} | {assets.SPEAKER_EMBEDDING.name}
     assert PrefetchASR.calls == ["load", "unload"]  # weights pulled and released
 
 

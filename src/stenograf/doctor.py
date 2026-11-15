@@ -40,13 +40,10 @@ def run_checks() -> list[Check]:
     if sys.platform == "darwin":
         checks.append(_macos_version_check())
         checks.append(_capture_helper_check())
-        checks.append(_diarizer_helper_check())
     elif sys.platform.startswith("linux"):
         checks.append(_linux_capture_check())
-        checks.append(_diarizer_helper_check())
     elif sys.platform == "win32":
         checks.append(_windows_capture_check())
-        checks.append(_diarizer_helper_check())
     else:
         # Optional: `steno transcribe` is fully supported everywhere (the
         # ONNX backend), so a box missing only live capture is healthy.
@@ -219,29 +216,6 @@ def _windows_capture_check() -> Check:
         return Check(name="Capture", ok=False, detail=str(exc))
     listing = ", ".join(f"{ch.value} ← {device}" for ch, device in sorted(devices.items()))
     return Check(name="Capture", ok=True, detail=f"WASAPI via stenocap ({listing})")
-
-
-def _diarizer_helper_check() -> Check:
-    """stenodiar is optional: without it, an *estimated* speaker count falls back
-    to sherpa's threshold clustering, which badly over-splits — explicit counts
-    are unaffected. Report it missing without failing the doctor run."""
-    from stenograf.diarization.speakrs import DiarizerHelperNotFoundError, find_stenodiar
-
-    try:
-        path = find_stenodiar()
-    except DiarizerHelperNotFoundError as exc:
-        return Check(name="Diarization helper (optional)", ok=True, detail=str(exc))
-    if not os.access(path, os.X_OK):
-        return Check(
-            name="Diarization helper (optional)",
-            ok=False,
-            detail=f"{path} is not executable — chmod +x it",
-        )
-    return Check(
-        name="Diarization helper (optional)",
-        ok=True,
-        detail=f"{path} — speaker counts are estimated with speakrs (VBx)",
-    )
 
 
 _QML_PROBE = """
@@ -445,7 +419,7 @@ def _models_check() -> Check:
     from stenograf import assets
     from stenograf.paths import cache_dir
 
-    wanted = (assets.SILERO_VAD, assets.PYANNOTE_SEGMENTATION, assets.SPEAKER_EMBEDDING)
+    wanted = (assets.SILERO_VAD, *assets.NEMOTRON, assets.SPEAKER_EMBEDDING)
     missing = [asset.name for asset in wanted if assets.cached_path(asset) is None]
     if missing:
         detail = (

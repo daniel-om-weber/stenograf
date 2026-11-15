@@ -5,8 +5,8 @@ into a live meeting. It:
 
 1. consumes ``AudioFrame`` objects from any :class:`CaptureProvider`,
 2. accumulates each channel's PCM in a bounded in-RAM store (never disk),
-3. on stop, runs the finalize pass **per channel** with that channel's known
-   speaker count — the biggest diarization accuracy lever — then
+3. on stop, runs the finalize pass **per channel** with that channel's
+   speaker count, if stated (one skips diarization, more caps it), then
 4. interleaves the two channels' entries into one timeline, labelling the mic
    channel ``Local-N`` and the system channel ``Remote-N``.
 
