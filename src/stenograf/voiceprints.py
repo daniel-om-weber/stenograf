@@ -47,8 +47,10 @@ at every measured duration, with margin — strangers top out at 0.531
 holds FAR 0 % / FRR 0 % at full duration in both arms. The previous 0.62 was
 calibrated against complete-linkage clusters, whose impure-enrollment leak
 (strangers to 0.860) ward removed; on today's curves it pays 13.7 pts DIR at
-3 s of clean speech and 5.9 at 2 s for no FAR gain. Known solo/1:1 matches
-score 0.870+, far above. Override per run with ``--reid-threshold``
+3 s of clean speech and 5.9 at 2 s for no FAR gain. Re-checked on Nemotron 3's
+turns (held-out AMI, `eval/heldout_reid.py`, 2026-11-15): no stranger named at
+0.56 with or without a stated count. Known solo/1:1 matches score 0.870+, far
+above. Override per run with ``--reid-threshold``
 (``steno start``/``transcribe``)."""
 
 _STORE_VERSION = 2

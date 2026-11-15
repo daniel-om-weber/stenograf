@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+MAX_SPEAKERS = 8
+"""The most speakers one channel can be told it holds: the diarizer's speaker
+slots (Nemotron 3 Diarization has eight). A larger stated count would cap
+nothing, so every count a user can set stops here."""
+
 
 class Language(StrEnum):
     GERMAN = "de"
@@ -108,8 +113,8 @@ class MeetingProfile:
     def __post_init__(self) -> None:
         for name in ("local_speakers", "remote_speakers"):
             count = getattr(self, name)
-            if count is not None and not 0 <= count <= 8:
-                raise ValueError(f"{name} must be between 0 and 8, got {count}")
+            if count is not None and not 0 <= count <= MAX_SPEAKERS:
+                raise ValueError(f"{name} must be between 0 and {MAX_SPEAKERS}, got {count}")
         if self.local_speakers == 0 and self.remote_speakers == 0:
             raise ValueError("a meeting needs at least one speaker")
         if self.diarization is False and self._counts_imply_diarization():

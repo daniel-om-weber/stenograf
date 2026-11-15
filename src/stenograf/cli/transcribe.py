@@ -13,13 +13,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 from stenograf import flow, loaders
-from stenograf.cli.format import (
-    _FILE_MAX_SPEAKERS,
-    _MEETING_MAX_SPEAKERS,
-    _fmt_duration,
-    _lock_hint,
-    _report_speaker_counts,
-)
+from stenograf.cli.format import _fmt_duration, _report_speaker_counts
 from stenograf.cli.run import (
     _apply_no_diarization,
     _echo_glossary,
@@ -32,7 +26,7 @@ from stenograf.cli.run import (
     _resolve_run_config,
     _vocab_options,
 )
-from stenograf.config import Language, MeetingProfile
+from stenograf.config import MAX_SPEAKERS, Language, MeetingProfile
 from stenograf.output import prepare_output, write_transcript
 
 
@@ -56,7 +50,7 @@ from stenograf.output import prepare_output, write_transcript
 )
 @click.option(
     "--speakers",
-    type=click.IntRange(1, _FILE_MAX_SPEAKERS),
+    type=click.IntRange(1, MAX_SPEAKERS),
     default=None,
     help="Known speaker count: a count above 1 turns diarization on and caps "
     "the speakers it finds (dropping stray voices such as crosstalk), 1 skips "
@@ -78,14 +72,14 @@ from stenograf.output import prepare_output, write_transcript
 @click.option(
     "--local",
     "local_speakers",
-    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
+    type=click.IntRange(0, MAX_SPEAKERS),
     default=None,
     help="Split channels: number of speakers on the left/local channel; omit to auto-detect.",
 )
 @click.option(
     "--remote",
     "remote_speakers",
-    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
+    type=click.IntRange(0, MAX_SPEAKERS),
     default=None,
     help="Split channels: number of speakers on the right/remote channel; omit to auto-detect.",
 )
@@ -335,13 +329,8 @@ def transcribe(
     elif speakers is None:
         found = len({e.speaker for e in entries})
         click.echo(f"speakers: {found} detected")
-        hint = _lock_hint(found, _FILE_MAX_SPEAKERS)
-        if hint is not None:  # None → no speech found, nothing to lock
-            value, over = hint
-            note = f" (estimate over the {_FILE_MAX_SPEAKERS}-speaker max)" if over else ""
-            click.echo(
-                f"  estimated — re-run with --speakers {value} to lock or correct the count{note}"
-            )
+        if found >= 1:  # no speech found → nothing to lock
+            click.echo(f"  estimated — re-run with --speakers {found} to lock or correct the count")
     else:
         click.echo(f"speakers: {speakers} given")
     click.echo(

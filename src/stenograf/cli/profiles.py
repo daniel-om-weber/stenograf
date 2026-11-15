@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import click
 
 from stenograf import loaders
+from stenograf.config import MAX_SPEAKERS
 
 if TYPE_CHECKING:
     import numpy as np
@@ -52,7 +53,7 @@ def profiles_list() -> None:
 @click.argument("audio_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option(
     "--speakers",
-    type=click.IntRange(1, 16),
+    type=click.IntRange(1, MAX_SPEAKERS),
     default=1,
     show_default=True,
     help="How many speakers are in the clip; it is diarized into at most this many "

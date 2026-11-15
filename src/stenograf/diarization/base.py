@@ -47,9 +47,9 @@ class Diarizer(ABC):
     ) -> DiarizationResult:
         """Diarize and also return a per-cluster voice embedding for re-ID.
 
-        Non-abstract so existing backends keep working: the default runs
-        :meth:`diarize` and returns no embeddings. A backend that can embed
-        overrides this (see :class:`~stenograf.diarization.embedding.VoiceEmbedder`)."""
+        The default runs :meth:`diarize` and returns no embeddings, which is
+        what a test double that only needs turns wants; the real diarizer
+        overrides it with :class:`~stenograf.diarization.embedding.VoiceEmbedder`."""
         return DiarizationResult(self.diarize(samples, num_speakers), {})
 
     def channel_embedding(

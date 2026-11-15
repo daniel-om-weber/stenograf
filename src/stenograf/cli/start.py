@@ -18,7 +18,7 @@ import click
 if TYPE_CHECKING:
     from stenograf.view import LiveView
 
-from stenograf.cli.format import _MEETING_MAX_SPEAKERS, _report_speaker_counts
+from stenograf.cli.format import _report_speaker_counts
 from stenograf.cli.run import (
     _apply_no_diarization,
     _echo_glossary,
@@ -30,7 +30,7 @@ from stenograf.cli.run import (
     _resolve_run_config,
     _vocab_options,
 )
-from stenograf.config import Language, MeetingProfile
+from stenograf.config import MAX_SPEAKERS, Language, MeetingProfile
 
 # Sentinel for --record-audio given without a value (write next to the transcript).
 _RECORD_DEFAULT = "\0default"
@@ -55,14 +55,14 @@ _RECORD_DEFAULT = "\0default"
 @click.option(
     "--local",
     "local_speakers",
-    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
+    type=click.IntRange(0, MAX_SPEAKERS),
     default=None,
     help="Number of speakers in the room; omit to auto-detect.",
 )
 @click.option(
     "--remote",
     "remote_speakers",
-    type=click.IntRange(0, _MEETING_MAX_SPEAKERS),
+    type=click.IntRange(0, MAX_SPEAKERS),
     default=None,
     help="Number of remote speakers; 0 = in-room meeting without system audio.",
 )

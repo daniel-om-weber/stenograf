@@ -3,13 +3,13 @@ The *same* model the MLX backend runs, fp32 ONNX export, so
 transcripts stay comparable across platforms.
 
 onnx-asr won over sherpa-onnx on *accuracy*, not
-timestamps: the pinned sherpa-onnx<1.13 does decode Parakeet-v3 with real
+timestamps: sherpa-onnx does decode Parakeet-v3 with real
 per-token timestamps, but its only published v3 export is int8, and int8
 costs real accuracy — measured 2026-07-11 on the eval WAVs, cross-WER
 against MLX grew from 2.0–6.8 % (fp32) to 5.8–20.8 % (int8), German worst.
 fp32 on CPU was no slower (~36–44× realtime, all cores). onnx-asr is the
 plan's designated fallback (small MIT dep, isolated ONNX Runtime, leaves the
-diarization sherpa pin untouched); ``quantization="int8"`` remains available
+sherpa pin — VAD and voice embedder — untouched); ``quantization="int8"`` remains available
 for RAM-constrained boxes.
 
 onnx-asr returns per-token *start* timestamps but no durations, so token

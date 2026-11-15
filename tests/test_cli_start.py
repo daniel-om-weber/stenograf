@@ -299,18 +299,16 @@ def test_start_generates_notes_through_the_finish_tail(tmp_path, monkeypatch):
 
 
 class TestSpeakerCountHints:
-    """The 'lock the detected count' hint must stay actionable.
+    """The 'lock the detected count' hint must stay actionable."""
 
-    An unconstrained diarizer can detect more (or, on silence, zero) speakers than
-    the user can set, so the hint is clamped to the settable range and suppressed
-    when there is nothing to lock — a form-driven web UI inherits these paths.
-    """
+    def test_detected_count_is_offered_as_the_lock(self, capsys):
+        from stenograf.capture.base import Channel
+        from stenograf.session import SpeakerCount
 
-    def test_lock_hint_clamps_and_guards(self):
-        assert cli.format._lock_hint(0, 8) is None  # no speech found → nothing to lock
-        assert cli.format._lock_hint(1, 8) == (1, False)
-        assert cli.format._lock_hint(3, 8) == (3, False)
-        assert cli.format._lock_hint(13, 8) == (8, True)  # over-cluster → clamp to the max
+        cli.format._report_speaker_counts([SpeakerCount(Channel.MIC, None, 3)])
+        out = capsys.readouterr().out
+        assert "3 local (detected)" in out
+        assert "re-run with --local 3" in out
 
     def test_silent_channel_gives_no_bogus_zero_hint(self, capsys):
         from stenograf.capture.base import Channel
@@ -321,15 +319,23 @@ class TestSpeakerCountHints:
         assert "0 local (detected)" in out
         assert "re-run with" not in out  # never suggests the nonsensical `--local 0`
 
-    def test_over_range_estimate_is_clamped_in_the_hint(self, capsys):
-        from stenograf.capture.base import Channel
-        from stenograf.session import SpeakerCount
 
-        cli.format._report_speaker_counts([SpeakerCount(Channel.MIC, None, 13)])
-        out = capsys.readouterr().out
-        assert "13 local (detected)" in out  # the raw estimate is still shown
-        assert "re-run with --local 8" in out  # clamped to the settable max
-        assert "exceeded the 8-speaker max" in out
+def test_no_count_above_the_diarizer_slots_is_accepted(tmp_path):
+    # A count past the diarizer's speaker slots would cap nothing, so the CLI
+    # refuses it instead of silently returning fewer speakers than asked for.
+    from stenograf.config import MAX_SPEAKERS
+
+    audio = tmp_path / "a.wav"
+    write_wav(audio)
+    too_many = str(MAX_SPEAKERS + 1)
+    for argv in (
+        ["transcribe", str(audio), "--speakers", too_many],
+        ["start", "--local", too_many, "--replay", str(audio)],
+        ["profiles", "enroll", "Anna", str(audio), "--speakers", too_many],
+    ):
+        result = CliRunner().invoke(cli.main, argv)
+        assert result.exit_code == 2, (argv, result.output)
+        assert "Invalid value" in result.output, argv
 
 
 def test_start_with_no_speakers_errors_cleanly(tmp_path, monkeypatch):

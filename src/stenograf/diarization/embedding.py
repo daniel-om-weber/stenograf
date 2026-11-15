@@ -4,8 +4,8 @@ Re-ID voiceprints must come from one embedding model whichever diarizer
 produced the turns — saved profiles are cosine-matched against
 ``assets.SPEAKER_EMBEDDING`` vectors (see that asset for why not CAM++), so a
 second embedding model would silently break every enrolled profile. Hence one
-:class:`VoiceEmbedder`, one :func:`cluster_embeddings`, and one worker pool
-that every diarization stage submits into."""
+:class:`VoiceEmbedder` and one :func:`cluster_embeddings`, which embeds a
+channel's spans in parallel on the embedder's own worker pool."""
 
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ they are skipped when a cluster has any longer span, and used only as a last
 resort (see :func:`cluster_embeddings`)."""
 
 _MAX_THREADS = 8
-"""The pool's fallback worker cap where physical cores are unknowable. Every
-ORT session runs at ONE intra-op thread and the pool parallelizes across
-calls instead — see :func:`_pool_workers`."""
+"""The pool's fallback worker cap where physical cores are unknowable. The
+embedder's ORT session runs at ONE intra-op thread and the pool parallelizes
+across calls instead — see :func:`_pool_workers`."""
 
 _MAX_POOL = 16
 """Hard ceiling on pool workers: efficiency decays past the physical core
@@ -40,7 +40,7 @@ server gains nothing this workload can use."""
 
 
 def _pool_workers() -> int:
-    """Worker threads for the diarization pool: one per core worth using.
+    """Worker threads for the embedding pool: one per core worth using.
 
     Outer call-level threading at one intra-op thread each beats intra-op
     threading on this workload (2026-08-09, M4 Max, 37.6-min channel:
@@ -102,39 +102,35 @@ def _pool_workers() -> int:
 
 
 class VoiceEmbedder:
-    """The extractor (lazy), the shared worker pool, and per-cluster voices.
+    """The extractor (lazy), its worker pool, and per-cluster voices.
 
-    ``model`` overrides the fetched ``assets.SPEAKER_EMBEDDING`` (eval A/Bs);
-    ``workers`` sizes the pool (default :func:`_pool_workers`)."""
+    ``model`` overrides the fetched ``assets.SPEAKER_EMBEDDING`` (eval A/Bs)."""
 
     def __init__(
         self,
         model: Path | None = None,
         *,
-        workers: int | None = None,
         progress: assets.ProgressHook | None = None,
     ) -> None:
         self._model = model
         self._progress = progress
         self._extractor = None
-        self._workers = workers if workers is not None else _pool_workers()
         self._pool: ThreadPoolExecutor | None = None
         self._init_lock = threading.Lock()  # guards every lazy field
 
     def pool(self) -> ThreadPoolExecutor:
-        """The shared worker pool for embedding and diarizer model calls.
+        """The worker pool every embedding call of this embedder runs on.
 
-        One pool, sized once (:func:`_pool_workers`) — every stage submits
-        into the same budget, so concurrent stages or channels can never
-        oversubscribe the machine. ``workers=1`` is the sequential reference
-        the parity gate compares against; results are bit-identical at any
-        worker count because each call is independent and every ORT session
-        runs single-threaded."""
+        One pool, sized once (:func:`_pool_workers`), so concurrent channels
+        share one budget and never oversubscribe the machine. Results are
+        bit-identical at any worker count because each call is independent and
+        the ORT session runs single-threaded (measured 2026-08-09,
+        ``eval/README.md``)."""
         if self._pool is None:
             with self._init_lock:
                 if self._pool is None:
                     self._pool = ThreadPoolExecutor(
-                        max_workers=self._workers, thread_name_prefix="diar"
+                        max_workers=_pool_workers(), thread_name_prefix="embed"
                     )
         return self._pool
 

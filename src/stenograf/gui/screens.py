@@ -208,9 +208,10 @@ class SetupScreen(Screen):
 
     @Property("QVariantList", constant=True)  # type: ignore[operator]  # PySide decorator
     def counts(self) -> list[dict[str, object]]:
-        # MeetingProfile caps counts at 8.
+        from stenograf.config import MAX_SPEAKERS
+
         return [{"label": "Auto-detect", "value": _AUTO}] + [
-            {"label": str(n), "value": n} for n in range(1, 9)
+            {"label": str(n), "value": n} for n in range(1, MAX_SPEAKERS + 1)
         ]
 
     @Slot("QVariantMap")

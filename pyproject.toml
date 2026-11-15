@@ -26,7 +26,8 @@ classifiers = [
 dependencies = [
     "click>=8.1",
     "numpy>=1.26",
-    # Silero VAD + speaker diarization (ONNX/CPU — works on every platform).
+    # Silero VAD + the ERes2Net voice embedder behind re-ID (ONNX/CPU — works on
+    # every platform; the diarizer itself runs on the onnxruntime below).
     # The floor is a memory leak twice over, not a feature. 1.12.x retains
     # ~21 MB per SpeakerEmbeddingExtractor call (measured 2026-08-06), which
     # put one 38-min meeting channel at ~31 GB RSS. 1.13.4 bundles onnxruntime
@@ -243,8 +244,8 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TID251"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# The suite runs in ~60 s (1027 tests, 2026-08-12) and, apart from the real
-# diarization test CI skips (11.7 s), no test reaches 2 s — so any test near
+# The suite runs in ~60 s (1027 tests, 2026-08-12) and no test reaches 2 s
+# (the real-diarizer test CI skips included) — so any test near
 # 30 s is hung, not slow. Tests that start a real program carry their own,
 # smaller subprocess timeout (conftest.TOOL_TIMEOUT_S) so the stalled tool is
 # what fails.

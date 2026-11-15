@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from stenograf import assets
+from stenograf.config import MAX_SPEAKERS
 from stenograf.diarization.base import SpeakerTurn
 from stenograf.diarization.nemotron import (
     HOP,
@@ -189,5 +190,6 @@ def test_nemotron_assets_share_one_directory():
 def test_real_model_runs_on_the_fixture():
     fixture = np.load(FIXTURE)
     probs = NemotronDiarizer().probabilities(fixture["pcm"])
-    assert probs.shape == (num_mel_frames(len(fixture["pcm"])), 8)
+    # One column per speaker slot: the settable counts stop at the slot count.
+    assert probs.shape == (num_mel_frames(len(fixture["pcm"])), MAX_SPEAKERS)
     assert np.all(np.isfinite(probs)) and np.all((probs >= 0) & (probs <= 1))
