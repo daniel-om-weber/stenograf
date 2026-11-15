@@ -1817,6 +1817,36 @@ published curve exists for any off-the-shelf pipeline; (c) codec × noise
 interaction on far-field audio (the one crossed study, SVeritas
 arXiv:2509.17091, suggests multiplicative, but its codec tables are defective).
 
+## The ONNX ASR loads from its own model folder (2026-11-15)
+
+The release dry run's Windows smoke failed at `steno setup --models-only`:
+onnxruntime refused `encoder-model.onnx.data` with "External data path
+validation failed". Two upstream changes meet there. huggingface_hub 1.32
+(2026-09) moved large Xet-stored files into a cache-wide store sharded by hash
+(`hub/blobs/<2 hex>/<hash>`, a second symlink hop behind the repo's own
+`blobs/`), so the graph and its weights resolve into different directories —
+measured on macOS: `blobs/9a/…` and `blobs/79/…`, the same `79` the Windows
+error names. Every onnxruntime from 1.24.2 through 1.31.1 rejects external
+data outside the graph's directory; 1.32.0 (2026-11-13) accepts it. DirectML,
+the Windows flavor, ends at 1.24.4. Measured on macOS, CPU provider, onnx-asr
+0.12.0:
+
+| model source | onnxruntime 1.24.4 |
+|---|---|
+| hub cache written by huggingface_hub 2.4.0 | fails, the Windows error |
+| hub cache written by 0.36.2 | loads |
+| a directory of plain files | loads |
+| the old layout with only the `.data` blob moved into a `blobs/79/` | fails |
+
+1.25.1 through 1.31.1 fail the shared layout too; 1.32.0 loads it. Fix:
+`parakeet_onnx.model_dir()` downloads the five files the fp32 export needs
+(`snapshot_download(local_dir=…)`, pinned revision) into stenograf's cache as
+plain files, marks the folder complete only afterwards, and hands onnx-asr the
+folder. With huggingface_hub 2.4.0 and onnxruntime 1.24.4 the backend then
+loads from a folder with no symlinks and transcribes the TTS sentinel clip
+correctly. The Nemotron assets were never exposed: `assets.py` downloads them
+into one directory of plain files.
+
 ## Side quests
 
 - ~~Canary-1B-v2 runtime~~ — resolved, see above: no accelerated runtime with

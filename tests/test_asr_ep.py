@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import sys
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+from stenograf.asr import parakeet_onnx
 from stenograf.asr.base import BackendUnavailableError
 from stenograf.asr.ep import (
     EP_CHOICES,
@@ -89,24 +91,91 @@ class _FakeModel:
         return types.SimpleNamespace(tokens=[], timestamps=[])
 
 
-def _stub_onnx_asr(monkeypatch, models_by_first_provider: dict):
-    """onnx_asr.load_model returning (or raising) per requested first provider."""
+def _stub_onnx_asr(monkeypatch, models_by_first_provider: dict) -> list:
+    """onnx_asr.load_model returning (or raising) per requested first provider.
 
-    def load_model(model_id, *, quantization=None, providers=None):
+    The model folder is stubbed too, so no test downloads; returns the list of
+    paths load_model was handed."""
+    paths: list = []
+
+    def load_model(model_id, path=None, *, quantization=None, providers=None):
+        paths.append(path)
         result = models_by_first_provider[providers[0]]
         if isinstance(result, Exception):
             raise result
         return result
 
     monkeypatch.setitem(sys.modules, "onnx_asr", types.SimpleNamespace(load_model=load_model))
+    monkeypatch.setattr(parakeet_onnx, "model_dir", lambda quantization=None: Path("/models"))
+    return paths
 
 
 def test_backend_defaults_to_cpu_without_canary(monkeypatch):
     cpu = _FakeModel()
-    _stub_onnx_asr(monkeypatch, {"CPUExecutionProvider": cpu})
+    paths = _stub_onnx_asr(monkeypatch, {"CPUExecutionProvider": cpu})
     backend = ParakeetOnnxBackend()
     backend.load()
     assert cpu.recognized == 0  # no canary cost on the CPU path
+    assert paths == [Path("/models")]  # loads from its own folder, not the hub cache
+
+
+class _FakeHub:
+    """huggingface_hub.snapshot_download writing the files it was asked for."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.calls: list[dict] = []
+        self.fail = fail
+
+    def snapshot_download(self, repo_id, *, revision, local_dir, allow_patterns):
+        self.calls.append({"repo": repo_id, "revision": revision, "patterns": allow_patterns})
+        if self.fail:
+            raise OSError("connection reset")
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        for name in allow_patterns:
+            (Path(local_dir) / name).write_bytes(b"x")
+        return str(local_dir)
+
+
+def test_model_dir_downloads_plain_files_once(monkeypatch, tmp_path):
+    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
+    hub = _FakeHub()
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    first = parakeet_onnx.model_dir()
+    assert parakeet_onnx.model_dir() == first
+    assert len(hub.calls) == 1  # the marker short-circuits the second call
+    assert hub.calls[0]["revision"] == parakeet_onnx._REVISION
+    assert sorted(hub.calls[0]["patterns"]) == [
+        "config.json",
+        "decoder_joint-model.onnx",
+        "encoder-model.onnx",
+        "encoder-model.onnx.data",
+        "vocab.txt",
+    ]
+    assert first.parent == tmp_path
+    assert not any(p.is_symlink() for p in first.iterdir())
+
+
+def test_model_dir_quantized_variant_has_its_own_marker(monkeypatch, tmp_path):
+    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
+    hub = _FakeHub()
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    parakeet_onnx.model_dir()
+    parakeet_onnx.model_dir("int8")
+    assert len(hub.calls) == 2
+    assert "encoder-model.int8.onnx" in hub.calls[1]["patterns"]
+
+
+def test_interrupted_download_is_not_marked_complete(monkeypatch, tmp_path):
+    # onnx-asr treats an existing folder as complete; only the marker may say
+    # so, and only after every file is in — the next call resumes the download.
+    monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "huggingface_hub", _FakeHub(fail=True))
+    with pytest.raises(OSError):
+        parakeet_onnx.model_dir()
+    hub = _FakeHub()
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    parakeet_onnx.model_dir()
+    assert len(hub.calls) == 1
 
 
 def test_backend_uses_accelerated_provider_after_canary(monkeypatch):

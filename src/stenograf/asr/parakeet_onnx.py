@@ -22,6 +22,7 @@ a diarization turn boundary farther than the model's real durations could.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -34,6 +35,50 @@ from stenograf.audio import SAMPLE_RATE, to_float32
 from stenograf.config import Language
 
 MODEL_ID = "nemo-parakeet-tdt-0.6b-v3"
+
+_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+_REVISION = "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce"
+"""The export :data:`MODEL_ID` names, pinned so the files below are exactly the
+ones onnx-asr loads."""
+
+
+def model_dir(quantization: str | None = None) -> Path:
+    """The model's files as plain files in stenograf's own cache, downloaded once.
+
+    Never huggingface_hub's cache: from hub 1.32 (2026-09) it keeps large files
+    in a cache-wide store sharded by hash, so ``encoder-model.onnx`` and its
+    ``encoder-model.onnx.data`` resolve into different directories, and every
+    onnxruntime before 1.32 refuses external data outside the graph's
+    directory — DirectML, the Windows flavor, ends at 1.24.4 and will never get
+    the fix (measured 2026-11-15, ``eval/README.md``). A directory of real files
+    loads on every version. onnx-asr treats an existing directory as complete,
+    so completeness is ours: the marker is written only after every file is in,
+    and an interrupted download resumes on the next call.
+    """
+    from stenograf.paths import cache_dir
+
+    variant = quantization or "fp32"
+    target = cache_dir() / f"parakeet-tdt-0.6b-v3-onnx-{_REVISION[:12]}"
+    marker = target / f".complete-{variant}"
+    if marker.exists():
+        return target
+    from huggingface_hub import snapshot_download
+
+    suffix = f".{quantization}" if quantization else ""
+    snapshot_download(
+        _REPO,
+        revision=_REVISION,
+        local_dir=target,
+        allow_patterns=[
+            "config.json",
+            "vocab.txt",
+            f"encoder-model{suffix}.onnx",
+            f"encoder-model{suffix}.onnx.data",
+            f"decoder_joint-model{suffix}.onnx",
+        ],
+    )
+    marker.touch()
+    return target
 
 _MAX_TOKEN_SECONDS = 0.32
 """Cap on an approximated token duration: TDT emits at most 4 × 80 ms frames
@@ -109,8 +154,10 @@ class ParakeetOnnxBackend(ASRBackend):
     def _load_with(self, providers: list[str]):
         import onnx_asr
 
+        path = model_dir(self._quantization) if self.model_id == MODEL_ID else None
         model = onnx_asr.load_model(
             self.model_id,
+            path,
             quantization=self._quantization,
             providers=providers,
         ).with_timestamps()
