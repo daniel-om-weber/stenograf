@@ -1847,6 +1847,20 @@ loads from a folder with no symlinks and transcribes the TTS sentinel clip
 correctly. The Nemotron assets were never exposed: `assets.py` downloads them
 into one directory of plain files.
 
+**Nemotron moved to the fp32 export the same day.** On onnxruntime 1.32 the
+fp16 export ran twice as slow: 34–35 vs 18 s per audio-hour on the 105-minute
+system channel of a stored meeting (M4 Max, interleaved runs, nothing else
+running), at unchanged accuracy on AMI's held-out set (attribution identical
+on mic and loop, 97.4 vs 97.3 % on duo with the count cap). The step is between
+1.28 (16–17 s) and 1.29 (33 s); 1.31.1 is 34. Not threads — both use all 8
+cores, 1.29 spends 43.6 vs 20.7 s of CPU on 10 minutes of audio. An ORT
+profile puts it in MatMul: 1.28 runs all 4 560 MatMul calls in fp32 (the fp16
+graph converted around them), 1.29 runs 4 512 of them in fp16 natively, 3.79
+vs 1.45 s. The fp32 export runs 15 s per audio-hour on 1.32 (18 on 1.27), its
+peak resident memory 1.78 vs 1.73 GB, and its held-out scores match fp16's
+within 0.1 pt (the reference fp32 row above). Cost: a 398 MB download instead
+of 199. Whether x86 CPUs show the same fp16 step is not measured.
+
 ## Side quests
 
 - ~~Canary-1B-v2 runtime~~ — resolved, see above: no accelerated runtime with

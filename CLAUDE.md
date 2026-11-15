@@ -54,7 +54,7 @@ fired. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
 twelve seconds.
 
 **Nemotron 3 is the one diarizer (2026-11-15).** NVIDIA Nemotron 3
-Diarization (fp16 ONNX on the onnxruntime the wheel already ships, CPU only)
+Diarization (fp32 ONNX on the onnxruntime the wheel already ships, CPU only)
 replaced both the owned clustering loop and the stenodiar/speakrs helper: it
 counts the speakers itself, a stated count is applied afterwards as a cap, and
 count 1 still skips the diarizer. Re-ID is unchanged in kind — ERes2Net

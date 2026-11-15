@@ -5,7 +5,7 @@ in; per-10-ms speaker logits, the chunk's encoder frames and the learned
 silence frame out. Everything around it is a numpy port of transformers 5.23's
 offline ``Nemotron3DiarizationForAudioFrameClassification`` and
 ``Nemotron3DiarizationSpeakerCache`` (the eval port, ``eval/nemotron_arm.py``,
-matched the PyTorch reference to 7.6e-6 on CPU, 2026-11-15). Three traps the
+matched the PyTorch reference to 7.6e-6 on CPU, 2026-11-15). Two traps the
 port keeps:
 
 - the ONNX ``attention_mask`` is per *encoder* frame of the step (cached +
@@ -13,8 +13,7 @@ port keeps:
 - the reference front end marks the last mel frame invalid, and the encoder
   mask is sampled at each 8-frame group's first frame — so when that frame
   opens the final group, the last encoder frame is masked, and ignoring it
-  moves the final chunk's probabilities by up to 0.06;
-- the fp16 export keeps fp32 inputs and outputs.
+  moves the final chunk's probabilities by up to 0.06.
 
 The model takes no speaker count. A stated count is applied afterwards as a
 cap (:func:`turns_from_probs`): measured on the held-out AMI set it lifts
@@ -368,7 +367,7 @@ class NemotronDiarizer(Diarizer):
     """Nemotron's turns, voices from the shared :class:`VoiceEmbedder`.
 
     ``model_dir`` overrides the fetched assets (a directory holding
-    ``model_fp16.onnx``, its ``.onnx_data`` and ``config.json``)."""
+    ``model.onnx``, its ``.onnx_data`` and ``config.json``)."""
 
     def __init__(
         self,
@@ -387,14 +386,15 @@ class NemotronDiarizer(Diarizer):
     def _load(self):
         # The chunk loop is sequential (each step reads the cache the previous
         # one wrote), so intra-op threads are its only parallelism: ORT's
-        # default, which the measured 17 s per audio-hour used (M4 Max, fp16).
+        # default, which the measured 15 s per audio-hour used (M4 Max, fp32,
+        # onnxruntime 1.32).
         if self._session is None:
             with self._init_lock:
                 if self._session is None:
                     import onnxruntime
 
                     if self._model_dir is not None:
-                        graph = self._model_dir / "model_fp16.onnx"
+                        graph = self._model_dir / "model.onnx"
                         config = self._model_dir / "config.json"
                     else:
                         graph, _, config = (

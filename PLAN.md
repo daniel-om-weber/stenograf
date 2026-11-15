@@ -645,8 +645,10 @@ smoked the single manylinux_2_28 wheel.
    for people merged into one speaker, crosstalk phantoms, and a profile
    naming the wrong person. A labelled room recording, if one ever exists,
    replaces this with a number.
-2. **WebGPU, as an optional extra.** CPU runs 17 s per audio-hour on the M4
-   Max. The `onnxruntime-ep-webgpu` plugin loads a second onnxruntime copy
+2. **WebGPU, as an optional extra.** CPU runs 15 s per audio-hour on the M4
+   Max (fp32, onnxruntime 1.32). On a GPU fp16 is the faster export (x86
+   iGPU: 8.3 vs 14 s per 37.6-min channel), so a GPU path would fetch it
+   beside the CPU's fp32. The `onnxruntime-ep-webgpu` plugin loads a second onnxruntime copy
    beside the wheel's on macOS and segfaulted on a second session in one
    process; revisit once the CPU path has shipped in a release.
 

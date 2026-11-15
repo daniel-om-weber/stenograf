@@ -69,15 +69,15 @@ _NEMOTRON_DIR = "nemotron-3-diarization-onnx"
 external weights by their stored filename, next to the graph."""
 
 NEMOTRON_GRAPH = ModelAsset(
-    name=f"{_NEMOTRON_DIR}/model_fp16.onnx",
-    url=f"{_NEMOTRON}/onnx/model_fp16.onnx",
-    sha256="286f56d64d80755eb0c84f9158c3620c9eccccb84ec53b48942c3795cf5a0c7b",
+    name=f"{_NEMOTRON_DIR}/model.onnx",
+    url=f"{_NEMOTRON}/onnx/model.onnx",
+    sha256="12a7c98fc1ee6ec98ea728c7ffd9fcf6b245f3c9c1ea9f7c2a7cc47c023e3f9d",
 )
 
 NEMOTRON_WEIGHTS = ModelAsset(
-    name=f"{_NEMOTRON_DIR}/model_fp16.onnx_data",
-    url=f"{_NEMOTRON}/onnx/model_fp16.onnx_data",
-    sha256="affecf841c462d78c86b56a6eee6216b119809285bcbdb4d5c4d541810e9d317",
+    name=f"{_NEMOTRON_DIR}/model.onnx_data",
+    url=f"{_NEMOTRON}/onnx/model.onnx_data",
+    sha256="c293d9b5930eb9f6172f095ced052c0d1bbdbeb2594a115497583ca209b1dbd6",
 )
 
 NEMOTRON_CONFIG = ModelAsset(
@@ -87,10 +87,12 @@ NEMOTRON_CONFIG = ModelAsset(
 )
 
 NEMOTRON = (NEMOTRON_GRAPH, NEMOTRON_WEIGHTS, NEMOTRON_CONFIG)
-"""NVIDIA Nemotron 3 Diarization, fp16 ONNX export (OpenMDW-1.1; downloaded,
-never redistributed). fp16 over fp32: half the size (199 vs 398 MB),
-attribution within 0.1 pt on the held-out AMI set (2026-11-15,
-``eval/README.md``)."""
+"""NVIDIA Nemotron 3 Diarization, fp32 ONNX export (OpenMDW-1.1; downloaded,
+never redistributed). fp32, not the half-size fp16 export (398 vs 199 MB):
+from onnxruntime 1.29 the CPU runs fp16 matmuls natively, and on an M4 Max
+that doubles the time (fp16 33–35 vs fp32 15 s per audio-hour on 1.32, where
+1.27–1.28 converted to fp32 and ran fp16 at 16–17); attribution on the
+held-out AMI set is the same within 0.1 pt (2026-11-15, ``eval/README.md``)."""
 
 
 def cached_path(asset: ModelAsset) -> Path | None:
