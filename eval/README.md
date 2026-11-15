@@ -1307,6 +1307,31 @@ linear in slice length (~14 MB per second — 26 GB before the guard killed the
 first attempt), so the script embeds their reference speech segments instead,
 standing in for the transcript entries production embeds.
 
+**Two speakers off AMI** (`eval/owncalls.py`, 2026-11-15): the user's own
+recorded calls, labelled by channel instead of by hand — the stored recording
+keeps mic and system tap apart (after echo cancellation), so each side's VAD
+is the reference. 17 one-to-one online calls (19 h, German) were selected by a
+calendar event with exactly one other participant; residual echo, measured as
+mic VAD firing during remote speech, was 0–4 % on every call, so none was
+dropped. Two sets, owned loop at k=2 (+1 fold) against Nemotron with no count:
+
+| set | owned loop: attribution mean (min) / confusion | Nemotron | Nemotron better on |
+|---|---|---|---|
+| user + remote, mixed (17 calls) | 98.1 % (96.1) / 0.9 % | 99.3 % (98.3) / 0.1 % | 17 / 17 |
+| two remote people taking turns (22 × 10.8 min) | 89.7 % (74.1) / 7.4 % | **98.6 % (81.7) / 1.0 %** | 22 / 22 |
+
+The first set saturates: a laptop mic against a call codec splits by channel
+colour, so it shows only that neither diarizer breaks on German call audio.
+The second removes that cue — each dialogue splices two different calendar
+partners' system-tap speech runs (11 partners, each partner's longest call,
+each in four dialogues) end to end with 0.25 s gaps — and separates the
+diarizers: the owned loop drops below 95 % on 15 of 22, Nemotron on 2 (one
+pair at 81.7 % for both). Nemotron counted 2 on every dialogue and on 16/17
+calls, at 5.4 s per audio-hour on WebGPU against 75–93 s for the owned loop.
+What it does not show: the dialogues are spliced (no overlap, no backchannels,
+uniform gaps), the two voices still come from different calls, and a shared
+room mic — the hybrid-meeting case — has no free reference here.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

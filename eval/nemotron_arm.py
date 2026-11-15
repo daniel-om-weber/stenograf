@@ -344,7 +344,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     for channel in channels:
         cid = channel["id"]
         started = time.perf_counter()
-        features, mask, seconds = features_of(processor, AUDIO_DIR / f"{cid}.wav")
+        features, mask, seconds = features_of(processor, args.audio_dir / f"{cid}.wav")
         probs = speaker_probabilities(sess, cfg, features, mask)
         elapsed = time.perf_counter() - started
         np.save(probs_dir / f"{cid}.npy", probs.astype(np.float16))
@@ -367,6 +367,7 @@ def main() -> int:
     check.add_argument("--wav", type=Path, default=AUDIO_DIR / "IS1009a.loop.wav")
     check.add_argument("--frames", type=int, default=6001, help="mel frames (10 ms) to compare")
     sub.choices["run"].add_argument("--out", type=Path, default=OUT_DIR)
+    sub.choices["run"].add_argument("--audio-dir", type=Path, default=AUDIO_DIR)
     args = parser.parse_args()
     return cmd_check(args) if args.cmd == "check" else cmd_run(args)
 

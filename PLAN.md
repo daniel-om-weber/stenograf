@@ -649,10 +649,10 @@ and Nemotron 3 Diarization as the one diarizer".
 
 Gates before it can ship, in order:
 
-1. **Non-AMI 2-speaker audio.** Everything measured is AMI headset mixes, and
-   published results put the best hybrid ahead of Nemotron at k=2 — the
-   product's commonest channel. Real calls with corrected labels, scored on
-   transcript attribution against the owned loop at the true count.
+1. **A shared room mic.** Two-speaker audio off AMI is measured (below); what no
+   free reference covers is several people on one room microphone, the hybrid
+   case that is common and diarization-critical. Until a labelled room recording
+   exists, the first real hybrid meetings after the switch are the check.
 2. **Enrollment hygiene without a count.** Re-ID on Nemotron's turns passed
    with the count applied (below); without one, a phantom crosstalk cluster
    assigned to a person poisons the mean-cosine profile (FIO084: 0.84 → 0.41,
@@ -673,7 +673,9 @@ Nemotron on an M4 Max runs at stenodiar-on-CoreML speed on plain CPU and faster
 on WebGPU. Re-ID on its turns is measured too (same section, "Re-ID"): with the
 count applied it names every known trial right and no stranger at every
 threshold 0.45–0.70, so 0.56 holds; the owned loop's known IS1009 misnaming
-disappears.
+disappears. Off AMI, on the user's own calls labelled by channel (same file,
+"Two speakers off AMI"), Nemotron beats the owned loop at k=2 on every call and
+every two-remote-voices dialogue (98.6 vs 89.7 % on the latter).
 
 If it ships, stenodiar, the vendored speakrs and the manylinux_2_39 floor's
 reason go with it. If it does not, two cheap fixes to today's helper are
