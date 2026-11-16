@@ -1359,6 +1359,252 @@ class TestWhoSpoke:
         assert notes == [], "a discarded meeting writes no notes"
 
 
+def _items(shell):
+    """Every item in the window's tree, for tests that reach into a page."""
+
+    def walk(item):
+        yield item
+        for child in item.childItems():
+            yield from walk(child)
+
+    assert shell.window is not None
+    return list(walk(shell.window.contentItem()))
+
+
+def _switches(shell):
+    return [i for i in _items(shell) if "Switch" in i.metaObject().className() and i.isVisible()]
+
+
+def _toggle(switch):
+    """Flip a switch the way a click does — not a write to ``checked``, which
+    would drop the very binding these tests are about."""
+    from PySide6.QtCore import QMetaObject
+
+    QMetaObject.invokeMethod(switch, "toggle")
+
+
+class TestOneMeetingAfterAnother:
+    """The screen outlives its meetings; a run must not reach past its own."""
+
+    _stub = TestMeetingScreen._stub_offline_meeting
+    _form = staticmethod(TestMeetingScreen._mic_only_form)
+
+    def test_a_finished_meetings_notes_leave_the_next_meeting_alone(
+        self, gui, tmp_path, monkeypatch
+    ):
+        # Back to menu while the notes are still writing, then straight into
+        # the next meeting: when the first run's notes return, the recording
+        # meeting must stay recording, with its Stop.
+        import conftest
+
+        from stenograf import loaders
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+        from stenograf.notes import run as notes_run
+
+        self._stub(monkeypatch, tmp_path)
+        started, release = threading.Event(), threading.Event()
+
+        def slow_notes(view, transcript, out_dir, basename, **kwargs):
+            started.set()
+            release.wait(10)
+            view.status("notes written")
+            return True
+
+        monkeypatch.setattr(notes_run, "run_notes", slow_notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.screen("Setup").start(self._form(notes=True))
+        through_the_card(meeting)
+        assert started.wait(10)
+        meeting.stop()  # Back to menu, notes still in flight
+        first = meeting._thread
+
+        second_mic = tmp_path / "second.wav"
+        conftest.write_wav(second_mic, seconds=4.0)
+        monkeypatch.setattr(
+            loaders,
+            "make_provider",
+            lambda replay, plans, **kwargs: FileCaptureProvider(
+                {Channel.MIC: second_mic}, paced=True
+            ),
+        )
+        shell.screen("Setup").start(self._form(notes=False))
+        pump(lambda: meeting.state["canStop"])
+
+        release.set()
+        assert first is not None
+        first.join(10)
+        pump(lambda: True)
+        assert meeting.state["phase"] == "rec"
+        assert meeting.state["active"] is True
+        assert meeting.state["canStop"] is True
+        assert meeting.state["status"] != "notes written"
+
+        meeting.stop()
+        pump(lambda: meeting.state["phase"] == "done")
+        through_the_card(meeting)
+        meeting.join()
+
+    def test_cancel_while_the_next_meeting_starts_cancels_it(self, gui, tmp_path, monkeypatch):
+        # The first run's stop callback must not outlive it: the next
+        # meeting's Cancel, pressed before its capture is up, cancels the run.
+        from stenograf import loaders
+
+        self._stub(monkeypatch, tmp_path)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.screen("Setup").start(self._form(notes=False))
+        through_the_card(meeting)
+        meeting.join()
+        pump(lambda: not meeting.state["active"])
+        meeting.stop()
+
+        gate = threading.Event()
+        real = loaders.make_provider
+
+        def slow_provider(*args, **kwargs):
+            gate.wait(10)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(loaders, "make_provider", slow_provider)
+        shell.screen("Setup").start(self._form(notes=False))
+        pump(lambda: meeting.state["status"] == "starting capture…")
+        meeting.stop()
+        assert meeting.state["phase"] == "rec"
+        assert meeting.state["status"] == "cancelling…"
+        gate.set()
+        pump(lambda: not meeting.running and not meeting.state["active"])
+
+    def test_the_form_refuses_a_second_meeting_while_one_records(self, gui):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        never = threading.Event()
+        meeting._thread = threading.Thread(target=never.wait, daemon=True)
+        meeting._thread.start()
+        meeting.set(active=True, phase="rec")
+        try:
+            setup = shell.screen("Setup")
+            setup.start(self._form(notes=False))
+            assert "still recording" in setup.state["error"]
+        finally:
+            never.set()
+            meeting._thread.join()
+
+    def test_a_menu_bar_stop_does_not_hold_the_notes_behind_the_card(
+        self, gui, tmp_path, monkeypatch
+    ):
+        # Nobody is at the (hidden) window, so a card holding the notes would
+        # hold them until a Quit skipped them. They run on the start form's
+        # choices; the card waits, notes-free, for whenever the window opens.
+        import conftest
+
+        from stenograf import loaders
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+        from stenograf.notes import run as notes_run
+
+        self._stub(monkeypatch, tmp_path)
+        mic = tmp_path / "long.wav"
+        conftest.write_wav(mic, seconds=3.0)
+        monkeypatch.setattr(
+            loaders,
+            "make_provider",
+            lambda replay, plans, **kwargs: FileCaptureProvider({Channel.MIC: mic}, paced=True),
+        )
+        calls = []
+        monkeypatch.setattr(
+            notes_run, "run_notes", lambda *args, **kwargs: calls.append(args) or True
+        )
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.screen("Setup").start(self._form(notes=True))
+        pump(lambda: meeting.state["canStop"])
+        assert shell.window is not None and not shell.window.isVisible()
+
+        meeting.stop_from_menu_bar()
+        # No Done: the run finishes on its own (the loop pumps, as the app's does).
+        pump(lambda: not meeting.running and not meeting.state["active"])
+        assert len(calls) == 1
+        assert meeting.state["namesOpen"] is True
+        assert meeting.state["notesLocked"] is True
+
+
+class TestFinishCardInputs:
+    """What the user types or flips on the card stays until Done."""
+
+    _stub = TestMeetingScreen._stub_offline_meeting
+    _form = staticmethod(TestMeetingScreen._mic_only_form)
+
+    def _open_card(self, gui, tmp_path, monkeypatch):
+        self._stub(monkeypatch, tmp_path)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.screen("Setup").start(self._form(notes=False))
+        pump(lambda: meeting.state["namesOpen"])
+        return shell, meeting
+
+    def test_typed_and_flipped_answers_survive_a_status_line(self, gui, tmp_path, monkeypatch):
+        # The state map is one property: every status line re-evaluates every
+        # binding on it, and a bound field gets its old value written back.
+        shell, meeting = self._open_card(gui, tmp_path, monkeypatch)
+        title = next(
+            i for i in _items(shell) if i.property("placeholderText") == "Untitled meeting"
+        )
+        title.setProperty("text", "Planning")
+        (notes,) = _switches(shell)
+        _toggle(notes)
+        assert notes.property("checked") is True
+
+        meeting.set(status="something else happened")
+        meeting.hold_names()
+        pump(lambda: True)
+        assert title.property("text") == "Planning"
+        assert notes.property("checked") is True
+        meeting.skip_names()
+        meeting.join()
+
+    def test_escape_in_the_card_does_not_leave_the_meeting(self, gui, tmp_path, monkeypatch):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        shell, meeting = self._open_card(gui, tmp_path, monkeypatch)
+        shell.show_window()
+        try:
+            title = next(
+                i for i in _items(shell) if i.property("placeholderText") == "Untitled meeting"
+            )
+            title.forceActiveFocus()
+            pump(lambda: title.hasActiveFocus())
+            QTest.keyClick(title.window(), Qt.Key.Key_Escape)
+            pump(lambda: True)
+            assert meeting.state["namesOpen"] is True
+            assert not meeting._run._names_settled.is_set()
+        finally:
+            shell.hide_window()
+        meeting.skip_names()
+        meeting.join()
+
+
+class TestSetupFormInputs:
+    def test_a_flipped_switch_survives_the_microphone_listing(self, gui):
+        # The listing lands after the form is up, through the same state map;
+        # a switch bound to a default would flip back when it did.
+        shell, _engine = gui
+        shell.open("Setup")
+        pump(lambda: bool(shell.screen("Setup").state["micDevicesReady"]))
+        setup = shell.screen("Setup")
+        switches = _switches(shell)
+        notes = switches[-1]  # "Generate notes afterwards", the form's last switch
+        before = notes.property("checked")
+        _toggle(notes)
+        setup.set(micDevicesReady=False)
+        setup.set(micDevicesReady=True)
+        pump(lambda: True)
+        assert notes.property("checked") is (not before)
+        shell.back()
+
+
 class TestTranscribeScreen:
     def test_pick_and_transcribe_writes_a_transcript(self, gui, tmp_path, monkeypatch):
         import conftest
@@ -1706,6 +1952,17 @@ class TestTray:
         assert tray.stop.isEnabled()
         assert not tray.start.isEnabled(), "a second meeting cannot be started over this one"
 
+        # Finalizing is still this meeting; its notes and finish card are not.
+        meeting.set(phase="finalizing")
+        tray.menu.aboutToShow.emit()
+        assert not tray.start.isEnabled()
+        meeting.set(phase="done")
+        tray.menu.aboutToShow.emit()
+        assert tray.status.text() == "Finishing the meeting…"
+        assert tray.start.isEnabled(), "the next meeting need not wait for the notes"
+
+        meeting.set(active=True, phase="rec", elapsed="12:34")
+        tray.menu.aboutToShow.emit()
         meeting.set(active=False, phase="done")
         assert tray.status.text() == "Recording · 12:34", "stale until the menu is opened again"
         tray.menu.aboutToShow.emit()

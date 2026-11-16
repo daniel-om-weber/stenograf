@@ -1,13 +1,18 @@
-"""The live meeting screen: a :class:`~stenograf.view.LiveView` that is also a QObject.
+"""The live meeting screen, and the per-run view that feeds it.
 
 The only screen with real machinery. The meeting itself is
-:class:`stenograf.flow.MeetingRun` on a worker thread; this class is the sink
-for the events it emits, marshalling every one of them onto the GUI thread
-before it touches a property (Qt objects belong to one thread, and the live
-worker calls a view from its own).
+:class:`stenograf.flow.MeetingRun` on a worker thread; each run reports
+through its own :class:`_RunView`, which marshals every event onto the GUI
+thread before it touches a property (Qt objects belong to one thread, and the
+live worker calls a view from its own).
 
-Being both is deliberate: the events map one-to-one onto display state, so an
-adapter object between the two would be pure indirection.
+**One view per run, not the screen itself.** The screen outlives its meetings,
+and a run outlives its visit to the screen: notes left writing behind "Back to
+menu" keep reporting — and finally return — after the next meeting has
+started. Delivered to the screen directly, that tail would flip the new
+meeting to DONE mid-recording, show the old transcript and hide its Stop
+button. So an event is delivered only while its run is still the screen's
+(checked on the GUI thread, where the switch happens); the rest is dropped.
 
 What the screen shows, and where it comes from:
 
@@ -34,9 +39,12 @@ What the screen shows, and where it comes from:
   run's notes wait until Done, and leaving the screen or the
   ``[speakers] names_panel_timeout_s`` countdown settles it with the start
   form's choices: notes stranded behind a screen nobody returns to would be
-  lost work. Each row plays the speaker's voice samples
-  (:mod:`stenograf.playback`), which live in the run's memory and are dropped
-  when the screen is left.
+  lost work. A meeting stopped from the menu bar with nobody at the window
+  does not hold its notes at all — the card is there to answer later, but the
+  notes run with the start form's choices, so the "Meeting finished" notice
+  arrives and a later Quit cannot skip them. Each row plays the speaker's
+  voice samples (:mod:`stenograf.playback`), which live in the run's memory
+  and are dropped when the screen is left.
 
 Stopping crosses back to capture through the callback the run hands over
 (:meth:`set_stop`) — and it *blocks*, up to ~5 s waiting on the capture
@@ -77,6 +85,7 @@ if TYPE_CHECKING:
     from stenograf.gui.app import StenografGui
     from stenograf.playback import Playback
 
+
 class Phase(StrEnum):
     """Screen lifecycle: capture running → on-stop pass running → transcript shown
     (or the run never got off the ground). QML colours the dot from the value."""
@@ -92,8 +101,8 @@ class Phase(StrEnum):
         return self.name
 
 
-class MeetingScreen(Screen, LiveView):
-    """One meeting, from the Start button to the finalized transcript on screen."""
+class MeetingScreen(Screen):
+    """One meeting at a time, from the Start button to the finalized transcript on screen."""
 
     committed = Signal(str, str, str)
     """``(channel, speaker, text)`` — one finished caption line, appended to the
@@ -118,10 +127,13 @@ class MeetingScreen(Screen, LiveView):
         self._names_clock.timeout.connect(self._names_tick)
 
         self._request: MeetingRequest | None = None
-        self._persist: Callable[[Transcript], object] | None = None
         self._stop_capture: Callable[[], None] | None = None
         self._thread: threading.Thread | None = None
         self._run: MeetingRun | None = None
+        self._run_id = 0
+        """Which run the screen belongs to; events from any other are dropped."""
+        self._unattended = False
+        """Stopped from the menu bar: the finish card must not hold the notes."""
         self._abort = threading.Event()
         """Cancels a run whose capture is still being built (`MeetingRun.abort`).
 
@@ -176,6 +188,7 @@ class MeetingScreen(Screen, LiveView):
         describes the meeting while capture is still starting."""
         from stenograf.session import plan_channels
 
+        self._retire_run()
         self._request = request
         self._reset()
         from stenograf.flow import standing_settings
@@ -209,6 +222,7 @@ class MeetingScreen(Screen, LiveView):
         request, self._request = self._request, None
         if request is None:  # re-entered the page without a new Start
             return
+        run_id = self._run_id
         self.cleared.emit()
         self._captions.clear()
         self._abort.clear()
@@ -219,23 +233,56 @@ class MeetingScreen(Screen, LiveView):
         # bar (gui/tray.py) cannot tell from it whether a meeting is under way.
         self.set(active=True)
         self._thread = self.work(
-            lambda: self._meeting(request),
-            done=self._finished,
-            failed=self._failed,
+            lambda: self._meeting(request, run_id),
+            done=lambda transcript: self._for_run(run_id, self._finished, transcript),
+            failed=lambda message: self._for_run(run_id, self._failed, message),
             name="gui-meeting",
         )
 
-    def _meeting(self, request: MeetingRequest) -> Transcript | None:
+    def _retire_run(self) -> None:
+        """Let go of the previous run before arming the next one.
+
+        Its events stop reaching the screen from here on, and the next run
+        starts with nothing of it — above all not its stop callback, which
+        would otherwise answer the new meeting's Cancel. A tail it still runs
+        (notes) carries on unwatched; a question it still waits on is settled,
+        and its voice samples go."""
+        self._run_id += 1
+        self._stop_capture = None
+        self._unattended = False
+        old, self._run = self._run, None
+        if old is not None:
+            old.settle_names()
+            old.discard_voice_clips()
+
+    def _for_run(
+        self, run_id: int, fn: Callable[..., object], /, *args: object, **kwargs: object
+    ) -> None:
+        """Call ``fn`` only if ``run_id`` is still the screen's run (GUI thread)."""
+        if run_id == self._run_id:
+            fn(*args, **kwargs)
+
+    def _meeting(self, request: MeetingRequest, run_id: int) -> Transcript | None:
         """The meeting, on the worker thread."""
         from stenograf.flow import MeetingRun
 
         run = MeetingRun(request, abort=self._abort, ask_names=True)
-        # The transcript reaches disk at the ``finalized`` event, before the user
-        # can close the window on the done screen.
-        self._persist = run.persist
-        self._run = run  # shutdown() needs its abandon-notes handle
-        self.post(self.set, folder=str(run.out_dir))
-        return run.run(self)
+        view = _RunView(self, run_id, run)
+        if run_id == self._run_id:
+            self._run = run  # shutdown() needs its abandon-notes handle
+        view.show(folder=str(run.out_dir))
+        return run.run(view)
+
+    @property
+    def capturing(self) -> bool:
+        """Whether the current meeting is still recording or finalizing — the
+        stretch in which a second meeting must not replace it. Past it (the
+        finish card, the notes) the next meeting may start: the run carries on
+        unwatched. From the announced ``active``, like the menu bar's state."""
+        return bool(self._state.get("active")) and self._state.get("phase") in (
+            Phase.REC,
+            Phase.FINALIZING,
+        )
 
     def _finished(self, transcript: Transcript | None) -> None:
         """The meeting thread returned (capture stopped, finalize and notes done)."""
@@ -350,12 +397,29 @@ class MeetingScreen(Screen, LiveView):
             self._abort.set()
             self.set(status="cancelling…")
         elif phase in (Phase.DONE, Phase.FAILED):
-            self._stop_playback()
-            if self._run is not None:
-                self._run.settle_names()  # leaving unanswered = skipping
-                self._run.discard_voice_clips()
-            self.set(speakers=[], namesOpen=False)
+            self.left()
             self.app.back()
+
+    def stop_from_menu_bar(self) -> None:
+        """Stop with nobody at the window: :meth:`stop`, but the finish card
+        that follows must not hold the notes for an answer nobody is there to
+        give (unless the window is up and focused by the time it is offered)."""
+        if self._state.get("phase") == Phase.REC:
+            self._unattended = True
+        self.stop()
+
+    @Slot()
+    def left(self) -> None:
+        """The finished meeting's page is going away: settle the question
+        (leaving unanswered = skipping) and drop the voice samples. Nothing
+        while a meeting is still recording or finalizing."""
+        if self._state.get("phase") not in (Phase.DONE, Phase.FAILED):
+            return
+        self._stop_playback()
+        if self._run is not None:
+            self._run.settle_names()
+            self._run.discard_voice_clips()
+        self.set(speakers=[], namesOpen=False)
 
     @Slot(str)
     def play(self, label: str) -> None:
@@ -442,12 +506,14 @@ class MeetingScreen(Screen, LiveView):
             )
             finished = False
             problem = ""
+            applied_title: str | None = None
             if finish is not None and not any(
                 o.refused_similarity is not None or o.error is not None for o in outcomes
             ):
                 title, choices = finish
                 try:
                     run.retitle(title.strip() or None)
+                    applied_title = title.strip()
                 except (OSError, RuntimeError, ValueError) as exc:
                     problem = f"folder not renamed: {exc}"
                 if not locked:
@@ -458,7 +524,9 @@ class MeetingScreen(Screen, LiveView):
             except ValueError:
                 transcript = None
             speakers = meeting_speakers(run.out_dir, store_path=run.profile_store)
-            return _Saved(outcomes, speakers, transcript, finished, str(run.out_dir), problem)
+            return _Saved(
+                outcomes, speakers, transcript, finished, str(run.out_dir), problem, applied_title
+            )
 
         self.work(job, done=self._names_saved, failed=self._names_failed, name="gui-names")
 
@@ -564,12 +632,14 @@ class MeetingScreen(Screen, LiveView):
     def _names_saved(self, result: _Saved) -> None:
         outcomes, speakers, transcript = result.outcomes, result.speakers, result.transcript
         self.set(folder=result.folder)
+        if result.title is not None:  # what the card shows when it is reopened
+            self.set(title=result.title)
         if result.problem:
             self.set(status=result.problem)
         if transcript is not None:
             self._restore(transcript)
         refused = {o.label: o for o in outcomes if o.refused_similarity is not None}
-        rows = _speaker_rows(speakers, self._clip_counts())
+        rows = _speaker_rows(speakers, _clip_counts(self._run))
         # A refused voice keeps its row (the label is unchanged) and the answer
         # the user typed, so "Add anyway" or a corrected name is one click away.
         for row in rows:
@@ -603,64 +673,30 @@ class MeetingScreen(Screen, LiveView):
         except Exception as exc:  # noqa: BLE001 — a stop error must not wedge the UI
             self.post(self.set, status=f"stop failed: {exc}")
 
-    # -- LiveView events (worker thread) → GUI thread ----------------------
-
     def set_stop(self, stop: Callable[[], None]) -> None:
+        """Install the current run's capture-stop callback; safe from any thread."""
         self._stop_capture = stop
         self.post(self.set, canStop=True)
 
-    def commit(self, channel: Channel, words: Sequence[Word]) -> None:
-        self.post(self._commit, channel, tuple(words))
-
-    def interim(self, channel: Channel, text: str) -> None:
-        self.post(self._interim, channel, text)
-
-    def status(self, message: str) -> None:
-        self.post(self.set, status=message)
-
-    def language(self, language: Language) -> None:
-        self.post(self.set, language=language.value)
-
-    def finalizing(self) -> None:
-        self.post(self._set_phase, Phase.FINALIZING)
-
-    def finalized(self, transcript: Transcript) -> None:
-        if self._persist is not None:
-            try:
-                self._persist(transcript)
-            except Exception as exc:  # noqa: BLE001 — persistence must not sink the result
-                self.error(f"could not write the transcript yet ({exc}); retrying on exit")
-        self.post(self._show, transcript)
-
-    def error(self, message: str) -> None:
-        self.post(self.set, status=message)
-
-    def speakers(self, speakers: list[SpeakerSummary], *, ask: bool) -> None:
-        from stenograf.flow import known_speaker_names
-
-        run = self._run
-        known = (
-            known_speaker_names(
-                store_path=run.profile_store,
-                attendee_names=run.request.profile.attendee_names,
-            )
-            if run is not None
-            else []
-        )
-        self.post(
-            self._offer_names, _speaker_rows(speakers, self._clip_counts()), ", ".join(known), ask
-        )
-
-    def _clip_counts(self) -> dict[str, int]:
-        run = self._run
-        return {label: len(c) for label, c in run.voice_clips.items()} if run else {}
-
     def _offer_names(self, rows: list[dict[str, object]], known: str, ask: bool) -> None:
+        if ask and self._unattended and not self._watched():
+            # Stopped from the menu bar: the card waits for whenever the window
+            # is opened, but the notes go ahead with the start form's choices.
+            self.set(speakers=rows, knownNames=known, namesOpen=True, notesLocked=True, clipNext={})
+            if self._run is not None:
+                self._run.settle_names()
+            return
         self.set(speakers=rows, knownNames=known, namesOpen=ask, clipNext={})
         timeout = self._run.request.settings.speakers.names_panel_timeout_s if self._run else None
         if ask and timeout:
             self.set(namesCountdown=max(1, round(timeout)))
             self._names_clock.start()
+
+    def _watched(self) -> bool:
+        """Whether someone is at the window: shown and focused. Visible alone
+        is not enough — a window buried behind the call is visible."""
+        window = self.app.window
+        return window is not None and window.isVisible() and window.isActive()
 
     # -- GUI-thread renderers ----------------------------------------------
 
@@ -723,6 +759,75 @@ class MeetingScreen(Screen, LiveView):
         )
 
 
+class _RunView(LiveView):
+    """One run's events, delivered to the screen only while it is the screen's run.
+
+    Worker-side work that belongs to the run whatever the screen does — the
+    transcript reaching disk, the speaker summary read against the run's own
+    profile store and samples — happens here; display updates cross to the GUI
+    thread through :meth:`MeetingScreen._for_run`, which drops them once the
+    screen has moved on to another run."""
+
+    def __init__(self, screen: MeetingScreen, run_id: int, run: MeetingRun) -> None:
+        self._screen = screen
+        self._run_id = run_id
+        self._run = run
+
+    def show(
+        self, fn: Callable[..., object] | None = None, /, *args: object, **fields: object
+    ) -> None:
+        """Run ``fn(*args)`` — or, without one, set ``fields`` — on the GUI
+        thread, if this run is still the screen's by then."""
+        screen = self._screen
+        if fn is None:
+            screen.post(screen._for_run, self._run_id, screen.set, **fields)
+        else:
+            screen.post(screen._for_run, self._run_id, fn, *args)
+
+    def set_stop(self, stop: Callable[[], None]) -> None:
+        # Installed directly rather than posted: a quit from another thread
+        # reads it, and a run's capture comes up only while it is current.
+        if self._run_id == self._screen._run_id:
+            self._screen.set_stop(stop)
+
+    def commit(self, channel: Channel, words: Sequence[Word]) -> None:
+        self.show(self._screen._commit, channel, tuple(words))
+
+    def interim(self, channel: Channel, text: str) -> None:
+        self.show(self._screen._interim, channel, text)
+
+    def status(self, message: str) -> None:
+        self.show(status=message)
+
+    def language(self, language: Language) -> None:
+        self.show(language=language.value)
+
+    def finalizing(self) -> None:
+        self.show(self._screen._set_phase, Phase.FINALIZING)
+
+    def finalized(self, transcript: Transcript) -> None:
+        # The transcript reaches disk here, before the user can close the
+        # window on the done screen.
+        try:
+            self._run.persist(transcript)
+        except Exception as exc:  # noqa: BLE001 — persistence must not sink the result
+            self.error(f"could not write the transcript yet ({exc}); retrying on exit")
+        self.show(self._screen._show, transcript)
+
+    def error(self, message: str) -> None:
+        self.show(status=message)
+
+    def speakers(self, speakers: list[SpeakerSummary], *, ask: bool) -> None:
+        from stenograf.flow import known_speaker_names
+
+        run = self._run
+        known = known_speaker_names(
+            store_path=run.profile_store, attendee_names=run.request.profile.attendee_names
+        )
+        rows = _speaker_rows(speakers, _clip_counts(run))
+        self.show(self._screen._offer_names, rows, ", ".join(known), ask)
+
+
 @dataclass(frozen=True)
 class _Saved:
     """What a names (or finish) job hands back to the GUI thread."""
@@ -733,6 +838,12 @@ class _Saved:
     finished: bool
     folder: str
     problem: str
+    title: str | None
+    """The title Done applied (``None``: unchanged)."""
+
+
+def _clip_counts(run: MeetingRun | None) -> dict[str, int]:
+    return {label: len(c) for label, c in run.voice_clips.items()} if run else {}
 
 
 def _speaker_rows(

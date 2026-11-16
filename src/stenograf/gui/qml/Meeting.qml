@@ -32,9 +32,12 @@ Item {
 
     // Escape does what the button does: stop while capturing, leave once there
     // is nothing left to stop. Never a plain "go back" — popping this page
-    // would leave a meeting running with no way to reach its Stop.
+    // would leave a meeting running with no way to reach its Stop. Off while
+    // the finish card is open: Escape in one of its fields reads as "cancel
+    // this edit", and leaving would drop everything typed into the card.
     Shortcut {
         sequences: [StandardKey.Cancel]
+        enabled: !names.visible
         onActivated: page.screen.stop()
     }
 

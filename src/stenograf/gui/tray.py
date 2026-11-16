@@ -370,9 +370,10 @@ class Tray(QObject):
     @Slot()
     def _relabel(self) -> None:
         """Bring the menu up to date, called just before it is shown."""
-        live = self.state() != "idle"
         self.status.setText(self.summary())
-        self.start.setEnabled(not live and not self.shell.quitting_now)
+        # Open as soon as the meeting has stopped recording: a finish card or a
+        # notes run still going is no reason to keep the next meeting waiting.
+        self.start.setEnabled(not self._meeting().capturing and not self.shell.quitting_now)
         recording = self.state() in ("rec", "muted")
         self.stop.setEnabled(recording)
         meeting = self._meeting()
@@ -409,14 +410,18 @@ class Tray(QObject):
 
     @Slot()
     def _start(self) -> None:
-        """Straight to the setup form, wherever the window had been left."""
+        """Straight to the setup form, wherever the window had been left.
+
+        Unwinding the stack drops a finished meeting's page without its Back
+        button, so its leaving is announced here (the voice samples go)."""
+        self._meeting().left()
         self.shell.show_window()
         self.shell.reset_to("Setup")
 
     @Slot()
     def _stop(self) -> None:
         """Stop and finalize without opening anything — the reason this mode exists."""
-        self._meeting().stop()
+        self._meeting().stop_from_menu_bar()
 
     def _mute(self, channel: str) -> None:
         meeting = self._meeting()

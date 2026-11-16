@@ -239,9 +239,14 @@ class SetupScreen(Screen):
         except MeetingRequestError as exc:
             self.set(error=str(exc))
             return
-        self.set(error="")
         meeting = self.app.screen("Meeting")
         assert meeting is not None
+        if meeting.capturing:  # type: ignore[attr-defined]  # the Meeting screen
+            # Arming a second meeting would take the screen from one that is
+            # still recording, and with it the only Stop it has.
+            self.set(error="a meeting is still recording — stop it first")
+            return
+        self.set(error="")
         meeting.begin(request)  # type: ignore[attr-defined]  # the Meeting screen
         # Replace, not push: Back from the meeting belongs on Home, not on the
         # form that started it.

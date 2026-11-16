@@ -16,8 +16,18 @@ Panel {
     heading: "Start meeting"
     hint: "Formats, vocabulary and the rest come from your settings."
 
-    Component.onCompleted: if (page.screen)
-        page.screen.opened()
+    // The standing defaults are copied into the switches once, after opened()
+    // refreshed them — never bound: the microphone listing lands a moment
+    // later through the same state map, and a binding re-evaluated then would
+    // flip back a switch the user had already changed.
+    Component.onCompleted: {
+        if (!page.screen)
+            return;
+        page.screen.opened();
+        diarize.checked = page.screen.state.diarize;
+        record.checked = page.screen.state.recordAudio;
+        notes.checked = page.screen.state.notes;
+    }
 
     // The meeting type comes first because it sets defaults for the controls
     // below it — and it is hidden entirely on a machine whose settings.toml
@@ -106,7 +116,6 @@ Panel {
     Toggle {
         id: diarize
 
-        checked: page.screen.state.diarize
         label: "Tell speakers apart"
         hint: "Off: each source is one speaker in the transcript."
     }
@@ -167,7 +176,6 @@ Panel {
     Toggle {
         id: record
 
-        checked: page.screen.state.recordAudio
         label: "Keep the audio recording"
         hint: "Writes audio.opus next to the transcript."
     }
@@ -175,7 +183,6 @@ Panel {
     Toggle {
         id: notes
 
-        checked: page.screen.state.notes
         label: "Generate notes afterwards"
     }
 

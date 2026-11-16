@@ -15,7 +15,26 @@ Rectangle {
     readonly property var st: card.screen.state
     readonly property bool busy: card.st.namesBusy
 
+    // Tracks the state map, so it fires on the card's opening only.
+    readonly property bool opening: card.st.namesOpen
+
     signal jump(int line)
+
+    // The inputs are filled here, once per opening, and never bound to the
+    // state map: that map is one property, so every status line or countdown
+    // tick re-evaluates every binding on it — and a binding re-evaluated over
+    // a field the user has typed into writes the old value back.
+    function load() {
+        titleField.text = card.st.title;
+        notesSwitch.checked = card.st.notesOn;
+        presetCombo.model = card.st.presets;
+        presetCombo.currentIndex = Math.max(0, card.st.presets.findIndex(p => p.value === card.st.preset));
+        contextField.text = card.st.context;
+    }
+
+    onOpeningChanged: if (card.opening)
+        card.load()
+    Component.onCompleted: card.load()
 
     function done() {
         var answers = {};
@@ -60,7 +79,6 @@ Rectangle {
                 TextField {
                     id: titleField
 
-                    text: card.st.title
                     placeholderText: "Untitled meeting"
                     font.pixelSize: 19
                     color: Theme.text
@@ -371,29 +389,27 @@ Rectangle {
                 Toggle {
                     id: notesSwitch
 
-                    checked: card.st.notesOn
                     label: "Notes"
                     Layout.fillWidth: false
+                    onToggled: card.screen.hold_names()
                 }
 
                 Combo {
                     id: presetCombo
 
-                    model: card.st.presets
                     visible: card.st.presets.length > 1
                     enabled: notesSwitch.checked && !card.busy
-                    currentIndex: Math.max(0, card.st.presets.findIndex(p => p.value === card.st.preset))
                     implicitHeight: 32
                     Layout.preferredWidth: 170
                     ToolTip.visible: hovered
                     ToolTip.delay: 500
                     ToolTip.text: "Meeting type — which notes setup to use"
+                    onActivated: card.screen.hold_names()
                 }
 
                 Field {
                     id: contextField
 
-                    text: card.st.context
                     placeholderText: "What was it about? (optional)"
                     enabled: notesSwitch.checked && !card.busy
                     implicitHeight: 32
@@ -455,7 +471,13 @@ Rectangle {
                     glyph: "trash"
                     tip: armed ? "Click again to move this meeting to the trash" : "Discard this meeting"
                     enabled: !card.busy
-                    onClicked: armed ? card.screen.discard() : armed = true
+                    onClicked: {
+                        card.screen.hold_names();  // the countdown must not close the card between the clicks
+                        if (armed)
+                            card.screen.discard();
+                        else
+                            armed = true;
+                    }
 
                     Timer {
                         interval: 4000

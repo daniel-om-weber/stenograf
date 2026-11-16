@@ -11,6 +11,9 @@ RowLayout {
     property string label: ""
     property string hint: ""
 
+    // A user's flip only — never a write to `checked`.
+    signal toggled
+
     spacing: 12
     Layout.fillWidth: true
 
@@ -21,6 +24,7 @@ RowLayout {
         implicitHeight: 24
         padding: 0
         Layout.alignment: Qt.AlignTop
+        onToggled: row.toggled()
 
         indicator: Rectangle {
             implicitWidth: 44
