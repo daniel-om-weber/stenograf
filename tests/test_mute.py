@@ -137,7 +137,8 @@ class TestPacedReplayClock:
         frames = provider.frames()
         next(frames)
         time.sleep(0.05)
-        assert provider.now() >= 0.05
+        # Windows' monotonic clock ticks in ~15.6 ms steps: 50 ms can read as 46.
+        assert provider.now() >= 0.05 - time.get_clock_info("monotonic").resolution
 
 
 def _transcript(muted: list[MutedSpan]) -> Transcript:
