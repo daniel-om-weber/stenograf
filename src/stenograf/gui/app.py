@@ -192,6 +192,36 @@ class Screen(QObject):
         """The page for this screen just appeared (no-op by default)."""
 
 
+def open_folder(folder: Path) -> str | None:
+    """Show ``folder`` in the desktop's file manager; the reason when it cannot."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    if not folder.is_dir():
+        # The run names its folder at start, but the first write creates it.
+        return f"{folder} does not exist yet"
+    if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+        return f"nothing on this machine opens folders — find it at {folder}"
+    return None
+
+
+def copy_transcript(folder: Path) -> str | None:
+    """Put ``folder``'s transcript on the clipboard; the reason when it cannot.
+
+    Read back from disk rather than from the screen, so speakers named after the
+    finalize are in it. Markdown — the same text as ``transcript.md`` — because
+    it keeps who said what and when, and the places a transcript is pasted
+    (chat, a notes vault, a language model) render or ignore the emphasis."""
+    from stenograf.output import load_transcript
+
+    try:
+        transcript = load_transcript(folder)[0]
+    except ValueError as exc:
+        return str(exc)
+    QGuiApplication.clipboard().setText(transcript.to_markdown())
+    return None
+
+
 class StenografGui(QObject):
     """The shell QML talks to: the menu, the screen objects, and navigation.
 

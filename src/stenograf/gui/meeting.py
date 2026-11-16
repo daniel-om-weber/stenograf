@@ -20,8 +20,10 @@ What the screen shows, and where it comes from:
   advances it is the app's only periodic timer, and it also flushes an idle
   caption line — together the screen's whole redraw budget;
 - **the footer** — the transient status line (model loading, notes progress)
-  and, once allocated, the meeting folder. They are separate fields on purpose:
-  the notes step overwrites the status, and the folder must survive that;
+  and, once allocated, the meeting folder, which a click opens in the file
+  manager. They are separate fields on purpose: the notes step overwrites the
+  status, and the folder must survive that. Once the transcript is in, a
+  button copies it to the clipboard;
 - **"who spoke?"** — after the finalize, one row per nameable speaker
   (:func:`stenograf.flow.meeting_speakers`). The run's notes wait until the
   names are saved or skipped, and leaving the screen counts as skipping:
@@ -43,12 +45,13 @@ import contextlib
 import threading
 import time
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, Signal, Slot
 
 from stenograf.captions import LIVE_LABEL, CaptionStream
-from stenograf.gui.app import Screen
+from stenograf.gui.app import Screen, copy_transcript, open_folder
 from stenograf.transcript import Transcript, format_timestamp
 from stenograf.view import LiveView, profile_label
 
@@ -131,6 +134,7 @@ class MeetingScreen(Screen, LiveView):
             profile="",
             status="",
             folder="",
+            transcriptReady=False,
             tails=[],
             canStop=False,
             speakers=[],
@@ -401,6 +405,23 @@ class MeetingScreen(Screen, LiveView):
             self.skip_names()
 
     @Slot()
+    def reveal(self) -> None:
+        """Show the meeting's folder in the desktop's file manager."""
+        folder = str(self._state.get("folder", ""))
+        if folder and (problem := open_folder(Path(folder))):
+            self.set(status=problem)
+
+    @Slot(result=bool)
+    def copy(self) -> bool:
+        """Copy the finished transcript, names included; False (and why, on the
+        status line) when there is none to copy."""
+        folder = str(self._state.get("folder", ""))
+        problem = copy_transcript(Path(folder)) if folder else "no meeting folder"
+        if problem:
+            self.set(status=f"transcript not copied: {problem}")
+        return problem is None
+
+    @Slot()
     def open_names(self) -> None:
         """Bring the panel back after it closed (names can be fixed any time)."""
         self.set(namesOpen=True)
@@ -541,6 +562,7 @@ class MeetingScreen(Screen, LiveView):
             Phase.DONE,
             canStop=False,
             tails=[],
+            transcriptReady=True,
             status=f"{count} {'entry' if count == 1 else 'entries'}",
             language=(
                 transcript.language.value

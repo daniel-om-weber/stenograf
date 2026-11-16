@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Property, Slot
 
-from stenograf.gui.app import Screen
+from stenograf.gui.app import Screen, copy_transcript, open_folder
 
 if TYPE_CHECKING:
     from stenograf.gui.app import StenografGui
@@ -273,11 +273,29 @@ class TranscribeScreen(Screen):
             busy=False,
             progress=0.0,
             home=_url(Path.home()),
+            folder="",
         )
 
     @Slot(str)
     def choose(self, url: str) -> None:
-        self.set(file=str(_local(url)), status="")
+        self.set(file=str(_local(url)), status="", folder="")
+
+    @Slot()
+    def reveal(self) -> None:
+        """Show the finished transcription's folder in the desktop's file manager."""
+        folder = str(self._state.get("folder", ""))
+        if folder and (problem := open_folder(Path(folder))):
+            self.set(status=problem)
+
+    @Slot(result=bool)
+    def copy(self) -> bool:
+        """Copy the finished transcript; False (and why, on the status line)
+        when there is none to copy."""
+        folder = str(self._state.get("folder", ""))
+        problem = copy_transcript(Path(folder)) if folder else "nothing transcribed yet"
+        if problem:
+            self.set(status=f"transcript not copied: {problem}")
+        return problem is None
 
     @Slot()
     def start(self) -> None:
@@ -286,14 +304,16 @@ class TranscribeScreen(Screen):
         path = Path(str(self._state.get("file", "")))
         if not path.is_file() or self._state.get("busy"):
             return
-        self.set(busy=True, progress=0.0, status=f"transcribing {path.name}…")
+        self.set(busy=True, progress=0.0, status=f"transcribing {path.name}…", folder="")
         self.work(
             lambda: transcribe_recording(
                 path,
                 on_status=lambda message: self.post(self.set, status=message),
                 on_windows=lambda done, total: self.post(self._windows, done, total),
             ),
-            done=lambda result: self.set(busy=False, progress=1.0, status=result.summary()),
+            done=lambda result: self.set(
+                busy=False, progress=1.0, status=result.summary(), folder=str(result.out_dir)
+            ),
             failed=lambda message: self.set(busy=False, status=f"failed: {message}"),
             name="gui-transcribe",
         )

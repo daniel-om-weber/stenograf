@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -955,6 +956,27 @@ class TestWhoSpoke:
         assert meeting.state["speakers"][0]["label"] == "Anna"
         assert ProfileStore.load().get("Anna", "eres2net-voxceleb-16k.onnx") is not None
 
+    def test_a_copied_transcript_carries_names_given_after_the_finalize(
+        self, gui, tmp_path, monkeypatch
+    ):
+        # The screen's captions are the finalize's; the names land on disk
+        # later. The copy must be the named one, or a user pastes "Local-1".
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        assert meeting.state["transcriptReady"]
+        meeting.save_names({"Local-1": "Anna"}, [])
+        pump(lambda: notes != [] and not meeting.running)
+
+        assert meeting.copy() is True
+        copied = QGuiApplication.clipboard().text()
+        assert "**Anna**" in copied and "Local-1" not in copied
+        folder = Path(meeting.state["folder"])
+        assert copied == (folder / "transcript.md").read_text(encoding="utf-8")
+
     def test_skip_starts_the_notes_with_the_labels(self, gui, tmp_path, monkeypatch):
         notes = []
         self._diarized_meeting(monkeypatch, tmp_path, notes)
@@ -1210,6 +1232,98 @@ class TestTranscribeScreen:
         screen.choose((tmp_path / "not-audio.wav").as_uri())
         screen.start()  # the file does not exist
         assert screen.state["busy"] is False  # never started
+
+
+class TestFolderActions:
+    """The done screens' clickable folder and copy button (meeting and transcribe)."""
+
+    @staticmethod
+    def _folder(tmp_path) -> Path:
+        from stenograf import output
+        from stenograf.config import MeetingProfile
+        from stenograf.transcript import Transcript, TranscriptEntry
+
+        folder = tmp_path / "meeting-20261116-091500"
+        transcript = Transcript(
+            language=None,
+            profile=MeetingProfile(),
+            entries=[TranscriptEntry(speaker="Anna", text="Hallo.", start=0.0, end=1.0)],
+        )
+        output.write_transcript(transcript, folder, output.TRANSCRIPT_STEM)
+        return folder
+
+    @pytest.fixture
+    def opened(self, monkeypatch):
+        """Records what would have opened in the file manager — the real call
+        would put a Finder window on the developer's screen."""
+        from PySide6.QtGui import QDesktopServices
+
+        urls = []
+        monkeypatch.setattr(
+            QDesktopServices, "openUrl", staticmethod(lambda url: urls.append(url) or True)
+        )
+        return urls
+
+    @pytest.mark.parametrize("page", ["Meeting", "Transcribe"])
+    def test_the_folder_opens_in_the_file_manager(self, gui, tmp_path, opened, page):
+        folder = self._folder(tmp_path)
+        shell, _engine = gui
+        screen = shell.screen(page)
+        screen.set(folder=str(folder), status="")
+        screen.reveal()
+        assert [url.toLocalFile() for url in opened] == [str(folder)]
+        assert screen.state["status"] == ""
+
+    def test_a_folder_not_written_yet_says_so(self, gui, tmp_path, opened):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        meeting.set(folder=str(tmp_path / "meeting-20261116-091500"))
+        meeting.reveal()
+        assert opened == []
+        assert "does not exist yet" in meeting.state["status"]
+
+    @pytest.mark.parametrize("page", ["Meeting", "Transcribe"])
+    def test_copy_puts_the_transcript_on_the_clipboard(self, gui, tmp_path, page):
+        folder = self._folder(tmp_path)
+        shell, _engine = gui
+        screen = shell.screen(page)
+        screen.set(folder=str(folder))
+        assert screen.copy() is True
+        assert QGuiApplication.clipboard().text() == "**Anna** [0:00]: Hallo.\n"
+
+    def test_copy_without_a_transcript_says_why(self, gui, tmp_path):
+        QGuiApplication.clipboard().setText("left alone")
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        meeting.set(folder=str(tmp_path))  # a folder, but no transcript in it
+        assert meeting.copy() is False
+        assert meeting.state["status"].startswith("transcript not copied:")
+        assert QGuiApplication.clipboard().text() == "left alone"
+
+    def test_a_finished_transcription_offers_its_folder(self, gui, tmp_path, monkeypatch):
+        import conftest
+
+        from stenograf import loaders, output
+
+        home_dir = tmp_path / "meetings"
+        monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
+        monkeypatch.setattr(
+            loaders,
+            "load_backends",
+            lambda **kwargs: (conftest.FakeASR(), conftest.WholeBufferVAD(), None),
+        )
+        audio = tmp_path / "recording.wav"
+        conftest.write_wav(audio)
+        shell, _engine = gui
+        screen = shell.screen("Transcribe")
+        screen.choose(audio.as_uri())
+        screen.start()
+        assert screen.state["folder"] == "", "no folder to offer while it runs"
+        pump(lambda: not screen.state["busy"])
+        (written,) = home_dir.glob("*/transcript.md")
+        assert screen.state["folder"] == str(written.parent)
+        screen.choose(audio.as_uri())  # a new pick forgets the last result
+        assert screen.state["folder"] == ""
 
 
 class TestNotesScreen:

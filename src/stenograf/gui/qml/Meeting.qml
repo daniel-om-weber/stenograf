@@ -531,13 +531,30 @@ Item {
                     Layout.fillWidth: true
                 }
 
-                Text {
+                PathLink {
                     text: page.screen.state.folder
                     visible: text.length > 0
-                    color: Theme.dim
-                    font.pixelSize: 11
-                    elide: Text.ElideMiddle
                     Layout.fillWidth: true
+                    onActivated: page.screen.reveal()
+                }
+            }
+
+            Btn {
+                id: copyButton
+
+                // Confirmed on the button itself: the status line beside it is
+                // the notes step's, and would be overwritten within a second.
+                property bool copied: false
+
+                text: copied ? "Copied" : "Copy transcript"
+                visible: page.phase === "done" && page.screen.state.transcriptReady
+                implicitWidth: 150
+                onClicked: copied = page.screen.copy()
+
+                Timer {
+                    interval: 1500
+                    running: copyButton.copied
+                    onTriggered: copyButton.copied = false
                 }
             }
 

@@ -73,6 +73,32 @@ Panel {
     }
 
     RowLayout {
+        visible: page.screen.state.folder.length > 0 && !page.screen.state.busy
+        spacing: 10
+        Layout.fillWidth: true
+
+        Btn {
+            text: "Open folder"
+            onClicked: page.screen.reveal()
+        }
+
+        Btn {
+            id: copyButton
+
+            property bool copied: false
+
+            text: copied ? "Copied" : "Copy transcript"
+            onClicked: copied = page.screen.copy()
+
+            Timer {
+                interval: 1500
+                running: copyButton.copied
+                onTriggered: copyButton.copied = false
+            }
+        }
+    }
+
+    RowLayout {
         spacing: 10
         Layout.fillWidth: true
         Layout.topMargin: 8
