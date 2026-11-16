@@ -31,7 +31,9 @@ def test_macos_and_linux_play_through_the_bundled_ffmpeg_from_a_pipe(monkeypatch
     monkeypatch.setattr(playback.sys, "platform", "linux")
     linux = playback.player_argv()
     assert linux[0] == mac[0], "one binary, one code path"
-    assert linux[-3:-1] == ["-f", "pulse"]
+    assert linux[linux.index("pulse") - 1] == "-f"
+    # the muxer drops its buffer at exit: a short buffer, and silence to drop
+    assert "apad=pad_dur=1" in linux and "-buffer_duration" in linux
 
 
 def test_windows_has_no_subprocess_player(monkeypatch):

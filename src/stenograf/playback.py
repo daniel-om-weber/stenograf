@@ -47,7 +47,14 @@ def player_argv() -> list[str]:
     if sys.platform == "darwin":
         output = ["-f", "audiotoolbox", "-"]
     elif sys.platform.startswith("linux"):
-        output = ["-f", "pulse", "stenograf"]  # the stream name the mixer shows
+        # ffmpeg's PulseAudio muxer disconnects at the end without draining
+        # (pulse_write_trailer, FFmpeg 9.0), discarding whatever is buffered —
+        # and the server only starts a stream once its default ~2 s target is
+        # full. A short buffer starts playback at once; a second of appended
+        # silence is what the disconnect throws away instead of the voice.
+        # "stenograf" is the stream name the system mixer shows.
+        output = ["-af", "apad=pad_dur=1", "-f", "pulse", "-buffer_duration", "250",
+                  "stenograf"]  # fmt: skip
     else:
         raise PlaybackUnavailableError(f"no subprocess player on {sys.platform}")
     return [ffmpeg_exe(), "-hide_banner", "-loglevel", "error",
