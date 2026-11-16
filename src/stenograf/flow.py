@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 
 from stenograf import loaders, output
 from stenograf.audio import SAMPLE_RATE, load_audio
+from stenograf.capture.base import CaptureHelperError, CaptureUnavailableError, Channel
 from stenograf.config import Language, MeetingProfile
 from stenograf.notes import run as notes_run
 from stenograf.notes.warm import NotesWarmer
@@ -71,11 +72,10 @@ from stenograf.view import CallbackView, LiveView
 from stenograf.vocab import collect_terms
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Mapping, Sequence
+    from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 
     import numpy as np
 
-    from stenograf.capture.base import Channel
     from stenograf.notes.backend import NotesBackend
     from stenograf.session import MeetingResult
 
@@ -84,7 +84,7 @@ class MeetingRequestError(Exception):
     """A setup form's inputs (plus settings.toml) do not describe a runnable meeting.
 
     One type for every way that can happen — an unreadable settings file, a
-    stale ``[vocab] glossary_file`` path, both sources switched off — so a form
+    stale ``[vocab] glossary_file`` path, a preset the file no longer defines — so a form
     has one thing to catch and one message to show. The message is
     user-facing text, already phrased for a dialog."""
 
@@ -100,13 +100,15 @@ class MeetingRequest:
     ``mic_device`` is the already-resolved microphone selection
     (:func:`resolve_mic_device`), ``None`` meaning the OS default — a form
     control like the rest of this class, not one of ``RunOptions``' tuning
-    flags."""
+    flags. ``start_muted`` are channels recorded but muted from the first
+    sample, which the meeting can switch on later (:meth:`MeetingRun.mute`)."""
 
     profile: MeetingProfile
     settings: Settings
     notes: bool
     record_audio: bool
     mic_device: str | None = None
+    start_muted: frozenset[Channel] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -203,7 +205,6 @@ def resolve_meeting_request(
     diarize: bool,
     local_speakers: int | None = None,
     remote_speakers: int | None = None,
-    language: Language | None = None,
     title: str = "",
     notes: bool = False,
     record_audio: bool = False,
@@ -214,16 +215,21 @@ def resolve_meeting_request(
 
     ``mic``/``system`` are the source switches, ``diarize`` the "tell speakers
     apart" switch, and the two counts the per-channel choices that only exist
-    while it is on (``None`` = estimate the count). They collapse into the
-    profile's counts the way the CLI's flags do: a source switched off is 0
-    speakers, and without diarization a live source is exactly 1 — which is what
-    keeps the diarizer model unloaded.
+    while it is on (``None`` = estimate the count). Both sources are always
+    recorded: a switch says whether its source is live at the start, and one
+    switched off starts muted (``start_muted``), so the meeting can still turn
+    it on — which is why the app needs both captures to work. Without
+    diarization each source is exactly 1 speaker, which is what keeps the
+    diarizer model unloaded.
 
     ``preset`` applies a ``[meetings.<name>]`` section exactly as the CLI's
     ``--preset`` does: its notes setup rides in the returned request's
-    ``settings``, its vocabulary merges into the profile, and its
-    title/language are defaults a form's typed values (``title``,
-    ``language``) still beat. One known precedence gap on this UI path only:
+    ``settings``, its vocabulary merges into the profile, its title is a default
+    a typed ``title`` still beats, and its language becomes the meeting's. A
+    form offers no language of its own: Parakeet ignores it (a German clip
+    decoded word-for-word identically as de, en and unset, 2026-11-16), and the
+    one thing a language steers — what the notes are written in — is detected
+    from the finished transcript. One known precedence gap on this UI path only:
     ``STENOGRAF_NOTES_BACKEND`` still beats a preset's *backend* inside
     ``create_backend`` (the CLI passes the backend explicitly; this path has
     no override channel) — the env var is a developer escape hatch, so
@@ -244,29 +250,28 @@ def resolve_meeting_request(
         )
     except SettingsError as exc:  # e.g. a stale [vocab] glossary_file
         raise MeetingRequestError(str(exc)) from exc
+    language = None
     if preset_obj is not None:
         title = title or (preset_obj.title or "")
-        if language is None and preset_obj.language is not None:
+        if preset_obj.language is not None:
             language = Language(preset_obj.language)
 
-    def count(enabled: bool, chosen: int | None) -> int | None:
-        """The profile count a source's controls mean: 0 = off, 1 = one speaker,
+    def count(chosen: int | None) -> int | None:
+        """The profile count a source's controls mean: 1 = one speaker,
         None = diarize and estimate."""
-        if not enabled:
-            return 0
         return chosen if diarize else 1
 
     try:
         profile = MeetingProfile(
             language=language,
-            local_speakers=count(mic, local_speakers),
-            remote_speakers=count(system, remote_speakers),
+            local_speakers=count(local_speakers),
+            remote_speakers=count(remote_speakers),
             glossary=glossary_terms,
             attendee_names=attendee_names,
             title=title,
             diarization=diarize,
         )
-    except ValueError as exc:  # e.g. both sources switched off
+    except ValueError as exc:
         raise MeetingRequestError(str(exc)) from exc
     return MeetingRequest(
         profile=profile,
@@ -274,6 +279,9 @@ def resolve_meeting_request(
         notes=notes,
         record_audio=record_audio,
         mic_device=resolve_mic_device(mic_device, settings),
+        start_muted=frozenset(
+            channel for channel, live in ((Channel.MIC, mic), (Channel.SYSTEM, system)) if not live
+        ),
     )
 
 
@@ -350,6 +358,8 @@ class MeetingRun:
         :attr:`abandon_notes`; capture teardown and finalize must be waited on,
         or the meeting itself is lost)."""
         self._muting = MuteSwitch()  # exists before the run: a press may come first
+        for channel in request.start_muted:
+            self._muting.set(channel, True)  # no clock bound yet: the span starts at 0
         self.abort = abort or threading.Event()
         """Set while capture is still being *built* to cancel the run outright.
 
@@ -373,6 +383,27 @@ class MeetingRun:
     def muted(self, channel: Channel) -> bool:
         return self._muting.muted(channel)
 
+    @contextlib.contextmanager
+    def _explain_capture_failure(self) -> Iterator[None]:
+        """Say why a source the user switched off can still fail the meeting.
+
+        It is recorded muted, so the meeting can switch it on later; a capture
+        that cannot open it (a denied permission, no output device) therefore
+        fails the run, and "but I turned that off" deserves an answer."""
+        try:
+            yield
+        except (CaptureUnavailableError, CaptureHelperError) as exc:
+            if not self.request.start_muted:
+                raise
+            muted = " and ".join(
+                "the microphone" if ch is Channel.MIC else "system audio"
+                for ch in sorted(self.request.start_muted)
+            )
+            raise type(exc)(
+                f"{exc} — {muted} is recorded even when switched off (it starts muted, so "
+                "the meeting can turn it on), so both captures must work"
+            ) from exc
+
     def run(self, view: LiveView) -> Transcript | None:
         """Capture, finalize, persist, and (if asked) write notes, reporting
         through ``view``.
@@ -391,19 +422,20 @@ class MeetingRun:
         # view, never through click — a GUI has no stdio at all, and on Windows
         # click.echo dies probing its proxy (loaders module docstring). on_log
         # likewise, unless the front-end owns a real stderr and says so.
-        provider = loaders.make_provider(
-            options.replay,
-            plans,
-            # Pace file replay to wall-clock only when it feeds the live pass,
-            # so a replay demonstrates captions at meeting cadence; batch just
-            # dumps it.
-            paced=options.live,
-            aec=options.aec,
-            aec_dump=options.aec_dump,
-            mic_device=self.request.mic_device,
-            announce=view.status,
-            on_log=None if options.transport_stderr else loaders.CaptureLog(view=view),
-        )
+        with self._explain_capture_failure():
+            provider = loaders.make_provider(
+                options.replay,
+                plans,
+                # Pace file replay to wall-clock only when it feeds the live pass,
+                # so a replay demonstrates captions at meeting cadence; batch just
+                # dumps it.
+                paced=options.live,
+                aec=options.aec,
+                aec_dump=options.aec_dump,
+                mic_device=self.request.mic_device,
+                announce=view.status,
+                on_log=None if options.transport_stderr else loaders.CaptureLog(view=view),
+            )
         if self.abort.is_set():
             # The cancel arrived while the provider was being built. Release
             # the devices and walk away — no audio exists, so there is nothing
@@ -485,23 +517,24 @@ class MeetingRun:
             notes_warmer.start()
         try:
             try:
-                result = recorder.run(
-                    provider,
-                    live=options.live,
-                    view=view,
-                    on_frame=tee.add if tee else None,
-                    checkpoint=(
-                        CheckpointConfig(
-                            output.checkpoint_writer(self.out_dir, self.basename),
-                            options.resolved_flush_interval(),
-                        )
-                        if options.live
-                        else None
-                    ),
-                    max_seconds=options.max_seconds,
-                    provider_started=True,
-                    mute=self._muting,
-                )
+                with self._explain_capture_failure():
+                    result = recorder.run(
+                        provider,
+                        live=options.live,
+                        view=view,
+                        on_frame=tee.add if tee else None,
+                        checkpoint=(
+                            CheckpointConfig(
+                                output.checkpoint_writer(self.out_dir, self.basename),
+                                options.resolved_flush_interval(),
+                            )
+                            if options.live
+                            else None
+                        ),
+                        max_seconds=options.max_seconds,
+                        provider_started=True,
+                        mute=self._muting,
+                    )
             finally:
                 if tee is not None:
                     tee.close()  # flush + finalize the recording even on a dying run

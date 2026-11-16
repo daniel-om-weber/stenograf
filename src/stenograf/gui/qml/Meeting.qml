@@ -128,7 +128,9 @@ Item {
             // Also the row's spring: it takes the spare width and gives it back
             // first when the channel chips need room.
             Text {
-                text: page.screen.state.language + "  ·  " + page.screen.state.profile
+                // The language appears once detected — at the finalize, or at
+                // the start when a meeting type fixes it.
+                text: (page.screen.state.language ? page.screen.state.language + "  ·  " : "") + page.screen.state.profile
                 color: Theme.muted
                 font.pixelSize: 12
                 elide: Text.ElideRight

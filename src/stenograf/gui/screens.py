@@ -97,9 +97,10 @@ def _device_entries(devices: list, pinned: str | None) -> list[dict[str, str]]:
 class SetupScreen(Screen):
     """The few choices that matter before capture starts.
 
-    One concept per control: the meeting type, which sources to capture,
+    One concept per control: the meeting type, which sources are live at the
+    start (both are always recorded; one switched off starts muted),
     whether to tell speakers apart (the per-channel counts only mean something
-    while that is on), language, an optional title, the audio-recording opt-in
+    while that is on), an optional title, the audio-recording opt-in
     and the notes toggle. Everything else — formats, vocabulary, re-ID, AEC,
     checkpoint cadence — comes from settings.toml exactly as it does for a
     flagless ``steno start``. The switches' standing defaults are refreshed on
@@ -199,14 +200,6 @@ class SetupScreen(Screen):
         ]
 
     @Property("QVariantList", constant=True)  # type: ignore[operator]  # PySide decorator
-    def languages(self) -> list[dict[str, str]]:
-        from stenograf.config import Language
-
-        return [{"label": "Auto-detect", "value": "auto"}] + [
-            {"label": language.name.title(), "value": language.value} for language in Language
-        ]
-
-    @Property("QVariantList", constant=True)  # type: ignore[operator]  # PySide decorator
     def counts(self) -> list[dict[str, object]]:
         from stenograf.config import MAX_SPEAKERS
 
@@ -218,18 +211,15 @@ class SetupScreen(Screen):
     def start(self, form: dict) -> None:
         """Resolve the form into a request and hand it to the meeting screen.
 
-        A form that cannot describe a meeting (both sources off, an unreadable
-        settings file, a preset settings.toml no longer defines) stays open with
-        the reason shown, through the same library call every front-end resolves
-        with."""
-        from stenograf.config import Language
+        A form that cannot describe a meeting (an unreadable settings file, a
+        preset settings.toml no longer defines) stays open with the reason
+        shown, through the same library call every front-end resolves with."""
         from stenograf.flow import MeetingRequestError, resolve_meeting_request
 
         def count(key: str) -> int | None:
             value = form.get(key)
             return None if value == _AUTO else int(value)  # type: ignore[arg-type]
 
-        language = str(form.get("language", "auto"))
         try:
             request = resolve_meeting_request(
                 mic=bool(form.get("mic")),
@@ -237,7 +227,6 @@ class SetupScreen(Screen):
                 diarize=bool(form.get("diarize")),
                 local_speakers=count("local"),
                 remote_speakers=count("remote"),
-                language=None if language == "auto" else Language(language),
                 title=str(form.get("title", "")),
                 notes=bool(form.get("notes")),
                 record_audio=bool(form.get("recordAudio")),

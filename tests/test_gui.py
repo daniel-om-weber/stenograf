@@ -268,7 +268,6 @@ class TestSetupScreen:
                 "diarize": True,
                 "local": 2,
                 "remote": -1,
-                "language": "de",
                 "title": "Weekly",
                 "recordAudio": True,
                 "notes": False,
@@ -280,10 +279,14 @@ class TestSetupScreen:
         assert seen == [("Meeting", "replace")]
         # The meeting page is live by then and has already consumed the request
         # (that is what starts the meeting), so what it says about it is the
-        # observable proof it arrived: mic-only, two people in the room, German.
+        # observable proof it arrived: two people in the room, a language left
+        # to detection, and system audio recorded but muted — the switch said
+        # "not live at start".
         meeting = shell.screen("Meeting")
-        assert meeting.state["profile"] == "local 2"
-        assert meeting.state["language"] == "de"
+        assert meeting.state["profile"].startswith("local 2")
+        assert meeting.state["language"] == ""
+        assert meeting.state["channels"] == ["mic", "system"]
+        assert (meeting.state["micMuted"], meeting.state["systemMuted"]) == (False, True)
 
     def test_the_microphone_picker_lists_devices_with_the_default_first(self, gui):
         shell, _engine = gui
@@ -360,7 +363,6 @@ class TestSetupScreen:
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": False,
@@ -423,7 +425,6 @@ class TestSetupScreen:
             "diarize": False,
             "local": -1,
             "remote": -1,
-            "language": "auto",
             "title": "",
             "recordAudio": False,
             "notes": False,
@@ -448,7 +449,6 @@ class TestSetupScreen:
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": False,
@@ -497,15 +497,14 @@ language = "de"
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",  # the preset's language fills the gap
-                "title": "",  # …and its title
+                "title": "",  # the preset's title fills the gap
                 "recordAudio": False,
                 "notes": False,
             }
         )
 
-        # The form sent language "auto" and no title, so a German meeting on the
-        # live page is the preset having reached the library through the picker.
+        # The form has no language field, so a German meeting on the live page
+        # is the preset having reached the library through the picker.
         assert setup.state["error"] == ""
         assert shell.screen("Meeting").state["language"] == "de"
 
@@ -525,7 +524,6 @@ language = "de"
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": False,
@@ -534,27 +532,32 @@ language = "de"
         assert seen == []
         assert "unknown meeting preset" in shell.screen("Setup").state["error"]
 
-    def test_an_impossible_profile_keeps_the_form_open(self, gui, tmp_path, monkeypatch):
+    def test_both_sources_off_starts_a_meeting_with_both_muted(
+        self, gui, tmp_path, monkeypatch
+    ):
+        # "Off" means "not live at the start": both are still recorded, so the
+        # meeting can switch either on — no longer a form that cannot start.
+        from stenograf import output
+
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
         shell, _engine = gui
         seen = []
         shell.navigation.connect(lambda page, mode: seen.append((page, mode)))
-
         shell.screen("Setup").start(
             {
-                "mic": False,  # both sources off — nothing to capture
+                "mic": False,
                 "system": False,
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": False,
             }
         )
-        assert seen == [], "a form that cannot start a meeting must not navigate"
-        error = shell.screen("Setup").state["error"]
-        assert error and ("speaker" in error or "source" in error), error
+        assert seen == [("Meeting", "replace")]
+        meeting = shell.screen("Meeting")
+        assert (meeting.state["micMuted"], meeting.state["systemMuted"]) == (True, True)
 
     def test_standing_settings_preset_the_switches(self, gui, tmp_path, monkeypatch):
         write_settings("[speakers]\ndiarization = true\n\n[notes]\nauto = true\n")
@@ -619,7 +622,6 @@ class TestMeetingScreen:
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": True,  # keep audio.opus
                 "notes": False,
@@ -679,14 +681,14 @@ class TestMeetingScreen:
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": False,
             }
         )
         pump(lambda: meeting.state["canStop"])
-        assert meeting.state["channels"] == ["mic"]
+        assert meeting.state["channels"] == ["mic", "system"]
+        assert meeting.state["systemMuted"] is True  # switched off in the form
         meeting.mute("mic", True)
         assert meeting.state["micMuted"] is True
         time.sleep(0.3)
@@ -698,8 +700,9 @@ class TestMeetingScreen:
 
         folder = Path(meeting.state["folder"])
         saved = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
-        (span,) = saved["muted"]
-        assert span["channel"] == "mic" and span["end"] - span["start"] >= 0.25
+        spans = {span["channel"]: span for span in saved["muted"]}
+        assert spans["mic"]["end"] - spans["mic"]["start"] >= 0.25
+        assert spans["system"]["start"] == 0.0, "muted from the first sample"
         assert "*(microphone muted" in (folder / "transcript.md").read_text(encoding="utf-8")
         meeting.mute("mic", True)  # after the recording: nothing left to mute
         assert meeting.state["micMuted"] is False
@@ -723,7 +726,6 @@ class TestMeetingScreen:
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": False,
@@ -779,7 +781,6 @@ class TestMeetingScreen:
                 "diarize": False,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": False,
@@ -884,7 +885,6 @@ class TestMeetingScreen:
             "diarize": False,
             "local": -1,
             "remote": -1,
-            "language": "auto",
             "title": "",
             "recordAudio": False,
             "notes": notes,
@@ -997,7 +997,6 @@ class TestWhoSpoke:
                 "diarize": True,
                 "local": -1,
                 "remote": -1,
-                "language": "auto",
                 "title": "",
                 "recordAudio": False,
                 "notes": notes,
@@ -1263,7 +1262,6 @@ class TestWhoSpoke:
             "diarize": False,
             "local": -1,
             "remote": -1,
-            "language": "auto",
             "title": "",
             "recordAudio": False,
             "notes": True,

@@ -16,7 +16,7 @@ What the screen shows, and where it comes from:
   re-evaluate every binding on the screen for each new line;
 - **the interim area** — the open (bright) line plus the grey provisional tail,
   per channel, exactly as :class:`~stenograf.captions.CaptionStream` decides;
-- **the header** — phase, elapsed, language, profile, and one chip per
+- **the header** — phase, elapsed, language (once known), profile, and one chip per
   recorded channel that both shows and switches its mute (the run silences
   it: :meth:`stenograf.flow.MeetingRun.mute`); the 1 Hz clock that
   advances it is the app's only periodic timer, and it also flushes an idle
@@ -132,7 +132,7 @@ class MeetingScreen(Screen, LiveView):
             Phase.REC,
             active=False,
             elapsed="0:00",
-            language="—",
+            language="",
             profile="",
             status="",
             folder="",
@@ -162,10 +162,13 @@ class MeetingScreen(Screen, LiveView):
 
         self._request = request
         self._reset()
+        muted = {channel.value for channel in request.start_muted}
         self.set(
             channels=[plan.channel.value for plan in plan_channels(request.profile)],
+            micMuted="mic" in muted,
+            systemMuted="system" in muted,
             profile=profile_label(request.profile),
-            language=request.profile.language.value if request.profile.language else "—",
+            language=request.profile.language.value if request.profile.language else "",
         )
 
     @Slot()
@@ -586,7 +589,7 @@ class MeetingScreen(Screen, LiveView):
             language=(
                 transcript.language.value
                 if transcript.language is not None
-                else self._state.get("language", "—")
+                else self._state.get("language", "")
             ),
         )
 

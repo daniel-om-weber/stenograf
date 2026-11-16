@@ -91,6 +91,17 @@ plan (§9), but the API is there for it.
 carried over to the next meeting would silently lose a whole meeting of the
 user's own voice.
 
+**D7 — In the app, a source switch means "live at the start", not "recorded"
+(Daniel, 2026-11-16).** The start form always records both sources; one
+switched off starts muted from the first sample (`MeetingRequest.start_muted`),
+so the meeting can switch it on later. Consequence, chosen over an automatic
+fallback: both captures must work. A denied system-audio permission or a
+missing output device fails the meeting at start, with a message that says the
+switched-off source is still recorded (`MeetingRun._explain_capture_failure`);
+the app no longer offers a mic-only capture. The CLI is unchanged —
+`--local 0` / `--remote 0` still leave a channel out, since it has no control
+to switch one on.
+
 ## 3. Step 0 — measure the clock anchor, BEFORE any code
 
 D3 needs "the session time right now" at the moment of a press. Two candidates:

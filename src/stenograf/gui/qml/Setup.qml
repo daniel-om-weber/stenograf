@@ -57,17 +57,17 @@ Panel {
 
         checked: true
         label: "Microphone"
-        hint: "People in the room."
+        hint: mic.checked ? "People in the room." : "Starts muted — switch it on in the meeting."
     }
 
-    // Which microphone, under the switch that turns it on. The combo appears
+    // Which microphone, under its switch — shown either way, because a mic that
+    // starts muted is still recorded and can be switched on. The combo appears
     // only once Python has listed the devices (the model arrives from a helper
     // subprocess, and a model swap resets the selection) and only when there is
     // something to choose between; the hint below it is separate, because a
     // listing that failed must say so rather than show nothing at all.
     ColumnLayout {
         spacing: 6
-        visible: mic.checked
         Layout.fillWidth: true
 
         Text {
@@ -100,7 +100,7 @@ Panel {
 
         checked: true
         label: "System audio"
-        hint: "Calls, videos — anything playing on this machine."
+        hint: system.checked ? "Calls, videos — anything playing on this machine." : "Starts muted — switch it on in the meeting."
     }
 
     Toggle {
@@ -148,20 +148,6 @@ Panel {
             color: Theme.muted
             font.pixelSize: 12
         }
-    }
-
-    Text {
-        text: "Language"
-        color: Theme.text
-        font.pixelSize: 13
-        Layout.topMargin: 4
-    }
-
-    Combo {
-        id: language
-
-        model: page.screen.languages
-        Layout.fillWidth: true
     }
 
     Text {
@@ -222,7 +208,6 @@ Panel {
                 "diarize": diarize.checked,
                 "local": localCount.value,
                 "remote": remoteCount.value,
-                "language": language.value,
                 "title": title.text,
                 "recordAudio": record.checked,
                 "notes": notes.checked

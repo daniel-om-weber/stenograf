@@ -55,14 +55,27 @@ class TestMeetingRequest:
         )
         assert not off.profile.diarizes
 
-    def test_a_source_switched_off_is_zero_speakers(self):
+    def test_a_source_switched_off_is_recorded_but_starts_muted(self):
+        # Both sources are always recorded so the meeting can switch either on;
+        # the switch only decides which is live at the start.
         request = resolve_meeting_request(mic=True, system=False, diarize=True)
-        assert request.profile.remote_speakers == 0
+        assert request.profile.remote_speakers is None  # recorded, count estimated
         assert request.profile.local_speakers is None  # auto by default
+        assert request.start_muted == {Channel.SYSTEM}
 
-    def test_both_sources_off_is_a_reported_error(self):
-        with pytest.raises(MeetingRequestError):
-            resolve_meeting_request(mic=False, system=False, diarize=False)
+    def test_both_sources_off_is_a_meeting_that_starts_fully_muted(self):
+        request = resolve_meeting_request(mic=False, system=False, diarize=False)
+        assert (request.profile.local_speakers, request.profile.remote_speakers) == (1, 1)
+        assert request.start_muted == {Channel.MIC, Channel.SYSTEM}
+
+    def test_the_language_is_left_to_detection_unless_a_preset_fixes_it(self):
+        # The form has no language field: Parakeet ignores one, and the notes
+        # language comes from the finished transcript.
+        plain = resolve_meeting_request(mic=True, system=True, diarize=False)
+        assert plain.profile.language is None
+        write_settings('[meetings.x]\nlanguage = "de"\n')
+        preset = resolve_meeting_request(mic=True, system=True, diarize=False, preset="x")
+        assert preset.profile.language == "de"
 
     def test_a_broken_settings_file_is_reported_not_raised_raw(self):
         write_settings("not toml [")
@@ -234,6 +247,35 @@ class TestMeetingRunAbort:
 
         assert run.run(LiveView()) is None
         assert stopped == [True]  # the devices were released on the way out
+
+
+    def test_a_source_switched_off_that_cannot_be_captured_says_why(
+        self, tmp_path, monkeypatch
+    ):
+        # Switched off still means recorded (muted), so a denied permission on
+        # that source fails the meeting — the message must say why.
+        from stenograf import loaders, output
+        from stenograf.capture.base import CaptureUnavailableError
+        from stenograf.flow import MeetingRun
+        from stenograf.view import LiveView
+
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+
+        def denied(*args, **kwargs):
+            raise CaptureUnavailableError("system tap unavailable — permission missing")
+
+        monkeypatch.setattr(loaders, "make_provider", denied)
+        request = resolve_meeting_request(mic=True, system=False, diarize=False)
+        with pytest.raises(CaptureUnavailableError) as excinfo:
+            MeetingRun(request).run(LiveView())
+        message = str(excinfo.value)
+        assert message.startswith("system tap unavailable")
+        assert "system audio is recorded even when switched off" in message
+
+        both_live = resolve_meeting_request(mic=True, system=True, diarize=False)
+        with pytest.raises(CaptureUnavailableError) as excinfo:
+            MeetingRun(both_live).run(LiveView())
+        assert "switched off" not in str(excinfo.value), "nothing to explain"
 
 
 class TestBiasingReachesTheDecoder:
