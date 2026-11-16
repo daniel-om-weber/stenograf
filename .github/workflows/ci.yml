@@ -41,8 +41,8 @@ jobs:
       - run: uv run pytest -q
 
   # The "Who spoke?" play button on Windows, played and recorded back through
-  # a virtual sound card (hosted runners have none); both images, because the
-  # driver install depends on what each image's WDK provides.
+  # a virtual sound card (hosted runners have none); both current images, so
+  # an image change that breaks the install shows up before it is the only one.
   playback-windows:
     strategy:
       fail-fast: false

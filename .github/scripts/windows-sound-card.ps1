@@ -7,10 +7,11 @@
 # and pinned by SHA-256 — never from the vendor at CI time (VB-Audio's
 # licence permits redistributing the package AS IS with credit; the credit is
 # in the release notes). The steps follow Mozilla cubeb's CI script
-# (.github/scripts/setup_windows_audio.ps1), with one change: the device is
-# created with tools already on the runner — Microsoft's DevCon replacement
-# (devgen + the inbox pnputil) where the WDK provides devgen, else the WDK's
-# devcon — so no Microsoft binary is redistributed either.
+# (.github/scripts/setup_windows_audio.ps1), with one change: no devcon. The
+# root device is created through SetupAPI directly (what devcon's "install"
+# does inside) and the inbox pnputil installs the driver on it, so nothing is
+# needed from the WDK — windows-2025 ships neither devcon nor devgen
+# (measured 2026-11-16) — and no Microsoft binary is redistributed.
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
@@ -38,25 +39,57 @@ $cert = Join-Path $work "vbcable.cer"
 if ($LASTEXITCODE -ne 0) { throw "certutil failed ($LASTEXITCODE)" }
 
 $inf = Join-Path $driver "vbMmeCable64_win7.inf"
-$kits = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Tools"
-$devgen = Get-ChildItem -Path $kits -Recurse -Filter devgen.exe -ErrorAction SilentlyContinue |
-    Where-Object { $_.DirectoryName -like "*\x64" } | Select-Object -Last 1
-$devcon = Get-ChildItem -Path $kits -Recurse -Filter devcon.exe -ErrorAction SilentlyContinue |
-    Where-Object { $_.DirectoryName -like "*\x64" } | Select-Object -Last 1
-if ($devgen) {
-    Write-Host "creating the device with $($devgen.FullName) + pnputil"
-    & $devgen.FullName /add /bus ROOT /hardwareid $hardwareId
-    if ($LASTEXITCODE -ne 0) { throw "devgen failed ($LASTEXITCODE)" }
-    & pnputil.exe /add-driver $inf /install
-    if ($LASTEXITCODE -ne 0) { throw "pnputil failed ($LASTEXITCODE)" }
-} elseif ($devcon) {
-    Write-Host "creating the device with $($devcon.FullName)"
-    & $devcon.FullName install $inf $hardwareId
-    if ($LASTEXITCODE -ne 0) { throw "devcon failed ($LASTEXITCODE)" }
-} else {
-    Get-ChildItem -Path $kits -ErrorAction SilentlyContinue | Format-Table Name
-    throw "neither devgen.exe nor devcon.exe under $kits"
+Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class RootDevice {
+    [StructLayout(LayoutKind.Sequential)]
+    struct SP_DEVINFO_DATA { public uint cbSize; public Guid ClassGuid; public uint DevInst; public IntPtr Reserved; }
+
+    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool SetupDiGetINFClassW(string inf, out Guid classGuid, StringBuilder className, uint size, out uint required);
+    [DllImport("setupapi.dll", SetLastError = true)]
+    static extern IntPtr SetupDiCreateDeviceInfoList(ref Guid classGuid, IntPtr parent);
+    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool SetupDiCreateDeviceInfoW(IntPtr set, string name, ref Guid classGuid, string description, IntPtr parent, uint flags, ref SP_DEVINFO_DATA data);
+    [DllImport("setupapi.dll", SetLastError = true)]
+    static extern bool SetupDiSetDeviceRegistryPropertyW(IntPtr set, ref SP_DEVINFO_DATA data, uint property, byte[] buffer, uint size);
+    [DllImport("setupapi.dll", SetLastError = true)]
+    static extern bool SetupDiCallClassInstaller(uint function, IntPtr set, ref SP_DEVINFO_DATA data);
+    [DllImport("setupapi.dll")]
+    static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
+
+    const uint DICD_GENERATE_ID = 1, SPDRP_HARDWAREID = 1, DIF_REGISTERDEVICE = 0x19;
+
+    static Exception Failed(string call) { return new Win32Exception(Marshal.GetLastWin32Error(), call + " failed"); }
+
+    // A root-enumerated device node carrying the INF's class and the given
+    // hardware ID, registered with PnP; the driver is installed onto it after.
+    public static void Create(string inf, string hardwareId) {
+        Guid cls; uint required; var className = new StringBuilder(256);
+        if (!SetupDiGetINFClassW(inf, out cls, className, 256, out required)) throw Failed("SetupDiGetINFClass");
+        IntPtr set = SetupDiCreateDeviceInfoList(ref cls, IntPtr.Zero);
+        if (set == new IntPtr(-1)) throw Failed("SetupDiCreateDeviceInfoList");
+        try {
+            var data = new SP_DEVINFO_DATA();
+            data.cbSize = (uint)Marshal.SizeOf(typeof(SP_DEVINFO_DATA));
+            if (!SetupDiCreateDeviceInfoW(set, className.ToString(), ref cls, null, IntPtr.Zero, DICD_GENERATE_ID, ref data)) throw Failed("SetupDiCreateDeviceInfo");
+            byte[] ids = Encoding.Unicode.GetBytes(hardwareId + "\0\0");
+            if (!SetupDiSetDeviceRegistryPropertyW(set, ref data, SPDRP_HARDWAREID, ids, (uint)ids.Length)) throw Failed("SetupDiSetDeviceRegistryProperty");
+            if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, ref data)) throw Failed("SetupDiCallClassInstaller");
+        } finally {
+            SetupDiDestroyDeviceInfoList(set);
+        }
+    }
 }
+"@
+Write-Host "creating the $hardwareId root device through SetupAPI"
+[RootDevice]::Create($inf, $hardwareId)
+& pnputil.exe /add-driver $inf /install
+if ($LASTEXITCODE -ne 0) { throw "pnputil failed ($LASTEXITCODE)" }
 
 # Off by default since the windows-2022 image (actions/runner-images#2528).
 Start-Service AudioEndpointBuilder, Audiosrv

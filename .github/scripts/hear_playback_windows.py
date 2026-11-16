@@ -1,9 +1,9 @@
 """The "Who spoke?" play button on Windows, heard back through VB-CABLE.
 
-winsound plays into the default output (the cable's "CABLE Input", the
-runner's only endpoint once windows-sound-card.ps1 ran); the bundled ffmpeg
-records the cable's "CABLE Output" over DirectShow. Two checks, as on Linux
-plus the one Linux cannot need:
+stenograf's player (waveOut) plays into the default output — the cable's
+"CABLE Input", the runner's only endpoint once windows-sound-card.ps1 ran —
+and the bundled ffmpeg records the cable's "CABLE Output" over DirectShow.
+Two checks, the Linux one plus the one Linux cannot need:
 
 1. a 4 s tone (a real sample's length) arrives whole — at least 3.6 s of it;
 2. stop() cuts a playing sample short: the player reports done promptly and

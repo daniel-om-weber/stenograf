@@ -13,9 +13,12 @@ That rules out the obvious players, all of which want a file. What remains:
   cannot do this: it needs a seekable file (``AudioFileOpen failed`` on a pipe,
   measured 2026-11-16); ``pacat``/``pw-cat`` would, but stock Debian 12 GNOME
   ships no ``pacat`` and Debian 12 KDE no ``pw-cat``.
-- **Windows:** ffmpeg has no audio output there at all; ``winsound`` (standard
-  library) plays a WAV image from memory — synchronously only (``SND_MEMORY``
-  refuses ``SND_ASYNC``), so on a thread.
+- **Windows:** ffmpeg has no audio output there at all. The waveOut API
+  (winmm, unchanged since Windows 95) plays a memory buffer and ``waveOutReset``
+  stops it at once, reached through ``ctypes``. Not ``winsound``: its in-memory
+  play is synchronous only (``SND_MEMORY`` refuses ``SND_ASYNC``), and
+  ``PlaySound(None, 0)`` from another thread does not interrupt it — a sample
+  "stopped" after 1 s played all 4 s (Windows CI, 2026-11-16).
 
 No Qt Multimedia: PySide6-Essentials does not ship it, and the add-on package
 is a 40–90 MB download for one button.
@@ -23,11 +26,9 @@ is a 40–90 MB download for one button.
 
 from __future__ import annotations
 
-import io
 import subprocess
 import sys
 import threading
-import wave
 from collections.abc import Callable
 
 import numpy as np
@@ -80,12 +81,8 @@ class Playback:
         return self
 
     def stop(self) -> None:
-        self._stopped.set()
-        if sys.platform == "win32":
-            import winsound
-
-            winsound.PlaySound(None, 0)  # ends the synchronous play on the other thread
-        elif self._process is not None:
+        self._stopped.set()  # the waveOut loop polls it
+        if self._process is not None:
             self._process.terminate()
 
     def join(self, timeout: float | None = None) -> None:
@@ -95,9 +92,7 @@ class Playback:
         error = None
         try:
             if sys.platform == "win32":
-                import winsound
-
-                winsound.PlaySound(_wav_bytes(self._clip), winsound.SND_MEMORY)
+                _play_waveout(self._clip, self._stopped)
             else:
                 self._process = subprocess.Popen(
                     player_argv(),
@@ -122,11 +117,67 @@ class Playback:
         self._on_done(error)
 
 
-def _wav_bytes(clip: np.ndarray) -> bytes:
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as out:
-        out.setnchannels(1)
-        out.setsampwidth(2)
-        out.setframerate(SAMPLE_RATE)
-        out.writeframes(clip.tobytes())
-    return buffer.getvalue()
+def _play_waveout(clip: np.ndarray, stopped: threading.Event) -> None:
+    """Play ``clip`` through winmm's waveOut until it ends or ``stopped`` is set."""
+    assert sys.platform == "win32"
+    import ctypes
+    from ctypes import wintypes
+
+    class WaveFormatEx(ctypes.Structure):
+        _fields_ = [
+            ("wFormatTag", wintypes.WORD),
+            ("nChannels", wintypes.WORD),
+            ("nSamplesPerSec", wintypes.DWORD),
+            ("nAvgBytesPerSec", wintypes.DWORD),
+            ("nBlockAlign", wintypes.WORD),
+            ("wBitsPerSample", wintypes.WORD),
+            ("cbSize", wintypes.WORD),
+        ]
+
+    class WaveHdr(ctypes.Structure):
+        _fields_ = [
+            ("lpData", ctypes.c_void_p),
+            ("dwBufferLength", wintypes.DWORD),
+            ("dwBytesRecorded", wintypes.DWORD),
+            ("dwUser", ctypes.c_size_t),
+            ("dwFlags", wintypes.DWORD),
+            ("dwLoops", wintypes.DWORD),
+            ("lpNext", ctypes.c_void_p),
+            ("reserved", ctypes.c_size_t),
+        ]
+
+    winmm = ctypes.WinDLL("winmm")
+    handle_t, header_p = ctypes.c_void_p, ctypes.POINTER(WaveHdr)
+    winmm.waveOutOpen.argtypes = [ctypes.POINTER(handle_t), wintypes.UINT,
+                                  ctypes.POINTER(WaveFormatEx), ctypes.c_size_t,
+                                  ctypes.c_size_t, wintypes.DWORD]  # fmt: skip
+    for name in ("waveOutPrepareHeader", "waveOutWrite", "waveOutUnprepareHeader"):
+        getattr(winmm, name).argtypes = [handle_t, header_p, wintypes.UINT]
+    for name in ("waveOutReset", "waveOutClose"):
+        getattr(winmm, name).argtypes = [handle_t]
+
+    def check(result: int, call: str) -> None:
+        if result != 0:  # MMSYSERR_NOERROR
+            raise OSError(f"Windows audio output failed ({call}: MMRESULT {result})")
+
+    wave_mapper, callback_null, whdr_done = 0xFFFFFFFF, 0, 0x1
+    fmt = WaveFormatEx(1, 1, SAMPLE_RATE, SAMPLE_RATE * 2, 2, 16, 0)  # PCM, mono, s16
+    data = clip.tobytes()
+    buffer = ctypes.create_string_buffer(data, len(data))
+    header = WaveHdr(lpData=ctypes.cast(buffer, ctypes.c_void_p), dwBufferLength=len(data))
+    size = ctypes.sizeof(header)
+    device = handle_t()
+    check(winmm.waveOutOpen(ctypes.byref(device), wave_mapper, ctypes.byref(fmt), 0, 0,
+                            callback_null), "waveOutOpen")  # fmt: skip
+    try:
+        check(winmm.waveOutPrepareHeader(device, ctypes.byref(header), size), "prepare")
+        try:
+            check(winmm.waveOutWrite(device, ctypes.byref(header), size), "write")
+            # The driver sets WHDR_DONE once the buffer has played.
+            while not header.dwFlags & whdr_done and not stopped.wait(0.02):
+                pass
+        finally:
+            winmm.waveOutReset(device)  # the stop: drops whatever is still queued
+            winmm.waveOutUnprepareHeader(device, ctypes.byref(header), size)
+    finally:
+        winmm.waveOutClose(device)
