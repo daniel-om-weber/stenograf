@@ -40,6 +40,28 @@ jobs:
         if: runner.os == 'macOS'
       - run: uv run pytest -q
 
+  # The "Who spoke?" play button on Windows, played and recorded back through
+  # a virtual sound card (hosted runners have none); both images, because the
+  # driver install depends on what each image's WDK provides.
+  playback-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+      - name: Install a virtual sound card
+        shell: pwsh
+        run: .github/scripts/windows-sound-card.ps1
+      - run: uv sync
+      - name: A voice sample plays whole, and stops when told
+        run: uv run python .github/scripts/hear_playback_windows.py
+
   # Build and unit-test the capture helper on both platforms it serves. The
   # framing arithmetic tests run everywhere; the pulse/wasapi backends only
   # compile on their own OS, which is exactly what this matrix pins down.
