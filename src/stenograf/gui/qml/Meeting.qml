@@ -125,33 +125,8 @@ Item {
                 font.family: Theme.mono
             }
 
-            // What is muted, readable at a glance: a forgotten mute silently
-            // drops the rest of the meeting, so the toggle's label alone is
-            // not enough.
-            Rectangle {
-                readonly property bool mic: page.screen.state.micMuted
-                readonly property bool system: page.screen.state.systemMuted
-
-                visible: page.phase === "rec" && (mic || system)
-                radius: 4
-                color: Theme.off
-                implicitWidth: badge.implicitWidth + 14
-                implicitHeight: badge.implicitHeight + 6
-
-                Text {
-                    id: badge
-
-                    anchors.centerIn: parent
-                    text: parent.mic && parent.system ? "MIC + SYSTEM MUTED" : parent.mic ? "MIC MUTED" : "SYSTEM AUDIO MUTED"
-                    color: Theme.bg
-                    font.pixelSize: 11
-                    font.weight: Font.DemiBold
-                    font.letterSpacing: 0.6
-                }
-            }
-
             // Also the row's spring: it takes the spare width and gives it back
-            // first when the mute toggles need room.
+            // first when the channel chips need room.
             Text {
                 text: page.screen.state.language + "  ·  " + page.screen.state.profile
                 color: Theme.muted
@@ -164,14 +139,11 @@ Item {
             Repeater {
                 model: page.phase === "rec" ? page.screen.state.channels : []
 
-                Btn {
+                ChannelChip {
                     required property string modelData
-                    readonly property bool muted: modelData === "mic" ? page.screen.state.micMuted : page.screen.state.systemMuted
-                    readonly property string what: modelData === "mic" ? "mic" : "system audio"
 
-                    text: (muted ? "Unmute " : "Mute ") + what
-                    implicitHeight: 30
-                    font.pixelSize: 12
+                    channel: modelData
+                    muted: modelData === "mic" ? page.screen.state.micMuted : page.screen.state.systemMuted
                     enabled: page.screen.state.canStop
                     onClicked: page.screen.mute(modelData, !muted)
                 }
@@ -589,6 +561,7 @@ Item {
                 property bool copied: false
 
                 text: copied ? "Copied" : "Copy transcript"
+                glyph: copied ? "check" : "copy"
                 visible: page.phase === "done" && page.screen.state.transcriptReady
                 implicitWidth: 150
                 onClicked: copied = page.screen.copy()
@@ -612,6 +585,7 @@ Item {
                 // starting run instead of stopping a live one — screen.stop()
                 // routes both, so it is enabled through the whole "rec" phase.
                 text: page.phase === "rec" ? (page.screen.state.canStop ? "Stop & finalize" : "Cancel") : page.phase === "finalizing" ? "Finalizing…" : "Back to menu"
+                glyph: page.phase === "rec" && page.screen.state.canStop ? "stop" : ""
                 primary: page.phase === "rec"
                 enabled: page.phase !== "finalizing"
                 implicitWidth: 150

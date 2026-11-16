@@ -7,6 +7,8 @@ Button {
     id: control
 
     property bool primary: false
+    property string glyph: ""  // an Icon name shown before the text; not `icon`, which Button owns
+    readonly property color ink: !control.enabled ? Theme.dim : control.primary ? Theme.accentText : Theme.text
 
     implicitHeight: 36
     leftPadding: 16
@@ -26,12 +28,36 @@ Button {
         }
     }
 
-    contentItem: Text {
-        text: control.text
-        font: control.font
-        color: !control.enabled ? Theme.dim : control.primary ? Theme.accentText : Theme.text
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideRight
+    contentItem: Item {
+        // From the label's natural width, not the row's: the label's own width
+        // is clamped to the button, so deriving the button from it would loop.
+        implicitWidth: label.implicitWidth + (control.glyph !== "" ? 22 : 0)
+        implicitHeight: label.implicitHeight
+
+        Row {
+            id: row
+
+            anchors.centerIn: parent
+            spacing: 7
+
+            Icon {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: control.glyph !== ""
+                name: control.glyph
+                color: control.ink
+                size: 15
+            }
+
+            Text {
+                id: label
+
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(implicitWidth, control.availableWidth - (control.glyph !== "" ? 22 : 0))
+                text: control.text
+                font: control.font
+                color: control.ink
+                elide: Text.ElideRight
+            }
+        }
     }
 }

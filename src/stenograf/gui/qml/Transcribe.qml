@@ -79,6 +79,7 @@ Panel {
 
         Btn {
             text: "Open folder"
+            glyph: "folder"
             onClicked: page.screen.reveal()
         }
 
@@ -88,6 +89,7 @@ Panel {
             property bool copied: false
 
             text: copied ? "Copied" : "Copy transcript"
+            glyph: copied ? "check" : "copy"
             onClicked: copied = page.screen.copy()
 
             Timer {

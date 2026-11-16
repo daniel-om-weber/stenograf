@@ -168,6 +168,22 @@ class TestQmlTree:
                 assert item is not None, f"{page}.qml did not instantiate"
             assert log.seen == []
 
+    def test_every_icon_a_page_names_is_drawn(self):
+        # An unknown name draws nothing and warns nothing, so a typo would ship
+        # a blank button. Every name an icon line can pick must be a known path.
+        import re
+
+        icon = (QML_DIR / "Icon.qml").read_text(encoding="utf-8")
+        known = set(re.findall(r'^\s*"([a-z-]+)": "M', icon, re.MULTILINE))
+        assert {"mic", "mic-off", "volume", "volume-off", "stop"} <= known
+        used = set()
+        for page in QML_DIR.glob("*.qml"):
+            for line in page.read_text(encoding="utf-8").splitlines():
+                if re.match(r"\s*(glyph|name):", line) and page.name != "Icon.qml":
+                    line = re.sub(r'[!=]==\s*"[^"]*"', "", line)  # conditions, not names
+                    used.update(word for word in re.findall(r'"([^"]*)"', line) if word)
+        assert used and used <= known, used - known
+
     def test_a_failed_load_carries_qts_reason(self, qt_app, monkeypatch, tmp_path):
         # Qt writes the one actionable line — a missing plugin DLL, a bad
         # import — to a stderr that an icon launch and `pythonw` do not have.

@@ -83,7 +83,9 @@ _SIZES = (16, 18, 22, 32, 36, 44, 64)
 _TINT = {
     "rec": "#ff5f56",  # Theme.rec
     "busy": "#e8b339",  # Theme.busy
-    "muted": "#aab1bd",  # Theme.off — recording, with a channel muted
+    # Recording with a channel muted. Grey, not the window's mute red: in the
+    # menu bar red already means "recording", and a muted meeting still records.
+    "muted": "#aab1bd",
 }
 """While a meeting is live the whole mark takes the phase colour the app's own
 header uses. Idle keeps the brand inks (or a template image on macOS, below)."""

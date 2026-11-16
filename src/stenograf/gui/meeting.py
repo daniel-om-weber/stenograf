@@ -16,9 +16,9 @@ What the screen shows, and where it comes from:
   re-evaluate every binding on the screen for each new line;
 - **the interim area** — the open (bright) line plus the grey provisional tail,
   per channel, exactly as :class:`~stenograf.captions.CaptionStream` decides;
-- **the header** — phase, elapsed, language, profile, and a mute toggle per
-  recorded channel with a badge naming what is muted (the run silences it:
-  :meth:`stenograf.flow.MeetingRun.mute`); the 1 Hz clock that
+- **the header** — phase, elapsed, language, profile, and one chip per
+  recorded channel that both shows and switches its mute (the run silences
+  it: :meth:`stenograf.flow.MeetingRun.mute`); the 1 Hz clock that
   advances it is the app's only periodic timer, and it also flushes an idle
   caption line — together the screen's whole redraw budget;
 - **the footer** — the transient status line (model loading, notes progress)

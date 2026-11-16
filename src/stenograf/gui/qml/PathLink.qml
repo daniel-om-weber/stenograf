@@ -3,18 +3,43 @@
 import QtQuick
 import QtQuick.Controls.Basic
 
-Text {
+Item {
     id: link
+
+    property alias text: label.text
+    readonly property color ink: area.containsMouse ? Theme.accent : Theme.dim
 
     signal activated
 
-    color: area.containsMouse ? Theme.accent : Theme.dim
-    font.pixelSize: 11
-    font.underline: area.containsMouse
-    elide: Text.ElideMiddle
+    implicitWidth: glyph.width + 6 + label.implicitWidth
+    implicitHeight: Math.max(glyph.height, label.implicitHeight)
     Accessible.role: Accessible.Link
     Accessible.name: "Open folder " + text
     Accessible.onPressAction: link.activated()
+
+    Icon {
+        id: glyph
+
+        anchors.verticalCenter: parent.verticalCenter
+        name: "folder"
+        color: link.ink
+        size: 13
+    }
+
+    Text {
+        id: label
+
+        anchors {
+            left: glyph.right
+            leftMargin: 6
+            right: parent.right
+            verticalCenter: parent.verticalCenter
+        }
+        color: link.ink
+        font.pixelSize: 11
+        font.underline: area.containsMouse
+        elide: Text.ElideMiddle
+    }
 
     MouseArea {
         id: area
