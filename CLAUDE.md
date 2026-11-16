@@ -116,7 +116,11 @@ Retrieve any of them with `git log --follow -p <file>`. Measured evidence for th
 The tool ends at **transcript + notes in a visible folder**
 (`~/Documents/Meetings`). No meeting management, browsing, playback, index,
 or web UI — ever. Obsidian/Finder/audio players do that; the filesystem is
-the index.
+the index. One exception, Daniel's (2026-11-16): the "Who spoke?" panel plays
+a few seconds of each speaker's voice so a stranger can be recognised by ear —
+samples cut at the stop, held in memory only, dropped when the screen is left
+(`playback.py`). That is identification, not meeting playback; it does not
+open the door to a player.
 
 ## Workflow conventions
 

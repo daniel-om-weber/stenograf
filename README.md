@@ -340,8 +340,25 @@ skips them for one run. A notes failure never touches the transcript.
 
 ## Naming speakers across meetings
 
-Enroll a voice once and every later meeting relabels that speaker automatically
-(cross-meeting re-identification):
+Name a voice once and every later meeting relabels that speaker automatically
+(cross-meeting re-identification). In the app, a meeting with "Tell speakers
+apart" on ends with a "Who spoke?" panel: every speaker shows three of their
+lines (click one to see it in the transcript) and a button that plays a few
+seconds of their voice — cut at the stop, held in memory only, and dropped when
+you leave the screen. Recognised speakers show their name (correct a wrong one
+with "Not …?"), and the
+name you type joins the voice library and replaces the label in the
+transcript. Notes wait while the panel is open. Two `[speakers]` settings
+shorten it: `names_panel_timeout_s = 60` closes it after a minute untouched
+(typing keeps it open), and `names_panel_skip_if_recognised = true` opens it
+only when someone is unknown. From a terminal, the same correction for any
+finished meeting:
+
+```sh
+steno profiles assign Remote-1 Anna --last       # or a meeting folder path
+```
+
+Or enroll from a voice sample:
 
 ```sh
 steno profiles enroll Daniel daniel-sample.wav   # a short clip of one speaker
@@ -361,7 +378,7 @@ steno profiles enroll Anna meeting.wav --speakers 4 --speaker S2
 
 Matching is on by default in `steno start`/`transcribe` and does nothing until
 you enroll someone; disable it with `--no-reid`, or adjust the match strictness
-with `--reid-threshold` (0–1, default 0.5). Voiceprints live in the platform data
+with `--reid-threshold` (0–1, default 0.56). Voiceprints live in the platform data
 dir (not the model cache) and are never uploaded.
 
 ## Vocabulary

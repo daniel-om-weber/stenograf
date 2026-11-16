@@ -36,7 +36,7 @@ from difflib import SequenceMatcher
 import numpy as np
 
 from stenograf.asr.base import ASRBackend, Segment, Word
-from stenograf.audio import merge_voices, to_float32
+from stenograf.audio import merge_voices, to_float32, to_int16
 from stenograf.capture.base import (
     ORDER_TOLERANCE_SAMPLES,
     SAMPLE_RATE,
@@ -224,6 +224,38 @@ class MeetingResult:
     Diarized channels contribute per-cluster embeddings; a solo channel
     contributes one over its transcribed speech. Empty when the meeting ran
     without its speaker machinery (the diarization switch off)."""
+    voice_clips: dict[str, list[np.ndarray]] = field(default_factory=dict)
+    """A few seconds of each speaker's voice (int16, 16 kHz mono) under the
+    label the transcript shows, cut while the audio still exists — what the
+    app's "Who spoke?" plays so a voice can be recognised by ear. In memory
+    only: never written anywhere. Empty without the speaker machinery."""
+
+
+CLIP_COUNT = 3
+CLIP_SECONDS = 4.0
+"""Voice samples per speaker, and the longest one: enough to recognise a
+voice, short enough that holding them costs ~0.4 MB per speaker."""
+
+
+def cut_voice_clips(
+    entries: list[TranscriptEntry], read: Callable[[float, float], np.ndarray]
+) -> list[np.ndarray]:
+    """Up to :data:`CLIP_COUNT` samples of one speaker's voice, in meeting order.
+
+    From their longest lines nobody spoke over (an overlapped line is flagged
+    provisional — its audio carries two voices), falling back to any line;
+    each sample is the middle :data:`CLIP_SECONDS` of its line. ``read(start,
+    end)`` returns that span of the speaker's channel as float32."""
+    clean = [e for e in entries if not e.provisional] or entries
+    longest = sorted(clean, key=lambda e: e.start - e.end)[:CLIP_COUNT]
+    chosen = sorted(longest, key=lambda e: e.start)
+    clips = []
+    for e in chosen:
+        middle, half = (e.start + e.end) / 2, min(CLIP_SECONDS, e.end - e.start) / 2
+        clip = read(max(0.0, middle - half), middle + half)
+        if len(clip):
+            clips.append(to_int16(clip))
+    return clips
 
 
 def plan_channels(profile: MeetingProfile) -> list[ChannelPlan]:
@@ -1095,12 +1127,24 @@ class MeetingRecorder:
                 view.status(f"{plan.channel}: detected {detected} speaker(s)")
             by_channel[plan.channel] = labeled
         dropped = self._apply_echo_backstop(by_channel, view, reference_gap_s)
+        clips: dict[str, list[np.ndarray]] = {}
+        if self.diarizer is not None:  # the speaker machinery ran: voices are nameable
+            for plan in plans:
+                entries = by_channel.get(plan.channel, [])
+                for label in dict.fromkeys(e.speaker for e in entries):
+                    clips.setdefault(label, []).extend(
+                        cut_voice_clips(
+                            [e for e in entries if e.speaker == label],
+                            lambda start, end, ch=plan.channel: store.view(ch, start, end),
+                        )
+                    )
         return MeetingResult(
             transcript=self._assemble_transcript(plans, by_channel, counts, view),
             speaker_counts=counts,
             dropped_echo_lines=dropped,
             reference_gap_s=reference_gap_s,
             speaker_embeddings=merge_voices(voices),
+            voice_clips={label: found[:CLIP_COUNT] for label, found in clips.items() if found},
         )
 
     def _apply_echo_backstop(

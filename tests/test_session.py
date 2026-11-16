@@ -411,6 +411,28 @@ class TestMeetingRecorder:
         assert {e.speaker for e in result.transcript.entries} == {"Anna"}
         assert set(result.speaker_embeddings) == {"Anna"}
 
+    def test_a_diarized_meeting_keeps_a_voice_sample_per_speaker(self):
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=2),
+            asr=FakeASR(),
+            diarizer=EmbeddingDiarizer(
+                [SpeakerTurn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0], np.float32)}
+            ),
+        )
+        result = recorder.run(provider)
+        (clip,) = result.voice_clips["Remote-1"]
+        assert clip.dtype == np.int16 and len(clip) > 0
+
+    def test_without_the_speaker_machinery_no_voice_is_kept(self):
+        pcm = np.ones(SAMPLE_RATE, dtype=np.int16)
+        provider = ListProvider([frame(Channel.SYSTEM, 0.0, pcm)])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=0, remote_speakers=1), asr=FakeASR()
+        )
+        assert recorder.run(provider).voice_clips == {}
+
     def test_one_profile_matched_on_both_channels_merges_its_voices(self):
         # The sidecar holds one vector per label: a profile matched on the mic
         # and on the system channel must keep both voices, not the last one.
@@ -871,3 +893,46 @@ class TestShieldInterrupt:
         t.join(timeout=5)
         assert ran.is_set()
         assert errors == []
+
+
+class TestVoiceClips:
+    """Which seconds of a speaker's voice the "Who spoke?" panel can play."""
+
+    @staticmethod
+    def _entry(start, end, provisional=False):
+        return TranscriptEntry(
+            speaker="Remote-1", text="x", start=start, end=end, provisional=provisional
+        )
+
+    def test_the_longest_clean_lines_give_their_middle_seconds_in_order(self):
+        from stenograf.session import CLIP_SECONDS, cut_voice_clips
+
+        reads = []
+
+        def read(start, end):
+            reads.append((start, end))
+            return np.zeros(int((end - start) * SAMPLE_RATE), np.float32)
+
+        entries = [
+            self._entry(0.0, 10.0),  # long: its middle CLIP_SECONDS
+            self._entry(20.0, 21.0),  # short, kept whole
+            self._entry(30.0, 50.0, provisional=True),  # two voices: never
+            self._entry(60.0, 62.0),
+            self._entry(70.0, 70.5),  # fourth longest: dropped
+        ]
+        clips = cut_voice_clips(entries, read)
+        assert len(clips) == 3
+        assert reads == [
+            (5.0 - CLIP_SECONDS / 2, 5.0 + CLIP_SECONDS / 2),
+            (20.0, 21.0),
+            (60.0, 62.0),
+        ]
+
+    def test_only_overlapped_lines_still_give_a_sample(self):
+        from stenograf.session import cut_voice_clips
+
+        clips = cut_voice_clips(
+            [self._entry(0.0, 2.0, provisional=True)],
+            lambda start, end: np.ones(int((end - start) * SAMPLE_RATE), np.float32),
+        )
+        assert len(clips) == 1

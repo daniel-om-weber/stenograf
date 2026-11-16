@@ -627,7 +627,7 @@ never run on, and was deleted on 2026-07-26 with nothing open:
 
 ---
 
-## Diarization: Nemotron 3 — shipped 2026-11-15, two things left
+## Diarization: Nemotron 3 — shipped 2026-11-15, three things left
 
 NVIDIA Nemotron 3 Diarization is the one diarizer; the owned loop, stenodiar
 and the manylinux_2_39 wheel are deleted. The migration record is
@@ -651,6 +651,21 @@ smoked the single manylinux_2_28 wheel.
    beside the CPU's fp32. The `onnxruntime-ep-webgpu` plugin loads a second onnxruntime copy
    beside the wheel's on macOS and segfaulted on a second session in one
    process; revisit once the CPU path has shipped in a release.
+3. **Privacy: stop holding the whole meeting in memory (deferred
+   2026-11-16, Daniel's call).** Today `SessionStore` keeps every channel's
+   full audio in RAM until the stop (~115 MB/hour/channel, never on disk),
+   because the stop-time diarization, the voiceprints and the no-live-reuse
+   ASR fallback all read it. The motivation is privacy — the voice should
+   exist as briefly as possible — not memory. The route is Nemotron's
+   streaming mode during the meeting, with three questions to answer first:
+   (a) attribution and count accuracy of the streaming mode on the held-out
+   AMI set against the offline 97.8 % (`eval/README.md`); (b) voiceprints
+   accumulated per speaker during the meeting instead of over the full
+   audio at the end; (c) the meeting's power budget (~0.6 W live) with the
+   diarizer running alongside capture. The fallback paths (live pass off or
+   failed) would still need audio or would lose speaker separation. The
+   "Who spoke?" voice samples are already only a few seconds per speaker,
+   so they survive this change if collected during the meeting instead.
 
 Out of scope: streaming diarization in live captions — Nemotron has an online
 mode, but live captions carry no speaker labels.

@@ -118,6 +118,11 @@ SETTINGS_TEMPLATE = """\
 #                                          # count above 1 also turns it on)
 # reid_threshold = 0.56                    # voice-match strictness 0-1
 # profile_store = "~/steno/profiles.json"  # re-ID voiceprint store location
+# names_panel_timeout_s = 60               # app: the "Who spoke?" panel closes on its
+#                                          # own after this long untouched (unset or
+#                                          # 0 = stays open until saved or skipped)
+# names_panel_skip_if_recognised = true    # app: no panel when every voice was
+#                                          # recognised (default: it always opens)
 
 [asr]
 # backend = "parakeet"
@@ -215,6 +220,15 @@ class SpeakerSettings:
     above 1 also turns it on."""
     reid_threshold: float | None = None
     profile_store: Path | None = None
+    names_panel_timeout_s: float | None = None
+    """Seconds the app's "Who spoke?" panel stays open untouched before it
+    closes as if skipped; ``None`` or 0 keeps it open until saved or skipped.
+    Typing in it stops the clock — a panel closing under the user's hands
+    would throw away what they typed."""
+    names_panel_skip_if_recognised: bool | None = None
+    """``True`` opens no panel when every voice was recognised. Off by default:
+    a wrong name is the risk worth seeing while the voice library is young,
+    and the panel is where it is seen."""
 
 
 @dataclass(frozen=True)
@@ -500,6 +514,8 @@ def _speakers_from_table(data: dict) -> SpeakerSettings:
         diarization=t.bool_("diarization"),
         reid_threshold=t.number("reid_threshold", 0, 1),
         profile_store=t.path("profile_store"),
+        names_panel_timeout_s=t.number("names_panel_timeout_s", 0, 3600),
+        names_panel_skip_if_recognised=t.bool_("names_panel_skip_if_recognised"),
     )
     t.reject_unknown()
     return settings
@@ -726,6 +742,20 @@ def settings_rows(
         ("speakers", "diarization", settings.speakers.diarization, False, None),
         ("speakers", "reid_threshold", settings.speakers.reid_threshold, REID_THRESHOLD, None),
         ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
+        (
+            "speakers",
+            "names_panel_timeout_s",
+            settings.speakers.names_panel_timeout_s,
+            "(off — open until saved or skipped)",
+            None,
+        ),
+        (
+            "speakers",
+            "names_panel_skip_if_recognised",
+            settings.speakers.names_panel_skip_if_recognised,
+            False,
+            None,
+        ),
         ("asr", "backend", settings.asr.backend, asr_default(), "STENOGRAF_ASR_BACKEND"),
         ("asr", "provider", settings.asr.ep, "cpu", "STENOGRAF_ASR_PROVIDER"),
         ("asr", "boost", settings.asr.boost, DEFAULT_ALPHA, None),

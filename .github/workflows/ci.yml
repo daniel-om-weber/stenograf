@@ -123,3 +123,29 @@ jobs:
           cat meeting/transcript.txt
           grep -qi "provisioning" meeting/transcript.txt
           grep -qi "october" meeting/transcript.txt
+      - name: A voice sample reaches the sound server through the bundled ffmpeg
+        # The "Who spoke?" play button on Linux: ffmpeg's compiled-in PulseAudio
+        # output into the default (null) sink, heard back on its monitor. Fails
+        # if an imageio-ffmpeg build ever drops the output or cannot find the
+        # server's socket.
+        run: |
+          parec --device=steno_ci.monitor --format=s16le --rate=16000 --channels=1 > played.raw &
+          rec=$!
+          sleep 1
+          uv run python -c "
+          import threading, numpy as np
+          from stenograf.playback import Playback
+          tone = (0.3 * 32767 * np.sin(2 * np.pi * 440 * np.arange(16000) / 16000)).astype(np.int16)
+          done, errors = threading.Event(), []
+          Playback(tone, lambda error: (errors.append(error), done.set())).start()
+          assert done.wait(30) and errors == [None], errors
+          "
+          sleep 1
+          kill $rec
+          python3 -c "
+          import array, sys
+          samples = array.array('h', open('played.raw', 'rb').read())
+          peak = max(map(abs, samples), default=0)
+          print('peak heard on the monitor:', peak)
+          sys.exit(0 if peak > 1000 else 1)
+          "

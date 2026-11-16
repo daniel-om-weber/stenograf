@@ -21,7 +21,15 @@ What the screen shows, and where it comes from:
   caption line — together the screen's whole redraw budget;
 - **the footer** — the transient status line (model loading, notes progress)
   and, once allocated, the meeting folder. They are separate fields on purpose:
-  the notes step overwrites the status, and the folder must survive that.
+  the notes step overwrites the status, and the folder must survive that;
+- **"who spoke?"** — after the finalize, one row per nameable speaker
+  (:func:`stenograf.flow.meeting_speakers`). The run's notes wait until the
+  names are saved or skipped, and leaving the screen counts as skipping:
+  notes stranded behind a screen nobody returns to would be lost work. With
+  ``[speakers] names_panel_timeout_s`` the panel skips itself after that long
+  untouched — a second 1 Hz timer, alive only while that countdown runs.
+  Each row plays the speaker's voice samples (:mod:`stenograf.playback`),
+  which live in the run's memory and are dropped when the screen is left.
 
 Stopping crosses back to capture through the callback the run hands over
 (:meth:`set_stop`) — and it *blocks*, up to ~5 s waiting on the capture
@@ -45,13 +53,14 @@ from stenograf.transcript import Transcript, format_timestamp
 from stenograf.view import LiveView, profile_label
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from stenograf.asr.base import Word
     from stenograf.capture.base import Channel
     from stenograf.config import Language
-    from stenograf.flow import MeetingRequest, MeetingRun
+    from stenograf.flow import MeetingRequest, MeetingRun, NamingOutcome, SpeakerSummary
     from stenograf.gui.app import StenografGui
+    from stenograf.playback import Playback
 
 class Phase(StrEnum):
     """Screen lifecycle: capture running → on-stop pass running → transcript shown
@@ -89,6 +98,9 @@ class MeetingScreen(Screen, LiveView):
         self._clock = QTimer(self)  # the ONLY periodic repaint in the app (1 Hz)
         self._clock.setInterval(1000)
         self._clock.timeout.connect(self._tick)
+        self._names_clock = QTimer(self)  # the panel's countdown; idle otherwise
+        self._names_clock.setInterval(1000)
+        self._names_clock.timeout.connect(self._names_tick)
 
         self._request: MeetingRequest | None = None
         self._persist: Callable[[Transcript], object] | None = None
@@ -101,6 +113,7 @@ class MeetingScreen(Screen, LiveView):
         Owned here rather than by the run so it exists before the worker
         thread does — Stop can land in the first milliseconds."""
         self._started = 0.0
+        self._playback: Playback | None = None
         self._reset()
 
     def _set_phase(self, phase: Phase, **state: object) -> None:
@@ -108,6 +121,8 @@ class MeetingScreen(Screen, LiveView):
         self.set(phase=phase, phaseLabel=phase.label, **state)
 
     def _reset(self) -> None:
+        self._names_clock.stop()
+        self._stop_playback()
         self._set_phase(
             Phase.REC,
             active=False,
@@ -118,6 +133,13 @@ class MeetingScreen(Screen, LiveView):
             folder="",
             tails=[],
             canStop=False,
+            speakers=[],
+            knownNames="",
+            namesOpen=False,
+            namesBusy=False,
+            namesCountdown=0,
+            playing="",
+            clipNext={},
         )
 
     # -- lifecycle ---------------------------------------------------------
@@ -164,7 +186,7 @@ class MeetingScreen(Screen, LiveView):
         """The meeting, on the worker thread."""
         from stenograf.flow import MeetingRun
 
-        run = MeetingRun(request, abort=self._abort)
+        run = MeetingRun(request, abort=self._abort, ask_names=True)
         # The transcript reaches disk at the ``finalized`` event, before the user
         # can close the window on the done screen.
         self._persist = run.persist
@@ -232,6 +254,7 @@ class MeetingScreen(Screen, LiveView):
         no audio exists to protect, so the quit waits only a bounded moment
         for the worker to notice instead of joining a construction that may be
         wedged inside CoreAudio."""
+        self._stop_playback()
         run = self._run
         if run is not None:
             run.abandon_notes.set()  # a notes step not yet started is skipped
@@ -284,7 +307,136 @@ class MeetingScreen(Screen, LiveView):
             self._abort.set()
             self.set(status="cancelling…")
         elif phase in (Phase.DONE, Phase.FAILED):
+            self._stop_playback()
+            if self._run is not None:
+                self._run.settle_names()  # leaving unanswered = skipping
+                self._run.discard_voice_clips()
+            self.set(speakers=[], namesOpen=False)
             self.app.back()
+
+    @Slot(str)
+    def play(self, label: str) -> None:
+        """Play ``label``'s next voice sample, or stop the one playing."""
+        from stenograf import playback
+
+        self.hold_names()
+        playing = self._state.get("playing")
+        self._stop_playback()
+        if playing == label or self._run is None:
+            return
+        clips = self._run.voice_clips.get(label, [])
+        if not clips:
+            return
+        saved = self._state.get("clipNext")
+        cursor = dict(saved) if isinstance(saved, dict) else {}
+        index = int(cursor.get(label, 0)) % len(clips)
+        cursor[label] = index + 1
+        self._playback = current = playback.Playback(
+            clips[index], lambda error: self.post(self._played, current, error)
+        )
+        self.set(playing=label, clipNext=cursor)
+        current.start()
+
+    def _played(self, finished: Playback, error: str | None) -> None:
+        if finished is not self._playback:  # a newer sample took over
+            return
+        self._playback = None
+        self.set(playing="")
+        if error:
+            self.set(status=f"voice sample not played: {error}")
+
+    def _stop_playback(self) -> None:
+        current, self._playback = self._playback, None
+        if current is not None:
+            current.stop()
+        if self._state.get("playing"):
+            self.set(playing="")
+
+    @Slot("QVariantMap", "QVariantList")
+    def save_names(self, names: dict, forced: list) -> None:
+        """Apply the typed names (``label → name``); ``forced`` labels join a
+        profile whose saved voice they do not match. The panel closes and the
+        notes start once every answer landed; a refused voice keeps it open."""
+        run = self._run
+        if run is None or self._state.get("namesBusy"):
+            return
+        self.hold_names()
+        self.set(namesBusy=True)
+
+        def job() -> tuple[list[NamingOutcome], list[SpeakerSummary], Transcript | None]:
+            from stenograf import output
+            from stenograf.flow import meeting_speakers
+
+            outcomes = run.name_speakers(
+                {str(k): str(v) for k, v in names.items()}, [str(f) for f in forced]
+            )
+            try:
+                transcript = output.load_transcript(run.out_dir)[0]
+            except ValueError:
+                transcript = None
+            return outcomes, meeting_speakers(run.out_dir, store_path=run.profile_store), transcript
+
+        self.work(job, done=self._names_saved, failed=self._names_failed, name="gui-names")
+
+    @Slot()
+    def skip_names(self) -> None:
+        """Close the panel unanswered; waiting notes start with the labels as they are."""
+        self.hold_names()
+        self.set(namesOpen=False)
+        if self._run is not None:
+            self._run.settle_names()
+
+    @Slot()
+    def hold_names(self) -> None:
+        """The user is answering: stop the auto-close countdown for good."""
+        self._names_clock.stop()
+        self.set(namesCountdown=0)
+
+    def _names_tick(self) -> None:
+        current = self._state.get("namesCountdown", 0)
+        left = (current if isinstance(current, int) else 0) - 1
+        if left > 0:
+            self.set(namesCountdown=left)
+        else:
+            self.skip_names()
+
+    @Slot()
+    def open_names(self) -> None:
+        """Bring the panel back after it closed (names can be fixed any time)."""
+        self.set(namesOpen=True)
+
+    def _names_saved(
+        self,
+        result: tuple[list[NamingOutcome], list[SpeakerSummary], Transcript | None],
+    ) -> None:
+        outcomes, speakers, transcript = result
+        if transcript is not None:
+            self._restore(transcript)
+        refused = {o.label: o for o in outcomes if o.refused_similarity is not None}
+        rows = _speaker_rows(speakers, self._clip_counts())
+        # A refused voice keeps its row (the label is unchanged) and the answer
+        # the user typed, so "Add anyway" or a corrected name is one click away.
+        for row in rows:
+            outcome = refused.get(str(row["label"]))
+            if outcome is not None:
+                row["name"] = outcome.name
+                row["refused"] = (
+                    f"This voice doesn't sound like {outcome.name}'s saved voice "
+                    f"(similarity {outcome.refused_similarity:.2f}). Add it to "
+                    f"{outcome.name} anyway, or type another name."
+                )
+        errors = [f"{o.label}: {o.error}" for o in outcomes if o.error is not None]
+        self.set(speakers=rows, namesBusy=False)
+        if errors:
+            self.set(status="; ".join(errors))
+        if not refused and not errors:
+            named = [o for o in outcomes if o.applied]
+            if named:
+                self.set(status=f"named {len(named)} speaker{'' if len(named) == 1 else 's'}")
+            self.skip_names()
+
+    def _names_failed(self, message: str) -> None:
+        self.set(namesBusy=False, status=f"names not saved: {message}")
 
     def _invoke_stop(self) -> None:
         """Run the blocking capture teardown off the GUI thread (see the module docstring)."""
@@ -325,6 +477,33 @@ class MeetingScreen(Screen, LiveView):
     def error(self, message: str) -> None:
         self.post(self.set, status=message)
 
+    def speakers(self, speakers: list[SpeakerSummary], *, ask: bool) -> None:
+        from stenograf.flow import known_speaker_names
+
+        run = self._run
+        known = (
+            known_speaker_names(
+                store_path=run.profile_store,
+                attendee_names=run.request.profile.attendee_names,
+            )
+            if run is not None
+            else []
+        )
+        self.post(
+            self._offer_names, _speaker_rows(speakers, self._clip_counts()), ", ".join(known), ask
+        )
+
+    def _clip_counts(self) -> dict[str, int]:
+        run = self._run
+        return {label: len(c) for label, c in run.voice_clips.items()} if run else {}
+
+    def _offer_names(self, rows: list[dict[str, object]], known: str, ask: bool) -> None:
+        self.set(speakers=rows, knownNames=known, namesOpen=ask, clipNext={})
+        timeout = self._run.request.settings.speakers.names_panel_timeout_s if self._run else None
+        if ask and timeout:
+            self.set(namesCountdown=max(1, round(timeout)))
+            self._names_clock.start()
+
     # -- GUI-thread renderers ----------------------------------------------
 
     def _commit(self, channel: Channel, words: Sequence[Word]) -> None:
@@ -356,17 +535,7 @@ class MeetingScreen(Screen, LiveView):
         """Swap the live captions for the authoritative, diarized transcript."""
         self._captions.clear()
         self._clock.stop()
-        self.restored.emit(
-            [
-                {
-                    "speaker": entry.speaker,
-                    "time": format_timestamp(entry.start),
-                    "text": entry.text,
-                    "provisional": entry.provisional,
-                }
-                for entry in transcript.entries
-            ]
-        )
+        self._restore(transcript)
         count = len(transcript.entries)
         self._set_phase(
             Phase.DONE,
@@ -379,6 +548,45 @@ class MeetingScreen(Screen, LiveView):
                 else self._state.get("language", "—")
             ),
         )
+
+    def _restore(self, transcript: Transcript) -> None:
+        """Put ``transcript``'s entries on screen in place of whatever is there."""
+        self.restored.emit(
+            [
+                {
+                    "speaker": entry.speaker,
+                    "time": format_timestamp(entry.start),
+                    "text": entry.text,
+                    "provisional": entry.provisional,
+                }
+                for entry in transcript.entries
+            ]
+        )
+
+
+def _speaker_rows(
+    speakers: Sequence[SpeakerSummary], clips: Mapping[str, int]
+) -> list[dict[str, object]]:
+    """The panel's rows, as QML reads them."""
+    return [
+        {
+            "label": s.label,
+            "recognised": s.recognised,
+            "spoke": _spoke(s.seconds),
+            "quotes": [
+                {"text": f"“{quote}”", "line": line}
+                for quote, line in zip(s.quotes, s.quote_lines, strict=True)
+            ],
+            "clips": clips.get(s.label, 0),
+            "name": "",
+            "refused": "",
+        }
+        for s in speakers
+    ]
+
+
+def _spoke(seconds: float) -> str:
+    return f"{round(seconds)} s" if seconds < 60 else f"{round(seconds / 60)} min"
 
 
 __all__ = ["MeetingScreen", "Phase"]

@@ -114,7 +114,11 @@ dependencies = [
     # imageio_ffmpeg.get_ffmpeg_exe(): `steno transcribe` decodes .mov/.m4a/…
     # with no system ffmpeg install, and every platform decodes with the same
     # ffmpeg build. IMAGEIO_FFMPEG_EXE overrides the binary if ever needed.
-    "imageio-ffmpeg>=0.6",
+    # Pinned exactly: the binary is load-bearing beyond decoding — it encodes
+    # audio.opus (libopus) and plays the "Who spoke?" samples (AudioToolbox on
+    # macOS, PulseAudio on Linux, the latter compiled in from 0.8 on), so a
+    # new release is a new ffmpeg to re-verify, never a silent upgrade.
+    "imageio-ffmpeg==0.8.1",
 ]
 
 [project.optional-dependencies]

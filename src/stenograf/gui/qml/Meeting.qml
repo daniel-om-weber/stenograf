@@ -17,6 +17,14 @@ Item {
     property var screen
 
     readonly property string phase: page.screen.state.phase
+    // The transcript line a "Who spoke?" quote was clicked for, shown in the
+    // accent colour until the next click; -1 = none.
+    property int jumpedLine: -1
+
+    function jumpTo(line) {
+        page.jumpedLine = line;
+        captions.positionViewAtIndex(line, ListView.Center);
+    }
     readonly property color phaseColor: page.phase === "rec" ? Theme.rec : page.phase === "done" ? Theme.good : page.phase === "failed" ? Theme.bad : Theme.busy
 
     Component.onCompleted: if (page.screen)
@@ -56,6 +64,7 @@ Item {
             // The finalize swap: diarized speakers replace the channel-coarse
             // live captions wholesale.
             captionModel.clear();
+            page.jumpedLine = -1;
             for (var i = 0; i < entries.length; ++i) {
                 captionModel.append({
                     "channel": "",
@@ -128,11 +137,248 @@ Item {
         }
     }
 
+    // "Who spoke?": one row per nameable speaker once the transcript is on
+    // disk. Saving names the voices for good (later meetings recognise them);
+    // the run's notes wait until this is saved or skipped.
+    Rectangle {
+        id: names
+
+        visible: page.phase === "done" && page.screen.state.namesOpen
+        anchors {
+            top: header.bottom
+            left: parent.left
+            right: parent.right
+        }
+        height: visible ? Math.min(namesColumn.implicitHeight + 36, page.height * 0.6) : 0
+        color: Theme.surface
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: 1
+            color: Theme.line
+        }
+
+        Flickable {
+            anchors.fill: parent
+            anchors.margins: 18
+            contentHeight: namesColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar {}
+
+            ColumnLayout {
+                id: namesColumn
+
+                width: Math.min(parent.width - 14, 900)
+                spacing: 10
+
+                Text {
+                    text: "Who spoke?"
+                    color: Theme.text
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                }
+
+                Text {
+                    text: "Name a voice once and later meetings recognise it." + (page.screen.state.knownNames.length > 0 ? "  Known: " + page.screen.state.knownNames : "")
+                    color: Theme.muted
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+
+                Repeater {
+                    id: speakerRows
+
+                    model: page.screen.state.speakers
+
+                    delegate: ColumnLayout {
+                        id: speakerRow
+
+                        required property var modelData
+                        // A recognised speaker shows the name; "Not …?" opens
+                        // the field to correct it. A refused answer reopens it.
+                        property bool editing: !speakerRow.modelData.recognised || speakerRow.modelData.refused.length > 0
+                        readonly property string answer: nameField.text.trim()
+
+                        spacing: 4
+                        Layout.fillWidth: true
+
+                        Rectangle {
+                            height: 1
+                            color: Theme.line
+                            Layout.fillWidth: true
+                        }
+
+                        RowLayout {
+                            spacing: 12
+                            Layout.fillWidth: true
+                            Layout.topMargin: 6
+
+                            ColumnLayout {
+                                spacing: 2
+                                Layout.fillWidth: true
+
+                                RowLayout {
+                                    spacing: 8
+
+                                    Text {
+                                        text: speakerRow.modelData.label
+                                        color: Theme.text
+                                        font.pixelSize: 14
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Text {
+                                        text: speakerRow.modelData.recognised ? "recognised" : ""
+                                        visible: text.length > 0
+                                        color: Theme.good
+                                        font.pixelSize: 11
+                                    }
+
+                                    Text {
+                                        text: speakerRow.modelData.spoke
+                                        color: Theme.dim
+                                        font.pixelSize: 11
+                                    }
+                                }
+
+                                // Each quote jumps to its line in the transcript below,
+                                // where the lines around it often say who this is.
+                                Repeater {
+                                    model: speakerRow.modelData.quotes
+
+                                    delegate: Text {
+                                        id: quote
+
+                                        required property var modelData
+
+                                        text: quote.modelData.text
+                                        color: quoteMouse.containsMouse ? Theme.text : Theme.muted
+                                        font.pixelSize: 12
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+
+                                        MouseArea {
+                                            id: quoteMouse
+
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: page.jumpTo(quote.modelData.line)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Btn {
+                                readonly property bool playing: page.screen.state.playing === speakerRow.modelData.label
+                                readonly property int next: (page.screen.state.clipNext[speakerRow.modelData.label] || 0) % Math.max(1, speakerRow.modelData.clips)
+
+                                visible: speakerRow.modelData.clips > 0
+                                text: playing ? "■ Stop" : "▶ Voice " + (next + 1) + "/" + speakerRow.modelData.clips
+                                implicitWidth: 110
+                                onClicked: page.screen.play(speakerRow.modelData.label)
+                            }
+
+                            Field {
+                                id: nameField
+
+                                visible: speakerRow.editing
+                                text: speakerRow.modelData.name
+                                placeholderText: "Name"
+                                enabled: !page.screen.state.namesBusy
+                                Layout.preferredWidth: 190
+                                onAccepted: saveButton.clicked()
+                                onTextEdited: page.screen.hold_names()
+                            }
+
+                            Btn {
+                                visible: !speakerRow.editing
+                                text: "Not " + speakerRow.modelData.label + "?"
+                                implicitWidth: 190
+                                onClicked: {
+                                    page.screen.hold_names();
+                                    speakerRow.editing = true;
+                                    nameField.forceActiveFocus();
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            visible: speakerRow.modelData.refused.length > 0
+                            spacing: 12
+                            Layout.fillWidth: true
+
+                            Text {
+                                text: speakerRow.modelData.refused
+                                color: Theme.busy
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                                Layout.fillWidth: true
+                            }
+
+                            Btn {
+                                text: "Add anyway"
+                                enabled: !page.screen.state.namesBusy && speakerRow.answer.length > 0
+                                implicitWidth: 190
+                                onClicked: {
+                                    var one = {};
+                                    one[speakerRow.modelData.label] = speakerRow.answer;
+                                    page.screen.save_names(one, [speakerRow.modelData.label]);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    spacing: 10
+                    Layout.fillWidth: true
+                    Layout.topMargin: 6
+
+                    Text {
+                        // The auto-close countdown ([speakers] names_panel_timeout_s);
+                        // typing stops it.
+                        text: page.screen.state.namesBusy ? "Saving…" : page.screen.state.namesCountdown > 0 ? "Closes in " + page.screen.state.namesCountdown + " s — typing keeps it open" : ""
+                        color: Theme.muted
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+
+                    Btn {
+                        text: "Skip"
+                        enabled: !page.screen.state.namesBusy
+                        onClicked: page.screen.skip_names()
+                    }
+
+                    Btn {
+                        id: saveButton
+
+                        text: "Save names"
+                        primary: true
+                        enabled: !page.screen.state.namesBusy
+                        onClicked: {
+                            var answers = {};
+                            for (var i = 0; i < speakerRows.count; ++i) {
+                                var row = speakerRows.itemAt(i);
+                                if (row && row.editing && row.answer.length > 0)
+                                    answers[row.modelData.label] = row.answer;
+                            }
+                            page.screen.save_names(answers, []);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     ListView {
         id: captions
 
         anchors {
-            top: header.bottom
+            top: names.visible ? names.bottom : header.bottom
             left: parent.left
             right: parent.right
             bottom: interim.top
@@ -147,18 +393,21 @@ Item {
         delegate: RowLayout {
             id: row
 
+            required property int index
             required property string channel
             required property string who
             required property string stamp
             required property string line
             required property bool faded
 
+            readonly property bool jumped: row.index === page.jumpedLine
+
             width: Math.min(captions.width - 14, 900)
             spacing: 14
 
             Text {
                 text: row.who
-                color: row.channel === "mic" ? Theme.mic : row.channel === "system" ? Theme.remote : Theme.text
+                color: row.jumped ? Theme.accent : row.channel === "mic" ? Theme.mic : row.channel === "system" ? Theme.remote : Theme.text
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignRight
@@ -177,7 +426,7 @@ Item {
 
             Text {
                 text: row.line
-                color: row.faded ? Theme.muted : Theme.text
+                color: row.jumped ? Theme.accent : row.faded ? Theme.muted : Theme.text
                 font.pixelSize: 15
                 lineHeight: 1.35
                 wrapMode: Text.WordWrap
@@ -290,6 +539,13 @@ Item {
                     elide: Text.ElideMiddle
                     Layout.fillWidth: true
                 }
+            }
+
+            Btn {
+                text: "Name speakers"
+                visible: page.phase === "done" && page.screen.state.speakers.length > 0 && !page.screen.state.namesOpen
+                implicitWidth: 150
+                onClicked: page.screen.open_names()
             }
 
             Btn {

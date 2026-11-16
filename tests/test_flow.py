@@ -596,6 +596,123 @@ class TestAssignSpeaker:
             flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=tmp_path / "p.json")
 
 
+class TestWhoSpoke:
+    """The "who spoke?" question: the speakers a meeting can name, and answers."""
+
+    MODEL = "eres2net-voxceleb-16k.onnx"
+
+    def _meeting(self, tmp_path):
+        from stenograf.config import MeetingProfile
+        from stenograf.output import write_transcript
+        from stenograf.transcript import Transcript, TranscriptEntry
+        from stenograf.voiceprints import write_meeting_voiceprints
+
+        mdir = tmp_path / "meeting-20260801-120000"
+        long = "we moved the calibration runs to Thursday because the test vehicle is booked"
+        entries = [
+            TranscriptEntry(speaker="Daniel", text="hallo zusammen", start=0.0, end=2.0),
+            TranscriptEntry(speaker="Remote-1", text="kurz", start=2.0, end=3.0),
+            TranscriptEntry(
+                speaker="Remote-1",
+                text=long + " all week long, and the trailer is not back yet",
+                start=3.0,
+                end=9.0,
+            ),
+            TranscriptEntry(speaker="Remote-1", text="und noch was", start=9.0, end=10.0),
+            TranscriptEntry(speaker="Local-2", text="nur ein Satz", start=10.0, end=11.0),
+        ]
+        write_transcript(
+            Transcript(language=None, profile=MeetingProfile(), entries=entries),
+            mdir,
+            "transcript",
+        )
+        write_meeting_voiceprints(
+            mdir,
+            {
+                "Daniel": np.array([1.0, 0.0], np.float32),
+                "Remote-1": np.array([0.0, 1.0], np.float32),
+                "Local-2": np.array([0.7, 0.7], np.float32),
+            },
+            self.MODEL,
+            date="2026-08-01",
+        )
+        return mdir
+
+    def _store(self, tmp_path, **profiles):
+        from stenograf.voiceprints import ProfileStore
+
+        store = ProfileStore(tmp_path / "profiles.json")
+        for name, vector in profiles.items():
+            store.enroll(name, np.array(vector, np.float32), self.MODEL, date="2026-07-01")
+        store.save()
+        return store.path
+
+    def test_speakers_come_in_order_with_their_longest_lines(self, tmp_path):
+        mdir = self._meeting(tmp_path)
+        store = self._store(tmp_path, Daniel=[1.0, 0.0])
+        speakers = flow.meeting_speakers(mdir, store_path=store)
+        assert [s.label for s in speakers] == ["Daniel", "Remote-1", "Local-2"]
+        assert [s.recognised for s in speakers] == [True, False, False]
+        remote = speakers[1]
+        assert remote.seconds == pytest.approx(8.0)
+        assert remote.quotes[0] == "kurz"  # the three longest, in meeting order
+        assert remote.quotes[1].endswith("…") and len(remote.quotes[1]) <= flow.QUOTE_CHARS + 1
+        assert remote.quotes[2] == "und noch was"
+        assert remote.quote_lines == (1, 2, 3)  # their transcript entries
+        assert speakers[2].quote_lines == (4,)
+
+    def test_a_meeting_without_voiceprints_has_no_one_to_name(self, tmp_path):
+        from stenograf.voiceprints import MEETING_VOICEPRINTS_NAME
+
+        mdir = self._meeting(tmp_path)
+        (mdir / MEETING_VOICEPRINTS_NAME).unlink()
+        assert flow.meeting_speakers(mdir) == []
+        assert flow.meeting_speakers(tmp_path / "nowhere") == []
+
+    def test_known_names_are_the_library_then_the_attendees(self, tmp_path):
+        store = self._store(tmp_path, Daniel=[1.0, 0.0])
+        names = flow.known_speaker_names(store_path=store, attendee_names=("anna", "DANIEL"))
+        assert names == ["anna", "Daniel"]
+
+    def test_answers_take_the_library_spelling_and_blanks_change_nothing(self, tmp_path):
+        from stenograf.output import load_transcript
+
+        mdir = self._meeting(tmp_path)
+        store = self._store(tmp_path, Jonas=[0.1, 1.0])
+        outcomes = flow.name_speakers(
+            mdir, {"Remote-1": "  jonas ", "Local-2": "", "Daniel": "Daniel"}, store_path=store
+        )
+        assert [(o.label, o.name, o.applied) for o in outcomes] == [("Remote-1", "Jonas", True)]
+        transcript, _, _ = load_transcript(mdir)
+        assert {e.speaker for e in transcript.entries} == {"Daniel", "Jonas", "Local-2"}
+
+    def test_a_corrected_name_moves_before_someone_takes_it(self, tmp_path):
+        # "Not Daniel?" → Jonas, while Remote-1 is the real Daniel: Daniel's
+        # lines must become Jonas's before Remote-1's become Daniel's.
+        from stenograf.output import load_transcript
+
+        mdir = self._meeting(tmp_path)
+        store = self._store(tmp_path)
+        outcomes = flow.name_speakers(
+            mdir, {"Remote-1": "Daniel", "Daniel": "Jonas"}, store_path=store
+        )
+        assert all(o.applied for o in outcomes)
+        transcript, _, _ = load_transcript(mdir)
+        by_text = {e.text: e.speaker for e in transcript.entries}
+        assert by_text["hallo zusammen"] == "Jonas"
+        assert by_text["kurz"] == "Daniel"
+
+    def test_a_refused_voice_reports_its_similarity_until_forced(self, tmp_path):
+        mdir = self._meeting(tmp_path)
+        store = self._store(tmp_path, Anna=[1.0, 0.0])
+        (refused,) = flow.name_speakers(mdir, {"Remote-1": "Anna"}, store_path=store)
+        assert not refused.applied and refused.refused_similarity == pytest.approx(0.0)
+        (forced,) = flow.name_speakers(
+            mdir, {"Remote-1": "Anna"}, store_path=store, force=["Remote-1"]
+        )
+        assert forced.applied
+
+
 class TestMicDeviceResolution:
     """Which microphone a run records from: flag, then settings, then the OS."""
 

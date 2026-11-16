@@ -1,6 +1,7 @@
 """settings.toml wiring through the CLI, plus `steno settings show/edit`."""
 
 import json
+import re
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -263,7 +264,7 @@ attendees = ["Anja"]
     assert 'preset:   [meetings.controlling] — title "Controlling-Runde", notes via mlx' in (
         result.output
     )
-    assert "backend         = mlx  ([meetings.controlling])" in result.output
+    assert re.search(r"backend +=\s+mlx  \(\[meetings\.controlling\]\)", result.output)
     # Vocabulary merges instead of overlaying, so it gets a sentence, not a row.
     assert "merges into the standing vocabulary" in result.output
 

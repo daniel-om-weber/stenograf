@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
 
 import click
 
@@ -32,6 +33,9 @@ from stenograf.capture.base import Channel
 from stenograf.config import Language, MeetingProfile
 from stenograf.live import StreamingUpdate
 from stenograf.transcript import Transcript, format_timestamp
+
+if TYPE_CHECKING:
+    from stenograf.flow import SpeakerSummary
 
 
 class LiveView:
@@ -99,6 +103,12 @@ class LiveView:
 
     def error(self, message: str) -> None:
         """A recoverable error (e.g. the live pass stopped early)."""
+
+    def speakers(self, speakers: list[SpeakerSummary], *, ask: bool) -> None:
+        """The persisted meeting's nameable speakers — sent only to a run that
+        asks for names (``MeetingRun(ask_names=True)``), after the transcript
+        is on disk. ``ask`` says to put the question now (notes then wait for
+        the answer); without it the speakers are only there to fix later."""
 
 
 class PlainLiveView(LiveView):

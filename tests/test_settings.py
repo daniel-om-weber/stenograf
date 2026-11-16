@@ -97,6 +97,25 @@ def test_thinking_defaults_to_none_and_rejects_junk(tmp_path):
         load_settings(path)
 
 
+def test_the_names_panel_settings_are_off_unless_set(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text("[speakers]\n", encoding="utf-8")
+    speakers = load_settings(path).speakers
+    assert speakers.names_panel_timeout_s is None  # open until answered
+    assert speakers.names_panel_skip_if_recognised is None  # always opens
+    path.write_text(
+        "[speakers]\nnames_panel_timeout_s = 60\nnames_panel_skip_if_recognised = true\n",
+        encoding="utf-8",
+    )
+    speakers = load_settings(path).speakers
+    assert speakers.names_panel_timeout_s == 60.0
+    assert speakers.names_panel_skip_if_recognised is True
+    for bad in ("-1", '"sixty"', "7200"):
+        path.write_text(f"[speakers]\nnames_panel_timeout_s = {bad}\n", encoding="utf-8")
+        with pytest.raises(SettingsError, match="names_panel_timeout_s"):
+            load_settings(path)
+
+
 def test_max_input_chars_parses_and_rejects_junk(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text("[notes]\nmax_input_chars = 200000\n", encoding="utf-8")

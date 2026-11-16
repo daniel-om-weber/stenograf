@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 
+import numpy as np
 import pytest
 
 # PySide6 is a base dependency since the default flip — a broken Qt install
@@ -868,6 +869,312 @@ class TestMeetingScreen:
         shell.screen("Setup").start(self._mic_only_form(notes=True))
         pump(lambda: meeting.state["phase"] == "done" and not meeting.running)
         assert calls == [], "an abandoned run must not start its notes step"
+
+
+class TestWhoSpoke:
+    """The done screen's "who spoke?" panel, and the notes that wait for it."""
+
+    @staticmethod
+    def _diarized_meeting(monkeypatch, tmp_path, notes_calls):
+        """A mic-only diarized meeting (one voice, Local-1) whose notes step
+        records the transcript it was handed instead of running a model."""
+        import conftest
+
+        from stenograf import loaders, output
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+        from stenograf.diarization.base import SpeakerTurn
+        from stenograf.notes import run as notes_run
+
+        monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings")
+        mic = tmp_path / "mic.wav"
+        conftest.write_wav(mic)
+        diarizer = conftest.EmbeddingDiarizer(
+            [SpeakerTurn("S0", 0.0, 1e9)], {"S0": np.array([1.0, 0.0], np.float32)}
+        )
+        monkeypatch.setattr(
+            loaders,
+            "load_backends",
+            lambda **kwargs: (
+                conftest.FakeASR(),
+                conftest.WholeBufferVAD(),
+                diarizer if kwargs["need_diarizer"] else None,  # as the real loader
+            ),
+        )
+        monkeypatch.setattr(
+            loaders,
+            "make_provider",
+            lambda replay, plans, **kwargs: FileCaptureProvider({Channel.MIC: mic}),
+        )
+
+        def record_notes(view, transcript, out_dir, basename, **kwargs):
+            notes_calls.append({e.speaker for e in transcript.entries})
+            return True
+
+        monkeypatch.setattr(notes_run, "run_notes", record_notes)
+
+    @staticmethod
+    def _start(shell, notes=True):
+        shell.screen("Setup").start(
+            {
+                "mic": True,
+                "system": False,
+                "diarize": True,
+                "local": -1,
+                "remote": -1,
+                "language": "auto",
+                "title": "",
+                "recordAudio": False,
+                "notes": notes,
+            }
+        )
+
+    def test_notes_wait_for_the_names_and_carry_them(self, gui, tmp_path, monkeypatch):
+        from stenograf.voiceprints import ProfileStore
+
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        with _Warnings() as log:
+            self._start(shell)
+            pump(lambda: meeting.state["namesOpen"])
+            (row,) = meeting.state["speakers"]
+            assert row["label"] == "Local-1" and not row["recognised"]
+            assert row["quotes"] == [{"text": "“wort”", "line": 0}]
+            assert row["clips"] == 1  # one line, one voice sample
+            time.sleep(0.5)
+            assert notes == [], "notes must wait for the names"
+            assert "named or skipped" in meeting.state["status"]
+
+            meeting.save_names({"Local-1": "Anna"}, [])
+            pump(lambda: notes != [] and not meeting.running)
+        assert log.seen == []
+        assert notes == [{"Anna"}], "the notes see the name, not the placeholder"
+        assert not meeting.state["namesOpen"]
+        assert meeting.state["speakers"][0]["label"] == "Anna"
+        assert ProfileStore.load().get("Anna", "eres2net-voxceleb-16k.onnx") is not None
+
+    def test_skip_starts_the_notes_with_the_labels(self, gui, tmp_path, monkeypatch):
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        meeting.skip_names()
+        pump(lambda: notes != [] and not meeting.running)
+        assert notes == [{"Local-1"}]
+        assert not meeting.state["namesOpen"]
+        meeting.open_names()  # names stay fixable after the notes
+        assert meeting.state["namesOpen"]
+
+    def test_leaving_the_screen_counts_as_skipping(self, gui, tmp_path, monkeypatch):
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        meeting.stop()  # "Back to menu"
+        pump(lambda: notes != [] and not meeting.running)
+        assert notes == [{"Local-1"}]
+
+    def test_the_panel_closes_itself_after_the_timeout(self, gui, tmp_path, monkeypatch):
+        import conftest
+
+        conftest.write_settings("[speakers]\nnames_panel_timeout_s = 1\n")
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        assert meeting.state["namesCountdown"] == 1
+        pump(lambda: notes != [] and not meeting.running)
+        assert notes == [{"Local-1"}]
+        assert not meeting.state["namesOpen"] and meeting.state["namesCountdown"] == 0
+
+    def test_typing_stops_the_countdown(self, gui, tmp_path, monkeypatch):
+        import conftest
+
+        conftest.write_settings("[speakers]\nnames_panel_timeout_s = 1\n")
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        meeting.hold_names()  # what the name field calls on the first keystroke
+        assert meeting.state["namesCountdown"] == 0
+        deadline = time.monotonic() + 1.5
+        pump(lambda: time.monotonic() > deadline)
+        assert meeting.state["namesOpen"] and notes == [], "a held panel never closes itself"
+        meeting.skip_names()
+        pump(lambda: notes != [] and not meeting.running)
+
+    def _enroll_the_voice(self):
+        from stenograf.voiceprints import ProfileStore
+
+        store = ProfileStore()
+        store.enroll("Anna", np.array([1.0, 0.0], np.float32), "eres2net-voxceleb-16k.onnx")
+        store.save()
+
+    def test_the_panel_opens_even_when_everyone_was_recognised(
+        self, gui, tmp_path, monkeypatch
+    ):
+        self._enroll_the_voice()
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        (row,) = meeting.state["speakers"]
+        assert row["label"] == "Anna" and row["recognised"]
+        time.sleep(0.5)
+        assert notes == [], "a wrong name is worth a look before the notes use it"
+        meeting.save_names({"Anna": "Jonas"}, [])  # "Not Anna?"
+        pump(lambda: notes != [] and not meeting.running)
+        assert notes == [{"Jonas"}]
+
+    def test_the_panel_can_skip_meetings_where_everyone_was_recognised(
+        self, gui, tmp_path, monkeypatch
+    ):
+        import conftest
+
+        conftest.write_settings("[speakers]\nnames_panel_skip_if_recognised = true\n")
+        self._enroll_the_voice()
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: notes != [] and not meeting.running)
+        assert notes == [{"Anna"}]
+        assert not meeting.state["namesOpen"]
+        assert meeting.state["speakers"], "the footer button can still open it"
+
+    def test_a_refused_voice_keeps_the_panel_and_the_notes_waiting(
+        self, gui, tmp_path, monkeypatch
+    ):
+        from stenograf.voiceprints import ProfileStore
+
+        store = ProfileStore()
+        store.enroll("Anna", np.array([0.0, 1.0], np.float32), "eres2net-voxceleb-16k.onnx")
+        store.save()
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        with _Warnings() as log:
+            self._start(shell)
+            pump(lambda: meeting.state["namesOpen"])
+            meeting.save_names({"Local-1": "Anna"}, [])
+            pump(lambda: meeting.state["speakers"][0]["refused"] != "")
+            row = meeting.state["speakers"][0]
+            assert row["label"] == "Local-1" and row["name"] == "Anna"
+            assert "doesn't sound like Anna" in row["refused"]
+            assert meeting.state["namesOpen"] and notes == []
+
+            meeting.save_names({"Local-1": "Anna"}, ["Local-1"])  # "Add anyway"
+            pump(lambda: notes != [] and not meeting.running)
+        assert log.seen == []
+        assert notes == [{"Anna"}]
+
+    @staticmethod
+    def _silent_player(monkeypatch):
+        """Replace the speaker output: record what would play, play nothing."""
+        from stenograf import playback
+
+        played = []
+
+        class SilentPlayback:
+            def __init__(self, clip, on_done):
+                self.clip, self.on_done = clip, on_done
+
+            def start(self):
+                played.append(self)
+                return self
+
+            def stop(self):
+                self.on_done(None)
+
+        monkeypatch.setattr(playback, "Playback", SilentPlayback)
+        return played
+
+    def test_a_voice_sample_plays_and_stops(self, gui, tmp_path, monkeypatch):
+        import conftest
+
+        conftest.write_settings("[speakers]\nnames_panel_timeout_s = 30\n")
+        played = self._silent_player(monkeypatch)
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        with _Warnings() as log:
+            self._start(shell)
+            pump(lambda: meeting.state["namesOpen"])
+            assert meeting.state["namesCountdown"] > 0
+
+            meeting.play("Local-1")
+            assert meeting.state["playing"] == "Local-1"
+            assert meeting.state["namesCountdown"] == 0, "listening is answering"
+            (sample,) = played
+            assert sample.clip is meeting._run.voice_clips["Local-1"][0]
+
+            meeting.play("Local-1")  # the same button again stops it
+            pump(lambda: meeting.state["playing"] == "")
+
+            played[0].on_done(None)  # a stale finish never clears a newer sample
+            meeting.play("Local-1")
+            assert len(played) == 2 and meeting.state["playing"] == "Local-1"
+            played[0].on_done(None)
+            pump(lambda: True)
+            assert meeting.state["playing"] == "Local-1"
+            meeting.skip_names()
+            pump(lambda: notes != [] and not meeting.running)
+        assert log.seen == []
+
+    def test_samples_follow_a_name_and_leave_with_the_screen(self, gui, tmp_path, monkeypatch):
+        played = self._silent_player(monkeypatch)
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        run = meeting._run
+        meeting.save_names({"Local-1": "Anna"}, [])
+        pump(lambda: notes != [] and not meeting.running)
+        assert set(run.voice_clips) == {"Anna"}
+        assert meeting.state["speakers"][0]["clips"] == 1
+
+        meeting.play("Anna")
+        assert played and meeting.state["playing"] == "Anna"
+        meeting.stop()  # "Back to menu"
+        assert meeting.state["playing"] == ""
+        assert run.voice_clips == {}, "no voice outlives the screen"
+
+    def test_a_meeting_without_diarization_asks_nothing(self, gui, tmp_path, monkeypatch):
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        form = {
+            "mic": True,
+            "system": False,
+            "diarize": False,
+            "local": -1,
+            "remote": -1,
+            "language": "auto",
+            "title": "",
+            "recordAudio": False,
+            "notes": True,
+        }
+        shell.screen("Setup").start(form)
+        pump(lambda: notes != [] and not meeting.running)
+        assert meeting.state["speakers"] == [] and not meeting.state["namesOpen"]
 
 
 class TestTranscribeScreen:

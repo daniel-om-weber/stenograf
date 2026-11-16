@@ -70,7 +70,7 @@ from stenograf.view import CallbackView, LiveView
 from stenograf.vocab import collect_terms
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Collection, Mapping, Sequence
 
     import numpy as np
 
@@ -291,9 +291,21 @@ class MeetingRun:
         *,
         options: RunOptions | None = None,
         abort: threading.Event | None = None,
+        ask_names: bool = False,
     ) -> None:
         self.request = request
         self.options = options or RunOptions()
+        self.ask_names = ask_names
+        """A front-end that can ask "who spoke?" (the app): the view gets the
+        nameable speakers, and while it asks (always, unless ``[speakers]
+        names_panel_skip_if_recognised`` and every voice was recognised) notes
+        wait for :meth:`settle_names`. The front-end owns any timeout — only it
+        knows whether the user is in the middle of typing."""
+        self._names_settled = threading.Event()
+        self.voice_clips: dict[str, list[np.ndarray]] = {}
+        """Each speaker's voice samples (``MeetingResult.voice_clips``), under
+        the labels the transcript shows as names are given; in memory only,
+        and gone with :meth:`discard_voice_clips`."""
         self.created_at = datetime.now()
         # A fresh date-named folder under the visible output home (which cannot
         # collide with an existing meeting), or options.out as the folder —
@@ -417,7 +429,7 @@ class MeetingRun:
                         if options.reid_threshold is None
                         else options.reid_threshold
                     ),
-                    store_path=options.reid_store or settings.speakers.profile_store,
+                    store_path=self.profile_store,
                 )
                 if reid is not None:
                     view.status(f"re-ID: {len(reid.store.for_model(reid.model))} profile(s) active")
@@ -506,6 +518,7 @@ class MeetingRun:
                     else:
                         view.status(f"recorded audio: {tee.path}")
             self.result = result
+            self.voice_clips = dict(result.voice_clips)
             _report_lost_reference(result, view)
             transcript = result.transcript
             if transcript is not None:
@@ -520,7 +533,22 @@ class MeetingRun:
                     f"wrote {', '.join(p.name for p in paths)} → {self.out_dir} "
                     f"({self.elapsed:.1f}s)"
                 )
+                speakers = (
+                    meeting_speakers(self.out_dir, store_path=self.profile_store)
+                    if self.ask_names
+                    else []
+                )
+                ask = bool(speakers) and not (
+                    settings.speakers.names_panel_skip_if_recognised
+                    and all(s.recognised for s in speakers)
+                )
+                if speakers:
+                    view.speakers(speakers, ask=ask)
                 notes_ok = True
+                if ask and self.request.notes and not self.abandon_notes.is_set():
+                    transcript_for_notes = self._await_names(view)
+                    if transcript_for_notes is not None:
+                        transcript = transcript_for_notes
                 if self.request.notes and not self.abandon_notes.is_set():
                     self.notes_running = True
                     try:
@@ -536,6 +564,45 @@ class MeetingRun:
         finally:
             if notes_warmer is not None:
                 notes_warmer.cancel()  # idempotent; a consumed warmer already exited
+
+    @property
+    def profile_store(self) -> Path | None:
+        """The voice library this run matches and names against (``None`` = the
+        default location)."""
+        return self.options.reid_store or self.request.settings.speakers.profile_store
+
+    def name_speakers(
+        self, names: Mapping[str, str], force: Collection[str] = ()
+    ) -> list[NamingOutcome]:
+        """Answer "who spoke?" for this meeting (:func:`name_speakers`); safe
+        while the notes wait, which reread the transcript once settled. The
+        voice samples follow each applied name."""
+        outcomes = name_speakers(self.out_dir, names, store_path=self.profile_store, force=force)
+        for outcome in outcomes:
+            if outcome.applied and outcome.label in self.voice_clips:
+                moved = self.voice_clips.pop(outcome.label)
+                self.voice_clips[outcome.name] = [*self.voice_clips.get(outcome.name, []), *moved]
+        return outcomes
+
+    def discard_voice_clips(self) -> None:
+        """Drop the voice samples: the question is over and nothing may outlive it."""
+        self.voice_clips = {}
+
+    def settle_names(self) -> None:
+        """The names are saved or skipped: notes waiting on them start. Idempotent."""
+        self._names_settled.set()
+
+    def _await_names(self, view: LiveView) -> Transcript | None:
+        """Hold the notes until :meth:`settle_names` or a quit; returns the
+        transcript as the names left it on disk (``None`` = keep the one in hand)."""
+        view.status("notes start once the speakers are named or skipped")
+        while not self._names_settled.wait(0.2):
+            if self.abandon_notes.is_set():
+                return None
+        try:
+            return output.load_transcript(self.out_dir)[0]
+        except ValueError:
+            return None
 
     def _build_notes_backend(self) -> NotesBackend:
         """The exact backend the notes tail will use, for the warmer to heat
@@ -885,6 +952,149 @@ def assign_speaker(
         samples=len(profile.embeddings),
         rewritten=rewritten,
     )
+
+
+QUOTE_CHARS = 90
+QUOTE_COUNT = 3
+"""A speaker's quotes on the "who spoke?" question, and their length: enough
+to recognise a person by what they said, short enough to read at a glance."""
+
+
+@dataclass(frozen=True)
+class SpeakerSummary:
+    """One speaker of a finished meeting, as the "who spoke?" question shows it."""
+
+    label: str
+    """As the transcript shows it: ``Remote-1``, or a name."""
+    recognised: bool
+    """The label is a name in the voice library (re-ID matched the voice, or
+    it was named before) — as opposed to a placeholder still to be named."""
+    seconds: float
+    """Transcribed speech time."""
+    quotes: tuple[str, ...]
+    """The speaker's :data:`QUOTE_COUNT` longest lines, in meeting order,
+    clipped to :data:`QUOTE_CHARS` — what the user recognises them by."""
+    quote_lines: tuple[int, ...]
+    """Each quote's index into the transcript's entries, so a front-end can
+    show the line in its context (who spoke before, what they answered)."""
+
+
+def meeting_speakers(meeting_dir: Path, *, store_path: Path | None = None) -> list[SpeakerSummary]:
+    """The speakers of a finished meeting that can be named, in order of first
+    appearance; empty when the meeting has no voiceprints (diarization off) or
+    no ``transcript.json`` to rewrite."""
+    from stenograf.transcript import speech_seconds
+    from stenograf.voiceprints import ProfileStore, load_meeting_voiceprints
+
+    try:
+        transcript, json_path, _ = output.load_transcript(meeting_dir)
+    except ValueError:
+        return []
+    voiceprints = load_meeting_voiceprints(json_path.parent)
+    if voiceprints is None:
+        return []
+    store = ProfileStore.load(store_path)
+    seconds = speech_seconds(transcript.entries)
+    summaries = []
+    for label in dict.fromkeys(e.speaker for e in transcript.entries):
+        if label not in voiceprints.speakers:
+            continue
+        lines = [i for i, e in enumerate(transcript.entries) if e.speaker == label]
+        by_length = sorted(lines, key=lambda i: -len(transcript.entries[i].text))
+        longest = sorted(by_length[:QUOTE_COUNT])
+        summaries.append(
+            SpeakerSummary(
+                label=label,
+                recognised=store.get(label, voiceprints.embedding_model) is not None,
+                seconds=seconds.get(label, 0.0),
+                quotes=tuple(_clip(transcript.entries[i].text, QUOTE_CHARS) for i in longest),
+                quote_lines=tuple(longest),
+            )
+        )
+    return summaries
+
+
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0] or text[:limit]
+    return cut.rstrip(" ,;:.") + "…"
+
+
+def known_speaker_names(
+    *, store_path: Path | None = None, attendee_names: Sequence[str] = ()
+) -> list[str]:
+    """The names a "who spoke?" answer is likely to be: the voice library's,
+    then the meeting's attendee names, case-insensitively deduplicated."""
+    from stenograf import assets
+    from stenograf.voiceprints import ProfileStore
+
+    store = ProfileStore.load(store_path)
+    names = [p.name for p in store.for_model(assets.SPEAKER_EMBEDDING.name)]
+    seen = {n.casefold() for n in names}
+    for name in attendee_names:
+        if name.casefold() not in seen:
+            names.append(name)
+            seen.add(name.casefold())
+    return sorted(names, key=str.casefold)
+
+
+@dataclass(frozen=True)
+class NamingOutcome:
+    """What one answer to "who spoke?" did (:func:`name_speakers`)."""
+
+    label: str
+    name: str
+    refused_similarity: float | None = None
+    """Set when the voice did not match ``name``'s saved voice and nothing
+    changed: the similarity, for a front-end to ask whether to add it anyway
+    (``force``)."""
+    error: str | None = None
+    """Any other failure, already phrased for the user."""
+
+    @property
+    def applied(self) -> bool:
+        return self.refused_similarity is None and self.error is None
+
+
+def name_speakers(
+    meeting_dir: Path,
+    names: Mapping[str, str],
+    *,
+    store_path: Path | None = None,
+    force: Collection[str] = (),
+) -> list[NamingOutcome]:
+    """Answer "who spoke?" for several speakers at once — :func:`assign_speaker`
+    per answered label, each failing on its own.
+
+    A blank answer, or the label itself, leaves that speaker as is. A name
+    matching a library name up to case and spacing takes the library's
+    spelling, so "jonas" joins "Jonas" instead of founding a second profile.
+    A label that another answer names (``Daniel`` → ``Jonas`` while
+    ``Remote-1`` → ``Daniel``) is renamed first; otherwise its lines would
+    absorb the newcomer's before moving on. ``force`` holds the labels whose
+    voice joins the named profile even when it does not match."""
+    from stenograf.voiceprints import VoiceMismatchError
+
+    library = {name.casefold(): name for name in known_speaker_names(store_path=store_path)}
+    answers: dict[str, str] = {}
+    for label, raw in names.items():
+        name = " ".join(raw.split())
+        if name and name != label:
+            answers[label] = library.get(name.casefold(), name)
+    targets = set(answers.values())
+    outcomes = []
+    for label in sorted(answers, key=lambda label: label not in targets):
+        name = answers[label]
+        try:
+            assign_speaker(meeting_dir, label, name, store_path=store_path, force=label in force)
+        except VoiceMismatchError as exc:
+            outcomes.append(NamingOutcome(label, name, refused_similarity=exc.similarity))
+        except (ValueError, OSError) as exc:
+            outcomes.append(NamingOutcome(label, name, error=str(exc)))
+        else:
+            outcomes.append(NamingOutcome(label, name))
+    return outcomes
 
 
 def settings_report(preset: str | None = None) -> tuple[list[str], bool]:
