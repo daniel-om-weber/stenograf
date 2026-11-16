@@ -1586,6 +1586,55 @@ class TestFinishCardInputs:
         meeting.join()
 
 
+class TestFinishCardLayout:
+    _stub = TestMeetingScreen._stub_offline_meeting
+    _form = staticmethod(TestMeetingScreen._mic_only_form)
+    _open_card = TestFinishCardInputs._open_card
+
+    def test_done_stays_in_sight_with_many_voices_in_the_smallest_window(
+        self, gui, tmp_path, monkeypatch
+    ):
+        # The card gets only part of the window. A Done at the end of its
+        # scrolled column fell below the edge from five voices up in the
+        # default window, and nothing on screen said it was there.
+        from PySide6.QtCore import QPointF
+
+        shell, meeting = self._open_card(gui, tmp_path, monkeypatch)
+        voices = [
+            {
+                "label": f"Remote-{n}",
+                "recognised": False,
+                "spoke": "3 min",
+                "quotes": [{"text": "“something said”", "line": 0}],
+                "clips": 1,
+                "name": "",
+                "refused": "",
+            }
+            for n in range(1, 10)
+        ]
+        window = shell.window
+        assert window is not None
+        window.setWidth(window.minimumWidth())
+        window.setHeight(window.minimumHeight())
+        shell.show_window()
+        try:
+            meeting.set(speakers=voices)
+            pump(lambda: True)
+            card = next(
+                i for i in _items(shell) if i.property("opening") is not None and i.isVisible()
+            )
+            done = next(i for i in _items(shell) if i.property("text") == "Done")
+            assert card.property("implicitHeight") > card.height(), "the card must overflow here"
+            top = card.mapToScene(QPointF(0, 0)).y()
+            bottom = card.mapToScene(QPointF(0, card.height())).y()
+            assert top <= done.mapToScene(QPointF(0, 0)).y()
+            assert done.mapToScene(QPointF(0, done.height())).y() <= bottom
+        finally:
+            shell.hide_window()
+        meeting.skip_names()
+        meeting.join()
+
+
 class TestSetupFormInputs:
     def test_a_flipped_switch_survives_the_microphone_listing(self, gui):
         # The listing lands after the form is up, through the same state map;

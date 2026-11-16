@@ -47,7 +47,7 @@ Rectangle {
     }
 
     color: Theme.surface
-    implicitHeight: column.implicitHeight + 36
+    implicitHeight: column.implicitHeight + column.spacing + actions.implicitHeight + 36
 
     Rectangle {
         anchors.bottom: parent.bottom
@@ -56,13 +56,29 @@ Rectangle {
         color: Theme.line
     }
 
+    // Only the title, the voices and the notes scroll; the action row stays
+    // pinned below them. The card gets only part of the window, so a Done at
+    // the end of the scrolled column fell out of sight from five voices up in
+    // the default window (measured 2026-11-16).
     Flickable {
-        anchors.fill: parent
-        anchors.margins: 18
+        id: flick
+
+        anchors {
+            top: parent.top
+            left: parent.left
+            right: parent.right
+            bottom: actions.top
+            margins: 18
+            bottomMargin: column.spacing
+        }
         contentHeight: column.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar {}
+        // Basic's scrollbar shows only while scrolling, which makes a clipped
+        // card look complete.
+        ScrollBar.vertical: ScrollBar {
+            policy: flick.contentHeight > flick.height ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+        }
 
         ColumnLayout {
             id: column
@@ -427,97 +443,101 @@ Rectangle {
                     }
                 }
             }
+        }
+    }
 
-            // The files, and Done.
-            RowLayout {
-                spacing: 8
-                Layout.fillWidth: true
-                Layout.topMargin: 2
+    // The files, and Done, lined up with the column above.
+    RowLayout {
+        id: actions
 
-                IconButton {
-                    glyph: "folder"
-                    tip: "Open the folder"
-                    onClicked: card.screen.reveal()
-                }
+        x: flick.x + column.x
+        width: column.width
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 18
+        spacing: 8
 
-                IconButton {
-                    glyph: "file-text"
-                    tip: "Open the transcript"
-                    onClicked: card.screen.open_transcript()
-                }
+        IconButton {
+            glyph: "folder"
+            tip: "Open the folder"
+            onClicked: card.screen.reveal()
+        }
 
-                IconButton {
-                    id: copyButton
+        IconButton {
+            glyph: "file-text"
+            tip: "Open the transcript"
+            onClicked: card.screen.open_transcript()
+        }
 
-                    property bool copied: false
+        IconButton {
+            id: copyButton
 
-                    glyph: copied ? "check" : "copy"
-                    tip: copied ? "Copied" : "Copy the transcript"
-                    onClicked: copied = card.screen.copy()
+            property bool copied: false
 
-                    Timer {
-                        interval: 1500
-                        running: copyButton.copied
-                        onTriggered: copyButton.copied = false
-                    }
-                }
+            glyph: copied ? "check" : "copy"
+            tip: copied ? "Copied" : "Copy the transcript"
+            onClicked: copied = card.screen.copy()
 
-                IconButton {
-                    id: discardButton
-
-                    // Two clicks: the first arms it, the second moves the folder
-                    // to the trash. Disarms itself after a few seconds.
-                    danger: true
-                    glyph: "trash"
-                    tip: armed ? "Click again to move this meeting to the trash" : "Discard this meeting"
-                    enabled: !card.busy
-                    onClicked: {
-                        card.screen.hold_names();  // the countdown must not close the card between the clicks
-                        if (armed)
-                            card.screen.discard();
-                        else
-                            armed = true;
-                    }
-
-                    Timer {
-                        interval: 4000
-                        running: discardButton.armed
-                        onTriggered: discardButton.armed = false
-                    }
-                }
-
-                Item {
-                    Layout.fillWidth: true
-                }
-
-                RowLayout {
-                    // The auto-close countdown; typing stops it.
-                    visible: card.st.namesCountdown > 0
-                    spacing: 4
-
-                    Icon {
-                        name: "clock"
-                        color: Theme.dim
-                        size: 12
-                    }
-
-                    Text {
-                        text: card.st.namesCountdown + " s"
-                        color: Theme.dim
-                        font.pixelSize: 12
-                        font.family: Theme.mono
-                    }
-                }
-
-                Btn {
-                    text: card.busy ? "Saving…" : "Done"
-                    glyph: card.busy ? "" : "check"
-                    primary: true
-                    enabled: !card.busy
-                    implicitWidth: 110
-                    onClicked: card.done()
-                }
+            Timer {
+                interval: 1500
+                running: copyButton.copied
+                onTriggered: copyButton.copied = false
             }
+        }
+
+        IconButton {
+            id: discardButton
+
+            // Two clicks: the first arms it, the second moves the folder
+            // to the trash. Disarms itself after a few seconds.
+            danger: true
+            glyph: "trash"
+            tip: armed ? "Click again to move this meeting to the trash" : "Discard this meeting"
+            enabled: !card.busy
+            onClicked: {
+                card.screen.hold_names();  // the countdown must not close the card between the clicks
+                if (armed)
+                    card.screen.discard();
+                else
+                    armed = true;
+            }
+
+            Timer {
+                interval: 4000
+                running: discardButton.armed
+                onTriggered: discardButton.armed = false
+            }
+        }
+
+        Item {
+            Layout.fillWidth: true
+        }
+
+        RowLayout {
+            // The auto-close countdown; typing stops it.
+            visible: card.st.namesCountdown > 0
+            spacing: 4
+
+            Icon {
+                name: "clock"
+                color: Theme.dim
+                size: 12
+            }
+
+            Text {
+                text: card.st.namesCountdown + " s"
+                color: Theme.dim
+                font.pixelSize: 12
+                font.family: Theme.mono
+            }
+        }
+
+        Btn {
+            text: card.busy ? "Saving…" : "Done"
+            glyph: card.busy ? "" : "check"
+            primary: true
+            enabled: !card.busy
+            implicitWidth: 110
+            onClicked: card.done()
         }
     }
 }
