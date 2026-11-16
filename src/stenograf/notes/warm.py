@@ -6,10 +6,10 @@ transcript — so the end-of-meeting wait starts with a multi-GB cold load.
 :class:`NotesWarmer` owns one dedicated thread that (after a grace delay, and
 only past a free-memory gate) builds the backend and calls its ``warm()``
 hook, then waits for the meeting's transcript and runs the real generation
-job on that same thread. One thread for warm-up *and* generation is the
-mlx-lm 0.29 constraint (:mod:`stenograf.notes.mlx`: generation streams are
-per-thread); backends without a ``warm()`` hook still get built early, which
-is cheap and harmless. Ollama is deliberately not warmed: its server unloads
+job on that same thread. (The mlx backend's own thread constraint is met
+inside :mod:`stenograf.notes.mlx`, whatever thread calls it.) Backends
+without a ``warm()`` hook still get built early, which is cheap and
+harmless. Ollama is deliberately not warmed: its server unloads
 idle models (``keep_alive`` defaults to minutes), so a start-of-meeting warm
 evaporates before a normal meeting ends.
 

@@ -5,28 +5,36 @@ stenograf under the same platform marker as the parakeet ASR backend, and the
 model downloads into the Hugging Face cache on first use — no server, no
 daemon, no ``ollama pull``.
 
-Thread constraint (verified empirically, 2026-07-10): on the mlx-lm 0.29 line
-the GPU generation stream is created when ``mlx_lm`` is imported and is only
-valid on that thread — ``generate()`` anywhere else dies with "There is no
-Stream(gpu, 0)", even when load and generate share a worker thread. Fixed
-upstream only in mlx-lm >= 0.31, which we cannot ship (see the pyproject
+Thread constraint (verified empirically, 2026-07-10; re-confirmed
+2026-11-16): on the mlx-lm 0.29 line the GPU generation stream is a module
+global created when ``mlx_lm`` is imported, and it is only valid on that
+thread — ``generate()`` anywhere else dies with "There is no Stream(gpu, N)".
+Fixed upstream only in mlx-lm >= 0.31, which we cannot ship (see the pyproject
 comment: its transformers>=5 floor is broken against current transformers and
-collides with the eval group's 4.x pin). So this backend imports mlx_lm
-lazily — the first ``complete()`` call's thread becomes the generation
-thread — and raises a clear error if a later call comes from another thread.
-The CLI always satisfies this (notes run synchronously on the main thread).
+collides with the eval group's 4.x pin). The import happens once per process,
+so binding generation to *a backend's* first thread is not enough: a
+long-lived app builds a new backend, on a new thread, for every meeting, and
+every meeting after the first would lose its notes. Every touch of ``mlx_lm`` — import, load,
+warm-up, generation — therefore runs on one daemon thread per process
+(:class:`_MlxThread`); callers on any thread block on it, and two meetings'
+notes queue rather than holding two models at once.
 """
 
 from __future__ import annotations
 
 import os
+import queue
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from stenograf.settings import NotesSettings
+
+_T = TypeVar("_T")
 
 DEFAULT_MODEL = "Qwen/Qwen3-8B-MLX-4bit"
 """Official Qwen MLX quant: 4.35 GB on disk, Apache-2.0, 32k context —
@@ -55,6 +63,52 @@ _THINKING_TEMP, _THINKING_TOP_P = 0.6, 0.95
 endless repetition. Non-thinking mode keeps mlx-lm's greedy default."""
 
 
+class _MlxThread:
+    """The process's one ``mlx_lm`` thread, started on first use (module docstring)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._jobs: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
+        self._ident: int | None = None
+
+    def run(self, fn: Callable[[], _T]) -> _T:
+        """``fn()`` on the mlx thread; its result or its exception, here.
+
+        Daemon, so a CLI interrupted mid-generation still exits; the wait
+        polls so the main thread's Ctrl-C reaches the caller."""
+        with self._lock:
+            if self._ident is None:
+                worker = threading.Thread(target=self._serve, name="mlx-notes", daemon=True)
+                worker.start()
+                self._ident = worker.ident
+        if threading.get_ident() == self._ident:
+            return fn()
+        done = threading.Event()
+        box: dict[str, Any] = {}
+
+        def job() -> None:
+            try:
+                box["value"] = fn()
+            except BaseException as exc:  # noqa: BLE001 — re-raised on the caller's thread
+                box["error"] = exc
+            finally:
+                done.set()
+
+        self._jobs.put(job)
+        while not done.wait(0.2):
+            pass
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
+    def _serve(self) -> None:
+        while True:
+            self._jobs.get()()
+
+
+_THREAD = _MlxThread()
+
+
 class MlxBackend:
     """Runs the notes model in-process via mlx-lm, weights from the HF cache.
 
@@ -74,9 +128,8 @@ class MlxBackend:
         self.max_input_chars = max_input_chars or DEFAULT_MAX_INPUT_CHARS
         self.thinking = DEFAULT_THINKING if thinking is None else thinking
         # (model, tokenizer) — Any because mlx_lm's types are only importable
-        # lazily, on the generation thread.
+        # lazily, on the mlx thread.
         self._loaded: tuple[Any, Any] | None = None
-        self._generation_thread: int | None = None
 
     @classmethod
     def from_settings(cls, settings: NotesSettings) -> MlxBackend:
@@ -121,17 +174,18 @@ class MlxBackend:
         return True
 
     def warm(self) -> None:
-        """Load the weights and generate one token NOW, on this thread.
+        """Load the weights and generate one token NOW (on the mlx thread).
 
         The meeting-end wait then starts at the prompt instead of at a
-        4.35 GB cold load. Binds generation to the calling thread exactly
-        like a first ``complete()`` would (module docstring) — the caller
-        owns running the real completions on this same thread afterwards
-        (:class:`stenograf.notes.warm.NotesWarmer`). The one-token pass is
-        what turns the load into a *warm* model: weight upload and kernel
-        compilation happen on first generate, not on ``load``."""
-        if self._generation_thread is None:
-            self._generation_thread = threading.get_ident()
+        4.35 GB cold load. The one-token pass is what turns the load into a
+        *warm* model: weight upload and kernel compilation happen on first
+        generate, not on ``load``."""
+        _THREAD.run(self._warm)
+
+    def complete(self, messages: list[dict[str, str]]) -> str:
+        return _THREAD.run(lambda: self._complete(messages))
+
+    def _warm(self) -> None:
         from mlx_lm import stream_generate
 
         model, tokenizer = self._load()
@@ -139,17 +193,7 @@ class MlxBackend:
         for _ in stream_generate(model, tokenizer, prompt=prompt, max_tokens=1):
             break
 
-    def complete(self, messages: list[dict[str, str]]) -> str:
-        if self._generation_thread is None:
-            self._generation_thread = threading.get_ident()
-        elif threading.get_ident() != self._generation_thread:
-            # See the module docstring: fail with a message instead of
-            # mlx-lm 0.29's opaque "There is no Stream(gpu, 0)" RuntimeError.
-            raise NotesGenerationError(
-                "the mlx notes backend is bound to the thread of its first "
-                "completion (mlx-lm 0.29 generation streams are per-thread); "
-                "run all completions for one backend instance on one thread"
-            )
+    def _complete(self, messages: list[dict[str, str]]) -> str:
         from mlx_lm import stream_generate
 
         model, tokenizer = self._load()

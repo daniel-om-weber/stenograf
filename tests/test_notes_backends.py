@@ -435,23 +435,43 @@ def test_mlx_model_stays_loaded_across_completions(fake_mlx_lm):
     assert len(fake.generate_calls) == 2
 
 
-def test_mlx_completions_are_bound_to_one_thread(fake_mlx_lm):
+def test_every_backend_runs_mlx_on_one_process_thread(fake_mlx_lm, monkeypatch):
+    # mlx-lm 0.29's generation stream belongs to the thread that imported it,
+    # once per process. The app builds a fresh backend on a fresh thread for
+    # every meeting, so per-backend thread binding lost every later meeting's
+    # notes ("There is no Stream(gpu, 2)"); all mlx work must share one thread.
     import threading
 
-    fake, backend = fake_mlx_lm
-    backend.complete(MESSAGES)
-    caught = []
+    from stenograf.notes.mlx import MlxBackend
 
-    def other_thread():
-        try:
-            backend.complete(MESSAGES)
-        except NotesGenerationError as exc:
-            caught.append(str(exc))
+    fake, first = fake_mlx_lm
+    seen: list[int] = []
+    load, generate = fake.load, fake.stream_generate
 
-    t = threading.Thread(target=other_thread)
-    t.start()
-    t.join()
-    assert caught and "thread" in caught[0]
+    def load_here(repo):
+        seen.append(threading.get_ident())
+        return load(repo)
+
+    def generate_here(*args, **kwargs):
+        seen.append(threading.get_ident())
+        yield from generate(*args, **kwargs)
+
+    monkeypatch.setattr(fake, "load", load_here)
+    monkeypatch.setattr(fake, "stream_generate", generate_here)
+    callers: list[int] = []
+
+    def meeting(backend):
+        callers.append(threading.get_ident())
+        backend.warm()
+        assert backend.complete(MESSAGES) == NOTE_MD
+
+    for backend in (first, MlxBackend()):
+        t = threading.Thread(target=meeting, args=(backend,))
+        t.start()
+        t.join()
+    assert len(seen) == 6  # two meetings x (load, warm token, completion)
+    assert len(set(seen)) == 1
+    assert seen[0] not in callers
 
 
 def test_mlx_load_failure_is_unavailable_not_a_crash(monkeypatch):
