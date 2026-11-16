@@ -55,6 +55,7 @@ from stenograf.session import (
     LIVE_FLUSH_INTERVAL_S,
     CheckpointConfig,
     MeetingRecorder,
+    MuteSwitch,
     plan_channels,
 )
 from stenograf.settings import (
@@ -74,6 +75,7 @@ if TYPE_CHECKING:
 
     import numpy as np
 
+    from stenograf.capture.base import Channel
     from stenograf.notes.backend import NotesBackend
     from stenograf.session import MeetingResult
 
@@ -347,6 +349,7 @@ class MeetingRun:
         departing front-end may abandon instead of joining (see
         :attr:`abandon_notes`; capture teardown and finalize must be waited on,
         or the meeting itself is lost)."""
+        self._muting = MuteSwitch()  # exists before the run: a press may come first
         self.abort = abort or threading.Event()
         """Set while capture is still being *built* to cancel the run outright.
 
@@ -358,6 +361,17 @@ class MeetingRun:
         of starting the meeting. Nothing is lost: no audio has been captured
         yet. Once capture is up the stop callback is the way to end a run, and
         a stale flag is ignored."""
+
+    def mute(self, channel: Channel, muted: bool) -> None:
+        """Mute or unmute ``channel`` from now on; safe from any thread.
+
+        The audio becomes silence before it is stored, so nothing said while
+        muted reaches memory, the transcript, the notes or ``audio.opus``; the
+        transcript marks the span. A meeting always starts unmuted."""
+        self._muting.set(channel, muted)
+
+    def muted(self, channel: Channel) -> bool:
+        return self._muting.muted(channel)
 
     def run(self, view: LiveView) -> Transcript | None:
         """Capture, finalize, persist, and (if asked) write notes, reporting
@@ -397,6 +411,7 @@ class MeetingRun:
             with contextlib.suppress(Exception):
                 provider.stop()
             return None
+        self._muting.bind(provider.now)
         view.set_stop(provider.stop)  # Stop/Ctrl-C crosses to capture from here on
         # Capture starts NOW, before the models load: the provider's frame queue
         # is unbounded, so the meeting's first seconds buffer through a slow
@@ -485,6 +500,7 @@ class MeetingRun:
                     ),
                     max_seconds=options.max_seconds,
                     provider_started=True,
+                    mute=self._muting,
                 )
             finally:
                 if tee is not None:

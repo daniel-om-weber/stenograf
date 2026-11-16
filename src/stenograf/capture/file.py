@@ -45,6 +45,7 @@ class FileCaptureProvider(CaptureProvider):
         self._paced = paced
         self._loaded: dict[Channel, np.ndarray] = {}
         self._stopped = False
+        self._origin: float | None = None
 
     def start(self, channels: set[Channel]) -> None:
         self._stopped = False
@@ -59,7 +60,7 @@ class FileCaptureProvider(CaptureProvider):
                 chunk = pcm[start : start + self._frame]
                 pending.append((start / SAMPLE_RATE, channel, chunk))
         pending.sort(key=lambda f: (f[0], f[1]))
-        origin = time.monotonic()
+        origin = self._origin = time.monotonic()
         for timestamp, channel, chunk in pending:
             if self._stopped:
                 return
@@ -70,6 +71,13 @@ class FileCaptureProvider(CaptureProvider):
                 if delay > 0:
                     time.sleep(delay)
             yield AudioFrame(channel=channel, timestamp=timestamp, samples=chunk)
+
+    def now(self) -> float | None:
+        """Paced replay's wall clock, which starts when frames are first read —
+        before that no replayed time has passed. Unpaced replay has no clock."""
+        if not self._paced:
+            return None
+        return 0.0 if self._origin is None else time.monotonic() - self._origin
 
     def stop(self) -> None:
         self._stopped = True

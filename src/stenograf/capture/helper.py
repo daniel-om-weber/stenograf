@@ -60,7 +60,7 @@ import threading
 import time
 import unicodedata
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -346,6 +346,7 @@ class HelperCaptureProvider(CaptureProvider):
         self._mic_device = mic_device
         self._proc: subprocess.Popen[bytes] | None = None
         self._queue: queue.SimpleQueue[AudioFrame | Exception | None] | None = None
+        self._latest: tuple[float, float] | None = None  # (frame end, arrival)
         self._drainer: threading.Thread | None = None
         self._log_relay: threading.Thread | None = None
         self._channels: set[Channel] = set()
@@ -363,6 +364,7 @@ class HelperCaptureProvider(CaptureProvider):
         self._channels = set(channels)
         self._stop_requested = False
         self._respawned = False
+        self._latest = None
         # The queue outlives a helper respawn (frames() re-reads the attribute
         # per item, but one queue for both spawns is simpler and the first
         # drainer's end-of-stream marker is consumed before the second starts).
@@ -404,7 +406,7 @@ class HelperCaptureProvider(CaptureProvider):
         # would lose meeting audio to a stall the consumer recovers from.
         self._drainer = threading.Thread(
             target=_drain_pipe,
-            args=(self._proc.stdout, self._queue),
+            args=(self._proc.stdout, self._queue, self._arrived),
             name="stenocap-drain",
             daemon=True,
         )
@@ -415,6 +417,23 @@ class HelperCaptureProvider(CaptureProvider):
         # crash diagnostics must survive even a broken on_log.
         self._stderr_tail.append(line)
         self._on_log(line)  # type: ignore[misc]  # only installed when on_log is set
+
+    def _arrived(self, frame: AudioFrame) -> None:
+        # One tuple, swapped whole: the reader in now() never sees a torn pair.
+        self._latest = (frame.timestamp + len(frame.samples) / SAMPLE_RATE, time.monotonic())
+
+    def now(self) -> float | None:
+        """The newest frame's end plus the time since the pipe delivered it.
+
+        Read at the pipe, not where frames are consumed: at a meeting's start the
+        consumer is seconds behind while the models load. Short of the truth by
+        the pipe's latency (~30–40 ms, measured 2026-11-16), which errs toward
+        muting a little early."""
+        latest = self._latest
+        if latest is None:
+            return 0.0 if self._queue is not None else None
+        end, arrived = latest
+        return end + time.monotonic() - arrived
 
     def frames(self) -> Iterator[AudioFrame]:
         if self._queue is None:
@@ -517,12 +536,17 @@ class HelperCaptureProvider(CaptureProvider):
                 proc.stdin.close()
 
 
-def _drain_pipe(stream: IO[bytes], out: queue.SimpleQueue) -> None:
+def _drain_pipe(
+    stream: IO[bytes],
+    out: queue.SimpleQueue,
+    arrived: Callable[[AudioFrame], None] | None = None,
+) -> None:
     """Pump helper frames into the queue at capture rate, whatever downstream does.
 
     Runs on its own thread and owns the pipe: it closes it at end of stream,
     after queueing the ``None`` end-of-stream marker. A malformed frame (stream
     desync) is queued as the exception for ``frames()`` to re-raise.
+    ``arrived`` sees each frame as it comes off the pipe (the provider's clock).
     """
     try:
         while True:
@@ -530,6 +554,8 @@ def _drain_pipe(stream: IO[bytes], out: queue.SimpleQueue) -> None:
             if frame is None:
                 out.put(None)
                 return
+            if arrived is not None:
+                arrived(frame)
             out.put(frame)
     except Exception as exc:
         out.put(exc)

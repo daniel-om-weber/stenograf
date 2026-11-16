@@ -17,6 +17,7 @@ delivers the marshalled replies. Only the tray's close-to-hide test realizes a
 window at all, and offscreen means nothing appears on a screen.
 """
 
+import json
 import os
 import sys
 import threading
@@ -629,6 +630,63 @@ class TestMeetingScreen:
         announced["make_provider"]("probe: provider announce")
         pump(lambda: meeting.state["status"] == "probe: provider announce")
         assert isinstance(announced["on_log"], loaders.CaptureLog)
+
+    def test_muting_the_mic_reaches_the_transcript(self, gui, tmp_path, monkeypatch):
+        # The header toggle → MeetingRun.mute → silence at the intake → the span
+        # on the finished transcript, through the real recorder.
+        import conftest
+
+        from stenograf import loaders, output
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+
+        home_dir = tmp_path / "meetings"
+        monkeypatch.setattr(output, "default_output_home", lambda: home_dir)
+        mic = tmp_path / "mic.wav"
+        conftest.write_wav(mic, seconds=3.0)
+        monkeypatch.setattr(
+            loaders,
+            "load_backends",
+            lambda **kwargs: (conftest.FakeASR(), conftest.WholeBufferVAD(), None),
+        )
+        monkeypatch.setattr(
+            loaders,
+            "make_provider",
+            lambda replay, plans, **kwargs: FileCaptureProvider({Channel.MIC: mic}, paced=True),
+        )
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        shell.screen("Setup").start(
+            {
+                "mic": True,
+                "system": False,
+                "diarize": False,
+                "local": -1,
+                "remote": -1,
+                "language": "auto",
+                "title": "",
+                "recordAudio": False,
+                "notes": False,
+            }
+        )
+        pump(lambda: meeting.state["canStop"])
+        assert meeting.state["channels"] == ["mic"]
+        meeting.mute("mic", True)
+        assert meeting.state["micMuted"] is True
+        time.sleep(0.3)
+        meeting.mute("mic", False)
+        assert meeting.state["micMuted"] is False
+        meeting.stop()
+        pump(lambda: meeting.state["phase"] == "done", timeout=20)
+        meeting.join()
+
+        folder = Path(meeting.state["folder"])
+        saved = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
+        (span,) = saved["muted"]
+        assert span["channel"] == "mic" and span["end"] - span["start"] >= 0.25
+        assert "*(microphone muted" in (folder / "transcript.md").read_text(encoding="utf-8")
+        meeting.mute("mic", True)  # after the recording: nothing left to mute
+        assert meeting.state["micMuted"] is False
 
     def test_a_failed_start_lands_on_the_status_line(self, gui, tmp_path, monkeypatch):
         from stenograf import loaders, output
@@ -1589,6 +1647,44 @@ class TestTray:
         tray._refresh()
         assert [message[0] for message in messages] == ["Meeting finished"]
         assert messages[0][1] == "/meetings/meeting-1", "the folder is the whole message"
+
+    def test_a_muted_channel_shows_in_the_menu_bar(self, tray, gui, monkeypatch):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        meeting.set(
+            active=True,
+            phase="rec",
+            elapsed="3:00",
+            channels=["mic", "system"],
+            canStop=True,
+            micMuted=True,
+            systemMuted=False,
+        )
+        assert tray.state() == "muted"
+        tray._refresh()
+        assert tray.icon.icon().cacheKey() == tray._icons["muted"].cacheKey()
+
+        tray.menu.aboutToShow.emit()
+        assert tray.status.text() == "Recording · 3:00 · mic muted"
+        assert tray.mute_mic.isVisible() and tray.mute_mic.isChecked()
+        assert tray.mute_system.isVisible() and not tray.mute_system.isChecked()
+
+        pressed = []
+        monkeypatch.setattr(meeting, "mute", lambda channel, on: pressed.append((channel, on)))
+        tray.mute_mic.trigger()
+        tray.mute_system.trigger()
+        assert pressed == [("mic", False), ("system", True)]
+
+        meeting.set(phase="done")  # the meeting is finishing: nothing to mute
+        tray.menu.aboutToShow.emit()
+        assert not tray.mute_mic.isVisible() and not tray.mute_system.isVisible()
+
+    def test_a_mic_only_meeting_offers_no_system_mute(self, tray, gui):
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        meeting.set(active=True, phase="rec", channels=["mic"], canStop=True)
+        tray.menu.aboutToShow.emit()
+        assert tray.mute_mic.isVisible() and not tray.mute_system.isVisible()
 
     def test_stop_from_the_menu_bar_needs_no_window(self, tray, gui):
         shell, _engine = gui

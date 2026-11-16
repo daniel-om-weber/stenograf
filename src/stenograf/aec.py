@@ -394,6 +394,11 @@ class EchoCancellingProvider(CaptureProvider):
             self._iterating = False
             self._close_dump()
 
+    def now(self) -> float | None:
+        # The capture clock, not this wrapper's output: the canceller holds
+        # frames back to pair the channels, but a mute is stamped on capture time.
+        return self._inner.now()
+
     def stop(self) -> None:
         self._inner.stop()
         # start() → stop() without ever iterating frames(): nobody else will

@@ -27,6 +27,9 @@ QtObject {
     readonly property color rec: "#ff5f56"
     readonly property color busy: "#e8b339"
     readonly property color good: "#3ddc84"
+    // A muted channel while recording: grey reads as "switched off", and no
+    // phase colour may be borrowed, or a muted meeting looks finished.
+    readonly property color off: "#aab1bd"
     readonly property color bad: "#ff5f56"
 
     readonly property string mono: Qt.platform.os === "windows" ? "Consolas"

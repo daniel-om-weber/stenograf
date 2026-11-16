@@ -152,6 +152,20 @@ class TestHelperTransport:
         provider.stop()
         assert len(frames) == 200  # buffered while the consumer stalled, none dropped
 
+    def test_the_clock_runs_from_the_newest_frame_off_the_pipe(self, transport):
+        # A mute is stamped on this clock while the consumer may be seconds
+        # behind (models loading), so it must follow the pipe, not frames().
+        provider = transport("--frames", "20")
+        assert provider.now() is None  # not started: no clock at all
+        provider.start({Channel.MIC})
+        assert provider._proc.wait(timeout=10) == 0
+        provider._drainer.join(timeout=10)
+        first = provider.now()
+        assert first is not None and first >= 2.0  # 20 frames of 0.1 s, none consumed
+        assert provider.now() >= first  # and it keeps running between frames
+        list(provider.frames())
+        provider.stop()
+
     def test_stream_desync_raises_in_the_consumer(self, transport):
         # The drain thread hits the malformed header; the error must surface in
         # frames(), not die silently on the drain thread.

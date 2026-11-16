@@ -284,6 +284,9 @@ class TestBiasingReachesTheDecoder:
             def stop(self):
                 pass
 
+            def now(self):
+                return None
+
         monkeypatch.setattr(loaders, "make_provider", lambda *args, **kwargs: Provider())
         seen = self._recording_load_backends(monkeypatch)
         request = resolve_meeting_request(mic=True, system=False, diarize=False)

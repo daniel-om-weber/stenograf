@@ -83,6 +83,7 @@ _SIZES = (16, 18, 22, 32, 36, 44, 64)
 _TINT = {
     "rec": "#ff5f56",  # Theme.rec
     "busy": "#e8b339",  # Theme.busy
+    "muted": "#aab1bd",  # Theme.off — recording, with a channel muted
 }
 """While a meeting is live the whole mark takes the phase colour the app's own
 header uses. Idle keeps the brand inks (or a template image on macOS, below)."""
@@ -208,6 +209,7 @@ class Tray(QObject):
             "idle": _icon("#000000", mask=True) if sys.platform == "darwin" else _icon(None),
             "rec": _icon(_TINT["rec"]),
             "busy": _icon(_TINT["busy"]),
+            "muted": _icon(_TINT["muted"]),
         }
 
         self.menu = QMenu()
@@ -223,6 +225,13 @@ class Tray(QObject):
         self.open_window = self._item("Open Stenograf", self._open)
         self.start = self._item("Start meeting…", self._start)
         self.stop = self._item("Stop && finalize", self._stop)  # && escapes the mnemonic
+        # The same switch as the meeting screen's header: a call comes in while
+        # the window is hidden, which is the shape this menu exists for.
+        self.mute_mic = self._item("Mute microphone", lambda: self._mute("mic"))
+        self.mute_system = self._item("Mute system audio", lambda: self._mute("system"))
+        for action in (self.mute_mic, self.mute_system):
+            action.setCheckable(True)
+            action.setVisible(False)
         self.folder = self._item("Open meetings folder", self._open_folder)
         self.menu.addSeparator()
         self.quit = self._item("Quit Stenograf", shell.quit_app)
@@ -290,7 +299,8 @@ class Tray(QObject):
     # -- what the meeting is doing -----------------------------------------
 
     def state(self) -> str:
-        """``rec`` while capturing, ``busy`` while finishing, ``idle`` otherwise.
+        """``rec`` while capturing (``muted`` with a channel muted), ``busy``
+        while finishing, ``idle`` otherwise.
 
         ``phase`` alone will not do: it reads ``rec`` before any meeting has been
         started, and it reads ``done`` while the notes run is still going."""
@@ -299,15 +309,24 @@ class Tray(QObject):
         meeting = self._meeting()
         if not meeting.get("active"):
             return "idle"
-        return "rec" if meeting.get("phase") == Phase.REC else "busy"
+        if meeting.get("phase") != Phase.REC:
+            return "busy"
+        return "muted" if meeting.get("micMuted") or meeting.get("systemMuted") else "rec"
+
+    def _muted_note(self) -> str:
+        meeting = self._meeting()
+        mic, system = meeting.get("micMuted"), meeting.get("systemMuted")
+        if mic and system:
+            return " · mic and system audio muted"
+        return " · mic muted" if mic else " · system audio muted" if system else ""
 
     def summary(self) -> str:
         """The disabled first menu entry: one line on what the app is doing."""
         if self.shell.quitting_now:
             return "Finishing the meeting before quitting…"
         state = self.state()
-        if state == "rec":
-            return f"Recording · {self._meeting().get('elapsed', '0:00')}"
+        if state in ("rec", "muted"):
+            return f"Recording · {self._meeting().get('elapsed', '0:00')}{self._muted_note()}"
         if state == "busy":
             return "Finishing the meeting…"
         return "No meeting running"
@@ -320,7 +339,7 @@ class Tray(QObject):
         state = self.state()
         if state == self._state:
             return
-        finished = self._state in ("rec", "busy") and state == "idle"
+        finished = self._state in ("rec", "muted", "busy") and state == "idle"
         self._state = state
         self.icon.setIcon(self._icons[state])
         self.icon.setToolTip(f"Stenograf — {self.summary()}")
@@ -352,7 +371,15 @@ class Tray(QObject):
         live = self.state() != "idle"
         self.status.setText(self.summary())
         self.start.setEnabled(not live and not self.shell.quitting_now)
-        self.stop.setEnabled(self.state() == "rec")
+        recording = self.state() in ("rec", "muted")
+        self.stop.setEnabled(recording)
+        meeting = self._meeting()
+        channels = meeting.get("channels")
+        recorded = channels if isinstance(channels, list) else []
+        for action, channel in ((self.mute_mic, "mic"), (self.mute_system, "system")):
+            action.setVisible(recording and channel in recorded)
+            action.setEnabled(bool(meeting.get("canStop")))
+            action.setChecked(bool(meeting.get(f"{channel}Muted")))
         self.quit.setText(
             "Quit now (abandons the finalize)" if self.shell.quitting_now else "Quit Stenograf"
         )
@@ -388,6 +415,10 @@ class Tray(QObject):
     def _stop(self) -> None:
         """Stop and finalize without opening anything — the reason this mode exists."""
         self._meeting().stop()
+
+    def _mute(self, channel: str) -> None:
+        meeting = self._meeting()
+        meeting.mute(channel, not meeting.get(f"{channel}Muted"))
 
     @Slot()
     def _open_folder(self) -> None:

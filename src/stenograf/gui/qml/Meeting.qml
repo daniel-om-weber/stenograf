@@ -125,14 +125,56 @@ Item {
                 font.family: Theme.mono
             }
 
-            Item {
-                Layout.fillWidth: true
+            // What is muted, readable at a glance: a forgotten mute silently
+            // drops the rest of the meeting, so the toggle's label alone is
+            // not enough.
+            Rectangle {
+                readonly property bool mic: page.screen.state.micMuted
+                readonly property bool system: page.screen.state.systemMuted
+
+                visible: page.phase === "rec" && (mic || system)
+                radius: 4
+                color: Theme.off
+                implicitWidth: badge.implicitWidth + 14
+                implicitHeight: badge.implicitHeight + 6
+
+                Text {
+                    id: badge
+
+                    anchors.centerIn: parent
+                    text: parent.mic && parent.system ? "MIC + SYSTEM MUTED" : parent.mic ? "MIC MUTED" : "SYSTEM AUDIO MUTED"
+                    color: Theme.bg
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0.6
+                }
             }
 
+            // Also the row's spring: it takes the spare width and gives it back
+            // first when the mute toggles need room.
             Text {
                 text: page.screen.state.language + "  ·  " + page.screen.state.profile
                 color: Theme.muted
                 font.pixelSize: 12
+                elide: Text.ElideRight
+                horizontalAlignment: Text.AlignRight
+                Layout.fillWidth: true
+            }
+
+            Repeater {
+                model: page.phase === "rec" ? page.screen.state.channels : []
+
+                Btn {
+                    required property string modelData
+                    readonly property bool muted: modelData === "mic" ? page.screen.state.micMuted : page.screen.state.systemMuted
+                    readonly property string what: modelData === "mic" ? "mic" : "system audio"
+
+                    text: (muted ? "Unmute " : "Mute ") + what
+                    implicitHeight: 30
+                    font.pixelSize: 12
+                    enabled: page.screen.state.canStop
+                    onClicked: page.screen.mute(modelData, !muted)
+                }
             }
         }
     }

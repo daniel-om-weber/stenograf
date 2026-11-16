@@ -8,7 +8,12 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**One side-plan is live.** `PLAN-MIC-DEVICE.md` (built 2026-08-12: the mic
+**Two side-plans are live.** `PLAN-MUTE.md` (built 2026-11-16: the microphone
+or system audio is muted mid-meeting from the meeting screen or the menu-bar
+icon; muted audio becomes silence after the echo canceller, stamped on the
+capture clock, and the transcript marks the gap; what remains is §8's hardware
+gates, and a system-wide shortcut is researched but deferred).
+`PLAN-MIC-DEVICE.md` (built 2026-08-12: the mic
 channel records from a chosen device on all three platforms — `[capture]
 mic_device`, `steno devices`, `--mic-device`, and the setup form's picker;
 what remains is §7's hardware gates, and its §4a is superseded by the measured

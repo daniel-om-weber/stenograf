@@ -62,7 +62,7 @@ from stenograf.pipeline import (
     raw_label_map,
     relabel_speakers,
 )
-from stenograf.transcript import Transcript, TranscriptEntry, speech_seconds
+from stenograf.transcript import MutedSpan, Transcript, TranscriptEntry, speech_seconds
 from stenograf.vad import SileroVAD
 from stenograf.view import LiveView
 
@@ -501,6 +501,85 @@ class AudioBus:
             return dict(self._marks), self._closed
 
 
+class MuteSwitch:
+    """The user's per-channel mute, as spans on the session clock.
+
+    A press is stamped with the time being *captured* at that instant (the
+    provider's :meth:`~CaptureProvider.now`), and :meth:`apply` silences every
+    sample inside a span whenever its frame is consumed. Stamping the consumer
+    instead would fail at a meeting's start, where frames queue for seconds
+    while the models load: a call muted and unmuted in that time would be
+    consumed after the unmute, and kept.
+
+    Applied after the echo canceller (at :func:`_consume_frame`), so the
+    canceller keeps the real far-end reference while the system channel is
+    muted, and the store, the audio tee and the live pass all get the same
+    silence. Written from any thread (the GUI), read by the capture thread.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._spans: dict[Channel, list[tuple[float, float | None]]] = {}
+        self._clock: Callable[[], float | None] = lambda: None
+        self._consumed = 0.0  # fallback clock: the furthest frame end applied
+
+    def bind(self, clock: Callable[[], float | None]) -> None:
+        """Stamp presses on ``clock`` (the provider's ``now``) from here on."""
+        self._clock = clock
+
+    def set(self, channel: Channel, muted: bool) -> None:
+        """Mute or unmute ``channel`` as of now; repeating a state is a no-op."""
+        now = self._clock()
+        now = self._consumed if now is None else now
+        with self._lock:
+            spans = self._spans.setdefault(channel, [])
+            open_start = spans[-1][0] if spans and spans[-1][1] is None else None
+            if muted == (open_start is not None):
+                return
+            if muted:
+                # Never before the previous span's end, so spans stay ordered.
+                floor = spans[-1][1] if spans else None
+                spans.append((max(now, floor or 0.0), None))
+            else:
+                assert open_start is not None
+                spans[-1] = (open_start, max(now, open_start))
+
+    def muted(self, channel: Channel) -> bool:
+        with self._lock:
+            spans = self._spans.get(channel)
+            return bool(spans) and spans[-1][1] is None
+
+    def spans(self, until: float) -> list[MutedSpan]:
+        """Every span, an open one closed at ``until``; empty spans dropped."""
+        with self._lock:
+            found = [
+                MutedSpan(channel.value, start, max(start, until) if end is None else end)
+                for channel, spans in self._spans.items()
+                for start, end in spans
+            ]
+        return sorted((span for span in found if span.end > span.start), key=lambda m: m.start)
+
+    def apply(self, frame: AudioFrame) -> AudioFrame:
+        """``frame`` with the samples inside a span silenced (a copy if any)."""
+        start = frame.timestamp
+        end = start + len(frame.samples) / SAMPLE_RATE
+        self._consumed = max(self._consumed, end)
+        with self._lock:
+            hits = [
+                (s0, end if s1 is None else s1)
+                for s0, s1 in self._spans.get(frame.channel, ())
+                if s0 < end and (s1 is None or s1 > start)
+            ]
+        if not hits:
+            return frame
+        samples = np.array(frame.samples, dtype=np.int16, copy=True)
+        for s0, s1 in hits:
+            lo = max(0, round((s0 - start) * SAMPLE_RATE))
+            hi = min(len(samples), round((s1 - start) * SAMPLE_RATE))
+            samples[lo:hi] = 0
+        return dc_replace(frame, samples=samples)
+
+
 def _consume_frame(
     frame: AudioFrame,
     store: SessionStore,
@@ -508,6 +587,7 @@ def _consume_frame(
     on_frame: Callable[[AudioFrame], None] | None,
     channels: list[Channel],
     max_seconds: float | None,
+    mute: MuteSwitch | None = None,
 ) -> bool:
     """Store one captured frame (tee + watermark); True once ``max_seconds`` is hit.
 
@@ -516,6 +596,8 @@ def _consume_frame(
     ``KeyboardInterrupt`` in the provider ends the meeting cleanly, while the
     live pass runs it on :class:`CaptureLoop`.
     """
+    if mute is not None:
+        frame = mute.apply(frame)
     store.append(frame)
     if on_frame is not None:
         on_frame(frame)
@@ -546,8 +628,10 @@ class CaptureLoop(threading.Thread):
         channels: list[Channel],
         on_frame: Callable[[AudioFrame], None] | None = None,
         max_seconds: float | None = None,
+        mute: MuteSwitch | None = None,
     ) -> None:
         super().__init__(name="capture-loop", daemon=True)
+        self._mute = mute
         self._provider = provider
         self._store = store
         self._bus = bus
@@ -560,7 +644,13 @@ class CaptureLoop(threading.Thread):
         try:
             for frame in self._provider.frames():
                 if _consume_frame(
-                    frame, self._store, self._bus, self._on_frame, self._channels, self._max_seconds
+                    frame,
+                    self._store,
+                    self._bus,
+                    self._on_frame,
+                    self._channels,
+                    self._max_seconds,
+                    self._mute,
                 ):
                     self._provider.stop()
                     break
@@ -780,6 +870,7 @@ class MeetingRecorder:
         max_seconds: float | None = None,
         live: bool = False,
         provider_started: bool = False,
+        mute: MuteSwitch | None = None,
     ) -> MeetingResult:
         """Capture until the provider stops (or Ctrl-C), then finalize.
 
@@ -791,6 +882,8 @@ class MeetingRecorder:
         (so recording could begin before its own slow setup — model loading —
         with the provider buffering frames meanwhile); the run then only
         consumes and stops the provider, never starting it a second time.
+        ``mute`` silences what the user muted (:class:`MuteSwitch`); its spans
+        ride on the finished transcript.
 
         With ``live=True`` the meeting runs the streaming pass: capture on its own
         thread feeding a single :class:`LiveWorker` that drives a
@@ -826,6 +919,7 @@ class MeetingRecorder:
                 checkpoint=checkpoint,
                 max_seconds=max_seconds,
                 provider_started=provider_started,
+                mute=mute,
             )
         return self._run_batch(
             provider,
@@ -835,6 +929,7 @@ class MeetingRecorder:
             view=sink,
             max_seconds=max_seconds,
             provider_started=provider_started,
+            mute=mute,
         )
 
     def _run_batch(
@@ -847,6 +942,7 @@ class MeetingRecorder:
         view: LiveView,
         max_seconds: float | None,
         provider_started: bool = False,
+        mute: MuteSwitch | None = None,
     ) -> MeetingResult:
         """Consume-thread capture, then finalize (no live view, no checkpoints).
 
@@ -859,7 +955,7 @@ class MeetingRecorder:
         capture_error: BaseException | None = None
         try:
             for frame in provider.frames():
-                if _consume_frame(frame, store, None, on_frame, channels, max_seconds):
+                if _consume_frame(frame, store, None, on_frame, channels, max_seconds, mute):
                     break
         except KeyboardInterrupt:
             view.status("interrupted — finalizing captured audio")
@@ -870,7 +966,7 @@ class MeetingRecorder:
         finally:
             provider.stop()
         return self._finalize_and_publish(
-            provider, store, plans, view, capture_error=capture_error, aux_error=None
+            provider, store, plans, view, capture_error=capture_error, aux_error=None, mute=mute
         )
 
     def _run_live(
@@ -884,6 +980,7 @@ class MeetingRecorder:
         checkpoint: CheckpointConfig | None,
         max_seconds: float | None,
         provider_started: bool = False,
+        mute: MuteSwitch | None = None,
     ) -> MeetingResult:
         """Live pass: threaded capture + one inference worker, then finalize.
 
@@ -931,7 +1028,13 @@ class MeetingRecorder:
             flush_interval=checkpoint.interval if checkpoint is not None else 0.0,
         )
         capture = CaptureLoop(
-            provider, store, bus, channels=channels, on_frame=on_frame, max_seconds=max_seconds
+            provider,
+            store,
+            bus,
+            channels=channels,
+            on_frame=on_frame,
+            max_seconds=max_seconds,
+            mute=mute,
         )
 
         if not provider_started:
@@ -976,6 +1079,7 @@ class MeetingRecorder:
                 aux_error=aux_error,
                 live_words=live_words,
                 inference_lock=inference_lock,
+                mute=mute,
             )
 
     def _finalize_and_publish(
@@ -989,6 +1093,7 @@ class MeetingRecorder:
         aux_error: str | None,
         live_words: dict[Channel, tuple[Word, ...]] | None = None,
         inference_lock: threading.Lock | None = None,
+        mute: MuteSwitch | None = None,
     ) -> MeetingResult:
         """The shared stop→finalize tail of both run modes.
 
@@ -1016,12 +1121,14 @@ class MeetingRecorder:
         with _shield_interrupt():
             lock = inference_lock if inference_lock is not None else contextlib.nullcontext()
             with lock:
+                end = max((store.duration(ch) for ch in store.channels()), default=0.0)
                 result = self.finalize(
                     store,
                     plans,
                     view=view,
                     live_words=live_words,
                     reference_gap_s=_reference_gap(provider),
+                    muted=mute.spans(until=end) if mute is not None else None,
                 )
         view.finalized(result.transcript)
         return result
@@ -1034,6 +1141,7 @@ class MeetingRecorder:
         view: LiveView | None = None,
         live_words: dict[Channel, tuple[Word, ...]] | None = None,
         reference_gap_s: float | None = None,
+        muted: list[MutedSpan] | None = None,
     ) -> MeetingResult:
         """Run the finalize pass on every stored channel and interleave them.
 
@@ -1055,6 +1163,8 @@ class MeetingRecorder:
         echo-text backstop arms on it. ``None`` means unknown — no canceller
         was observed (direct calls, e.g. a file transcribe) — and finalize
         treats unknown conservatively: backstop armed.
+
+        ``muted`` are the meeting's muted spans; they ride on the transcript.
         """
         plans = plans or plan_channels(self.profile)
         view = view or LiveView()  # the bare base class is the null view
@@ -1138,8 +1248,10 @@ class MeetingRecorder:
                             lambda start, end, ch=plan.channel: store.view(ch, start, end),
                         )
                     )
+        transcript = self._assemble_transcript(plans, by_channel, counts, view)
+        transcript.muted = list(muted or ())
         return MeetingResult(
-            transcript=self._assemble_transcript(plans, by_channel, counts, view),
+            transcript=transcript,
             speaker_counts=counts,
             dropped_echo_lines=dropped,
             reference_gap_s=reference_gap_s,

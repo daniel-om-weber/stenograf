@@ -10,7 +10,7 @@ survive customization.
 from __future__ import annotations
 
 from stenograf.config import Language
-from stenograf.transcript import Transcript, TranscriptEntry, format_timestamp
+from stenograf.transcript import Transcript, TranscriptEntry, format_timestamp, with_muted
 
 
 def template_instruction(template: str) -> str:
@@ -113,7 +113,13 @@ def build_messages(
     no template (content in map, shape in reduce); a full request carries
     ``template`` as the last thing in the prompt."""
     system = _system_prompt(transcript, instructions=instructions, partial=partial)
-    body = _render_entries(entries if entries is not None else transcript.entries)
+    if entries is None:
+        entries, muted = transcript.entries, transcript.muted
+    else:
+        # A chunk names the gaps inside its own stretch of the meeting.
+        span = (entries[0].start, entries[-1].end) if entries else (0.0, -1.0)
+        muted = [m for m in transcript.muted if span[0] <= m.start <= span[1]]
+    body = "\n\n".join(with_muted(entries, muted, _render_entry)) + "\n"
     user = f"The meeting transcript:\n\n{body}"
     if partial:
         user += "\n" + _PARTIAL_INSTRUCTION
@@ -180,10 +186,6 @@ def _context_lines(transcript: Transcript) -> list[str]:
     if profile.glossary:
         lines.append(f"- Domain terms: {', '.join(profile.glossary)}")
     return lines
-
-
-def _render_entries(entries: list[TranscriptEntry]) -> str:
-    return "\n\n".join(_render_entry(e) for e in entries) + "\n"
 
 
 def _render_entry(entry: TranscriptEntry) -> str:

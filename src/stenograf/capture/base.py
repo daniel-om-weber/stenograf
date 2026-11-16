@@ -168,3 +168,13 @@ class CaptureProvider(ABC):
     @abstractmethod
     def stop(self) -> None:
         """End capture and release devices; ``frames`` iterators finish."""
+
+    def now(self) -> float | None:
+        """The session time being captured at this instant, or ``None`` when
+        the provider keeps no live clock (unpaced replay, test fakes).
+
+        Not ``time.monotonic()`` minus the moment :meth:`start` returned: the
+        helper's own t=0 lands anywhere from ~30 ms to 1.85 s after that
+        (measured on macOS 27.2, 2026-11-16, the slow one a cold start), and a
+        mute stamped on the wrong clock leaves audio after the press unmuted."""
+        return None

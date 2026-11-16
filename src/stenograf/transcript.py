@@ -61,6 +61,41 @@ class TranscriptEntry:
     (e.g. a Whisper/Voxtral path) — ``text`` is always the source of truth."""
 
 
+@dataclass(frozen=True)
+class MutedSpan:
+    """A stretch the user muted one channel for, on the session clock.
+
+    Kept beside the entries rather than as an entry: a speaker-less entry would
+    reach diarization counts, speaker lists, re-ID and the notes chunker."""
+
+    channel: str
+    """``mic`` or ``system`` — :class:`~stenograf.capture.base.Channel` values."""
+    start: float
+    end: float
+
+    def line(self) -> str:
+        """The transcript's marker, e.g. ``*(microphone muted 10:32–10:41)*``."""
+        what = "microphone" if self.channel == "mic" else "system audio"
+        return f"*({what} muted {format_timestamp(self.start)}–{format_timestamp(self.end)})*"
+
+
+def with_muted(
+    entries: list[TranscriptEntry],
+    muted: list[MutedSpan],
+    render: Callable[[TranscriptEntry], str],
+) -> list[str]:
+    """``entries`` rendered in order, each span's line placed before the first
+    entry that starts at or after it (spans after the last entry go last)."""
+    spans = sorted(muted, key=lambda span: span.start)
+    lines: list[str] = []
+    for entry in entries:
+        while spans and spans[0].start <= entry.start:
+            lines.append(spans.pop(0).line())
+        lines.append(render(entry))
+    lines.extend(span.line() for span in spans)
+    return lines
+
+
 @dataclass
 class Transcript:
     language: Language | None
@@ -72,6 +107,8 @@ class Transcript:
     written back so the persisted transcript records provenance, not just the
     collapsed value. ``None`` on crash checkpoints, which
     predate the authoritative finalize that resolves the parameters."""
+    muted: list[MutedSpan] = field(default_factory=list)
+    """Where the user muted a channel; that audio was replaced by silence."""
 
     def to_json(self) -> str:
         return json.dumps(
@@ -81,6 +118,7 @@ class Transcript:
                 "profile": asdict(self.profile),
                 "parameters": asdict(self.parameters) if self.parameters is not None else None,
                 "entries": [asdict(e) for e in self.entries],
+                "muted": [asdict(span) for span in self.muted],
             },
             ensure_ascii=False,
             indent=2,
@@ -107,15 +145,15 @@ class Transcript:
             profile=_profile_from_json(obj["profile"]),
             entries=[_entry_from_json(e) for e in obj.get("entries", [])],
             parameters=_parameters_from_json(obj.get("parameters")),
+            muted=[MutedSpan(**span) for span in obj.get("muted", [])],
         )
 
     def to_markdown(self) -> str:
-        lines = []
-        for entry in self.entries:
+        def render(entry: TranscriptEntry) -> str:
             marker = " *(overlap)*" if entry.provisional else ""
-            stamp = format_timestamp(entry.start)
-            lines.append(f"**{entry.speaker}** [{stamp}]{marker}: {entry.text}")
-        return "\n\n".join(lines) + "\n"
+            return f"**{entry.speaker}** [{format_timestamp(entry.start)}]{marker}: {entry.text}"
+
+        return "\n\n".join(with_muted(self.entries, self.muted, render)) + "\n"
 
     def to_text(self) -> str:
         """Render as plain prose — no speakers, timestamps, or overlap markers."""

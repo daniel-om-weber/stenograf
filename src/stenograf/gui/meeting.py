@@ -16,7 +16,9 @@ What the screen shows, and where it comes from:
   re-evaluate every binding on the screen for each new line;
 - **the interim area** — the open (bright) line plus the grey provisional tail,
   per channel, exactly as :class:`~stenograf.captions.CaptionStream` decides;
-- **the header** — phase, elapsed, language, profile; the 1 Hz clock that
+- **the header** — phase, elapsed, language, profile, and a mute toggle per
+  recorded channel with a badge naming what is muted (the run silences it:
+  :meth:`stenograf.flow.MeetingRun.mute`); the 1 Hz clock that
   advances it is the app's only periodic timer, and it also flushes an idle
   caption line — together the screen's whole redraw budget;
 - **the footer** — the transient status line (model loading, notes progress)
@@ -137,6 +139,9 @@ class MeetingScreen(Screen, LiveView):
             transcriptReady=False,
             tails=[],
             canStop=False,
+            channels=[],
+            micMuted=False,
+            systemMuted=False,
             speakers=[],
             knownNames="",
             namesOpen=False,
@@ -153,9 +158,12 @@ class MeetingScreen(Screen, LiveView):
 
         Called by the setup form before it navigates here, so the header already
         describes the meeting while capture is still starting."""
+        from stenograf.session import plan_channels
+
         self._request = request
         self._reset()
         self.set(
+            channels=[plan.channel.value for plan in plan_channels(request.profile)],
             profile=profile_label(request.profile),
             language=request.profile.language.value if request.profile.language else "—",
         )
@@ -298,7 +306,7 @@ class MeetingScreen(Screen, LiveView):
         """Stop & finalize while capturing; cancel while starting; leave when done."""
         phase = self._state.get("phase")
         if phase == Phase.REC and self._stop_capture is not None:
-            self._set_phase(Phase.FINALIZING, canStop=False)
+            self._set_phase(Phase.FINALIZING, canStop=False, micMuted=False, systemMuted=False)
             threading.Thread(target=self._invoke_stop, name="gui-stop", daemon=True).start()
         elif phase == Phase.REC and self.running:
             # Capture is not up yet (the provider is still being built — exactly
@@ -403,6 +411,17 @@ class MeetingScreen(Screen, LiveView):
             self.set(namesCountdown=left)
         else:
             self.skip_names()
+
+    @Slot(str, bool)
+    def mute(self, channel: str, muted: bool) -> None:
+        """Mute or unmute one channel (``mic``/``system``) while recording."""
+        from stenograf.capture.base import Channel
+
+        run = self._run
+        if run is None or self._state.get("phase") != Phase.REC:
+            return
+        run.mute(Channel(channel), muted)
+        self.set(**{f"{channel}Muted": run.muted(Channel(channel))})
 
     @Slot()
     def reveal(self) -> None:
