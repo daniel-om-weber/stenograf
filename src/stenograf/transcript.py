@@ -236,6 +236,7 @@ def _profile_from_json(obj: dict) -> MeetingProfile:
         attendee_names=tuple(obj.get("attendee_names", ())),
         speaker_profile_store=obj.get("speaker_profile_store"),
         title=obj.get("title"),
+        context=obj.get("context"),
     )
 
 

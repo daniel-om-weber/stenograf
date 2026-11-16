@@ -99,6 +99,9 @@ class MeetingProfile:
     title: str | None = None
     """Human-readable meeting title. Fed to the notes prompt and the combined-note
     export filename; ``None`` = untitled."""
+    context: str | None = None
+    """One line the user gave the notes about this meeting ("decide the Q3
+    budget"); ``None`` = none. Fed to the notes prompt beside the title."""
     diarization: bool | None = None
     """The meeting's "tell speakers apart" switch, carried explicitly because the
     counts alone cannot express one case: a stated 1:1 call (every count 1) with
@@ -125,10 +128,12 @@ class MeetingProfile:
         object.__setattr__(self, "attendee_names", tuple(self.attendee_names))
         if self.speaker_profile_store is not None:
             object.__setattr__(self, "speaker_profile_store", Path(self.speaker_profile_store))
-        if self.title is not None:
-            # Collapse a blank/whitespace-only title to the single "untitled" form
-            # so an empty string and ``None`` don't read as two different states.
-            object.__setattr__(self, "title", self.title.strip() or None)
+        # Collapse a blank/whitespace-only value to the single "unset" form so
+        # an empty string and ``None`` don't read as two different states.
+        for name in ("title", "context"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, value.strip() or None)
 
     def _counts_imply_diarization(self) -> bool:
         return any(

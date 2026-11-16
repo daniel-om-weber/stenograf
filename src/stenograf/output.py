@@ -249,6 +249,41 @@ def checkpoint_writer(out_dir: Path, basename: str) -> Callable[[Transcript], No
     return on_checkpoint
 
 
+_TITLE_DROP = re.compile(r"[^\w\s-]")  # keep letters (umlauts too), digits, spaces, dashes
+_TITLE_MAX_CHARS = 60
+
+
+def titled_dir_name(created_at: datetime, title: str | None) -> str:
+    """``meeting-YYYYMMDD-HHMMSS`` with the title appended as a suffix
+    (``meeting-20261116-091500-weekly-sync``): the date stays first, so the
+    folders still sort by when the meeting was."""
+    base = f"meeting-{created_at:%Y%m%d-%H%M%S}"
+    slug = "-".join(_TITLE_DROP.sub("", (title or "").casefold()).replace("_", " ").split())
+    slug = slug[:_TITLE_MAX_CHARS].strip("-")
+    return f"{base}-{slug}" if slug else base
+
+
+def retitle_meeting_dir(folder: Path, title: str | None) -> Path:
+    """Rename a date-named meeting folder to carry ``title``; returns the new path.
+
+    The date is read back from the current name, so retitling twice replaces
+    the old suffix instead of stacking one. A name already taken gets ``-2``,
+    ``-3``, … like :func:`allocate_meeting_dir`. Raises :class:`ValueError` for
+    a folder that is not date-named (one the user named with ``--out``)."""
+    created_at = created_at_from_dir_name(folder.name)
+    if created_at is None:
+        raise ValueError(f"{folder.name} is not a date-named meeting folder")
+    name = titled_dir_name(created_at, title)
+    if name == folder.name:
+        return folder
+    target = folder.with_name(name)
+    suffix = 2
+    while target.exists():
+        target = folder.with_name(f"{name}-{suffix}")
+        suffix += 1
+    return folder.rename(target)
+
+
 def created_at_from_dir_name(name: str) -> datetime | None:
     """Recover the start time a ``meeting-YYYYMMDD-HHMMSS`` dir name encodes,
     or ``None`` for any other name (then fall back to file mtime)."""

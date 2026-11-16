@@ -8,7 +8,10 @@ deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
 platform decisions are in `CLAUDE.md`; measured evidence for the shipped
 defaults is in `eval/README.md` and in the code's own docstrings.
 
-**Two side-plans are live.** `PLAN-MUTE.md` (built 2026-11-16: the microphone
+**Three side-plans are live.** `PLAN-FINISH.md` (built 2026-11-16: the
+finish card after a meeting — title that renames the folder, speakers with
+editable recognised names, notes switch/type/context, file actions; the
+real-meeting gate remains). `PLAN-MUTE.md` (built 2026-11-16: the microphone
 or system audio is muted mid-meeting from the meeting screen or the menu-bar
 icon; muted audio becomes silence after the echo canceller, stamped on the
 capture clock, and the transcript marks the gap; what remains is §8's hardware

@@ -109,6 +109,20 @@ class MeetingRequest:
     record_audio: bool
     mic_device: str | None = None
     start_muted: frozenset[Channel] = frozenset()
+    preset: str | None = None
+    """The meeting type applied (``[meetings.<name>]``); the finish card offers
+    to change it for the notes."""
+
+
+@dataclass(frozen=True)
+class FinishChoices:
+    """What the app's finish card says once the meeting is over: whether to
+    write notes, with which meeting type's notes setup (``None`` = no type),
+    and a line of context for them."""
+
+    notes: bool
+    preset: str | None
+    context: str = ""
 
 
 @dataclass(frozen=True)
@@ -279,6 +293,7 @@ def resolve_meeting_request(
         notes=notes,
         record_audio=record_audio,
         mic_device=resolve_mic_device(mic_device, settings),
+        preset=preset,
         start_muted=frozenset(
             channel for channel, live in ((Channel.MIC, mic), (Channel.SYSTEM, system)) if not live
         ),
@@ -312,6 +327,7 @@ class MeetingRun:
         wait for :meth:`settle_names`. The front-end owns any timeout — only it
         knows whether the user is in the middle of typing."""
         self._names_settled = threading.Event()
+        self._finish: FinishChoices | None = None
         self.voice_clips: dict[str, list[np.ndarray]] = {}
         """Each speaker's voice samples (``MeetingResult.voice_clips``), under
         the labels the transcript shows as names are given; in memory only,
@@ -587,21 +603,27 @@ class MeetingRun:
                     if self.ask_names
                     else []
                 )
-                ask = bool(speakers) and not (
+                # A front-end that asks always gets the finish card — it can
+                # retitle the meeting and switch the notes on — unless every
+                # voice was recognised and the settings say not to ask then.
+                ask = self.ask_names and not (
                     settings.speakers.names_panel_skip_if_recognised
+                    and bool(speakers)
                     and all(s.recognised for s in speakers)
                 )
-                if speakers:
+                if self.ask_names:
                     view.speakers(speakers, ask=ask)
                 notes_ok = True
-                if ask and self.request.notes and not self.abandon_notes.is_set():
+                if ask and not self.abandon_notes.is_set():
                     transcript_for_notes = self._await_names(view)
                     if transcript_for_notes is not None:
                         transcript = transcript_for_notes
-                if self.request.notes and not self.abandon_notes.is_set():
+                transcript, warm = self._apply_finish(transcript, notes_warmer)
+                wants_notes = self._finish.notes if self._finish else self.request.notes
+                if wants_notes and not self.abandon_notes.is_set():
                     self.notes_running = True
                     try:
-                        notes_ok = self._run_notes_step(view, transcript, notes_warmer)
+                        notes_ok = self._run_notes_step(view, transcript, warm)
                     finally:
                         self.notes_running = False
                 if notes_ok:  # a notes failure keeps its own message visible
@@ -641,10 +663,69 @@ class MeetingRun:
         """The names are saved or skipped: notes waiting on them start. Idempotent."""
         self._names_settled.set()
 
+    def settle(self, choices: FinishChoices) -> None:
+        """The finish card's Done: notes follow ``choices``, then start. Only
+        the first answer counts — the notes may already be running on it."""
+        if not self._names_settled.is_set():
+            self._finish = choices
+        self._names_settled.set()
+
+    def retitle(self, title: str | None) -> Path:
+        """Give the meeting ``title``: written into ``transcript.json`` (the notes
+        and the exported note use it) and appended to the folder name. Returns
+        the folder, renamed or not.
+
+        Refused while the notes are being written into the folder; before and
+        after them it is safe, and anything already in the folder moves along."""
+        if self.notes_running:
+            raise RuntimeError("the notes are being written — rename once they are done")
+        self._update_profile(title=title)
+        folder = output.retitle_meeting_dir(self.out_dir, title)
+        if folder != self.out_dir:
+            self.audio_path = folder / self.audio_path.relative_to(self.out_dir)
+            self.out_dir = folder
+        return folder
+
+    def _update_profile(self, **changes: object) -> None:
+        """Rewrite ``transcript.json``'s profile with ``changes``."""
+        transcript, path, _created = output.load_transcript(self.out_dir)
+        profile = dataclasses.replace(transcript.profile, **changes)  # type: ignore[arg-type]
+        if profile != transcript.profile:
+            transcript.profile = profile
+            output.atomic_write_text(path, transcript.to_json())
+
+    def _apply_finish(
+        self, transcript: Transcript, warmer: NotesWarmer | None
+    ) -> tuple[Transcript, NotesWarmer | None]:
+        """Fold the finish card's choices into the notes step: the meeting
+        type's notes setup (a backend warmed for the old one is dropped) and
+        the context line. Without choices nothing changes."""
+        choices = self._finish
+        if choices is None:
+            return transcript, warmer
+        if choices.preset != self.request.preset:
+            settings = standing_settings()
+            if choices.preset is not None:
+                settings, _preset = apply_meeting_preset(settings, choices.preset)
+            if settings.notes != self.request.settings.notes:
+                if warmer is not None:
+                    warmer.cancel()
+                warmer = None
+            self.request = dataclasses.replace(
+                self.request,
+                settings=dataclasses.replace(self.request.settings, notes=settings.notes),
+                preset=choices.preset,
+            )
+        if choices.context.strip():
+            self._update_profile(context=choices.context)
+            transcript = output.load_transcript(self.out_dir)[0]
+        return transcript, warmer
+
     def _await_names(self, view: LiveView) -> Transcript | None:
         """Hold the notes until :meth:`settle_names` or a quit; returns the
         transcript as the names left it on disk (``None`` = keep the one in hand)."""
-        view.status("notes start once the speakers are named or skipped")
+        if self.request.notes:
+            view.status("notes start once you press Done")
         while not self._names_settled.wait(0.2):
             if self.abandon_notes.is_set():
                 return None

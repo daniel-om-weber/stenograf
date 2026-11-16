@@ -181,6 +181,8 @@ def _context_lines(transcript: Transcript) -> list[str]:
     lines = []
     if profile.title:
         lines.append(f"- Title: {profile.title}")
+    if profile.context:
+        lines.append(f"- What the meeting was about, in the user's words: {profile.context}")
     if profile.attendee_names:
         lines.append(f"- Attendees: {', '.join(profile.attendee_names)}")
     if profile.glossary:

@@ -120,6 +120,13 @@ def pump(until, timeout=10.0):
     app.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
 
 
+def through_the_card(meeting):
+    """Close the finish card the way its timeout does: the run waits for it
+    after every meeting, so a test that waits for the run must answer it."""
+    pump(lambda: meeting.state["namesOpen"])
+    meeting.skip_names()
+
+
 class _Warnings:
     """Collects Qt warnings (QML binding errors are warnings, not exceptions)."""
 
@@ -630,6 +637,7 @@ class TestMeetingScreen:
         # No opened() call here: navigating instantiates Meeting.qml, whose
         # Component.onCompleted starts the run — the wiring under test.
         pump(lambda: meeting.state["phase"] == "done")
+        through_the_card(meeting)
         meeting.join()
         assert restored, "the finalize swap must reach the screen"
         assert meeting.state["folder"].startswith(str(home_dir))
@@ -696,6 +704,7 @@ class TestMeetingScreen:
         assert meeting.state["micMuted"] is False
         meeting.stop()
         pump(lambda: meeting.state["phase"] == "done", timeout=20)
+        through_the_card(meeting)
         meeting.join()
 
         folder = Path(meeting.state["folder"])
@@ -910,6 +919,7 @@ class TestMeetingScreen:
         shell, _engine = gui
         meeting = shell.screen("Meeting")
         shell.screen("Setup").start(self._mic_only_form(notes=True))
+        through_the_card(meeting)
         pump(notes_started.is_set)
 
         began = time.monotonic()
@@ -989,6 +999,11 @@ class TestWhoSpoke:
         monkeypatch.setattr(notes_run, "run_notes", record_notes)
 
     @staticmethod
+    def _done(meeting, names=None, *, title="", notes=True, preset="", context=""):
+        """The finish card's Done button."""
+        meeting.finish(names or {}, [], title, notes, preset, context)
+
+    @staticmethod
     def _start(shell, notes=True):
         shell.screen("Setup").start(
             {
@@ -1019,9 +1034,9 @@ class TestWhoSpoke:
             assert row["clips"] == 1  # one line, one voice sample
             time.sleep(0.5)
             assert notes == [], "notes must wait for the names"
-            assert "named or skipped" in meeting.state["status"]
+            assert "press Done" in meeting.state["status"]
 
-            meeting.save_names({"Local-1": "Anna"}, [])
+            self._done(meeting, {"Local-1": "Anna"})
             pump(lambda: notes != [] and not meeting.running)
         assert log.seen == []
         assert notes == [{"Anna"}], "the notes see the name, not the placeholder"
@@ -1041,7 +1056,7 @@ class TestWhoSpoke:
         self._start(shell)
         pump(lambda: meeting.state["namesOpen"])
         assert meeting.state["transcriptReady"]
-        meeting.save_names({"Local-1": "Anna"}, [])
+        self._done(meeting, {"Local-1": "Anna"})
         pump(lambda: notes != [] and not meeting.running)
 
         assert meeting.copy() is True
@@ -1129,7 +1144,7 @@ class TestWhoSpoke:
         assert row["label"] == "Anna" and row["recognised"]
         time.sleep(0.5)
         assert notes == [], "a wrong name is worth a look before the notes use it"
-        meeting.save_names({"Anna": "Jonas"}, [])  # "Not Anna?"
+        self._done(meeting, {"Anna": "Jonas"})  # the name button, corrected
         pump(lambda: notes != [] and not meeting.running)
         assert notes == [{"Jonas"}]
 
@@ -1165,14 +1180,19 @@ class TestWhoSpoke:
         with _Warnings() as log:
             self._start(shell)
             pump(lambda: meeting.state["namesOpen"])
-            meeting.save_names({"Local-1": "Anna"}, [])
+            folder = meeting.state["folder"]
+            self._done(meeting, {"Local-1": "Anna"}, title="Kept back")
             pump(lambda: meeting.state["speakers"][0]["refused"] != "")
             row = meeting.state["speakers"][0]
             assert row["label"] == "Local-1" and row["name"] == "Anna"
             assert "doesn't sound like Anna" in row["refused"]
             assert meeting.state["namesOpen"] and notes == []
+            assert meeting.state["folder"] == folder, "nothing after a refused name applies"
 
             meeting.save_names({"Local-1": "Anna"}, ["Local-1"])  # "Add anyway"
+            pump(lambda: not meeting.state["namesBusy"])
+            assert meeting.state["namesOpen"], "the card stays until Done"
+            self._done(meeting)
             pump(lambda: notes != [] and not meeting.running)
         assert log.seen == []
         assert notes == [{"Anna"}]
@@ -1240,7 +1260,7 @@ class TestWhoSpoke:
         self._start(shell)
         pump(lambda: meeting.state["namesOpen"])
         run = meeting._run
-        meeting.save_names({"Local-1": "Anna"}, [])
+        self._done(meeting, {"Local-1": "Anna"})
         pump(lambda: notes != [] and not meeting.running)
         assert set(run.voice_clips) == {"Anna"}
         assert meeting.state["speakers"][0]["clips"] == 1
@@ -1267,8 +1287,76 @@ class TestWhoSpoke:
             "notes": True,
         }
         shell.screen("Setup").start(form)
+        # Nothing to name, but the card still opens — the title and the notes
+        # are on it — and the notes wait for it.
+        pump(lambda: meeting.state["namesOpen"])
+        assert meeting.state["speakers"] == []
+        time.sleep(0.3)
+        assert notes == []
+        self._done(meeting)
         pump(lambda: notes != [] and not meeting.running)
-        assert meeting.state["speakers"] == [] and not meeting.state["namesOpen"]
+        assert not meeting.state["namesOpen"]
+
+    def test_done_renames_the_folder_and_titles_the_transcript(
+        self, gui, tmp_path, monkeypatch
+    ):
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        with _Warnings() as log:
+            self._start(shell)
+            pump(lambda: meeting.state["namesOpen"])
+            before = Path(meeting.state["folder"])
+            assert meeting.preview("Weekly sync") == before.name + "-weekly-sync"
+            self._done(meeting, title="Weekly sync", context="Budget freigeben")
+            pump(lambda: notes != [] and not meeting.running)
+        assert log.seen == []
+        after = Path(meeting.state["folder"])
+        assert after.name == before.name + "-weekly-sync" and not before.exists()
+        saved = json.loads((after / "transcript.json").read_text(encoding="utf-8"))
+        assert saved["profile"]["title"] == "Weekly sync"
+        assert saved["profile"]["context"] == "Budget freigeben"
+        assert meeting.state["notesLocked"], "the notes choices are spent"
+
+        meeting.open_names()  # the footer's Edit: the title can change again
+        self._done(meeting, title="Weekly sync 2")
+        pump(lambda: meeting.state["folder"].endswith("-weekly-sync-2"))
+        assert len(notes) == 1, "a second Done never writes the notes again"
+
+    def test_the_card_can_switch_notes_on_and_off(self, gui, tmp_path, monkeypatch):
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell, notes=False)  # the form said no notes
+        pump(lambda: meeting.state["namesOpen"])
+        assert meeting.state["notesOn"] is False
+        self._done(meeting, notes=True)  # …the card says yes
+        pump(lambda: notes != [] and not meeting.running)
+        assert len(notes) == 1
+
+    def test_discard_moves_the_meeting_to_the_trash(self, gui, tmp_path, monkeypatch):
+        from PySide6.QtCore import QFile
+
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        trashed = []
+        monkeypatch.setattr(
+            QFile, "moveToTrash", staticmethod(lambda path: trashed.append(path) or True)
+        )
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        moves = []
+        shell.navigation.connect(lambda page, mode: moves.append(mode))
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        folder = meeting.state["folder"]
+        meeting.discard()
+        assert trashed == [folder]
+        assert "pop" in moves, "back to the menu"
+        pump(lambda: not meeting.running)
+        assert notes == [], "a discarded meeting writes no notes"
 
 
 class TestTranscribeScreen:

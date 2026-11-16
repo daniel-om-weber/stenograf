@@ -205,6 +205,18 @@ def open_folder(folder: Path) -> str | None:
     return None
 
 
+def open_file(path: Path) -> str | None:
+    """Open ``path`` in the desktop's app for its type; the reason when it cannot."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    if not path.is_file():
+        return f"{path.name} is not there"
+    if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+        return f"nothing on this machine opens {path.suffix} files — find it at {path}"
+    return None
+
+
 def copy_transcript(folder: Path) -> str | None:
     """Put ``folder``'s transcript on the clipboard; the reason when it cannot.
 

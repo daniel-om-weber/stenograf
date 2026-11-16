@@ -26,14 +26,17 @@ What the screen shows, and where it comes from:
   manager. They are separate fields on purpose: the notes step overwrites the
   status, and the folder must survive that. Once the transcript is in, a
   button copies it to the clipboard;
-- **"who spoke?"** — after the finalize, one row per nameable speaker
-  (:func:`stenograf.flow.meeting_speakers`). The run's notes wait until the
-  names are saved or skipped, and leaving the screen counts as skipping:
-  notes stranded behind a screen nobody returns to would be lost work. With
-  ``[speakers] names_panel_timeout_s`` the panel skips itself after that long
-  untouched — a second 1 Hz timer, alive only while that countdown runs.
-  Each row plays the speaker's voice samples (:mod:`stenograf.playback`),
-  which live in the run's memory and are dropped when the screen is left.
+- **the finish card** (``FinishCard.qml``) — after the finalize, after every
+  meeting: the title (Done renames the folder to carry it), one row per
+  nameable speaker (:func:`stenograf.flow.meeting_speakers`; a recognised name
+  is a button that opens its field, because a wrong match must be easy to
+  fix), the notes switch, meeting type and context line, and the files. The
+  run's notes wait until Done, and leaving the screen or the
+  ``[speakers] names_panel_timeout_s`` countdown settles it with the start
+  form's choices: notes stranded behind a screen nobody returns to would be
+  lost work. Each row plays the speaker's voice samples
+  (:mod:`stenograf.playback`), which live in the run's memory and are dropped
+  when the screen is left.
 
 Stopping crosses back to capture through the callback the run hands over
 (:meth:`set_stop`) — and it *blocks*, up to ~5 s waiting on the capture
@@ -46,6 +49,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -63,7 +67,13 @@ if TYPE_CHECKING:
     from stenograf.asr.base import Word
     from stenograf.capture.base import Channel
     from stenograf.config import Language
-    from stenograf.flow import MeetingRequest, MeetingRun, NamingOutcome, SpeakerSummary
+    from stenograf.flow import (
+        FinishChoices,
+        MeetingRequest,
+        MeetingRun,
+        NamingOutcome,
+        SpeakerSummary,
+    )
     from stenograf.gui.app import StenografGui
     from stenograf.playback import Playback
 
@@ -145,6 +155,12 @@ class MeetingScreen(Screen, LiveView):
             speakers=[],
             knownNames="",
             namesOpen=False,
+            notesLocked=False,
+            title="",
+            notesOn=False,
+            presets=[],
+            preset="",
+            context="",
             namesBusy=False,
             namesCountdown=0,
             playing="",
@@ -162,8 +178,20 @@ class MeetingScreen(Screen, LiveView):
 
         self._request = request
         self._reset()
+        from stenograf.flow import standing_settings
+        from stenograf.gui.screens import SetupScreen
+
         muted = {channel.value for channel in request.start_muted}
         self.set(
+            title=request.profile.title or "",
+            notesOn=request.notes,
+            preset=request.preset or "",
+            # "None" reads as "no notes" beside the notes switch; it is the
+            # notes setup without a meeting type.
+            presets=[
+                {**entry, "label": entry["label"] if entry["value"] else "Default"}
+                for entry in SetupScreen._presets(standing_settings())
+            ],
             channels=[plan.channel.value for plan in plan_channels(request.profile)],
             micMuted="mic" in muted,
             systemMuted="system" in muted,
@@ -369,35 +397,119 @@ class MeetingScreen(Screen, LiveView):
 
     @Slot("QVariantMap", "QVariantList")
     def save_names(self, names: dict, forced: list) -> None:
-        """Apply the typed names (``label → name``); ``forced`` labels join a
-        profile whose saved voice they do not match. The panel closes and the
-        notes start once every answer landed; a refused voice keeps it open."""
+        """Apply the typed names (``label → name``) and leave the card open —
+        "Add anyway" on one refused voice; ``forced`` labels join a profile
+        whose saved voice they do not match."""
+        self._submit(names, forced, finish=None)
+
+    @Slot("QVariantMap", "QVariantList", str, bool, str, str)
+    def finish(
+        self, names: dict, forced: list, title: str, notes: bool, preset: str, context: str
+    ) -> None:
+        """The card's Done: names, then the title (renaming the folder), then
+        the notes choices — and the card closes. A refused voice keeps it open
+        with nothing after the names applied, so the answer can be fixed."""
+        from stenograf.flow import FinishChoices
+
+        self._submit(
+            names, forced, finish=(title, FinishChoices(bool(notes), preset or None, context))
+        )
+
+    def _submit(
+        self,
+        names: dict,
+        forced: list,
+        *,
+        finish: tuple[str, FinishChoices] | None,
+    ) -> None:
         run = self._run
         if run is None or self._state.get("namesBusy"):
             return
         self.hold_names()
         self.set(namesBusy=True)
+        locked = bool(self._state.get("notesLocked"))
 
-        def job() -> tuple[list[NamingOutcome], list[SpeakerSummary], Transcript | None]:
+        def job() -> _Saved:
             from stenograf import output
             from stenograf.flow import meeting_speakers
 
-            outcomes = run.name_speakers(
-                {str(k): str(v) for k, v in names.items()}, [str(f) for f in forced]
+            outcomes = (
+                run.name_speakers(
+                    {str(k): str(v) for k, v in names.items()}, [str(f) for f in forced]
+                )
+                if names
+                else []
             )
+            finished = False
+            problem = ""
+            if finish is not None and not any(
+                o.refused_similarity is not None or o.error is not None for o in outcomes
+            ):
+                title, choices = finish
+                try:
+                    run.retitle(title.strip() or None)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    problem = f"folder not renamed: {exc}"
+                if not locked:
+                    run.settle(choices)
+                finished = True
             try:
                 transcript = output.load_transcript(run.out_dir)[0]
             except ValueError:
                 transcript = None
-            return outcomes, meeting_speakers(run.out_dir, store_path=run.profile_store), transcript
+            speakers = meeting_speakers(run.out_dir, store_path=run.profile_store)
+            return _Saved(outcomes, speakers, transcript, finished, str(run.out_dir), problem)
 
         self.work(job, done=self._names_saved, failed=self._names_failed, name="gui-names")
 
+    @Slot(str, result=str)
+    def preview(self, title: str) -> str:
+        """The folder name ``title`` gives this meeting — shown under the field."""
+        from stenograf import output
+
+        run = self._run
+        if run is None:
+            return ""
+        return output.titled_dir_name(run.created_at, title.strip() or None)
+
+    @Slot()
+    def open_transcript(self) -> None:
+        """Open ``transcript.md`` in the desktop's app for it."""
+        from stenograf.gui.app import open_file
+
+        folder = str(self._state.get("folder", ""))
+        if folder and (problem := open_file(Path(folder) / "transcript.md")):
+            self.set(status=problem)
+
+    @Slot()
+    def discard(self) -> None:
+        """Move this meeting's folder to the trash and leave; notes not yet
+        started are skipped. Refused while they are being written."""
+        from PySide6.QtCore import QFile
+
+        run = self._run
+        folder = str(self._state.get("folder", ""))
+        if run is None or not folder:
+            return
+        if run.notes_running:
+            self.set(status="the notes are being written — discard once they are done")
+            return
+        run.abandon_notes.set()
+        run.settle_names()
+        self._stop_playback()
+        if not QFile.moveToTrash(folder):
+            self.set(status=f"could not move {folder} to the trash")
+            return
+        run.discard_voice_clips()
+        self.set(speakers=[], namesOpen=False)
+        self.app.back()
+
     @Slot()
     def skip_names(self) -> None:
-        """Close the panel unanswered; waiting notes start with the labels as they are."""
+        """Close the card unanswered (the timeout): waiting notes start with
+        the start form's choices and the labels as they are."""
         self.hold_names()
-        self.set(namesOpen=False)
+        self.set(namesOpen=False, notesLocked=True)
         if self._run is not None:
             self._run.settle_names()
 
@@ -445,14 +557,15 @@ class MeetingScreen(Screen, LiveView):
 
     @Slot()
     def open_names(self) -> None:
-        """Bring the panel back after it closed (names can be fixed any time)."""
+        """Bring the card back after it closed: names and the title can be
+        fixed any time; the notes choices are spent once settled."""
         self.set(namesOpen=True)
 
-    def _names_saved(
-        self,
-        result: tuple[list[NamingOutcome], list[SpeakerSummary], Transcript | None],
-    ) -> None:
-        outcomes, speakers, transcript = result
+    def _names_saved(self, result: _Saved) -> None:
+        outcomes, speakers, transcript = result.outcomes, result.speakers, result.transcript
+        self.set(folder=result.folder)
+        if result.problem:
+            self.set(status=result.problem)
         if transcript is not None:
             self._restore(transcript)
         refused = {o.label: o for o in outcomes if o.refused_similarity is not None}
@@ -474,9 +587,11 @@ class MeetingScreen(Screen, LiveView):
             self.set(status="; ".join(errors))
         if not refused and not errors:
             named = [o for o in outcomes if o.applied]
-            if named:
+            if named and not result.problem:
                 self.set(status=f"named {len(named)} speaker{'' if len(named) == 1 else 's'}")
-            self.skip_names()
+            if result.finished:
+                self.hold_names()
+                self.set(namesOpen=False, notesLocked=True)
 
     def _names_failed(self, message: str) -> None:
         self.set(namesBusy=False, status=f"names not saved: {message}")
@@ -606,6 +721,18 @@ class MeetingScreen(Screen, LiveView):
                 for entry in transcript.entries
             ]
         )
+
+
+@dataclass(frozen=True)
+class _Saved:
+    """What a names (or finish) job hands back to the GUI thread."""
+
+    outcomes: list[NamingOutcome]
+    speakers: list[SpeakerSummary]
+    transcript: Transcript | None
+    finished: bool
+    folder: str
+    problem: str
 
 
 def _speaker_rows(
