@@ -2385,14 +2385,14 @@ wheels = [
 
 [[package]]
 name = "onnx-asr"
-version = "0.11.0"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/78/f6/b154881761a593312f509522f99542acffa2516f7a1df6ddf5660ad4a162/onnx_asr-0.11.0.tar.gz", hash = "sha256:57ad8d9571dc17db95f0daf9ba432b9472383de320c610735850e56b5375a37d", size = 43665, upload-time = "2026-03-23T02:30:57.349Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/11/136f556cda02ecc172674dcea79232e9e84e74b951bbcd2e2722117f633b/onnx_asr-0.12.0.tar.gz", hash = "sha256:c1fcacddbced392f9f769ed5c6223f4ce739a6e4549346de33b9b520d4ead713", size = 45991, upload-time = "2026-07-15T00:09:58.852Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/82/04/bdffd682cc38b43144b6528186c80451f219a05e3fd0eb331a548f455b9a/onnx_asr-0.11.0-py3-none-any.whl", hash = "sha256:142d8b3ce7716684992826a269304f5ce9cf1c0fe704b751358e223f45d2a5cf", size = 138349, upload-time = "2026-03-23T02:30:58.566Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/60/2fa469a2ee674c35ab48821a1039762ae7b9d0b88188ac1012e779477f76/onnx_asr-0.12.0-py3-none-any.whl", hash = "sha256:5e7ceca454609819ea7833f61e2302e0c8f6ece4f8a78b66c5daba53cb51de4a", size = 3980006, upload-time = "2026-07-15T00:09:57.322Z" },
 ]
 
 [package.optional-dependencies]
@@ -2544,7 +2544,7 @@ wheels = [
 
 [[package]]
 name = "parakeet-mlx"
-version = "0.5.2"
+version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dacite", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
@@ -2554,9 +2554,9 @@ dependencies = [
     { name = "numpy", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
     { name = "typer", marker = "(sys_platform != 'emscripten' and sys_platform != 'win32') or extra == 'group-9-stenograf-eval' or extra != 'group-9-stenograf-eval-canary'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5b/1a/d7ab33b3e25dcf2d97d0192fd1e718f2c6e69b5775370413e144fef54256/parakeet_mlx-0.5.2.tar.gz", hash = "sha256:6c6ba3c4d42ebf015dde515e5a83858a516add3f5b2c6bd4a7be5c4ba8bd4d02", size = 37791, upload-time = "2026-06-05T07:52:35.473Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/24/f8/ffd4feae98e4db96c3acd270c32d063c6b1f2cba65e0030208f7a4c4d4f9/parakeet_mlx-0.7.0.tar.gz", hash = "sha256:ea3335732e64cd2eff38412e26a2ccf70526ad7239085a6625c370703248b998", size = 44191, upload-time = "2026-11-04T15:26:42.257Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/54/09a3501c74f1ef54a36002534661cb89a0b2f098fcad87fe64f515a0dba7/parakeet_mlx-0.5.2-py3-none-any.whl", hash = "sha256:50afb6ddb62237a6486e214482c25ef12759832fda3cd514e159938fa5970d9c", size = 37353, upload-time = "2026-06-05T07:52:34.452Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/74/509deb8ae7273969610a31115362d599a1ff30e9cf53ae9afcd5387ce33d/parakeet_mlx-0.7.0-py3-none-any.whl", hash = "sha256:768552ddc362af86e0a5911585f8e151cec48d40035193b077af91513b8e56e3", size = 42442, upload-time = "2026-11-04T15:26:35.611Z" },
 ]
 
 [[package]]
@@ -3858,10 +3858,10 @@ requires-dist = [
     { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.29.1,<0.30" },
     { name = "numba", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.60" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "onnx-asr", extras = ["hub"], specifier = ">=0.11" },
+    { name = "onnx-asr", extras = ["hub"], specifier = ">=0.11,<0.13" },
     { name = "onnxruntime", marker = "sys_platform != 'win32'", specifier = ">=1.18.1" },
     { name = "onnxruntime-directml", marker = "sys_platform == 'win32'", specifier = ">=1.24" },
-    { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.2" },
+    { name = "parakeet-mlx", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.5.2,<0.8" },
     { name = "pyside6-essentials", specifier = ">=6.12,<7" },
     { name = "sentencepiece", specifier = ">=0.2" },
     { name = "sherpa-onnx", specifier = ">=1.13.8,<1.14" },

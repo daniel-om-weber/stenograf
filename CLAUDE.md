@@ -136,6 +136,10 @@ open the door to a player.
 - Delegate token-heavy research fan-outs to cheaper Opus subagents rather
   than running them in the main loop.
 - Release = version bump + tag (CI publishes to PyPI).
+- Users' installs ignore `uv.lock`; a weekly CI run re-resolves to the newest
+  allowed versions and opens an issue when they break (`.github/workflows/ci.yml`).
+  The answer is a fix or a cap with its reason in `pyproject.toml`, then a
+  patch release.
 
 ## Comment policy
 

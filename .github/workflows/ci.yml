@@ -4,10 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The fresh-resolve run. Users install with `uv tool install stenograf`,
+  # which ignores uv.lock and takes the newest release every range in
+  # pyproject.toml allows, so between releases they run a combination the
+  # locked jobs never test. Weekly, the same jobs re-resolve to those newest
+  # versions first; a failure opens (or comments on) an issue. Run it by hand
+  # after raising a cap.
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  FRESH: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
   test:
@@ -32,8 +44,12 @@ jobs:
       # else Qt needs is already there; macOS and Windows need nothing.
       - run: sudo apt-get install -y libegl1
         if: runner.os == 'Linux'
+      - name: Resolve the newest versions a user install would get
+        if: env.FRESH == 'true'
+        run: uv lock --upgrade
       - run: uv sync
       - run: uv run ruff check .
+        if: env.FRESH != 'true'
       # macOS only: the platform-marker deps (mlx-lm, parakeet-mlx) are only
       # installed there, and pyright needs them importable to resolve types.
       - run: uv run --with pyright pyright
@@ -58,6 +74,9 @@ jobs:
       - name: Install a virtual sound card
         shell: pwsh
         run: .github/scripts/windows-sound-card.ps1
+      - name: Resolve the newest versions a user install would get
+        if: env.FRESH == 'true'
+        run: uv lock --upgrade
       - run: uv sync
       - name: A voice sample plays whole, and stops when told
         run: uv run python .github/scripts/hear_playback_windows.py
@@ -115,6 +134,9 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: asr-weights-${{ runner.os }}
+      - name: Resolve the newest versions a user install would get
+        if: env.FRESH == 'true'
+        run: uv lock --upgrade
       - run: uv sync
       - name: Prefetch models
         run: uv run steno setup --models-only
@@ -172,3 +194,27 @@ jobs:
           print(f'tone heard on the monitor: {heard:.2f} of 4 s')
           sys.exit(0 if heard >= 3.6 else 1)
           "
+
+  # Only the fresh-resolve run reports: a red push or PR is already in front of
+  # whoever caused it, but nobody is watching when an upstream release breaks.
+  report-fresh-failure:
+    needs: [test, playback-windows, capture-linux]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="The newest dependency versions break stenograf"
+          open=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "Still failing: $RUN_URL"
+          else
+            gh issue create --title "$title" --body "The weekly fresh-resolve CI run failed: $RUN_URL
+
+          A fresh \`uv tool install stenograf\` today gets the versions that failed here, so new installs and \`uv tool upgrade\` are likely broken; existing installs are not. The step \"Resolve the newest versions a user install would get\" lists every package that moved. Find the one responsible, then either fix stenograf for it or cap it in pyproject.toml with the reason, and cut a patch release."
+          fi

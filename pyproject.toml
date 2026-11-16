@@ -42,15 +42,24 @@ dependencies = [
     # the sdist would omit it and macOS import dies in dlopen, so declare it
     # ourselves rather than trusting whichever form uv picks.
     "sherpa-onnx-core>=1.13.8,<1.14",
-    # Default ASR backend (PLAN.md Phase 0 verdict); MLX is Apple-Silicon-only.
-    "parakeet-mlx>=0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    # Default ASR backend; MLX is Apple-Silicon-only. Capped above the newest
+    # release checked: asr/parakeet.py imports its internal modules (audio,
+    # alignment, tokenizer) and replaces its decode loop, which a 0.x minor may
+    # change without notice. 0.7.0 transcribed byte-identically to 0.5.2, with
+    # and without a glossary, German and English (2026-11-16). The weekly
+    # fresh-resolve CI run says when a release inside the cap breaks us; raise
+    # the cap only after checking the next minor the same way.
+    "parakeet-mlx>=0.5.2,<0.8; sys_platform == 'darwin' and platform_machine == 'arm64'",
     # Cross-platform ASR backend (Phase 5): the same Parakeet-TDT-v3, fp32 ONNX
     # on CPU. Decision A resolved to onnx-asr over sherpa's export on accuracy —
     # sherpa ships v3 only as int8, and int8 measurably degrades German (see
     # asr/parakeet_onnx.py). Unmarked: on macOS it is the parity reference the
     # eval harness compares MLX against. [hub] pins the HuggingFace download
-    # path; the onnxruntime flavor is declared below, not via [cpu].
-    "onnx-asr[hub]>=0.11",
+    # path; the onnxruntime flavor is declared below, not via [cpu]. Capped like
+    # parakeet-mlx above, for the same reason: we import its internal
+    # onnx_asr.utils and drive its decoder from our own loop. 0.12.0 matched
+    # 0.11.0 byte for byte on the same check (2026-11-16).
+    "onnx-asr[hub]>=0.11,<0.13",
     # Parakeet's own SentencePiece tokenizer, for compiling glossary terms into
     # the token ids the decoder emits (contextual biasing, asr/biasing.py). Both
     # ASR backends decode SentencePiece but neither exposes an *encoder*, and an
