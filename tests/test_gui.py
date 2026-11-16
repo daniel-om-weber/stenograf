@@ -1677,7 +1677,8 @@ class TestFolderActions:
         screen = shell.screen(page)
         screen.set(folder=str(folder), status="")
         screen.reveal()
-        assert [url.toLocalFile() for url in opened] == [str(folder)]
+        # toLocalFile() spells Windows paths with forward slashes; compare paths.
+        assert [Path(url.toLocalFile()) for url in opened] == [folder]
         assert screen.state["status"] == ""
 
     def test_a_folder_not_written_yet_says_so(self, gui, tmp_path, opened):
