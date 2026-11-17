@@ -158,6 +158,39 @@ notification-area **overflow** — click the `^` next to the clock and drag
 Stenograf onto the taskbar to keep it in sight; Windows hides every new
 notification icon that way, not just this one.
 
+**Muting.** The meeting screen's header carries one chip per source — *You*
+for your microphone, *Remote* for system audio — that shows whether it is live
+and mutes or unmutes it with a click; the menu-bar menu has the same two
+switches, and its icon turns grey while anything is muted. Muted audio becomes
+silence before anything else reads it, so nothing said in that stretch reaches
+the transcript, the notes or `audio.opus`; the transcript marks the gap instead,
+as `*(microphone muted 10:32–10:41)*`. A source switched off in the start form
+is still recorded, only muted from the first second, so the meeting can turn it
+on later — which is also why both captures have to work even when one starts
+off. Muting is an app feature; `steno start` has no equivalent.
+
+**The finish card.** When a meeting stops and its transcript is written, one
+card gathers what is left to decide:
+
+- **Title** — pre-filled from the start form or the meeting type. Done renames
+  the meeting folder to carry it after the date
+  (`meeting-20261116-091500-weekly-sync`), so folders still sort by date.
+- **Speakers** (with "Tell speakers apart" on) — one row per voice, with its
+  longest line (click it to see it in the transcript), how long it spoke, and a
+  button that plays a few seconds of it. Naming voices is described under
+  [Naming speakers across meetings](#naming-speakers-across-meetings).
+- **Notes** — whether to write them, which meeting type's notes setup to use
+  (often only known once the meeting is over), and an optional line of context
+  that the notes prompt receives.
+- **Files** — open the folder, open or copy the transcript, or discard the
+  meeting (moves its folder to the trash; asks once).
+
+Notes start when you press **Done**. Leaving the screen, or the
+`names_panel_timeout_s` countdown below, settles the card with the start form's
+choices instead, so notes are never stranded behind a screen nobody returns to;
+a meeting stopped from the menu bar with no window open writes its notes the
+same way and leaves the card to answer later.
+
 It runs the same library the CLI does — same meeting folders, same
 settings.toml, same transcripts — so you can switch between the two freely, or
 never use it at all.
@@ -342,21 +375,24 @@ skips them for one run. A notes failure never touches the transcript.
 
 Name a voice once and every later meeting relabels that speaker automatically
 (cross-meeting re-identification). In the app, a meeting with "Tell speakers
-apart" on ends with a "Who spoke?" panel: every speaker shows three of their
-lines (click one to see it in the transcript) and a button that plays a few
-seconds of their voice — cut at the stop, held in memory only, and dropped when
-you leave the screen. Recognised speakers show their name (correct a wrong one
-with "Not …?"), and the
-name you type joins the voice library and replaces the label in the
-transcript. Notes wait while the panel is open. Two `[speakers]` settings
-shorten it: `names_panel_timeout_s = 60` closes it after a minute untouched
-(typing keeps it open), and `names_panel_skip_if_recognised = true` opens it
-only when someone is unknown. From a terminal, the same correction for any
-finished meeting:
+apart" on lists its voices on the [finish card](#the-desktop-app), each with a
+button that plays a few seconds of it — cut at the stop, held in memory only,
+and dropped when you leave the screen. An unknown voice shows a "Who is this?"
+field; a recognised one shows its name as a button, and clicking it opens the
+field to correct a wrong match. The name you type joins the voice library and
+replaces the label in the transcript. A name that already belongs to a
+different-sounding voice is refused with the reason, and **Add anyway** files
+it regardless. Two `[speakers]` settings shorten the card:
+`names_panel_timeout_s = 60` settles it after a minute untouched (typing keeps
+it open), and `names_panel_skip_if_recognised = true` skips it when every voice
+was recognised. From a terminal, the same correction for any finished meeting:
 
 ```sh
 steno profiles assign Remote-1 Anna --last       # or a meeting folder path
 ```
+
+Like the card, `assign` refuses a voice that does not sound like the one
+already saved under that name; `--force` adds it anyway.
 
 Or enroll from a voice sample:
 

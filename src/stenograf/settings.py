@@ -118,10 +118,10 @@ SETTINGS_TEMPLATE = """\
 #                                          # count above 1 also turns it on)
 # reid_threshold = 0.56                    # voice-match strictness 0-1
 # profile_store = "~/steno/profiles.json"  # re-ID voiceprint store location
-# names_panel_timeout_s = 60               # app: the "Who spoke?" panel closes on its
-#                                          # own after this long untouched (unset or
-#                                          # 0 = stays open until saved or skipped)
-# names_panel_skip_if_recognised = true    # app: no panel when every voice was
+# names_panel_timeout_s = 60               # app: the finish card settles on its own
+#                                          # after this long untouched (unset or
+#                                          # 0 = stays open until Done)
+# names_panel_skip_if_recognised = true    # app: no finish card when every voice was
 #                                          # recognised (default: it always opens)
 
 [asr]
