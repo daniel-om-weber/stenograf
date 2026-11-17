@@ -1717,7 +1717,49 @@ behind), and on a CPU with few or weak efficiency cores — nothing guards the
 rule there (Daniel's call, 2026-11-17).
 
 **Windows** reads the efficiency classes from `GetSystemCpuSetInformation`
-and pins the same way; not measured.
+and pins the same way. Measured on the same GPD under Windows 11 (26200,
+Balanced, mains), the 10-min excerpt from minute 5 of the same meeting,
+energy from the Energy Meter's RAPL package counter (picowatt-hours) net of
+idle, placement from per-processor busy time. The detection reads class 0
+for the 8 Zen5c (logical 8–23) and 1 for the 4 Zen5, so the plan is the
+Linux one, and pinned work stayed 98–100 % on the Zen5c. The live windows'
+898 words were identical in every arm; the stream was bit-identical to the
+offline loop.
+
+A windowless process — anything started over SSH — runs under Windows'
+execution-speed throttling, which slowed every arm *and* cost energy; the
+arms were therefore run throttled and with the process opted out
+(`SetProcessInformation(ProcessPowerThrottling)`), the state of a foreground
+app, on mains and on battery (where Windows switches to its "best power
+efficiency" overlay). Runs whose idle baseline had not settled (Defender and
+the indexer after a long-unused boot, the minutes after unplugging) are left
+out; each cell lists every remaining run:
+
+| | mains, throttled | mains, not throttled | battery, throttled | battery, not throttled |
+|---|---|---|---|---|
+| live captions, ONNX Runtime defaults (J / audio-min) | 59.0, 59.4 — 20× | 48.0, 48.0 — 28–30× | 37.0 — 12× | — |
+| live captions, spin off only | 51.6, 51.7, 54.8 — 18× | — | — | — |
+| **live captions, shipped rule** | **53.8, 54.4, 55.7 — 14×** | **40.1, 49.5 — 26×** | **29.1 — 8×** | **33.7 — 7×** |
+| diarization stream, released defaults (J / audio-h / ch) | 1,140 — 0.41 s/step | 917, 920 — 0.31 s | — | 862 — 0.42 s |
+| **diarization stream, shipped rule** | **1,194, 1,490 — 0.55 s** | **927, 933 — 0.35 s** | — | **848 — 1.21 s** |
+
+So on Windows the rule gains little: about −8 % for the captions on mains
+throttled, about −20 % on battery (one run per arm), and nothing
+established unthrottled on mains (one run each side of the default); the
+stream is equal wherever the baseline was quiet. Windows already places much
+sustained work on the Zen5c, and ONNX Runtime's Windows pool spins far less
+(255–365 CPU-s by default against Linux's 995 for the same 10 min). The rule
+costs speed on battery — the captions' slowest window at 5–6× realtime
+against the default's 11–15×, still far ahead of the meeting — and keeps
+placement independent of power mode and throttling, so it stays uniform.
+Battery runs cost less than mains runs for the same work at lower clocks,
+and Windows decoded the Zen5c windows in about half Linux's CPU-seconds:
+Windows on mains clocks higher (inferred, clocks not logged). The same work
+reads 2–3× the energy of the Linux runs, but the sensors differ (RAPL
+package here, amdgpu PPT there), so absolute numbers do not compare across
+the two; the battery fuel gauge reports in ~420 mWh steps, too coarse to
+arbitrate at this run length. Untested on Windows: another power mode, and
+the real app's window states.
 
 ## Echo cancellation
 

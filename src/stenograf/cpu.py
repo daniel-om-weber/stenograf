@@ -11,8 +11,8 @@ threads never take it on, wherever the session was created — so macOS runs
 background work on one thread and leaves the live captions to ONNX Runtime's
 own count. Linux and Windows pin, because Linux at least places a lone
 background thread on a fast core even at ``SCHED_IDLE``. The measurements
-behind each choice (M4 Max and a Ryzen AI 9 HX 370; Windows unmeasured) are
-in ``eval/README.md``, "Background threads, by platform".
+behind each choice (M4 Max, and a Ryzen AI 9 HX 370 under Linux and Windows)
+are in ``eval/README.md``, "Background threads, by platform".
 """
 
 from __future__ import annotations
