@@ -1,3 +1,9 @@
+import random
+from difflib import SequenceMatcher
+
+import pytest
+
+from stenograf import glossary as glossary_module
 from stenograf.asr.base import Word
 from stenograf.glossary import apply_glossary, build_terms
 from stenograf.transcript import TranscriptEntry
@@ -144,3 +150,89 @@ def test_build_terms_dedup_expands_names_and_drops_short():
     norms = sorted(t.norm for t in terms)
     # "Greifswald" once (dedup by key), "ab" dropped (too short), name whole + per token.
     assert norms == ["daniel", "danielweber", "greifswald", "weber"]
+
+
+def test_first_term_wins_a_tie():
+    entry = _entry((_w("abcx", 0.0),))
+    # "abcx" scores exactly 0.75 against both terms.
+    assert apply_glossary([entry], glossary=["Abcd", "Abce"], threshold=0.7)[0].text == "Abcd"
+    assert apply_glossary([entry], glossary=["Abce", "Abcd"], threshold=0.7)[0].text == "Abce"
+
+
+_ALPHABET = "aaabbcdeäöß"
+
+
+def _random_entries(rng: random.Random) -> tuple[list[TranscriptEntry], list[str], list[str]]:
+    """Near-misses of random multi-token terms over a tiny alphabet, so corrections,
+    ties and terms competing for the same window are all common."""
+
+    def token(lo: int, hi: int) -> str:
+        text = "".join(rng.choice(_ALPHABET) for _ in range(rng.randint(lo, hi)))
+        return text.capitalize() if rng.random() < 0.3 else text
+
+    def mutate(tok: str) -> str:
+        i = rng.randrange(len(tok) + 1)
+        edit = rng.choice(("keep", "delete", "substitute", "insert"))
+        if edit == "delete":
+            return tok[:i] + tok[i + 1 :] or tok
+        if edit == "substitute":
+            return tok[:i] + rng.choice(_ALPHABET) + tok[i + 1 :]
+        if edit == "insert":
+            return tok[:i] + rng.choice(_ALPHABET) + tok[i:]
+        return tok
+
+    glossary = [
+        " ".join(token(2, 6) for _ in range(rng.choice((1, 1, 2, 3))))
+        for _ in range(rng.randint(1, 12))
+    ]
+    names = [f"{token(3, 6)} {token(3, 6)}" for _ in range(rng.randint(0, 2))]
+    vocabulary = [tok for phrase in glossary + names for tok in phrase.split()]
+    entries = []
+    for _ in range(rng.randint(1, 4)):
+        texts = [
+            mutate(rng.choice(vocabulary)) if rng.random() < 0.6 else token(1, 7)
+            for _ in range(rng.randint(1, 25))
+        ]
+        texts = [rng.choice(("", "(", "„")) + t + rng.choice(("", "", ",", ".")) for t in texts]
+        words = tuple(_w(t, 0.5 * i) for i, t in enumerate(texts))
+        text = " ".join(texts)
+        if rng.random() < 0.2:
+            words = ()  # a wordless backend
+        elif rng.random() < 0.2:
+            text += f" {mutate(rng.choice(vocabulary))}"  # words cover only part of the text
+        entries.append(TranscriptEntry(speaker="S0", text=text, start=0.0, end=1.0, words=words))
+    return entries, glossary, names
+
+
+def _score_every_term(self: glossary_module._Matcher, window: str, size: int):
+    best, best_score = None, self.threshold
+    for term in self._by_size[size]:
+        score = SequenceMatcher(None, window, term.norm).ratio()
+        if score >= self.threshold and (best is None or score > best_score):
+            best, best_score = term, score
+    return best
+
+
+def test_pruned_search_picks_exactly_what_scoring_every_term_picks(monkeypatch: pytest.MonkeyPatch):
+    """The length and character-multiset bounds and the per-window memo are only
+    allowed to save work: every text, word and tie must come out as an exhaustive
+    ``difflib`` search would have it."""
+    cases = []
+    for seed in range(150):
+        rng = random.Random(seed)
+        entries, glossary, names = _random_entries(rng)
+        for threshold in (0.5, 0.7, 0.82, 0.9, 0.95):
+            pruned = apply_glossary(
+                entries, glossary=glossary, attendee_names=names, threshold=threshold
+            )
+            cases.append((entries, glossary, names, threshold, pruned))
+    monkeypatch.setattr(glossary_module._Matcher, "best", _score_every_term)
+    fired = 0
+    for entries, glossary, names, threshold, pruned in cases:
+        exhaustive = apply_glossary(
+            entries, glossary=glossary, attendee_names=names, threshold=threshold
+        )
+        assert pruned == exhaustive, (glossary, names, threshold)
+        fired += any(a is not b for a, b in zip(entries, exhaustive, strict=True))
+    # Guards the guard: a generator that never triggers a correction proves nothing.
+    assert fired > len(cases) // 2

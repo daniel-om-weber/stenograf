@@ -137,17 +137,18 @@ def apply_glossary(
     terms = build_terms(glossary, attendee_names)
     if not terms:
         return entries
-    return [_correct_entry(entry, terms, threshold) for entry in entries]
+    matcher = _Matcher(terms, threshold)
+    return [_correct_entry(entry, matcher) for entry in entries]
 
 
-def _correct_entry(entry: TranscriptEntry, terms: list[_Term], threshold: float) -> TranscriptEntry:
+def _correct_entry(entry: TranscriptEntry, matcher: _Matcher) -> TranscriptEntry:
     # Correct the word list and the flat text independently with the same terms,
     # rather than rebuilding one from the other: for a well-formed entry both hold
     # the same tokens so they get identical corrections and stay in sync, but this
     # never truncates `text` if a backend's words don't fully cover it (a wordless
     # backend has `words=()` — only its text is corrected).
-    new_words = _correct_words(entry.words, terms, threshold) if entry.words else None
-    new_text = _correct_text(entry.text, terms, threshold)
+    new_words = _correct_words(entry.words, matcher) if entry.words else None
+    new_text = _correct_text(entry.text, matcher)
     if new_words is None and new_text is None:
         return entry
     return replace(
@@ -157,13 +158,11 @@ def _correct_entry(entry: TranscriptEntry, terms: list[_Term], threshold: float)
     )
 
 
-def _correct_words(
-    words: tuple[Word, ...], terms: list[_Term], threshold: float
-) -> tuple[Word, ...] | None:
+def _correct_words(words: tuple[Word, ...], matcher: _Matcher) -> tuple[Word, ...] | None:
     """Snap matching word runs to their canonical spelling, keeping timing +
     surrounding punctuation. ``None`` when nothing matched."""
     parts = [_split_punct(w.text) for w in words]
-    plan = _plan_corrections([core for _, core, _ in parts], terms, threshold)
+    plan = _plan_corrections([core for _, core, _ in parts], matcher)
     if not plan:
         return None
     out = []
@@ -176,11 +175,11 @@ def _correct_words(
     return tuple(out)
 
 
-def _correct_text(text: str, terms: list[_Term], threshold: float) -> str | None:
+def _correct_text(text: str, matcher: _Matcher) -> str | None:
     """Correction over a plain whitespace-tokenized string. ``None`` when unchanged."""
     tokens = text.split()
     parts = [_split_punct(tok) for tok in tokens]
-    plan = _plan_corrections([core for _, core, _ in parts], terms, threshold)
+    plan = _plan_corrections([core for _, core, _ in parts], matcher)
     if not plan:
         return None
     out = [
@@ -189,7 +188,7 @@ def _correct_text(text: str, terms: list[_Term], threshold: float) -> str | None
     return " ".join(out)
 
 
-def _plan_corrections(cores: list[str], terms: list[_Term], threshold: float) -> dict[int, str]:
+def _plan_corrections(cores: list[str], matcher: _Matcher) -> dict[int, str]:
     """Greedy, non-overlapping left-to-right match → {word index: canonical token}.
 
     At each position the longest term size that yields a qualifying match wins
@@ -197,22 +196,17 @@ def _plan_corrections(cores: list[str], terms: list[_Term], threshold: float) ->
     then consumed so corrections never overlap.
     """
     norms = [_norm(core) for core in cores]
-    by_size: dict[int, list[_Term]] = {}
-    for term in terms:
-        by_size.setdefault(term.size, []).append(term)
-    sizes = sorted(by_size, reverse=True)
-
     plan: dict[int, str] = {}
     i, n = 0, len(cores)
     while i < n:
         advance = 1
-        for size in sizes:
+        for size in matcher.sizes:
             if i + size > n:
                 continue
             window = "".join(norms[i : i + size])
             if not window:
                 continue
-            best = _best_term(window, by_size[size], threshold)
+            best = matcher.best(window, size)
             if best is not None:
                 for j, token in enumerate(best.tokens):
                     plan[i + j] = _recase(token, cores[i + j], best)
@@ -247,15 +241,81 @@ def _recase(token: str, core: str, term: _Term) -> str:
     return token[:1].upper() + token[1:]
 
 
-def _best_term(window: str, terms: list[_Term], threshold: float) -> _Term | None:
-    """The highest-scoring term at/above ``threshold``; first term wins ties."""
-    best: _Term | None = None
-    best_score = threshold
-    for term in terms:
-        score = SequenceMatcher(None, window, term.norm).ratio()
-        if score >= threshold and (best is None or score > best_score):
-            best, best_score = term, score
-    return best
+class _Matcher:
+    """The best term for a window, as scoring every term with ``difflib`` decides it,
+    built once per :func:`apply_glossary` call.
+
+    ``ratio()`` is ``2.0*M/T``, and ``M``, the matched characters, can exceed
+    neither the shorter string's length nor the two strings' shared character
+    multiset (difflib's own ``real_quick_ratio`` and ``quick_ratio`` bounds). The
+    same float expression is monotone in ``M``, so a term whose bound falls below
+    the threshold can never qualify, and skipping it is exact; the survivors keep
+    their order, so ties go to the same term. A window recurs across the meeting
+    and between an entry's words and text, so its answer is memoized per call.
+    Scoring every term took 34 s on a 104-minute meeting against 314 terms; this
+    takes 0.09 s at 0.95 and 0.14 s at 0.82, output identical with misspelled terms
+    injected so that corrections fire (2026-11-17).
+    """
+
+    def __init__(self, terms: list[_Term], threshold: float) -> None:
+        self.threshold = threshold
+        self._by_size: dict[int, list[_Term]] = {}
+        for term in terms:
+            self._by_size.setdefault(term.size, []).append(term)
+        self.sizes = sorted(self._by_size, reverse=True)
+        # One bit per (character, n-th occurrence) that some term holds, so the
+        # popcount of two masks ANDed is their shared multiset in one int operation.
+        # Every term's bits must exist before any window is masked: a window
+        # character no term holds can match nothing and gets no bit.
+        self._bits: dict[tuple[str, int], int] = {}
+        self._masks = {term.norm: self._mask(term.norm, grow=True) for term in terms}
+        self._by_length: dict[tuple[int, int], list[_Term]] = {}
+        self._best: dict[tuple[str, int], _Term | None] = {}
+
+    def best(self, window: str, size: int) -> _Term | None:
+        """The highest-scoring ``size``-token term at/above the threshold; first term
+        wins ties."""
+        key = (window, size)
+        if key not in self._best:
+            self._best[key] = self._search(window, size)
+        return self._best[key]
+
+    def _search(self, window: str, size: int) -> _Term | None:
+        threshold = self.threshold
+        best: _Term | None = None
+        best_score = threshold
+        window_mask = self._mask(window, grow=False)
+        for term in self._length_candidates(size, len(window)):
+            shared = (window_mask & self._masks[term.norm]).bit_count()
+            if 2.0 * shared / (len(window) + len(term.norm)) < threshold:
+                continue
+            score = SequenceMatcher(None, window, term.norm).ratio()
+            if score >= threshold and (best is None or score > best_score):
+                best, best_score = term, score
+        return best
+
+    def _length_candidates(self, size: int, length: int) -> list[_Term]:
+        key = (size, length)
+        if key not in self._by_length:
+            self._by_length[key] = [
+                term
+                for term in self._by_size[size]
+                if 2.0 * min(length, len(term.norm)) / (length + len(term.norm)) >= self.threshold
+            ]
+        return self._by_length[key]
+
+    def _mask(self, text: str, *, grow: bool) -> int:
+        mask = 0
+        seen: dict[str, int] = {}
+        for char in text:
+            seen[char] = nth = seen.get(char, 0) + 1
+            bit = self._bits.get((char, nth))
+            if bit is None:
+                if not grow:
+                    continue
+                bit = self._bits[(char, nth)] = len(self._bits)
+            mask |= 1 << bit
+        return mask
 
 
 def _norm(text: str) -> str:
