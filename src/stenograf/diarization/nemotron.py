@@ -23,6 +23,7 @@ because the extra slots it removes are headset crosstalk (``eval/README.md``).
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import math
@@ -35,7 +36,13 @@ import numpy as np
 
 from stenograf import assets
 from stenograf.audio import to_float32
-from stenograf.diarization.base import DiarizationResult, Diarizer, SpeakerTurn
+from stenograf.diarization.base import (
+    DiarizationResult,
+    DiarizationStream,
+    Diarizer,
+    Reader,
+    SpeakerTurn,
+)
 from stenograf.diarization.embedding import VoiceEmbedder
 
 N_FFT = 512
@@ -92,7 +99,32 @@ def num_mel_frames(num_samples: int) -> int:
     return num_samples // HOP + 1
 
 
-def log_mel(audio: np.ndarray, start: int = 0, stop: int | None = None) -> np.ndarray:
+def final_mel_frames(num_samples: int) -> int:
+    """How many leading mel frames of a recording still being captured are
+    already what they will be in the finished one.
+
+    Frame t reads samples up to ``t*HOP + N_FFT/2 - 1``, so it is complete
+    once that sample exists — and then it is never the finished recording's
+    last frame, the one the reference zeroes and masks (that one starts at or
+    after the final sample)."""
+    return max(0, (num_samples - N_FFT // 2) // HOP + 1)
+
+
+def _sample_span(start: int, stop: int, num_samples: int) -> tuple[int, int]:
+    """The samples mel frames ``[start, stop)`` read: their STFT windows plus
+    the one before, which feeds the first window's preemphasis."""
+    lo = max(start * HOP - N_FFT // 2 - 1, 0)
+    return lo, max(lo, min((stop - 1) * HOP + N_FFT // 2, num_samples))
+
+
+def log_mel(
+    audio: np.ndarray,
+    start: int = 0,
+    stop: int | None = None,
+    *,
+    offset: int = 0,
+    num_samples: int | None = None,
+) -> np.ndarray:
     """Log-mel features of mel frames ``[start, stop)`` of float32 ``audio``.
 
     Frame for frame what the reference extractor computes over the whole
@@ -101,8 +133,15 @@ def log_mel(audio: np.ndarray, start: int = 0, stop: int | None = None) -> np.nd
     each step's frames on demand instead of holding a channel's features
     (~2 GB of STFT frames per meeting-hour if built at once). Matches the
     reference to 3e-4 at worst, 1e-7 on average, 90 % of values bit-equal
-    (2026-11-15, one 14-min AMI channel); the parity test holds a fixture."""
-    total = num_mel_frames(len(audio))
+    (2026-11-15, one 14-min AMI channel); the parity test holds a fixture.
+
+    ``audio`` may be a window of a longer recording: it then starts at sample
+    ``offset`` of a recording ``num_samples`` long and must cover
+    :func:`_sample_span` of the frames asked for. The values do not depend on
+    which window holds them — only on the frame range, which picks the
+    matrix shapes the BLAS kernels see."""
+    num_samples = len(audio) + offset if num_samples is None else num_samples
+    total = num_mel_frames(num_samples)
     stop = total if stop is None else min(stop, total)
     if stop <= start:
         return np.zeros((0, NUM_MELS), dtype=np.float32)
@@ -110,10 +149,10 @@ def log_mel(audio: np.ndarray, start: int = 0, stop: int | None = None) -> np.nd
     # zeros outside the signal (centered STFT, constant padding).
     lo, hi = start * HOP - N_FFT // 2, (stop - 1) * HOP + N_FFT // 2
     padded = np.zeros(hi - lo, dtype=np.float32)
-    a, b = max(lo, 0), min(hi, len(audio))
+    a, b = max(lo, 0), min(hi, num_samples)
     if b > a:
         tap = 1 if a > 0 else 0  # the sample before the range feeds its first preemphasis
-        x = np.asarray(audio[a - tap : b], dtype=np.float32)
+        x = np.asarray(audio[a - tap - offset : b - offset], dtype=np.float32)
         emphasized = x[tap:].copy()
         emphasized[1 - tap :] -= np.float32(PREEMPHASIS) * x[: len(x) - 1]
         padded[a - lo : b - lo] = emphasized
@@ -286,32 +325,112 @@ class SpeakerCache:
         return embeds[frame], probs[frame]
 
 
-def speaker_probabilities(session: Any, cfg: Config, audio: np.ndarray) -> np.ndarray:
-    """Offline inference over a whole recording: float32 16 kHz ``audio`` →
-    (mel frames, num_speakers) probabilities, one row per 10 ms. ``session`` is
-    an ``onnxruntime.InferenceSession`` over the export (tests pass a double)."""
-    factor = cfg.subsampling
-    num_mel = num_mel_frames(len(audio))
-    num_embeds = math.ceil(num_mel / factor)
-    mel_mask = np.arange(num_mel) < num_mel - 1
-    embed_mask = mel_mask.astype(np.int64)[::factor]
-    cache = SpeakerCache(cfg)
-    chunks = []
-    for start in range(0, num_embeds, cfg.chunk):
+class ChunkLoop:
+    """Nemotron's offline chunk loop, as state that can stop and resume.
+
+    Every step attends to the speaker cache the step before it wrote, so the
+    steps run strictly in order — but a step's own inputs (its features and
+    attention mask) depend only on audio up to the end of its right context.
+    Only the recording's end changes anything: the reference masks the
+    finished recording's last mel frame and truncates the final chunk. So a
+    meeting can run every step whose inputs are already final while it is
+    still being recorded (:meth:`advance`), and only the rest once it ends
+    (:meth:`finish`): the same steps on the same inputs in the same order —
+    the probabilities are bit-identical to running them all at the end
+    (``eval/README.md``, 2026-11-17). :func:`speaker_probabilities` is this
+    loop run in one go, so the two paths cannot drift apart.
+
+    Holds the cache (~1.4 MB) and every finished step's logits (~11 MB per
+    audio-hour, the size of the result itself)."""
+
+    def __init__(self, cfg: Config) -> None:
+        self.cfg = cfg
+        self.cache = SpeakerCache(cfg)
+        self._logits: list[np.ndarray] = []
+        self.next_frame = 0
+        """First encoder frame of the next step."""
+        self.broken = False
+        """A step failed after it began writing the cache, so this state is no
+        longer the loop's: start over."""
+
+    def samples_needed(self) -> int:
+        """Samples a recording still being captured must hold before the next
+        step's inputs are final (:func:`final_mel_frames` inverted)."""
+        cfg = self.cfg
+        frames = (self.next_frame + cfg.chunk + cfg.right) * cfg.subsampling
+        return (frames - 1) * HOP + N_FFT // 2
+
+    def ready(self, num_samples: int) -> bool:
+        return num_samples >= self.samples_needed()
+
+    def steps_left(self, num_samples: int) -> int:
+        """Steps :meth:`finish` would run on a finished ``num_samples``-long recording."""
+        num_embeds = math.ceil(num_mel_frames(num_samples) / self.cfg.subsampling)
+        return max(0, math.ceil((num_embeds - self.next_frame) / self.cfg.chunk))
+
+    def advance(
+        self,
+        session: Any,
+        read: Reader,
+        num_samples: int,
+        limit: int | None = None,
+        run_options: Any = None,
+    ) -> int:
+        """Run up to ``limit`` steps that ``num_samples`` of a still-growing
+        recording already determine; returns how many ran. A step the session
+        raises in (``run_options.terminate``) leaves the loop as it was."""
+        ran = 0
+        while (limit is None or ran < limit) and self.ready(num_samples):
+            self._step(session, read, num_samples, ended=False, run_options=run_options)
+            ran += 1
+        return ran
+
+    def finish(self, session: Any, read: Reader, num_samples: int) -> np.ndarray:
+        """Run the remaining steps of the finished ``num_samples``-long
+        recording → (mel frames, num_speakers) probabilities."""
+        num_mel = num_mel_frames(num_samples)
+        while self.next_frame < math.ceil(num_mel / self.cfg.subsampling):
+            self._step(session, read, num_samples, ended=True)
+        return _sigmoid(np.concatenate(self._logits, 0)[:num_mel])
+
+    def _step(
+        self,
+        session: Any,
+        read: Reader,
+        num_samples: int,
+        *,
+        ended: bool,
+        run_options: Any = None,
+    ) -> None:
+        cfg = self.cfg
+        factor = cfg.subsampling
+        start = self.next_frame
+        if ended:
+            num_mel = num_mel_frames(num_samples)
+            num_embeds = math.ceil(num_mel / factor)
+        else:  # the recording reaches past this step's right context
+            num_mel = None
+            num_embeds = start + cfg.chunk + cfg.right
         end = min(start + cfg.chunk, num_embeds)
         context_start = max(start - cfg.left, 0)
         num_lookback = start - context_start
+        mel_start, mel_stop = context_start * factor, min(end + cfg.right, num_embeds) * factor
+        lo, hi = _sample_span(mel_start, mel_stop, num_samples)
         step_features = log_mel(
-            audio, context_start * factor, min(end + cfg.right, num_embeds) * factor
+            read(lo, hi), mel_start, mel_stop, offset=lo, num_samples=num_samples
         )
         if len(step_features) % factor:  # the reference zero-pads the last frame group
             pad = factor - len(step_features) % factor
             step_features = np.pad(step_features, ((0, pad), (0, 0)))
-        cached = cache.frames()
+        cached = self.cache.frames()
         num_step = len(step_features) // factor
-        step_mask = np.concatenate(
-            [np.ones(len(cached), np.int64), embed_mask[context_start : context_start + num_step]]
-        )
+        # Per encoder frame, sampled from the mel mask at each group's first
+        # frame; only the finished recording's last mel frame is invalid.
+        groups = np.arange(context_start, context_start + num_step) * factor
+        chunk_mask = (
+            np.ones(num_step, np.int64) if num_mel is None else (groups < num_mel - 1)
+        ).astype(np.int64)
+        step_mask = np.concatenate([np.ones(len(cached), np.int64), chunk_mask])
         logits, chunk_embeds, silence = session.run(
             None,
             {
@@ -319,20 +438,32 @@ def speaker_probabilities(session: Any, cfg: Config, audio: np.ndarray) -> np.nd
                 "cached_embeds": cached[None],
                 "attention_mask": step_mask[None],
             },
+            run_options,
         )
         logits = np.asarray(logits[0], dtype=np.float32)
         step_embeds = np.concatenate([cached, np.asarray(chunk_embeds[0], np.float32)], 0)
-        cache.update(
-            step_embeds,
-            logits,
-            np.asarray(silence, np.float32),
-            end - start,
-            num_lookback,
-            step_mask,
-        )
         first = (len(cached) + num_lookback) * factor
-        chunks.append(logits[first : first + (end - start) * factor])
-    return _sigmoid(np.concatenate(chunks, 0)[:num_mel])
+        try:
+            self.cache.update(
+                step_embeds,
+                logits,
+                np.asarray(silence, np.float32),
+                end - start,
+                num_lookback,
+                step_mask,
+            )
+        except BaseException:
+            self.broken = True
+            raise
+        self._logits.append(logits[first : first + (end - start) * factor])
+        self.next_frame = end
+
+
+def speaker_probabilities(session: Any, cfg: Config, audio: np.ndarray) -> np.ndarray:
+    """Offline inference over a whole recording: float32 16 kHz ``audio`` →
+    (mel frames, num_speakers) probabilities, one row per 10 ms. ``session`` is
+    an ``onnxruntime.InferenceSession`` over the export (tests pass a double)."""
+    return ChunkLoop(cfg).finish(session, lambda lo, hi: audio[lo:hi], len(audio))
 
 
 def turns_from_probs(probs: np.ndarray, num_speakers: int | None = None) -> list[SpeakerTurn]:
@@ -363,6 +494,101 @@ def turns_from_probs(probs: np.ndarray, num_speakers: int | None = None) -> list
     return turns
 
 
+class _Models:
+    """The export's config and its two sessions, loaded on first use and
+    shared by a diarizer and every stream it opened.
+
+    The offline session runs at ORT's default thread count: at the stop the
+    chunk loop is all that is left to wait for, and intra-op threads are its
+    only parallelism (each step reads the cache the step before wrote). The
+    streaming session runs on ONE thread, on the streamer's background-QoS
+    thread, which lands it on the efficiency cores: 0.19 J per step against
+    1.4 J for the cheapest P-core arm, at ~10 % of one E-core per channel
+    (M4 Max, 2026-11-17, ``eval/README.md``). ORT's own pool threads do not
+    inherit that QoS, so any second thread drags part of every step back to
+    the P-cores. The two sessions give the same probabilities to within
+    2.4e-8, so a loop may switch between them between steps (see
+    :meth:`_session` for the one difference)."""
+
+    def __init__(self, model_dir: Path | None, progress: assets.ProgressHook | None) -> None:
+        self._model_dir = model_dir
+        self._progress = progress
+        self._lock = threading.Lock()
+        self._config: Config | None = None
+        self._offline: Any = None
+        self._stream: Any = None
+        self._stream_users = 0
+
+    def _paths(self, *, fetch: bool) -> tuple[Path, Path] | None:
+        if self._model_dir is not None:
+            return self._model_dir / "model.onnx", self._model_dir / "config.json"
+        if not fetch:
+            found = [assets.cached_path(asset) for asset in assets.NEMOTRON]
+            if any(path is None for path in found):
+                return None
+            graph, _, config = found
+        else:
+            graph, _, config = (assets.fetch(asset, self._progress) for asset in assets.NEMOTRON)
+        assert graph is not None and config is not None
+        return graph, config
+
+    def config(self, *, fetch: bool = True) -> Config | None:
+        """The chunking policy; ``fetch=False`` answers ``None`` rather than
+        download the model (a meeting never downloads mid-recording)."""
+        if self._config is None:
+            paths = self._paths(fetch=fetch)
+            if paths is None:
+                return None
+            with self._lock:
+                if self._config is None:
+                    self._config = Config.load(paths[1])
+        return self._config
+
+    def _session(self, *, threads: int | None, prepack: bool) -> Any:
+        import onnxruntime
+
+        paths = self._paths(fetch=True)
+        assert paths is not None
+        options = onnxruntime.SessionOptions()
+        if threads is not None:
+            options.intra_op_num_threads = threads
+        if not prepack:
+            # The streaming session is resident for the whole meeting and holds
+            # 0.4 GB less without prepacked weights. The price is another GEMM
+            # kernel for the final, shorter chunk: up to 2.4e-8 in 49 of 625,649
+            # frames, turns identical, on a 104-min meeting; 2.9- and 25-min
+            # meetings stayed bit-identical (2026-11-17). The offline session
+            # keeps prepacking, so a file transcribe is unchanged.
+            options.add_session_config_entry("session.disable_prepacking", "1")
+        return onnxruntime.InferenceSession(
+            str(paths[0]), options, providers=["CPUExecutionProvider"]
+        )
+
+    def offline(self) -> tuple[Any, Config]:
+        config = self.config()
+        assert config is not None
+        if self._offline is None:
+            with self._lock:
+                if self._offline is None:
+                    self._offline = self._session(threads=None, prepack=True)
+        return self._offline, config
+
+    def acquire_stream(self) -> Any:
+        """The streaming session, held until every acquirer released it."""
+        with self._lock:
+            if self._stream is None:
+                self._stream = self._session(threads=1, prepack=False)
+            self._stream_users += 1
+            return self._stream
+
+    def release_stream(self) -> None:
+        with self._lock:
+            self._stream_users -= 1
+            if self._stream_users <= 0:
+                self._stream_users = 0
+                self._stream = None
+
+
 class NemotronDiarizer(Diarizer):
     """Nemotron's turns, voices from the shared :class:`VoiceEmbedder`.
 
@@ -376,41 +602,16 @@ class NemotronDiarizer(Diarizer):
         embedder: VoiceEmbedder | None = None,
         progress: assets.ProgressHook | None = None,
     ) -> None:
-        self._model_dir = model_dir
-        self._progress = progress
         self.embedder = embedder if embedder is not None else VoiceEmbedder(progress=progress)
-        self._session = None
-        self._config: Config | None = None
-        self._init_lock = threading.Lock()
-
-    def _load(self):
-        # The chunk loop is sequential (each step reads the cache the previous
-        # one wrote), so intra-op threads are its only parallelism: ORT's
-        # default, which the measured 15 s per audio-hour used (M4 Max, fp32,
-        # onnxruntime 1.32).
-        if self._session is None:
-            with self._init_lock:
-                if self._session is None:
-                    import onnxruntime
-
-                    if self._model_dir is not None:
-                        graph = self._model_dir / "model.onnx"
-                        config = self._model_dir / "config.json"
-                    else:
-                        graph, _, config = (
-                            assets.fetch(asset, self._progress) for asset in assets.NEMOTRON
-                        )
-                    self._config = Config.load(config)
-                    self._session = onnxruntime.InferenceSession(
-                        str(graph), providers=["CPUExecutionProvider"]
-                    )
-        assert self._config is not None
-        return self._session, self._config
+        self._models = _Models(model_dir, progress)
 
     def probabilities(self, samples: np.ndarray) -> np.ndarray:
         """(10-ms frames, slots) speaker probabilities of mono 16 kHz PCM."""
-        session, config = self._load()
+        session, config = self._models.offline()
         return speaker_probabilities(session, config, to_float32(samples))
+
+    def stream(self) -> NemotronStream:
+        return NemotronStream(self)
 
     def diarize(self, samples: np.ndarray, num_speakers: int | None = None) -> list[SpeakerTurn]:
         if len(samples) < HOP:  # no valid mel frame: nothing for the model to score
@@ -427,3 +628,98 @@ class NemotronDiarizer(Diarizer):
         self, samples: np.ndarray, turns: list[SpeakerTurn]
     ) -> np.ndarray | None:
         return self.embedder.channel_embedding(samples, turns)
+
+
+STREAM_TAIL_STEPS = 4
+"""Most steps the stop finishes on the streaming session. More means the
+stream fell behind, and the offline session's threads win back their load:
+one step costs 0.29 s on one P-core against 0.13 s on ORT's default threads
+(M4 Max, 2026-11-17)."""
+
+
+class NemotronStream(DiarizationStream):
+    """One channel's :class:`ChunkLoop`, advanced while the meeting records.
+
+    Opening the stream loads the streaming session, on the opening thread —
+    the meeting's, at its start. Created on the streamer's background thread
+    instead, the session held the interpreter lock for 0.7–1.8 s on an
+    efficiency core, stalling capture and captions with it; on the meeting's
+    thread it takes 0.12 s, and a step afterwards blocks other threads for
+    under 10 ms (M4 Max, 2026-11-17). It loads only from the model cache: a
+    meeting never downloads, and without the model the stream does nothing.
+    :meth:`finish` runs what is left and falls back to the offline loop from
+    the start if the streamed state is unusable, so a stream can only ever
+    make the stop faster, never lose its result."""
+
+    def __init__(self, diarizer: NemotronDiarizer) -> None:
+        self._diarizer = diarizer
+        self._models = diarizer._models
+        self._session: Any = None
+        self._run_options: Any = None
+        self._interrupted = False
+        config = self._models.config(fetch=False)
+        self._loop = ChunkLoop(config) if config is not None else None
+        if self._loop is not None:
+            import onnxruntime
+
+            self._run_options = onnxruntime.RunOptions()
+            self._session = self._models.acquire_stream()
+
+    def samples_needed(self) -> int | None:
+        if self._loop is None or self._loop.broken or self._session is None:
+            return None
+        return self._loop.samples_needed()
+
+    def advance(self, read: Reader, num_samples: int, limit: int | None = None) -> int:
+        needed = self.samples_needed()
+        if self._interrupted or needed is None or num_samples < needed:
+            return 0
+        assert self._loop is not None
+        return self._loop.advance(self._session, read, num_samples, limit, self._run_options)
+
+    def interrupt(self) -> None:
+        self._interrupted = True
+        if self._run_options is not None:
+            self._run_options.terminate = True
+
+    def resumed(self) -> Diarizer:
+        return _ResumedNemotron(self)
+
+    def finish(self, audio: np.ndarray) -> np.ndarray:
+        """Probabilities of the channel's finished float32 ``audio``."""
+        read: Reader = lambda lo, hi: audio[lo:hi]  # noqa: E731
+        loop = self._loop
+        try:
+            # A loop already past the audio's end did not stream this audio.
+            if loop is not None and loop.next_frame * loop.cfg.subsampling * HOP <= len(audio):
+                session = self._session
+                if session is None or loop.steps_left(len(audio)) > STREAM_TAIL_STEPS:
+                    self.close()  # the two sessions never stack
+                    session = self._models.offline()[0]
+                with contextlib.suppress(Exception):  # the offline loop below is the backstop
+                    if not loop.broken:
+                        return loop.finish(session, read, len(audio))
+            self.close()
+            session, config = self._models.offline()
+            return speaker_probabilities(session, config, audio)
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if self._session is not None:
+            self._session = None
+            self._models.release_stream()
+
+
+class _ResumedNemotron(NemotronDiarizer):
+    """A diarizer whose probabilities finish one stream's loop; voices and
+    sessions are its parent's."""
+
+    def __init__(self, stream: NemotronStream) -> None:
+        parent = stream._diarizer
+        self.embedder = parent.embedder
+        self._models = parent._models
+        self._stream = stream
+
+    def probabilities(self, samples: np.ndarray) -> np.ndarray:
+        return self._stream.finish(to_float32(samples))

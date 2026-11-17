@@ -1510,6 +1510,138 @@ needs it, unloads the ASR, then diarizes. Re-measured through the real
 11.2 → 7.9 GB, wall unchanged (180 s), and the transcript identical entry for
 entry (speaker, start, text) to the run before the change.
 
+#### The chunk loop runs during the meeting (2026-11-17)
+
+M4 Max (12 P + 4 E cores), 48 GB, macOS 27.2, onnxruntime 1.27.0, mains. A
+live meeting now runs every Nemotron step whose features and attention mask
+can no longer change (`ChunkLoop` in `diarization/nemotron.py`) on a
+background thread while it records; the stop runs only the last one or two
+steps. Every step reads only audio already in the append-only store, and the
+offline `speaker_probabilities` is the same loop run in one go.
+
+**Bit-identity**, the production path (`NemotronDiarizer().stream()`, fed in
+0.5 s blocks, finished by `resumed()`), against the offline loop as shipped
+before the change (ORT's default threads), from each meeting's stored
+`audio.opus`:
+
+| meeting | channel | steps streamed / left at the stop | probabilities | turns |
+|---|---|---|---|---|
+| 2.9 min, mic nearly silent (1 % of seconds active) | mic, system | 6 / 1 each | bit-identical | identical |
+| 22.9 min, system nearly silent (4 %) | mic, system | 50 / 1 each | bit-identical | identical |
+| 25.4 min, both active | mic, system | 55 / 1 each | bit-identical | identical |
+| 104.3 min | mic, system | 229 / 2 each | bit-identical | identical |
+
+Through `MeetingRecorder.finalize` on the 104-min meeting (live words reused,
+re-ID on the real profile store), the transcript is identical entry for entry
+(465 × speaker, start, end, text), and so are the detected counts, the
+profile names and every voice embedding, bit for bit. Every thread count
+from 1 to 16 gave bit-identical probabilities (2.9-min meeting; the 1-thread
+session on all eight channels above), which is what lets the stream use a
+one-thread session and the stop switch to the offline one between steps.
+The streaming session runs with weight prepacking off
+(`session.disable_prepacking`), traded for memory after the table above:
+every streamed step still matches, but the final, shorter chunk takes a
+different GEMM kernel. Against the offline loop as shipped before the change,
+streamed with prepacking off and fed in 0.1–31 s blocks: the 2.9- and 25.4-min
+meetings bit-identical on both channels; the 104-min meeting up to 2.4e-8
+(mic) and 3.3e-9 (system) in 49 of 625,649 frames, turns identical with no
+count and with a count of 2. The session's peak footprint after 13 real steps
+drops 3.15–3.17 → 2.77 GB (two fresh processes per arm), and a step costs the
+same, 0.20 against 0.21–0.24 J, still 0 % on the P-cores. The offline session
+keeps prepacking, so a file transcribe is unchanged. The memory arena off
+alone is bit-identical and saves 0.02 GB, not worth a switch.
+
+**The stop** of the 104-min meeting (`MeetingRecorder.finalize`, live words
+reused, embedder warm, footprint from `proc_pid_rusage`):
+
+| | the stop | footprint when it starts | process peak |
+|---|---|---|---|
+| offline, as before (session loaded at the stop) | 76.2, 76.1, 74.2 s | 5.5–5.6 GB | 6.7–7.4 GB |
+| streamed | 11.1, 10.9, 10.3 s | 4.4 GB | 6.4 GB |
+
+About 9 s of the streamed stop is the voice embeddings; the two remaining
+steps take 0.4 s per channel. One more streamed run took 118 s, on a machine
+that was busy at the time (its streamed phase ran 171 s at 85 % P-core where
+the quiet runs took 128 s at 100 %); not reproduced in three reruns, cause
+unknown.
+
+**Energy per step**, by session configuration: one process per arm, 8
+warm-up steps then 30 timed steps at one step every 2 s (or twice the step
+time, if longer), so every step starts from idle as in a meeting; CPU energy
+of the process from `proc_pid_rusage` (`ri_energy_nj`), time on P-cores from
+`ri_*_ptime`; two interleaved repetitions. A channel takes one step per
+27.2 s of audio, 132 per audio-hour.
+
+| threads | spin-wait | thread QoS | step | on P-cores | J / step | J / audio-hour / channel |
+|---|---|---|---|---|---|---|
+| default (16) | on | default | 0.15 s | 87 % | 3.68, 3.56 | 479 |
+| default (16) | off | default | 0.14 s | 99 % | 1.70, 1.66 | 222 |
+| 12 | on | default | 0.14 s | 90 % | 5.03, 4.40 | 625 |
+| 12 | off | default | 0.13 s | 98 % | 1.69, 1.69 | 223 |
+| 4 | on | default | 0.23 s | 78 % | 3.53, 3.50 | 466 |
+| 4 | off | default | 0.16 s | 99 % | 1.52, 1.52 | 201 |
+| 2 | on | default | 0.17 s | 98 % | 1.46, 1.43 | 192 |
+| 2 | off | default | 0.20 s | 99 % | 1.41, 1.41 | 187 |
+| 1 | – | default | 0.29 s | 99 % | 1.40, 1.40 | 186 |
+| 1 | – | utility | 0.28 s | 98 % | 1.41, 1.40 | 186 |
+| default (16) | off | background | 0.33 s | 72 % | 1.03, 0.97 | 132 |
+| 4 | on | background | 0.51 s | 72 % | 6.36, 7.56 | 921 |
+| 4 | off | background | 0.57 s | 53 % | 0.72, 0.71 | 94 |
+| 2 | off | background | 1.04 s | 22 % | 0.53, 0.44 | 64 |
+| **1** | – | **background** | **2.6 s** | **0 %** | **0.20, 0.18** | **25** |
+| 1, four steps per wake-up | – | background | 2.3 s | 0 % | 0.22, 0.23 | 30 |
+
+Shipped: one thread at background QoS. Only background QoS reaches the
+efficiency cores (utility stays on the P-cores), and ORT's own pool threads
+do not inherit it, so every second thread drags part of each step back to
+the P-cores; with spin-waiting on that thread burns its wait there too.
+Batching four steps per wake-up saves nothing. Both channels together then
+cost 0.014 W during a meeting against 0.27 W for the session the stop used
+(default threads, spin on), next to the live pipeline's ~0.6 W; each
+channel keeps one efficiency core ~10 % busy.
+
+Cross-checked at system level, because `ri_energy_nj` is the kernel's model:
+steps back to back for 30 s, alternating with 30 s idle, four pairs,
+`powermetrics --samplers cpu_power` over every window. One thread on a
+P-core: 3.3 W net by powermetrics against 5.9 W by the kernel model, so the
+model overstates P-core energy ~1.8×. One thread at background QoS: 0.08 W by
+the kernel model, and 0.09 W net by powermetrics in the one pair whose idle
+windows held still (idle drifted 0.3–1.5 W between windows, so the median of
+all four, 0.02 W, is noise). The ranking holds at either scale: the shipped
+arm is at least 4× cheaper per step than any P-core arm, 7× by the model.
+The idle machine's drift is also why the duty-cycle arms above are not
+measured by powermetrics: a 0.2 J step every 2 s is below it.
+
+**The live meeting** (`steno start --replay` paced, the first 10 min of the
+104-min meeting, `--diarization`, no counts, so both channels stream; once
+with streaming and once with `_open_streams` stubbed out, everything else
+identical; footprint sampled 4×/s plus the kernel's lifetime maximum):
+
+| | live-phase peak (sampled / kernel max) | steady, minutes 4–9 | the stop |
+|---|---|---|---|
+| without streaming | 5.32 / 5.51 GB | 4.24 GB | 6.8 s |
+| streaming, prepacking on | 5.58 / 5.99 GB | 4.66 GB | 1.2 s |
+
+Both runs: no load-shedding (0.0 s on either channel), the same 14 caption
+lines arriving at the same replay time (a constant +0.34 s, the second run's
+slower model load), 42 streamed steps (21 per channel, as 600 s allows), the
+transcript identical entry for entry with the same four speakers and
+voiceprints. The first streaming run loaded its session lazily on the
+background thread at the first step: the sampler thread then stalled 1.75 s,
+and a 5-ms ticker measured the session creation blocking every other Python
+thread for up to 0.68 s on an efficiency core (0.12 s on the meeting's
+thread, the GIL held throughout); the steps after it block other threads
+under 10 ms (p99 1.3 ms). Shipped: the stream opens, and loads, at the start
+of the meeting on the meeting's thread — the run in the table, whose only
+sampler stall (0.76 s) falls inside the model loading at meeting start, where
+the ASR load already holds the lock. Streaming costs the meeting ~0.4 GB
+resident throughout and 0.3–0.5 GB of peak; on the 104-min stop it saves
+~1 GB of peak instead, since the stop no longer loads the 1.8 GB offline
+session. One 10-min excerpt — a lead for longer meetings, not a law. These
+runs had prepacking on; the 0.4 GB it costs the session is what
+prepacking off removes, so the shipped meeting's overhead is expected near
+zero — inferred from the session's own footprint, not re-run as a meeting.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

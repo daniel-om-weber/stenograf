@@ -4,7 +4,8 @@ and the chunk loop's step inputs.
 The front end's parity fixture (``tests/data/nemotron_logmel.npz``) holds the
 reference processor's output, written by ``eval/nemotron_arm.py fixture``, so
 these need no torch. The chunk loop is checked against the held-out set by the
-eval harness; here a fake session pins what each step feeds the model. One
+eval harness; here a fake session pins what each step feeds the model, and
+that the loop run while audio arrives equals the loop run at the end. One
 real-model test runs only where the assets are cached.
 """
 
@@ -17,12 +18,16 @@ import pytest
 
 from stenograf import assets
 from stenograf.config import MAX_SPEAKERS
+from stenograf.diarization import nemotron
 from stenograf.diarization.base import SpeakerTurn
 from stenograf.diarization.nemotron import (
     HOP,
     NUM_MELS,
+    STREAM_TAIL_STEPS,
+    ChunkLoop,
     Config,
     NemotronDiarizer,
+    final_mel_frames,
     log_mel,
     num_mel_frames,
     speaker_probabilities,
@@ -116,7 +121,7 @@ class _FakeSession:
         self.cfg = cfg
         self.steps: list[dict[str, np.ndarray]] = []
 
-    def run(self, outputs, feeds):
+    def run(self, outputs, feeds, run_options=None):
         self.steps.append(feeds)
         features = feeds["input_features"][0]
         num_cached = feeds["cached_embeds"].shape[1]
@@ -125,7 +130,7 @@ class _FakeSession:
         logits[num_cached * self.cfg.subsampling :, 0] = features.mean(1)
         logits[num_cached * self.cfg.subsampling :, 1] = -features.mean(1)
         chunk = np.repeat(features[:: self.cfg.subsampling, :1], 512, axis=1)
-        return logits[None], chunk[None], np.ones((1, 512), np.float32)
+        return logits[None], chunk[None], np.ones(512, np.float32)
 
 
 @pytest.mark.parametrize(
@@ -153,6 +158,189 @@ def test_chunk_loop_masks_per_encoder_frame_and_covers_every_mel_frame(num_sampl
     assert all(f["attention_mask"][0][:-1].all() for f in session.steps)
     # The cache filled and was compressed along the way.
     assert max(f["cached_embeds"].shape[1] for f in session.steps) > _CONFIG.fifo_length
+
+
+def _streamed(session, cfg: Config, audio: np.ndarray, sizes) -> tuple[np.ndarray, int]:
+    """The loop advanced as ``audio`` arrives in blocks of ``sizes`` samples
+    (cycled), then finished; returns the probabilities and the steps streamed."""
+    loop = ChunkLoop(cfg)
+    read = lambda lo, hi: audio[lo:hi]  # noqa: E731
+    n, i, streamed = 0, 0, 0
+    while n < len(audio):
+        n = min(len(audio), n + sizes[i % len(sizes)])
+        i += 1
+        streamed += loop.advance(session, read, n)
+    return loop.finish(session, read, len(audio)), streamed
+
+
+@pytest.mark.parametrize(
+    "sizes",
+    [
+        [8000],  # the 0.5 s blocks a meeting's frames add up to
+        [HOP * 8 * 4 - 1, HOP * 8 * 4 + 1],  # just under / over one chunk, alternating
+        [1],  # every sample: each step runs at the first sample that allows it
+        [37, 4999, 160, 1281],
+    ],
+)
+def test_loop_streamed_as_audio_arrives_equals_the_loop_at_the_end(sizes):
+    rng = np.random.default_rng(7)
+    audio = (rng.standard_normal(5 * 16000 + 123) * 0.1).astype(np.float32)
+    want = speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio)
+    got, streamed = _streamed(_FakeSession(_CONFIG), _CONFIG, audio, sizes)
+    assert np.array_equal(got, want)
+    # Most steps ran before the end; only the chunks touching it waited.
+    total = ChunkLoop(_CONFIG).steps_left(len(audio))
+    assert streamed >= total - 2
+
+
+def test_a_step_runs_exactly_when_its_inputs_are_final():
+    rng = np.random.default_rng(3)
+    audio = (rng.standard_normal(4 * 16000) * 0.1).astype(np.float32)
+    session = _FakeSession(_CONFIG)
+    loop = ChunkLoop(_CONFIG)
+    needed = loop.samples_needed()
+    assert not loop.ready(needed - 1) and loop.ready(needed)
+    frames = (_CONFIG.chunk + _CONFIG.right) * _CONFIG.subsampling
+    assert final_mel_frames(needed) == frames and final_mel_frames(needed - 1) == frames - 1
+    # Run with exactly that much audio and nothing beyond it in memory: the
+    # step's features match the offline loop's first step.
+    loop.advance(session, lambda lo, hi: audio[:needed][lo:hi], needed)
+    offline = _FakeSession(_CONFIG)
+    speaker_probabilities(offline, _CONFIG, audio)
+    for key in ("input_features", "cached_embeds", "attention_mask"):
+        assert np.array_equal(session.steps[0][key], offline.steps[0][key])
+
+
+class _Sessions:
+    """Stands in for onnxruntime: hands out fake sessions, noting which
+    kind (``threads``) each was."""
+
+    def __init__(self) -> None:
+        self.made: list[int | None] = []
+        self.runs: dict[int | None, int] = {}
+        self.prepack: dict[int | None, bool] = {}
+
+    def __call__(self, *, threads: int | None, prepack: bool):
+        self.made.append(threads)
+        self.prepack[threads] = prepack
+        sessions = self
+
+        class Session(_FakeSession):
+            def run(self, outputs, feeds, run_options=None):
+                if run_options is not None and run_options.terminate:
+                    raise RuntimeError("Exiting due to terminate flag being set to true.")
+                sessions.runs[threads] = sessions.runs.get(threads, 0) + 1
+                return super().run(outputs, feeds, run_options)
+
+        return Session(_CONFIG)
+
+
+@pytest.fixture
+def fake_models(monkeypatch):
+    sessions = _Sessions()
+
+    def diarizer() -> NemotronDiarizer:
+        d = NemotronDiarizer(embedder=_Embedder())  # pyright: ignore[reportArgumentType]
+        d._models._config = _CONFIG
+        monkeypatch.setattr(d._models, "_session", sessions)
+        return d
+
+    return diarizer, sessions
+
+
+def _audio(seconds: float = 6.0) -> np.ndarray:
+    rng = np.random.default_rng(11)
+    return (rng.standard_normal(int(seconds * 16000)) * 0.1).astype(np.float32)
+
+
+def _feed(stream, audio: np.ndarray, upto: int, block: int = 4000) -> int:
+    ran = 0
+    for n in range(block, upto + 1, block):
+        ran += stream.advance(lambda lo, hi: audio[lo:hi], n)
+    return ran
+
+
+def test_stream_finishes_the_tail_on_its_own_session(fake_models):
+    make, sessions = fake_models
+    d = make()
+    audio = _audio()
+    want = speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio)
+    stream = d.stream()
+    assert sessions.made == [1]  # one thread, loaded as the stream opens
+    assert _feed(stream, audio, len(audio)) > 0
+    turns = stream.resumed().diarize(audio)
+    assert turns == turns_from_probs(want)
+    assert np.array_equal(stream.finish(audio), want)  # finishing twice: the same
+    assert sessions.made == [1, None]  # ... on the offline session; the stream's is gone
+    assert d._models._stream is None and d._models._stream_users == 0
+    # Only the meeting-long streaming session drops prepacked weights.
+    assert sessions.prepack == {1: False, None: True}
+
+
+def test_stream_short_of_its_first_step_finishes_on_its_session(fake_models):
+    make, sessions = fake_models
+    stream = make().stream()
+    audio = _audio(0.4)  # the tiny config's first step needs 48 mel frames, 0.48 s
+    assert _feed(stream, audio, len(audio), block=800) == 0
+    probs = stream.resumed().probabilities(audio)
+    assert np.array_equal(probs, speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio))
+    assert sessions.made == [1]  # the whole loop is a tail: no offline session
+
+
+def test_stream_far_behind_finishes_on_the_offline_session(fake_models):
+    make, sessions = fake_models
+    stream = make().stream()
+    audio = _audio(12.0)
+    _feed(stream, audio, 16000)  # the streamer stalled after a second of audio
+    left = ChunkLoop(_CONFIG).steps_left(len(audio))
+    assert left > STREAM_TAIL_STEPS
+    before = sessions.runs.get(1, 0)
+    probs = stream.finish(audio)
+    assert np.array_equal(probs, speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio))
+    assert sessions.runs.get(1, 0) == before  # the rest ran offline, from where it stopped
+    assert sessions.runs[None] == left - before
+
+
+def test_interrupted_step_loses_nothing(fake_models):
+    make, _ = fake_models
+    stream = make().stream()
+    audio = _audio()
+    _feed(stream, audio, 3 * 16000)
+    stream.interrupt()  # the meeting stopped while a step was due
+    with pytest.raises(RuntimeError, match="terminate"):
+        stream._loop.advance(
+            stream._session, lambda lo, hi: audio[lo:hi], len(audio), 1, stream._run_options
+        )  # pyright: ignore[reportOptionalMemberAccess]
+    assert stream.advance(lambda lo, hi: audio[lo:hi], len(audio)) == 0  # starts no more
+    want = speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio)
+    assert np.array_equal(stream.finish(audio), want)
+
+
+def test_broken_stream_falls_back_to_the_offline_loop(fake_models, monkeypatch):
+    make, sessions = fake_models
+    stream = make().stream()
+    audio = _audio()
+    _feed(stream, audio, 3 * 16000)
+
+    def fail(*args, **kwargs):
+        raise MemoryError
+
+    with monkeypatch.context() as patch, pytest.raises(MemoryError):
+        patch.setattr(nemotron.SpeakerCache, "update", fail)
+        _feed(stream, audio, len(audio))
+    assert stream._loop is not None and stream._loop.broken
+    want = speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio)
+    assert np.array_equal(stream.finish(audio), want)
+    assert None in sessions.made  # recomputed from the start
+
+
+def test_stream_never_downloads(monkeypatch):
+    d = NemotronDiarizer(embedder=_Embedder())  # pyright: ignore[reportArgumentType]
+    monkeypatch.setattr(assets, "cached_path", lambda asset: None)
+    monkeypatch.setattr(assets, "fetch", lambda *a, **k: pytest.fail("downloaded mid-meeting"))
+    stream = d.stream()
+    assert stream.samples_needed() is None
+    assert stream.advance(lambda lo, hi: np.zeros(hi - lo, np.float32), 10 * 16000) == 0
 
 
 class _Embedder:

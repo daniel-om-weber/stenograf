@@ -24,8 +24,12 @@ text dedup at merge time is the backstop.
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import functools
+import os
 import re
 import signal
+import sys
 import threading
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator
@@ -50,7 +54,7 @@ from stenograf.config import (
     ResolvedParameters,
     resolve_value,
 )
-from stenograf.diarization.base import Diarizer, SpeakerTurn
+from stenograf.diarization.base import DiarizationStream, Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD
 from stenograf.live import StreamingUpdate, WindowedLiveDecoder
 from stenograf.pipeline import (
@@ -151,13 +155,18 @@ class SessionStore:
         O(window), not O(buffer) — this is the live pass's re-decode feed and is
         called every ~1–1.5 s, so it must never re-scan the whole session.
         """
+        end = None if end_s is None else round(end_s * SAMPLE_RATE)
+        return self.read(channel, round(start_s * SAMPLE_RATE), end)
+
+    def read(self, channel: Channel, start: int, end: int | None = None) -> np.ndarray:
+        """Samples ``[start, end)`` as mono 16 kHz float32 — :meth:`view` in
+        sample indices, clamped the same way."""
         with self._lock:
             chunks = self._chunks[channel]
             offsets = self._offsets[channel]
             length = self._lengths[channel]
-            start = max(0, min(round(start_s * SAMPLE_RATE), length))
-            end = length if end_s is None else round(end_s * SAMPLE_RATE)
-            end = max(start, min(end, length))
+            start = max(0, min(start, length))
+            end = length if end is None else max(start, min(end, length))
             if start >= end:
                 return np.zeros(0, dtype=np.float32)
             lo = bisect_right(offsets, start) - 1  # chunk containing `start`
@@ -167,9 +176,12 @@ class SessionStore:
         pcm = np.concatenate(selected)
         return to_float32(pcm[start - base : end - base])
 
-    def duration(self, channel: Channel) -> float:
+    def num_samples(self, channel: Channel) -> int:
         with self._lock:
-            return self._lengths[channel] / SAMPLE_RATE
+            return self._lengths[channel]
+
+    def duration(self, channel: Channel) -> float:
+        return self.num_samples(channel) / SAMPLE_RATE
 
 
 @dataclass(frozen=True)
@@ -424,6 +436,16 @@ def _shield_interrupt() -> Iterator[None]:
         signal.signal(signal.SIGINT, previous)
 
 
+@contextlib.contextmanager
+def _closing(streams: dict[Channel, DiarizationStream]) -> Iterator[None]:
+    """Release every diarization stream on the way out, however finalize ends."""
+    try:
+        yield
+    finally:
+        for stream in streams.values():
+            stream.close()
+
+
 OnUpdate = Callable[[Channel, StreamingUpdate], None]
 """Live-pass callback: a channel's newest committed words plus its provisional
 grey tail. ``LiveView.update`` (view.py) has this signature, so a view wires
@@ -480,6 +502,11 @@ class AudioBus:
             if watermark > self._marks[channel]:
                 self._marks[channel] = watermark
                 self._cond.notify_all()
+
+    def marks(self) -> dict[Channel, float]:
+        """The current per-channel watermarks, without waiting."""
+        with self._cond:
+            return dict(self._marks)
 
     def close(self) -> None:
         """Signal that no more audio is coming; wakes the worker one last time."""
@@ -705,9 +732,16 @@ class LiveWorker(threading.Thread):
         # Per-channel shed audio: a channel with any shed has a live-caption gap,
         # so the finalize pass must re-decode it instead of reusing live words.
         self.shed_by_channel: dict[Channel, float] = dict.fromkeys(channels, 0.0)
+        self._seen: dict[Channel, float] = dict.fromkeys(channels, 0.0)
+
+    def backlog(self) -> float:
+        """Seconds of stored audio not yet fed, on the furthest-behind channel
+        (read from other threads: the diarization streamer yields on it)."""
+        marks = self._bus.marks()
+        return max((marks[ch] - self._seen[ch] for ch in self._channels), default=0.0)
 
     def run(self) -> None:
-        seen: dict[Channel, float] = {ch: 0.0 for ch in self._channels}
+        seen = self._seen
         flushing = self._on_flush is not None and self._flush_interval > 0
         next_flush = self._flush_interval
         try:
@@ -767,6 +801,110 @@ class LiveWorker(threading.Thread):
     def _emit(self, channel: Channel, update: StreamingUpdate) -> None:
         if self._on_update is not None and (update.committed or update.interim):
             self._on_update(channel, update)
+
+
+STREAM_YIELD_BACKLOG_S = 2.0
+"""The live captions come first: while the ASR worker has more than this much
+stored audio it has not fed, the diarization streamer starts no step. A
+healthy worker stays below it (it feeds each frame batch as it lands); one
+heading toward its load-shed bound (a full decode window) gets every core."""
+
+_STREAM_RETRY_S = 1.0
+_STREAM_WAKE_MARGIN_S = 0.25
+
+
+def _lower_thread_priority() -> None:
+    """Run the calling thread, and any thread it starts, below everything
+    interactive — best effort, a no-op where the platform refuses.
+
+    macOS: background QoS, which the scheduler keeps on the efficiency cores;
+    a one-thread Nemotron step there costs 0.2 J against 1.4 J on a P-core
+    (M4 Max, 2026-11-17, ``eval/README.md``). Linux: SCHED_IDLE (runs only on
+    otherwise idle CPU time). Windows: background mode (lowest CPU, I/O and
+    memory priority). Neither of the last two is measured."""
+    with contextlib.suppress(Exception):
+        if sys.platform == "darwin":
+            libc = ctypes.CDLL("/usr/lib/libSystem.dylib")
+            libc.pthread_set_qos_class_self_np(0x09, 0)  # QOS_CLASS_BACKGROUND
+        elif sys.platform.startswith("linux"):
+            os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))  # 0 = this thread
+        elif sys.platform == "win32":
+            kernel32 = ctypes.WinDLL("kernel32")  # pyright: ignore[reportAttributeAccessIssue]
+            kernel32.SetThreadPriority(kernel32.GetCurrentThread(), 0x00010000)
+
+
+class DiarizationStreamer(threading.Thread):
+    """Runs each diarized channel's :class:`DiarizationStream` while the
+    meeting records, so the stop only diarizes the last half-minute.
+
+    A thread of its own, not a task on :class:`LiveWorker`: the worker is the
+    single *accelerator* thread and must never wait behind a CPU model, while
+    this one runs a one-thread ONNX session at the lowest priority the
+    platform offers. It never takes the inference lock, and it starts no step
+    while the worker is behind (:data:`STREAM_YIELD_BACKLOG_S`) — so it cannot
+    cause a load-shed — or once :meth:`halt` was called. Each step reads only
+    audio already in the append-only :class:`SessionStore`, so what it
+    computed stays valid however the meeting continues (mute zeroes frames
+    before they are stored; a device switch only appends).
+
+    It sleeps until the audio the next step needs should have arrived — about
+    one wake per step, every 27 s per channel — rather than on the frame bus.
+    A stream that raises is dropped (its error kept in :attr:`errors`); the
+    stop then diarizes that channel from wherever the stream got to."""
+
+    def __init__(
+        self,
+        store: SessionStore,
+        streams: dict[Channel, DiarizationStream],
+        *,
+        backlog: Callable[[], float] = lambda: 0.0,
+    ) -> None:
+        super().__init__(name="diarization-stream", daemon=True)
+        self._store = store
+        self._streams = streams
+        self._backlog = backlog
+        self._halted = threading.Event()
+        self.errors: dict[Channel, BaseException] = {}
+        self.steps = 0
+
+    def run(self) -> None:
+        _lower_thread_priority()
+        active = dict(self._streams)
+        while active and not self._halted.is_set():
+            if self._backlog() > STREAM_YIELD_BACKLOG_S:
+                self._halted.wait(_STREAM_RETRY_S)
+                continue
+            ran = 0
+            short: list[int] = []  # samples each idle channel still lacks
+            for channel, stream in list(active.items()):
+                if self._halted.is_set():
+                    return
+                try:
+                    needed = stream.samples_needed()
+                    have = self._store.num_samples(channel)
+                    if needed is None:
+                        del active[channel]
+                    elif have < needed:
+                        short.append(needed - have)
+                    else:
+                        read = functools.partial(self._store.read, channel)
+                        ran += stream.advance(read, have, limit=1)
+                except Exception as exc:  # noqa: BLE001 — the stop diarizes it instead
+                    if not self._halted.is_set():
+                        self.errors[channel] = exc
+                    del active[channel]
+            self.steps += ran
+            if not ran and short:
+                arrives = max(min(short) / SAMPLE_RATE, _STREAM_RETRY_S)
+                self._halted.wait(arrives + _STREAM_WAKE_MARGIN_S)
+
+    def halt(self) -> None:
+        """Stop starting steps, abandon the one running, and wait for the thread."""
+        self._halted.set()
+        for stream in self._streams.values():
+            stream.interrupt()
+        if self.is_alive():
+            self.join()
 
 
 def _join_until_done(thread: threading.Thread, poll: float = 0.1) -> None:
@@ -843,6 +981,11 @@ class MeetingRecorder:
         ``--full-finalize`` clears it to force a from-scratch ASR pass at stop
         (an A/B and paranoia escape hatch). Reuse also self-disables per channel
         on any live load-shed, and entirely on a live-worker error."""
+        self.stream_diarization = True
+        """Whether a live meeting runs the diarizer's stream on each diarized
+        channel while it records (:class:`DiarizationStreamer`), leaving the
+        stop only the tail. The speakers are the same either way; clearing it
+        (``--full-finalize``) moves all of the work to the stop."""
         self.dedup_echo = dedup_echo
         """Whether finalize may run :func:`drop_echo_duplicates` on the mic channel.
         The CLI ties this to ``--aec``: with cancellation off the user asked for
@@ -1036,11 +1179,17 @@ class MeetingRecorder:
             max_seconds=max_seconds,
             mute=mute,
         )
+        streams = self._open_streams(plans, view)
+        streamer = (
+            DiarizationStreamer(store, streams, backlog=worker.backlog) if streams else None
+        )
 
         if not provider_started:
             provider.start(set(channels))
         worker.start()
         capture.start()
+        if streamer is not None:
+            streamer.start()
         try:
             _join_until_done(capture)
         except KeyboardInterrupt:
@@ -1050,7 +1199,14 @@ class MeetingRecorder:
         # Capture has stopped; from here the finalize is authoritative and must not
         # be lost to a second Ctrl-C. Shield SIGINT across the worker join and the
         # finalize (a no-op off the main thread, e.g. under the TUI).
-        with _shield_interrupt():
+        with _shield_interrupt(), _closing(streams):
+            if streamer is not None:
+                streamer.halt()
+                for channel, exc in streamer.errors.items():
+                    view.status(
+                        f"{channel}: diarizing during the meeting stopped ({exc}); "
+                        "the stop diarizes the rest"
+                    )
             worker.join()
             provider.stop()  # idempotent — releases the device if capture ended on its own
             # The window pass produced finalize-identical decodes (same windows,
@@ -1080,7 +1236,30 @@ class MeetingRecorder:
                 live_words=live_words,
                 inference_lock=inference_lock,
                 mute=mute,
+                streams=streams,
             )
+
+    def _open_streams(
+        self, plans: list[ChannelPlan], view: LiveView
+    ) -> dict[Channel, DiarizationStream]:
+        """A diarization stream per channel the stop would diarize — never one
+        with a stated count of 1, which skips the diarizer. Opened here, on the
+        meeting's thread, because opening loads the stream's model; a stream
+        that fails to open leaves its channel to the stop."""
+        if self.diarizer is None or not self.stream_diarization:
+            return {}
+        streams = {}
+        for plan in plans:
+            if plan.num_speakers == 1:
+                continue
+            try:
+                stream = self.diarizer.stream()
+            except Exception as exc:  # noqa: BLE001 — the stop diarizes it instead
+                view.status(f"{plan.channel}: diarizing at the stop ({exc})")
+                continue
+            if stream is not None:
+                streams[plan.channel] = stream
+        return streams
 
     def _finalize_and_publish(
         self,
@@ -1094,6 +1273,7 @@ class MeetingRecorder:
         live_words: dict[Channel, tuple[Word, ...]] | None = None,
         inference_lock: threading.Lock | None = None,
         mute: MuteSwitch | None = None,
+        streams: dict[Channel, DiarizationStream] | None = None,
     ) -> MeetingResult:
         """The shared stop→finalize tail of both run modes.
 
@@ -1129,6 +1309,7 @@ class MeetingRecorder:
                     live_words=live_words,
                     reference_gap_s=_reference_gap(provider),
                     muted=mute.spans(until=end) if mute is not None else None,
+                    streams=streams,
                 )
         view.finalized(result.transcript)
         return result
@@ -1142,6 +1323,7 @@ class MeetingRecorder:
         live_words: dict[Channel, tuple[Word, ...]] | None = None,
         reference_gap_s: float | None = None,
         muted: list[MutedSpan] | None = None,
+        streams: dict[Channel, DiarizationStream] | None = None,
     ) -> MeetingResult:
         """Run the finalize pass on every stored channel and interleave them.
 
@@ -1165,6 +1347,12 @@ class MeetingRecorder:
         treats unknown conservatively: backstop armed.
 
         ``muted`` are the meeting's muted spans; they ride on the transcript.
+
+        ``streams`` are the channels' diarization streams, advanced during the
+        meeting (:class:`DiarizationStreamer`): a channel with one diarizes
+        through :meth:`~stenograf.diarization.base.DiarizationStream.resumed`,
+        which finishes what the stream left — the same turns as the diarizer
+        from scratch, and from scratch is its fallback.
         """
         plans = plans or plan_channels(self.profile)
         view = view or LiveView()  # the bare base class is the null view
@@ -1198,7 +1386,12 @@ class MeetingRecorder:
                 continue
             note = ", reusing live decodes" if reused is not None else ""
             view.status(f"finalizing {plan.channel} ({_speaker_note(plan.num_speakers)}{note})")
-            diarizer = None if plan.num_speakers == 1 else self.diarizer
+            stream = streams.get(plan.channel) if streams else None
+            diarizer: Diarizer | None = self.diarizer
+            if plan.num_speakers == 1:
+                diarizer = None
+            elif stream is not None:
+                diarizer = stream.resumed()
             # A solo channel skips the diarizer (nothing to separate) but not
             # the voice: with the meeting's speaker machinery on it still gets
             # one embedding over its transcribed speech, so a 1:1 counterpart

@@ -153,7 +153,7 @@ class RunOptions:
     max_seconds: float | None = None
     """Stop capture automatically after this much audio."""
     full_finalize: bool = False
-    """Re-transcribe from scratch at stop instead of reusing the live pass."""
+    """Re-transcribe and re-diarize from scratch at stop instead of reusing the live pass."""
     use_reid: bool = True
     """Relabel diarized speakers from the saved voiceprint store."""
     reid_threshold: float | None = None
@@ -511,6 +511,7 @@ class MeetingRun:
                 dedup_echo=options.aec,
             )
             recorder.reuse_live_finalize = not options.full_finalize
+            recorder.stream_diarization = not options.full_finalize
         except BaseException:
             # Capture is already live but the run will never start (a load
             # failure) — release the devices on the way out; the error itself

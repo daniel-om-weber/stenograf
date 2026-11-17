@@ -124,7 +124,7 @@ def cmd_library(out: Path, features: Path | None) -> int:
     current: dict[str, np.ndarray] = {}
     if features is not None:
         # The reference features are what nemotron_arm.py fed its loop, frame for frame.
-        def reference_log_mel(audio, start=0, stop=None):
+        def reference_log_mel(audio, start=0, stop=None, **_window):
             return np.ascontiguousarray(current["features"][start:stop])
 
         nemotron.log_mel = reference_log_mel

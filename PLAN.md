@@ -670,8 +670,12 @@ smoked the single manylinux_2_28 wheel.
    AMI set against the offline 97.8 % (`eval/README.md`); (b) voiceprints
    accumulated per speaker during the meeting instead of over the full
    audio at the end; (c) the meeting's power budget (~0.6 W live) with the
-   diarizer running alongside capture. The fallback paths (live pass off or
-   failed) would still need audio or would lose speaker separation. The
+   diarizer running alongside capture — for the offline chunk loop, which
+   runs during the meeting since 2026-11-17, that is 0.014 W for two
+   channels (`eval/README.md`, "The chunk loop runs during the meeting");
+   the store still keeps the audio, which the voiceprints and the fallbacks
+   read. The fallback paths (live pass off or failed) would still need
+   audio or would lose speaker separation. The
    "Who spoke?" voice samples are already only a few seconds per speaker,
    so they survive this change if collected during the meeting instead.
 

@@ -191,10 +191,10 @@ _RECORD_DEFAULT = "\0default"
 @click.option(
     "--full-finalize",
     is_flag=True,
-    help="Re-transcribe everything at stop instead of reusing the live window "
-    "pass's decodes. The live pass already decodes the exact windows the "
-    "finalize pass would (so reuse is the default); this forces the "
-    "from-scratch ASR pass for A/B comparison or paranoia.",
+    help="Re-transcribe and re-diarize everything at stop instead of reusing "
+    "the live pass's work. The live pass already decodes the exact windows the "
+    "finalize pass would and runs the diarizer's exact steps (so reuse is the "
+    "default); this forces the from-scratch pass for A/B comparison or paranoia.",
 )
 @_notes_options
 @_library_errors

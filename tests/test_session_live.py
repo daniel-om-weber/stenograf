@@ -11,6 +11,7 @@ quality (that is test_live.py / the eval harness). The load-bearing guarantees:
 
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 import pytest
@@ -26,12 +27,14 @@ from stenograf.capture.base import (
     Channel,
 )
 from stenograf.config import MeetingProfile
-from stenograf.diarization.base import Diarizer, SpeakerTurn
+from stenograf.diarization.base import DiarizationStream, Diarizer, SpeakerTurn
 from stenograf.live import StreamingUpdate
 from stenograf.session import (
+    STREAM_YIELD_BACKLOG_S,
     AudioBus,
     CaptureLoop,
     CheckpointConfig,
+    DiarizationStreamer,
     LiveWorker,
     MeetingRecorder,
     SessionStore,
@@ -855,3 +858,197 @@ class TestTwoChannelLive:
         assert armed.dropped_echo_lines == 1
         off = run(dedup=False)
         assert sorted(e.speaker for e in off.transcript.entries) == ["Local-1", "Remote-1"]
+
+
+class _UnitStream(DiarizationStream):
+    """One unit of work per second of a channel's audio; records what it read
+    and lets a test wait until it has caught up with ``target`` units."""
+
+    def __init__(self, owner: "StreamingDiarizer", target: int = 0) -> None:
+        self.owner = owner
+        self.done = 0
+        self.reads: list[np.ndarray] = []
+        self.interrupted = False
+        self.closed = False
+        self.caught_up = threading.Event()
+        self.target = target
+        self.fail = False
+
+    def samples_needed(self) -> int | None:
+        return (self.done + 1) * SAMPLE_RATE
+
+    def advance(self, read, num_samples, limit=None) -> int:
+        if self.fail:
+            raise RuntimeError("stream blew up")
+        ran = 0
+        needed = self.samples_needed()
+        while (limit is None or ran < limit) and needed is not None and num_samples >= needed:
+            self.reads.append(read(self.done * SAMPLE_RATE, needed))
+            self.done += 1
+            ran += 1
+            needed = self.samples_needed()
+        if self.done >= self.target:
+            self.caught_up.set()
+        return ran
+
+    def interrupt(self) -> None:
+        self.interrupted = True
+
+    def resumed(self) -> Diarizer:
+        return _ResumedRecording(self)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _ResumedRecording(Diarizer):
+    def __init__(self, stream: _UnitStream) -> None:
+        self.stream = stream
+
+    def diarize(self, samples, num_speakers=None):
+        self.stream.owner.resumed_runs.append((self.stream, len(samples), num_speakers))
+        return self.stream.owner.diarize(samples, num_speakers)
+
+
+class StreamingDiarizer(RecordingDiarizer):
+    """A :class:`RecordingDiarizer` that offers a stream per channel."""
+
+    def __init__(self, turns: list[SpeakerTurn], target: int = 0) -> None:
+        super().__init__(turns)
+        self.streams: list[_UnitStream] = []
+        self.resumed_runs: list[tuple[_UnitStream, int, int | None]] = []
+        self.target = target
+
+    def stream(self) -> _UnitStream:
+        stream = _UnitStream(self, self.target)
+        self.streams.append(stream)
+        return stream
+
+
+class GatedProvider(ListProvider):
+    """Delivers its frames, then holds the meeting open until ``gate`` is set
+    (or a timeout) — so a background thread can catch up before the stop."""
+
+    def __init__(self, frames: list[AudioFrame], gate: Callable[[], threading.Event]) -> None:
+        super().__init__(frames)
+        self._gate = gate
+
+    def frames(self):
+        yield from super().frames()
+        self._gate().wait(5.0)
+
+
+class TestDiarizationStreaming:
+    """The diarizer's stream runs beside the live pass and hands the stop a
+    head start; the stop's result is the diarizer's either way."""
+
+    def _store(self, seconds: int, channels=(Channel.MIC,)) -> SessionStore:
+        store = SessionStore(set(channels))
+        for channel in channels:
+            pcm = (np.arange(seconds * SAMPLE_RATE) % 1000).astype(np.int16)
+            for frame in _frames(channel, pcm, 1600):
+                store.append(frame)
+        return store
+
+    def test_runs_ready_work_then_sleeps_until_the_audio_arrives(self):
+        store = self._store(3)
+        stream = _UnitStream(StreamingDiarizer([]), target=3)
+        streamer = DiarizationStreamer(store, {Channel.MIC: stream})
+        streamer.start()
+        assert stream.caught_up.wait(2.0)
+        assert stream.done == 3  # everything three seconds allow, and no more
+        np.testing.assert_array_equal(stream.reads[1], store.read(Channel.MIC, 16000, 32000))
+        stream.caught_up.clear()
+        stream.target = 4
+        store.append(AudioFrame(Channel.MIC, 3.0, np.ones(SAMPLE_RATE, np.int16)))
+        assert stream.caught_up.wait(3.0)  # woke by itself once the second had landed
+        streamer.halt()
+        assert not streamer.is_alive() and stream.interrupted
+        assert streamer.steps == 4 and not streamer.errors
+
+    def test_starts_nothing_while_the_live_worker_is_behind(self):
+        store = self._store(3)
+        stream = _UnitStream(StreamingDiarizer([]), target=3)
+        behind = [STREAM_YIELD_BACKLOG_S + 1.0]
+        streamer = DiarizationStreamer(store, {Channel.MIC: stream}, backlog=lambda: behind[0])
+        streamer.start()
+        assert not stream.caught_up.wait(0.3)
+        assert stream.done == 0
+        behind[0] = 0.0  # the captions caught up
+        assert stream.caught_up.wait(3.0)
+        streamer.halt()
+
+    def test_a_failing_stream_is_dropped_and_the_others_go_on(self):
+        store = self._store(2, (Channel.MIC, Channel.SYSTEM))
+        broken = _UnitStream(StreamingDiarizer([]))
+        broken.fail = True
+        healthy = _UnitStream(StreamingDiarizer([]), target=2)
+        streamer = DiarizationStreamer(store, {Channel.MIC: broken, Channel.SYSTEM: healthy})
+        streamer.start()
+        assert healthy.caught_up.wait(2.0)
+        streamer.halt()
+        assert set(streamer.errors) == {Channel.MIC}
+
+    def test_live_meeting_streams_the_diarized_channel_and_resumes_from_it(self):
+        mic = _pcm_with_speech(4, [(0.5, 1.5)], 1000)
+        system = _pcm_with_speech(4, [(1.0, 2.0), (2.2, 3.2)], 3000)
+        turns = [SpeakerTurn("S0", 0.0, 2.0), SpeakerTurn("S1", 2.0, 4.0)]
+        diarizer = StreamingDiarizer(turns, target=4)
+        provider = GatedProvider(
+            _interleaved_frames(mic, system), lambda: diarizer.streams[0].caught_up
+        )
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=None),  # mic: count 1
+            asr=AmplitudeASR(),
+            vad=EnergyVAD(),
+            diarizer=diarizer,
+        )
+        streamed = recorder.run(provider, live=True).transcript
+        [stream] = diarizer.streams  # the count-1 mic channel got none
+        assert stream.done == 4  # every second of the system channel, during the meeting
+        assert stream.interrupted and stream.closed
+        [(used, num_samples, count)] = diarizer.resumed_runs
+        assert used is stream and num_samples == 4 * SAMPLE_RATE and count is None
+        np.testing.assert_array_equal(
+            np.concatenate(stream.reads), to_float32(system)
+        )  # it read the system channel, nothing else
+
+        recorder.stream_diarization = False
+        plain = recorder.run(ListProvider(_interleaved_frames(mic, system)), live=True)
+        assert plain.transcript.entries == streamed.entries
+        assert len(diarizer.streams) == 1  # cleared: no stream opened
+
+    def test_batch_runs_never_stream(self):
+        mic = _pcm_with_speech(3, [(0.5, 1.5)], 1000)
+        system = _pcm_with_speech(3, [(1.0, 2.0)], 3000)
+        diarizer = StreamingDiarizer([SpeakerTurn("S0", 0.0, 3.0)])
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=2, remote_speakers=2),
+            asr=AmplitudeASR(),
+            vad=EnergyVAD(),
+            diarizer=diarizer,
+        )
+        recorder.run(ListProvider(_interleaved_frames(mic, system)))
+        assert diarizer.streams == [] and diarizer.resumed_runs == []
+
+    def test_a_stream_that_fails_to_open_leaves_the_channel_to_the_stop(self):
+        mic = _pcm_with_speech(3, [(0.5, 1.5)], 1000)
+        system = _pcm_with_speech(3, [(1.0, 2.0)], 3000)
+
+        class Unopenable(StreamingDiarizer):
+            def stream(self):
+                raise RuntimeError("no model")
+
+        diarizer = Unopenable([SpeakerTurn("S0", 0.0, 3.0)])
+        statuses: list[str] = []
+        recorder = MeetingRecorder(
+            MeetingProfile(local_speakers=1, remote_speakers=2),
+            asr=AmplitudeASR(),
+            vad=EnergyVAD(),
+            diarizer=diarizer,
+        )
+        view = CallbackView(on_status=statuses.append)
+        result = recorder.run(ListProvider(_interleaved_frames(mic, system)), live=True, view=view)
+        assert diarizer.num_speakers == 2  # diarized at the stop, from scratch
+        assert any("diarizing at the stop" in s for s in statuses)
+        assert [e.speaker for e in result.transcript.entries] == ["Local-1", "Remote-1"]

@@ -7,6 +7,7 @@ has to separate voices *within* a channel.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -36,7 +37,50 @@ class DiarizationResult:
     embeddings: dict[str, np.ndarray]
 
 
+Reader = Callable[[int, int], np.ndarray]
+"""``read(lo, hi)``: samples ``[lo, hi)`` of one channel as float32 16 kHz."""
+
+
+class DiarizationStream(ABC):
+    """One channel's diarization, run while the meeting is still recorded.
+
+    The meeting's streamer thread calls :meth:`advance` as audio arrives; the
+    stop diarizes through :meth:`resumed`, which picks up from the work done
+    and must give the speakers the offline diarizer gives on the same audio.
+    The channel's audio is read only through ``read`` and only below
+    ``num_samples`` — the meeting's store is append-only, so what was read
+    never changes."""
+
+    @abstractmethod
+    def samples_needed(self) -> int | None:
+        """How many samples the channel must hold before :meth:`advance` has
+        work; ``None`` = it never will (nothing to stream)."""
+
+    @abstractmethod
+    def advance(self, read: Reader, num_samples: int, limit: int | None = None) -> int:
+        """Do up to ``limit`` units of the work the channel's first
+        ``num_samples`` samples already determine; returns how many ran."""
+
+    @abstractmethod
+    def interrupt(self) -> None:
+        """Abandon an :meth:`advance` running on another thread, as soon as
+        possible, without losing the work before it (the meeting stopped)."""
+
+    @abstractmethod
+    def resumed(self) -> Diarizer:
+        """The diarizer the stop runs on this channel's finished audio."""
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release what the stream holds; idempotent."""
+
+
 class Diarizer(ABC):
+    def stream(self) -> DiarizationStream | None:
+        """A :class:`DiarizationStream` for one channel of a live meeting, or
+        ``None`` when this diarizer only runs at the end (the default)."""
+        return None
+
     @abstractmethod
     def diarize(self, samples: np.ndarray, num_speakers: int | None = None) -> list[SpeakerTurn]:
         """Segment mono 16 kHz PCM by speaker. ``num_speakers=None`` leaves
