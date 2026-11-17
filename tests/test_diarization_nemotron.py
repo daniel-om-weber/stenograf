@@ -213,23 +213,22 @@ def test_a_step_runs_exactly_when_its_inputs_are_final():
 
 class _Sessions:
     """Stands in for onnxruntime: hands out fake sessions, noting which
-    kind (``threads``) each was."""
+    kind (``"stream"`` or ``"offline"``) each was."""
 
     def __init__(self) -> None:
-        self.made: list[int | None] = []
-        self.runs: dict[int | None, int] = {}
-        self.prepack: dict[int | None, bool] = {}
+        self.made: list[str] = []
+        self.runs: dict[str, int] = {}
 
-    def __call__(self, *, threads: int | None, prepack: bool):
-        self.made.append(threads)
-        self.prepack[threads] = prepack
+    def __call__(self, *, stream: bool):
+        kind = "stream" if stream else "offline"
+        self.made.append(kind)
         sessions = self
 
         class Session(_FakeSession):
             def run(self, outputs, feeds, run_options=None):
                 if run_options is not None and run_options.terminate:
                     raise RuntimeError("Exiting due to terminate flag being set to true.")
-                sessions.runs[threads] = sessions.runs.get(threads, 0) + 1
+                sessions.runs[kind] = sessions.runs.get(kind, 0) + 1
                 return super().run(outputs, feeds, run_options)
 
         return Session(_CONFIG)
@@ -266,15 +265,13 @@ def test_stream_finishes_the_tail_on_its_own_session(fake_models):
     audio = _audio()
     want = speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio)
     stream = d.stream()
-    assert sessions.made == [1]  # one thread, loaded as the stream opens
+    assert sessions.made == ["stream"]  # loaded as the stream opens
     assert _feed(stream, audio, len(audio)) > 0
     turns = stream.resumed().diarize(audio)
     assert turns == turns_from_probs(want)
     assert np.array_equal(stream.finish(audio), want)  # finishing twice: the same
-    assert sessions.made == [1, None]  # ... on the offline session; the stream's is gone
+    assert sessions.made == ["stream", "offline"]  # finished offline; the stream session is gone
     assert d._models._stream is None and d._models._stream_users == 0
-    # Only the meeting-long streaming session drops prepacked weights.
-    assert sessions.prepack == {1: False, None: True}
 
 
 def test_stream_short_of_its_first_step_finishes_on_its_session(fake_models):
@@ -284,7 +281,7 @@ def test_stream_short_of_its_first_step_finishes_on_its_session(fake_models):
     assert _feed(stream, audio, len(audio), block=800) == 0
     probs = stream.resumed().probabilities(audio)
     assert np.array_equal(probs, speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio))
-    assert sessions.made == [1]  # the whole loop is a tail: no offline session
+    assert sessions.made == ["stream"]  # the whole loop is a tail: no offline session
 
 
 def test_stream_far_behind_finishes_on_the_offline_session(fake_models):
@@ -294,11 +291,11 @@ def test_stream_far_behind_finishes_on_the_offline_session(fake_models):
     _feed(stream, audio, 16000)  # the streamer stalled after a second of audio
     left = ChunkLoop(_CONFIG).steps_left(len(audio))
     assert left > STREAM_TAIL_STEPS
-    before = sessions.runs.get(1, 0)
+    before = sessions.runs.get("stream", 0)
     probs = stream.finish(audio)
     assert np.array_equal(probs, speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio))
-    assert sessions.runs.get(1, 0) == before  # the rest ran offline, from where it stopped
-    assert sessions.runs[None] == left - before
+    assert sessions.runs.get("stream", 0) == before  # the rest ran offline, from where it stopped
+    assert sessions.runs["offline"] == left - before
 
 
 def test_interrupted_step_loses_nothing(fake_models):
@@ -331,7 +328,7 @@ def test_broken_stream_falls_back_to_the_offline_loop(fake_models, monkeypatch):
     assert stream._loop is not None and stream._loop.broken
     want = speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio)
     assert np.array_equal(stream.finish(audio), want)
-    assert None in sessions.made  # recomputed from the start
+    assert "offline" in sessions.made  # recomputed from the start
 
 
 def test_stream_never_downloads(monkeypatch):

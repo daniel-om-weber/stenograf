@@ -1,7 +1,15 @@
 """stenograf — accuracy-first local meeting transcription. Audio never touches disk."""
 
+import os
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+
+# numpy's OpenBLAS (Linux and Windows wheels) spreads even a small matmul over
+# every core and leaves those threads spin-waiting after it: the diarizer's
+# log-mel step took 4.5 CPU-s per chunk instead of 1.4, at the same wall time
+# (Ryzen AI 9 HX 370, 2026-11-17). Read when numpy loads, so it is set here,
+# before any module imports numpy; an explicit setting still wins.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 ASSETS = Path(__file__).parent / "assets"
 """Brand assets shipped in the wheel: ``icon.png`` (the window, Dock and

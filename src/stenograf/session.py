@@ -24,12 +24,9 @@ text dedup at merge time is the backstop.
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import functools
-import os
 import re
 import signal
-import sys
 import threading
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Iterator
@@ -54,6 +51,7 @@ from stenograf.config import (
     ResolvedParameters,
     resolve_value,
 )
+from stenograf.cpu import background_plan, enter_background
 from stenograf.diarization.base import DiarizationStream, Diarizer, SpeakerTurn
 from stenograf.glossary import DEFAULT_THRESHOLD
 from stenograf.live import StreamingUpdate, WindowedLiveDecoder
@@ -813,36 +811,17 @@ _STREAM_RETRY_S = 1.0
 _STREAM_WAKE_MARGIN_S = 0.25
 
 
-def _lower_thread_priority() -> None:
-    """Run the calling thread, and any thread it starts, below everything
-    interactive — best effort, a no-op where the platform refuses.
-
-    macOS: background QoS, which the scheduler keeps on the efficiency cores;
-    a one-thread Nemotron step there costs 0.2 J against 1.4 J on a P-core
-    (M4 Max, 2026-11-17, ``eval/README.md``). Linux: SCHED_IDLE (runs only on
-    otherwise idle CPU time). Windows: background mode (lowest CPU, I/O and
-    memory priority). Neither of the last two is measured."""
-    with contextlib.suppress(Exception):
-        if sys.platform == "darwin":
-            libc = ctypes.CDLL("/usr/lib/libSystem.dylib")
-            libc.pthread_set_qos_class_self_np(0x09, 0)  # QOS_CLASS_BACKGROUND
-        elif sys.platform.startswith("linux"):
-            os.sched_setscheduler(0, os.SCHED_IDLE, os.sched_param(0))  # 0 = this thread
-        elif sys.platform == "win32":
-            kernel32 = ctypes.WinDLL("kernel32")  # pyright: ignore[reportAttributeAccessIssue]
-            kernel32.SetThreadPriority(kernel32.GetCurrentThread(), 0x00010000)
-
-
 class DiarizationStreamer(threading.Thread):
     """Runs each diarized channel's :class:`DiarizationStream` while the
     meeting records, so the stop only diarizes the last half-minute.
 
     A thread of its own, not a task on :class:`LiveWorker`: the worker is the
     single *accelerator* thread and must never wait behind a CPU model, while
-    this one runs a one-thread ONNX session at the lowest priority the
-    platform offers. It never takes the inference lock, and it starts no step
-    while the worker is behind (:data:`STREAM_YIELD_BACKLOG_S`) — so it cannot
-    cause a load-shed — or once :meth:`halt` was called. Each step reads only
+    this one runs its ONNX session on the efficiency cores at the lowest
+    priority the platform offers (:mod:`stenograf.cpu`). It never takes the
+    inference lock, and it starts no step while the worker is behind
+    (:data:`STREAM_YIELD_BACKLOG_S`) — so it cannot cause a load-shed — or
+    once :meth:`halt` was called. Each step reads only
     audio already in the append-only :class:`SessionStore`, so what it
     computed stays valid however the meeting continues (mute zeroes frames
     before they are stored; a device switch only appends).
@@ -868,7 +847,7 @@ class DiarizationStreamer(threading.Thread):
         self.steps = 0
 
     def run(self) -> None:
-        _lower_thread_priority()
+        enter_background(background_plan())
         active = dict(self._streams)
         while active and not self._halted.is_set():
             if self._backlog() > STREAM_YIELD_BACKLOG_S:

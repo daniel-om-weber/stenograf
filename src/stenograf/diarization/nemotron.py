@@ -501,14 +501,14 @@ class _Models:
     The offline session runs at ORT's default thread count: at the stop the
     chunk loop is all that is left to wait for, and intra-op threads are its
     only parallelism (each step reads the cache the step before wrote). The
-    streaming session runs on ONE thread, on the streamer's background-QoS
-    thread, which lands it on the efficiency cores: 0.19 J per step against
-    1.4 J for the cheapest P-core arm, at ~10 % of one E-core per channel
-    (M4 Max, 2026-11-17, ``eval/README.md``). ORT's own pool threads do not
-    inherit that QoS, so any second thread drags part of every step back to
-    the P-cores. The two sessions give the same probabilities to within
-    2.4e-8, so a loop may switch between them between steps (see
-    :meth:`_session` for the one difference)."""
+    streaming session runs the machine's background plan
+    (:func:`stenograf.cpu.background_plan`): on the efficiency cores, one
+    thread on macOS, one per efficiency core elsewhere, its pool threads
+    pinned there too. Neither spin-waits: at the same speed, spinning cost 2.2×
+    the energy on an M4 Max and 1.3× on a Ryzen AI 9 HX 370 (2026-11-17,
+    ``eval/README.md``). Thread count and pinning never change the
+    probabilities (measured 1–16 threads on both), so a loop may switch
+    sessions between steps."""
 
     def __init__(self, model_dir: Path | None, progress: assets.ProgressHook | None) -> None:
         self._model_dir = model_dir
@@ -544,22 +544,21 @@ class _Models:
                     self._config = Config.load(paths[1])
         return self._config
 
-    def _session(self, *, threads: int | None, prepack: bool) -> Any:
+    def _session(self, *, stream: bool) -> Any:
         import onnxruntime
+
+        from stenograf import cpu
 
         paths = self._paths(fetch=True)
         assert paths is not None
         options = onnxruntime.SessionOptions()
-        if threads is not None:
-            options.intra_op_num_threads = threads
-        if not prepack:
-            # The streaming session is resident for the whole meeting and holds
-            # 0.4 GB less without prepacked weights. The price is another GEMM
-            # kernel for the final, shorter chunk: up to 2.4e-8 in 49 of 625,649
-            # frames, turns identical, on a 104-min meeting; 2.9- and 25-min
-            # meetings stayed bit-identical (2026-11-17). The offline session
-            # keeps prepacking, so a file transcribe is unchanged.
-            options.add_session_config_entry("session.disable_prepacking", "1")
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        if stream:
+            plan = cpu.background_plan()
+            options.intra_op_num_threads = plan.threads
+            affinities = cpu.onnx_affinities(plan)
+            if affinities is not None:
+                options.add_session_config_entry("session.intra_op_thread_affinities", affinities)
         return onnxruntime.InferenceSession(
             str(paths[0]), options, providers=["CPUExecutionProvider"]
         )
@@ -570,14 +569,14 @@ class _Models:
         if self._offline is None:
             with self._lock:
                 if self._offline is None:
-                    self._offline = self._session(threads=None, prepack=True)
+                    self._offline = self._session(stream=False)
         return self._offline, config
 
     def acquire_stream(self) -> Any:
         """The streaming session, held until every acquirer released it."""
         with self._lock:
             if self._stream is None:
-                self._stream = self._session(threads=1, prepack=False)
+                self._stream = self._session(stream=True)
             self._stream_users += 1
             return self._stream
 

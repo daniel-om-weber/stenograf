@@ -1538,17 +1538,12 @@ profile names and every voice embedding, bit for bit. Every thread count
 from 1 to 16 gave bit-identical probabilities (2.9-min meeting; the 1-thread
 session on all eight channels above), which is what lets the stream use a
 one-thread session and the stop switch to the offline one between steps.
-The streaming session runs with weight prepacking off
-(`session.disable_prepacking`), traded for memory after the table above:
-every streamed step still matches, but the final, shorter chunk takes a
-different GEMM kernel. Against the offline loop as shipped before the change,
-streamed with prepacking off and fed in 0.1–31 s blocks: the 2.9- and 25.4-min
-meetings bit-identical on both channels; the 104-min meeting up to 2.4e-8
-(mic) and 3.3e-9 (system) in 49 of 625,649 frames, turns identical with no
-count and with a count of 2. The session's peak footprint after 13 real steps
-drops 3.15–3.17 → 2.77 GB (two fresh processes per arm), and a step costs the
-same, 0.20 against 0.21–0.24 J, still 0 % on the P-cores. The offline session
-keeps prepacking, so a file transcribe is unchanged. The memory arena off
+Weight prepacking stays on in both sessions. Off, the streaming session
+would hold 0.4 GB less, but the probabilities move: on the M4 Max only the
+final, shorter chunk (up to 2.4e-8 on the 104-min meeting), on the Ryzen AI 9
+HX 370 every frame (up to 6.8e-6; one 10-ms frame of 41,553 speech frames
+changed its speaker, 25.4-min meeting) — a platform-dependent result for
+memory that a 48 GB or 24 GB machine does not need. The memory arena off
 alone is bit-identical and saves 0.02 GB, not worth a switch.
 
 **The stop** of the 104-min meeting (`MeetingRecorder.finalize`, live words
@@ -1620,7 +1615,7 @@ identical; footprint sampled 4×/s plus the kernel's lifetime maximum):
 | | live-phase peak (sampled / kernel max) | steady, minutes 4–9 | the stop |
 |---|---|---|---|
 | without streaming | 5.32 / 5.51 GB | 4.24 GB | 6.8 s |
-| streaming, prepacking on | 5.58 / 5.99 GB | 4.66 GB | 1.2 s |
+| streaming, as shipped | 5.58 / 5.99 GB | 4.66 GB | 1.2 s |
 
 Both runs: no load-shedding (0.0 s on either channel), the same 14 caption
 lines arriving at the same replay time (a constant +0.34 s, the second run's
@@ -1637,10 +1632,65 @@ sampler stall (0.76 s) falls inside the model loading at meeting start, where
 the ASR load already holds the lock. Streaming costs the meeting ~0.4 GB
 resident throughout and 0.3–0.5 GB of peak; on the 104-min stop it saves
 ~1 GB of peak instead, since the stop no longer loads the 1.8 GB offline
-session. One 10-min excerpt — a lead for longer meetings, not a law. These
-runs had prepacking on; the 0.4 GB it costs the session is what
-prepacking off removes, so the shipped meeting's overhead is expected near
-zero — inferred from the session's own footprint, not re-run as a meeting.
+session. One 10-min excerpt — a lead for longer meetings, not a law. On the
+HX 370 (5-min paced replay, peak RSS sampled 2×/s) streaming raised the peak
+3.0 → 3.4 GB.
+
+#### Background threads, by platform (2026-11-17)
+
+`stenograf.cpu` states one rule — as many threads as the CPU has efficiency
+cores, all confined to them, every physical core unconfined on a CPU with one
+kind of core, never spin-waiting — and reaches it per OS. Measured on the M4
+Max (above) and on a GPD with a Ryzen AI 9 HX 370 (4 Zen5 at 5.16 GHz + 8
+Zen5c at 3.29 GHz, CachyOS, kernel 7.3, mains; package energy from amdgpu's
+PPT sensor against an 8-s idle baseline before each arm, 21–23 steps per arm;
+the arms on synthetic or stored audio cost the same per step).
+
+**macOS runs one thread.** It has no CPU affinity; background QoS on the
+calling thread is what puts a step on the E-cores, and ORT's pool threads do
+not take it on even when the session is created on a background-QoS thread:
+four threads ran 51 % on the P-cores created there, 53 % created on a normal
+thread (0.82 and 0.64 J per step, 108 and 85 J per audio-hour) against 0 %
+and 0.16 J (21 J) for one thread — so on macOS the rule's count is one.
+
+**Linux pins.** Linux places a lone thread on a fast core even at
+`SCHED_IDLE` (99 % of samples on Zen5): the one-thread stream cost ~15 J per
+step there, ~2,000 J per audio-hour per channel, three times the offline
+loop it replaced. Per step, by arm:
+
+| arm | step | J / audio-hour / channel |
+|---|---|---|
+| 1 thread, unconfined (`SCHED_IDLE`) | 1.30 s | 1,980–2,000 |
+| 1 thread, on the Zen5c | 1.88 s | 775–793 |
+| offline loop: ORT default threads, spin on | 0.36 s | 643–654 |
+| every core (24 threads), spin off | 0.35 s | 497 |
+| 16 threads on the Zen5c, spin off | 0.39 s | 534 |
+| **8 threads on the Zen5c (one per core), spin off** | **0.37–0.39 s** | **295–489** |
+| 4 / 2 threads on the Zen5c, spin off | 0.54 / 0.96 s | 747 / 774 |
+
+Race-to-idle wins here, the opposite of the M4 Max: the package draws ~5 W
+above idle the moment any core runs, so finishing on eight compact cores
+beats crawling on one. Pinning through ORT's `session.intra_op_thread_affinities`
+(which Windows honours too) and through inheritance from a pinned creating
+thread gave the same placement (88 % of running samples on the Zen5c; the
+rest the sampler itself) and the same energy within the idle baseline's
+noise. Through the shipped path (`background_plan` + `DiarizationStreamer`,
+10 min of the 25.4-min meeting): 8 threads, 100 % of running samples on the
+Zen5c, 0.39 s and 466–489 J per audio-hour per channel, probabilities and
+turns bit-identical to the offline loop as released. Thread count and
+pinning never changed a probability (1 vs 24 threads; every arm above).
+
+What the detection reads: x86 kernels write a flat `cpu_capacity` of 1024
+for every core even on this hybrid CPU, so a flat ranking defers to
+`cpuinfo_max_freq`; an efficiency core is one at ≤ 85 % of the fastest core's
+peak (`EFFICIENT_SHARE`). Two traps of this box that are not stenograf's:
+numpy's OpenBLAS spread the log-mel matmul over all 24 threads and left them
+spinning (4.5 CPU-s per step instead of 1.4, energy ~10 % higher) — set to
+one thread at `import stenograf`; and CachyOS's `ananicy-cpp` moves every
+Python process into `SCHED_IDLE`, capture and live captions included.
+
+**Windows** reads the efficiency classes from `GetSystemCpuSetInformation`
+and pins the same way; not measured.
 
 ## Echo cancellation
 
