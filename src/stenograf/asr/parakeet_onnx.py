@@ -33,6 +33,7 @@ from stenograf.asr.biasing import build as build_tree
 from stenograf.asr.tokens import Token, load_encoder, merge_tokens
 from stenograf.audio import SAMPLE_RATE, to_float32
 from stenograf.config import Language
+from stenograf.cpu import ThreadPlan, confined, live_plan, session_options
 
 MODEL_ID = "nemo-parakeet-tdt-0.6b-v3"
 
@@ -107,6 +108,7 @@ class ParakeetOnnxBackend(ASRBackend):
         self.model_id = model_id
         self._quantization = quantization
         self._model = None
+        self._plan: ThreadPlan | None = None
         self._glossary = tuple(glossary)
         self._boost = boost
         # "cpu" (never None) marks this backend as provider-configurable.
@@ -149,9 +151,15 @@ class ParakeetOnnxBackend(ASRBackend):
                 ) from exc
             self._model = model
             return
-        self._model = self._load_with(ort_providers("cpu"))
+        # CPU decodes, the live captions above all, run on the efficiency cores
+        # at normal priority (stenograf.cpu): on a Ryzen AI 9 HX 370 a third of
+        # ONNX Runtime's default energy at the same speed, word for word the
+        # same (2026-11-17, eval/README.md "Background threads, by platform").
+        # Accelerated providers keep ONNX Runtime's defaults: unmeasured.
+        self._plan = live_plan()
+        self._model = self._load_with(ort_providers("cpu"), session_options(self._plan))
 
-    def _load_with(self, providers: list[str]):
+    def _load_with(self, providers: list[str], options: Any = None):
         import onnx_asr
 
         path = model_dir(self._quantization) if self.model_id == MODEL_ID else None
@@ -160,6 +168,7 @@ class ParakeetOnnxBackend(ASRBackend):
             path,
             quantization=self._quantization,
             providers=providers,
+            sess_options=options,
         ).with_timestamps()
         self._bias(model)
         return model
@@ -188,7 +197,8 @@ class ParakeetOnnxBackend(ASRBackend):
             self.load()
         model = self._model
         assert model is not None  # load() sets it or raises
-        result = model.recognize(to_float32(samples), sample_rate=SAMPLE_RATE)
+        with confined(self._plan):
+            result = model.recognize(to_float32(samples), sample_rate=SAMPLE_RATE)
         # with_timestamps() at load time guarantees both are present.
         assert result.tokens is not None and result.timestamps is not None
         return _split_sentences(merge_tokens(_approximate_ends(result.tokens, result.timestamps)))

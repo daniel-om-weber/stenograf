@@ -1,5 +1,6 @@
-"""Where background inference runs: on the efficiency cores, below everything
-interactive, and never spin-waiting.
+"""Where CPU inference runs: on the efficiency cores, never spin-waiting —
+below everything interactive for background work (the diarizer), at normal
+priority for work that must keep pace with the meeting (the live captions).
 
 One rule on every platform — as many threads as the CPU has efficiency cores,
 confined to them (every physical core, unconfined, when it has only one kind)
@@ -7,7 +8,8 @@ confined to them (every physical core, unconfined, when it has only one kind)
 the count, not the rule: it has no CPU affinity, background QoS on the
 *calling* thread is the only way onto the E-cores, and ONNX Runtime's pool
 threads never take it on, wherever the session was created — so macOS runs
-one thread. Linux and Windows pin, because Linux at least places a lone
+background work on one thread and leaves the live captions to ONNX Runtime's
+own count. Linux and Windows pin, because Linux at least places a lone
 background thread on a fast core even at ``SCHED_IDLE``. The measurements
 behind each choice (M4 Max and a Ryzen AI 9 HX 370; Windows unmeasured) are
 in ``eval/README.md``, "Background threads, by platform".
@@ -21,8 +23,10 @@ import functools
 import os
 import struct
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 EFFICIENT_SHARE = 0.85
 """A core is an efficiency core when its peak capacity is at most this share
@@ -32,9 +36,9 @@ peak at 64 % of its Zen5, Intel's E-cores near three quarters of their
 P-cores."""
 
 MAX_THREADS = 16
-"""Ceiling on a background session's threads: no CPU a meeting runs on has
-more efficiency cores, and a many-core server gains nothing a 27-s chunk
-step can use."""
+"""Ceiling on a session's threads: no CPU a meeting runs on has
+more efficiency cores, and a many-core server gains nothing these models can
+use."""
 
 _FALLBACK_THREADS = 4
 
@@ -53,7 +57,7 @@ class Cpu:
 
 @dataclass(frozen=True)
 class ThreadPlan:
-    """How many threads a background session runs, and where."""
+    """How many threads an ONNX Runtime session runs, and where."""
 
     threads: int
     cpus: frozenset[int] | None
@@ -85,6 +89,64 @@ def background_plan() -> ThreadPlan:
     except Exception:  # noqa: BLE001 — an unreadable topology only loses the pinning
         pass
     return ThreadPlan(_FALLBACK_THREADS, None)
+
+
+def live_plan() -> ThreadPlan | None:
+    """Where work that must keep pace with the meeting runs: the cores and
+    thread count of :func:`background_plan`, at normal priority. ``None`` —
+    ONNX Runtime's own count, unconfined — on macOS, which cannot confine a
+    pool thread, and whose one-thread background plan was never shown to keep
+    up with a meeting."""
+    return None if sys.platform == "darwin" else background_plan()
+
+
+def session_options(plan: ThreadPlan | None) -> Any:
+    """ONNX Runtime options for a CPU session: never spin-waiting, and with a
+    ``plan``, its thread count and cores. Spinning keeps idle pool threads
+    burning cores between parallel sections; switching it off changed no
+    result and cost no speed wherever it was measured."""
+    import onnxruntime
+
+    options = onnxruntime.SessionOptions()
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    if plan is not None:
+        options.intra_op_num_threads = plan.threads
+        affinities = onnx_affinities(plan)
+        if affinities is not None:
+            options.add_session_config_entry("session.intra_op_thread_affinities", affinities)
+    return options
+
+
+@contextlib.contextmanager
+def confined(plan: ThreadPlan | None) -> Iterator[None]:
+    """Run the calling thread on ``plan.cpus`` for the block, then put it
+    back. The caller is the first worker of every ONNX Runtime call it makes,
+    so it belongs on the plan's cores; it may also be a thread that goes on to
+    other work (the finalize, the notes), so it must not stay there. A no-op
+    with nothing to confine to, or where the platform refuses."""
+    restore = _confine(plan.cpus) if plan is not None and plan.cpus else None
+    try:
+        yield
+    finally:
+        if restore is not None:
+            with contextlib.suppress(Exception):
+                restore()
+
+
+def _confine(cpus: frozenset[int]):
+    """Confine the calling thread; return what undoes it, or ``None``."""
+    with contextlib.suppress(Exception):
+        if sys.platform.startswith("linux"):
+            previous = os.sched_getaffinity(0)  # pyright: ignore[reportAttributeAccessIssue]
+            os.sched_setaffinity(0, cpus)  # pyright: ignore[reportAttributeAccessIssue]
+            return lambda: os.sched_setaffinity(0, previous)  # pyright: ignore[reportAttributeAccessIssue]
+        if sys.platform == "win32":
+            kernel32 = _kernel32()
+            thread = kernel32.GetCurrentThread()
+            previous = kernel32.SetThreadAffinityMask(thread, sum(1 << cpu for cpu in cpus))
+            if previous:
+                return lambda: kernel32.SetThreadAffinityMask(thread, previous)
+    return None
 
 
 def enter_background(plan: ThreadPlan) -> None:

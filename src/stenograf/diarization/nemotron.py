@@ -551,14 +551,7 @@ class _Models:
 
         paths = self._paths(fetch=True)
         assert paths is not None
-        options = onnxruntime.SessionOptions()
-        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
-        if stream:
-            plan = cpu.background_plan()
-            options.intra_op_num_threads = plan.threads
-            affinities = cpu.onnx_affinities(plan)
-            if affinities is not None:
-                options.add_session_config_entry("session.intra_op_thread_affinities", affinities)
+        options = cpu.session_options(cpu.background_plan() if stream else None)
         return onnxruntime.InferenceSession(
             str(paths[0]), options, providers=["CPUExecutionProvider"]
         )

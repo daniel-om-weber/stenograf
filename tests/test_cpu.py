@@ -164,3 +164,49 @@ def test_linux_smt_siblings_of_core_zero_count_once(tmp_path, monkeypatch):
         },
     )
     assert plan_for(_linux_cpus_from(tmp_path, monkeypatch)) == ThreadPlan(2, None)
+
+
+def test_session_options_never_spin_and_carry_the_plan():
+    bare = cpu.session_options(None)
+    assert bare.get_session_config_entry("session.intra_op.allow_spinning") == "0"
+    assert bare.intra_op_num_threads == 0  # ONNX Runtime's own count
+    pinned = cpu.session_options(ThreadPlan(3, frozenset({4, 5})))
+    assert pinned.get_session_config_entry("session.intra_op.allow_spinning") == "0"
+    assert pinned.intra_op_num_threads == 3
+    assert pinned.get_session_config_entry("session.intra_op_thread_affinities") == "5,6;5,6"
+
+
+def test_live_captions_keep_onnx_runtimes_count_on_macos(monkeypatch):
+    monkeypatch.setattr(cpu.sys, "platform", "darwin")
+    assert cpu.live_plan() is None
+    monkeypatch.setattr(cpu.sys, "platform", "linux")
+    monkeypatch.setattr(cpu, "background_plan", lambda: ThreadPlan(8, frozenset({4})))
+    assert cpu.live_plan() == ThreadPlan(8, frozenset({4}))
+
+
+def _fake_affinity(monkeypatch) -> list:
+    calls: list = []
+    monkeypatch.setattr(cpu.sys, "platform", "linux")
+    monkeypatch.setattr(cpu.os, "sched_getaffinity", lambda pid: {0, 1, 2, 3}, raising=False)
+    monkeypatch.setattr(
+        cpu.os, "sched_setaffinity", lambda pid, cpus: calls.append(set(cpus)), raising=False
+    )
+    return calls
+
+
+def test_confined_puts_the_thread_back_afterwards(monkeypatch):
+    calls = _fake_affinity(monkeypatch)
+    try:
+        with cpu.confined(ThreadPlan(2, frozenset({2, 3}))):
+            assert calls == [{2, 3}]
+            raise ValueError("decode failed")
+    except ValueError:
+        pass
+    assert calls == [{2, 3}, {0, 1, 2, 3}]
+
+
+def test_confined_without_cores_touches_nothing(monkeypatch):
+    calls = _fake_affinity(monkeypatch)
+    with cpu.confined(None), cpu.confined(ThreadPlan(8, None)):
+        pass
+    assert calls == []

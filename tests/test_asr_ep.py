@@ -98,7 +98,7 @@ def _stub_onnx_asr(monkeypatch, models_by_first_provider: dict) -> list:
     paths load_model was handed."""
     paths: list = []
 
-    def load_model(model_id, path=None, *, quantization=None, providers=None):
+    def load_model(model_id, path=None, *, quantization=None, providers=None, sess_options=None):
         paths.append(path)
         result = models_by_first_provider[providers[0]]
         if isinstance(result, Exception):
@@ -225,3 +225,34 @@ def test_backend_raises_when_the_build_lacks_the_provider(monkeypatch):
         backend.load()
     assert "not in this onnxruntime build" in str(excinfo.value)
     assert "DmlExecutionProvider" in str(excinfo.value)  # names what IS available
+
+
+def test_cpu_backend_decodes_on_the_live_plan(monkeypatch):
+    from contextlib import contextmanager
+
+    from stenograf.cpu import ThreadPlan
+
+    plan = ThreadPlan(2, frozenset({4, 5}))
+    handed: list = []
+    confined: list = []
+    model = _FakeModel()
+
+    def load_model(model_id, path=None, *, quantization=None, providers=None, sess_options=None):
+        handed.append(sess_options)
+        return model
+
+    @contextmanager
+    def confine(p):
+        confined.append(p)
+        yield
+
+    monkeypatch.setitem(sys.modules, "onnx_asr", types.SimpleNamespace(load_model=load_model))
+    monkeypatch.setattr(parakeet_onnx, "model_dir", lambda quantization=None: Path("/models"))
+    monkeypatch.setattr(parakeet_onnx, "live_plan", lambda: plan)
+    monkeypatch.setattr(parakeet_onnx, "confined", confine)
+    backend = ParakeetOnnxBackend()
+    backend.transcribe(np.zeros(1600, dtype=np.float32), None)
+    (options,) = handed
+    assert options.get_session_config_entry("session.intra_op.allow_spinning") == "0"
+    assert options.intra_op_num_threads == 2
+    assert confined == [plan]

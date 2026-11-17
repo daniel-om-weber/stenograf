@@ -1689,6 +1689,33 @@ spinning (4.5 CPU-s per step instead of 1.4, energy ~10 % higher) — set to
 one thread at `import stenograf`; and CachyOS's `ananicy-cpp` moves every
 Python process into `SCHED_IDLE`, capture and live captions included.
 
+**The live captions follow the same rule at normal priority** (Linux and
+Windows; macOS decodes on MLX, and its ONNX fallback only stops spinning).
+onnx-asr had run Parakeet on ONNX Runtime's defaults — spinning, 12 threads on
+any core. Measured on the same GPD: 20 min of the 2026-11-16 15:30 meeting,
+both channels, its 55 live windows decoded back to back with a 1-s pause after
+each (so pool threads go quiet as between real windows), net of idle, two
+runs per arm within 2 %:
+
+| arm | J / audio-minute | decode speed | CPU-s |
+|---|---|---|---|
+| ONNX Runtime defaults (spin on, 12 threads) | 62 | 15× realtime | 1,925 |
+| spin off | 26 | 15× | 1,090 |
+| spin off, 4 threads | 22 | 13× | 352 |
+| **spin off, 8 threads on the Zen5c** | **20** | **15×** (slowest window 14×) | 558 |
+
+Every arm produced the same 2,260 words. Through the shipped backend (10 min
+of the same meeting): 100 % of running samples on the Zen5c, 18 J per
+audio-minute against 68 for the released defaults, the same 898 words.
+Fewer compact cores, 10 min (a file copy ran alongside): 4 threads 9×
+realtime (slowest window 9×), 2 threads 6× (5×), 1 thread 4× (3×). Eight compact cores decode as fast
+as twelve on any core while four fast ones are slower, so the encoder still
+scales to eight threads; beyond that the per-token Python loop sets the pace
+(inferred). Not measured: with a glossary (the biased loop), with the
+diarization stream sharing the Zen5c (it yields while the captions are
+behind), and on a CPU with few or weak efficiency cores — nothing guards the
+rule there (Daniel's call, 2026-11-17).
+
 **Windows** reads the efficiency classes from `GetSystemCpuSetInformation`
 and pins the same way; not measured.
 
