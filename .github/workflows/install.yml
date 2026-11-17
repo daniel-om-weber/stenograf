@@ -1,0 +1,81 @@
+name: install
+
+# The README's one-line Windows install, run the way a user runs it: no uv on
+# the machine, Windows' default script policy, stenograf from PyPI, every
+# model downloaded. It installs the released package and fetches a few GB of
+# weights, so it runs when the installer changes, weekly (a new uv or a new
+# stenograf release can break a script that did not change) and by hand —
+# not on every push.
+on:
+  push:
+    branches: [main]
+    paths: [install.ps1, .github/workflows/install.yml]
+  pull_request:
+    paths: [install.ps1, .github/workflows/install.yml]
+  schedule:
+    - cron: "43 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # The last step that may be a PowerShell script: under Restricted the
+      # runner cannot run its own .ps1 step files, so every later step is cmd
+      # — which is also a shell users paste the command into.
+      - name: Make the runner look like a fresh PC
+        shell: powershell
+        run: |
+          # Restricted is the default on every Windows client. CurrentUser
+          # outranks the image's machine-wide setting, and the install
+          # command's -ExecutionPolicy Bypass (Process scope) must outrank it.
+          Set-ExecutionPolicy -Scope CurrentUser Restricted -Force
+          # A preinstalled uv would skip the branch that installs it.
+          Get-Command uv, uvx -All -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item $_.Source -Force }
+
+      - name: The precondition holds
+        shell: cmd
+        run: |
+          powershell -NoProfile -c "Get-ExecutionPolicy" | findstr /x Restricted || (echo ::error::the effective script policy is not Restricted & exit /b 1)
+          where uv >nul 2>&1 && (echo ::error::uv is still on PATH & exit /b 1)
+          exit /b 0
+
+      # The README command with the download swapped for this checkout's file,
+      # so a pull request tests its own script rather than main's.
+      - name: Install with the README command
+        shell: cmd
+        env:
+          # A typical PC has no Python; the runner has several on PATH.
+          UV_PYTHON_PREFERENCE: only-managed
+        run: powershell -NoProfile -ExecutionPolicy Bypass -c "Get-Content -Raw -Encoding UTF8 install.ps1 | iex"
+
+      - name: The app and both launchers are there
+        shell: cmd
+        run: |
+          "%USERPROFILE%\.local\bin\steno.exe" --version || exit /b 1
+          dir "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Stenograf.lnk" || exit /b 1
+          dir "%USERPROFILE%\Desktop\Stenograf.lnk" || exit /b 1
+
+      # Windows PowerShell 5.1 ignores a program's exit code unless the script
+      # checks it; this upgrade cannot reach any package index, so the
+      # installer must fail and must not print its success line.
+      - name: A failed upgrade is reported as a failure
+        shell: cmd
+        env:
+          UV_DEFAULT_INDEX: http://127.0.0.1:9/simple
+          UV_NO_CACHE: "1"
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -c "Get-Content -Raw -Encoding UTF8 install.ps1 | iex" > out.txt 2>&1
+          set rc=%errorlevel%
+          type out.txt
+          if %rc%==0 (echo ::error::the installer exited 0 although no package index was reachable & exit /b 1)
+          findstr /c:"Start it from the desktop launcher" out.txt >nul && (echo ::error::the installer printed its success line after a failed upgrade & exit /b 1)
+          exit /b 0

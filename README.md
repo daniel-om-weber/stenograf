@@ -48,7 +48,7 @@ untested and the installer above refuses to run there. WSL works, but records
 only audio playing inside WSL):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.ps1 | iex"
 ```
 
 That's the only command you have to type. Afterwards, open **Stenograf** from
