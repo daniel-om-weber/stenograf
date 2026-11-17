@@ -448,12 +448,41 @@ def test_install_script_parses_and_is_executable():
     assert script.stat().st_mode & 0o111
     subprocess.run(["sh", "-n", str(script)], check=True, timeout=TOOL_TIMEOUT_S)
     content = script.read_text()
-    assert "tool install --upgrade stenograf" in content
+    assert "tool install --upgrade --python 3.13 stenograf" in content
     assert "setup" in content  # the script must end in `steno setup`
 
 
+def test_every_install_command_names_a_supported_python():
+    """uv picks the interpreter before it reads requires-python and ignores
+    its upper bound, so an install command that lets uv choose fails on any
+    machine whose newest Python is outside the range (pyproject.toml has the
+    measurement). Every command a user is told to run names its Python, and
+    that version must stay inside the range."""
+    import re
+    import tomllib
+
+    from packaging.specifiers import SpecifierSet
+
+    from stenograf.doctor import REINSTALL_COMMAND
+
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    supported = SpecifierSet(pyproject["project"]["requires-python"])
+    sources = {
+        name: (REPO_ROOT / name).read_text(encoding="utf-8")
+        for name in ("install.sh", "install.ps1", "README.md")
+    }
+    sources["doctor.REINSTALL_COMMAND"] = REINSTALL_COMMAND
+    for name, text in sources.items():
+        commands = re.findall(r"tool install[^\n`\"]*stenograf", text)
+        assert commands, f"{name} no longer installs stenograf"
+        for command in commands:
+            pin = re.search(r"--python (\S+)", command)
+            assert pin, f"{name}: `{command}` lets uv pick the Python"
+            assert pin.group(1) in supported, f"{name}: {pin.group(1)} is outside {supported}"
+
+
 @pytest.mark.skipif(WINDOWS, reason="POSIX installer: exec bits and sh don't exist here")
-@pytest.mark.parametrize("reported", ["MINGW64_NT-10.0-26100", "MSYS_NT-10.0", "CYGWIN_NT-10.0"])
+@pytest.mark.parametrize("reported",["MINGW64_NT-10.0-26100", "MSYS_NT-10.0", "CYGWIN_NT-10.0"])
 def test_install_script_refuses_a_windows_unix_shell(tmp_path, reported):
     """Git Bash reports ``MINGW64_NT-…`` and must be turned away before it acts.
 
@@ -501,5 +530,5 @@ def test_install_ps1_parses():
     check = f"[ScriptBlock]::Create((Get-Content -Raw '{script}')) | Out-Null"
     subprocess.run(["powershell", "-NoProfile", "-Command", check], check=True, timeout=60)
     content = script.read_text()
-    assert "tool install --upgrade stenograf" in content
+    assert "tool install --upgrade --python 3.13 stenograf" in content
     assert "setup" in content  # the script must end in `steno setup`

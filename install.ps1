@@ -38,7 +38,10 @@ $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
 if (-not $uv) { $uv = $uvHome }
 Assert-Exists $uv "uv"
 
-& $uv tool install --upgrade stenograf
+# --python: uv picks the interpreter before it reads requires-python, so on a
+# PC with no Python 3.12/3.13 it fetches the newest one, and stenograf has no
+# install there (see pyproject.toml).
+& $uv tool install --upgrade --python 3.13 stenograf
 Assert-Ran "Installing stenograf"
 
 # A freshly created uv bin dir isn't on this shell's PATH yet — ask uv where it is.

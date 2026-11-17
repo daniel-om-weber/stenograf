@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 MACOS_MIN_VERSION = (14, 4)  # Core Audio process taps
 
+# Names its Python because uv picks the interpreter before it reads
+# requires-python, and ignores that range's upper bound (see pyproject.toml).
+REINSTALL_COMMAND = "uv tool install --force --python 3.13 stenograf"
+
 
 @dataclass(frozen=True)
 class Check:
@@ -307,7 +311,7 @@ def _desktop_app_check() -> Check:
         ok=False,
         detail=f"{_probe_reason(probe.stderr)} — the CLI (`steno start`, "
         "`steno transcribe`) works without it; to repair the window, reinstall with "
-        "`uv tool install --force stenograf`",
+        f"`{REINSTALL_COMMAND}`",
         optional=True,
     )
 

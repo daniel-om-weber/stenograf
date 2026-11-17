@@ -27,13 +27,15 @@ def run_gui(*, tray: bool = False) -> None:
     on such an install."""
     import click
 
+    from stenograf.doctor import REINSTALL_COMMAND
+
     try:
         from stenograf.gui.app import run
     except ImportError as exc:
         raise click.ClickException(
             "the desktop app needs Qt (PySide6), which this install cannot "
             "load. Reinstall stenograf:\n"
-            "  uv tool install --force stenograf\n"
+            f"  {REINSTALL_COMMAND}\n"
             "(or `pip install --upgrade --force-reinstall stenograf`). The "
             "CLI subcommands — `steno start`, `steno transcribe`, … — work "
             f"without it.\nThe import failed with: {exc}"

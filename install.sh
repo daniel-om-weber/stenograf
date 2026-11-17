@@ -30,7 +30,7 @@ main() {
             echo "If this shell already installed stenograf, that command upgrades" >&2
             echo "it in place and keeps the environment it built. Rebuild instead:" >&2
             echo "" >&2
-            echo "  uv tool install --force stenograf" >&2
+            echo "  uv tool install --force --python 3.13 stenograf" >&2
             exit 1
             ;;
     esac
@@ -53,7 +53,10 @@ main() {
     UV=$(command -v uv || true)
     [ -n "$UV" ] || UV="$HOME/.local/bin/uv"
 
-    "$UV" tool install --upgrade stenograf
+    # --python: uv picks the interpreter before it reads requires-python, so
+    # on a machine with no Python 3.12/3.13 it fetches the newest one, and
+    # stenograf has no install there (see pyproject.toml).
+    "$UV" tool install --upgrade --python 3.13 stenograf
 
     # A freshly created uv bin dir isn't on this shell's PATH yet — ask uv where it is.
     STENO=$(command -v steno || true)

@@ -71,7 +71,7 @@ On Linux the desktop app (Qt) sets the install floor: glibc 2.34 on x86_64,
 With [uv](https://docs.astral.sh/uv/) already installed:
 
 ```sh
-uv tool install stenograf
+uv tool install --python 3.13 stenograf
 steno doctor    # environment checks
 steno setup     # one-time: permission prompts, desktop launcher, model downloads
 ```
@@ -79,7 +79,7 @@ steno setup     # one-time: permission prompts, desktop launcher, model download
 macOS scopes the permission grant to the app the prompt came from, so run
 `steno setup` once from each terminal app (or IDE) you'll start meetings from.
 
-Pre-release channel: `uv tool install git+https://github.com/daniel-om-weber/stenograf`
+Pre-release channel: `uv tool install --python 3.13 git+https://github.com/daniel-om-weber/stenograf`
 installs the current main branch; building from the repository compiles the
 capture helper on your machine, which needs the Xcode command-line tools
 (`xcode-select --install`).
@@ -88,7 +88,7 @@ capture helper on your machine, which needs the Xcode command-line tools
 
 The PowerShell command above installs uv if missing, then stenograf, then the
 launcher — it is the supported way in. To rebuild an existing install rather
-than upgrade it in place, run `uv tool install --force stenograf`.
+than upgrade it in place, run `uv tool install --force --python 3.13 stenograf`.
 
 Windows never prompts for the microphone, so capture stays silent until you
 flip the toggle under Settings > Privacy & security > Microphone — `steno setup`

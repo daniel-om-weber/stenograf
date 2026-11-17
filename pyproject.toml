@@ -6,8 +6,12 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 # <3.14: the ASR chain (parakeet-mlx → librosa → numba) has no 3.14 support
-# yet; without the cap `uv tool install` on a 3.14-default machine backtracks
-# to ancient numba sdists and fails to build. The cap makes uv pick 3.12/3.13.
+# yet. pip honours the cap; uv does not steer by it — it picks the interpreter
+# first and ignores a requires-python upper bound. Measured 2026-11-17, uv
+# 0.13.9: on a Windows runner with no Python it fetched 3.15, resolved
+# stenograf 0.1.0 and failed building sherpa-onnx; `uv pip compile` gives
+# 0.1.0 on 3.15 (Windows, Linux) and no solution on macOS 3.14/3.15. Every
+# command that installs stenograf therefore names its Python (`--python 3.13`).
 requires-python = ">=3.12,<3.14"
 authors = [{ name = "Daniel Weber", email = "danielusweber@gmail.com" }]
 keywords = ["transcription", "meetings", "speech-to-text", "diarization", "local", "privacy"]

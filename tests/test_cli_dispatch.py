@@ -202,7 +202,7 @@ def test_the_desktop_app_says_how_to_repair_a_broken_qt(monkeypatch):
     monkeypatch.setitem(sys.modules, "stenograf.gui.app", None)  # import → ImportError
     with pytest.raises(click.ClickException) as excinfo:
         run_gui()
-    assert "uv tool install --force stenograf" in excinfo.value.message
+    assert "uv tool install --force --python 3.13 stenograf" in excinfo.value.message
     assert "[gui]" not in excinfo.value.message
     assert "stenograf.gui.app" in excinfo.value.message  # the original error is kept
 

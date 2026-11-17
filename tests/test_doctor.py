@@ -106,7 +106,7 @@ def test_desktop_app_check_quotes_the_actionable_line(monkeypatch, stderr, expec
 
     assert not check.ok
     assert expected in check.detail
-    assert "uv tool install --force stenograf" in check.detail
+    assert "uv tool install --force --python 3.13 stenograf" in check.detail
     assert len(check.detail) < 400  # a report line, not a dyld dump
 
 
