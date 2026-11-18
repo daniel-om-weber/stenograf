@@ -353,6 +353,19 @@ class ChunkLoop:
         """A step failed after it began writing the cache, so this state is no
         longer the loop's: start over."""
 
+    @property
+    def steps(self) -> int:
+        """Steps finished so far."""
+        return len(self._logits)
+
+    def probabilities(self, first_step: int) -> np.ndarray:
+        """The rows the steps from ``first_step`` on produced; they never
+        change once a step has finished."""
+        logits = self._logits[first_step:]
+        if not logits:
+            return np.zeros((0, 0), np.float32)
+        return _sigmoid(np.concatenate(logits, 0))
+
     def samples_needed(self) -> int:
         """Samples a recording still being captured must hold before the next
         step's inputs are final (:func:`final_mel_frames` inverted)."""
@@ -668,7 +681,12 @@ class NemotronStream(DiarizationStream):
     meeting never downloads, and without the model the stream does nothing.
     :meth:`finish` runs what is left and falls back to the offline loop from
     the start if the streamed state is unusable, so a stream can only ever
-    make the stop faster, never lose its result."""
+    make the stop faster, never lose its result.
+
+    Each step's speech goes to a :class:`VoiceCollector` in the same wake-up,
+    so the speakers' voiceprints are mostly built when the meeting stops. An
+    embedding that fails or is abandoned costs only itself: the collector
+    keeps what it had, the steps go on, and the stop embeds the rest."""
 
     def __init__(self, diarizer: NemotronDiarizer) -> None:
         self._diarizer = diarizer
@@ -676,6 +694,9 @@ class NemotronStream(DiarizationStream):
         self._session: Any = None
         self._run_options: Any = None
         self._interrupted = False
+        self._voices: VoiceCollector | None = None
+        self._voiced_steps = 0  # steps of the loop the collector has consumed
+        self._voices_failed = False
         config = self._models.config(fetch=False)
         self._loop = ChunkLoop(config) if config is not None else None
         if self._loop is not None:
@@ -683,6 +704,9 @@ class NemotronStream(DiarizationStream):
 
             self._run_options = onnxruntime.RunOptions()
             self._session = self._models.acquire_stream()
+            with contextlib.suppress(Exception):  # the stop embeds instead
+                if diarizer.embedder.load(fetch=False):
+                    self._voices = diarizer.embedder.collector(HOP)
 
     def samples_needed(self) -> int | None:
         if self._loop is None or self._loop.broken or self._session is None:
@@ -694,7 +718,33 @@ class NemotronStream(DiarizationStream):
         if self._interrupted or needed is None or num_samples < needed:
             return 0
         assert self._loop is not None
-        return self._loop.advance(self._session, read, num_samples, limit, self._run_options)
+        ran = self._loop.advance(self._session, read, num_samples, limit, self._run_options)
+        if ran:
+            self._collect_voices(read)
+        return ran
+
+    def _collect_voices(self, read: Reader) -> None:
+        loop, voices = self._loop, self._voices
+        if loop is None or voices is None or self._voices_failed:
+            return
+        embedder = self._diarizer.embedder
+        steps = loop.steps
+        try:
+            voices.feed(
+                loop.probabilities(self._voiced_steps) > 0.5,
+                read,
+                functools.partial(embedder.embed, run_options=self._run_options),
+            )
+        except Exception:  # noqa: BLE001 — the collector is as it was; the stop goes on from there
+            self._voices_failed = not self._interrupted
+            return
+        self._voiced_steps = steps
+
+    def take_voices(self) -> VoiceCollector | None:
+        """The collector for the audio :meth:`finish` just completed, or
+        ``None`` when the stop must embed from the start."""
+        voices, self._voices = self._voices, None
+        return voices
 
     def interrupt(self) -> None:
         self._interrupted = True
@@ -719,6 +769,7 @@ class NemotronStream(DiarizationStream):
                     if not loop.broken:
                         return loop.finish(session, read, len(audio))
             self.close()
+            self._voices = None  # collected over rows this recomputation does not vouch for
             session, config = self._models.offline()
             return speaker_probabilities(session, config, audio)
         finally:
@@ -742,3 +793,11 @@ class _ResumedNemotron(NemotronDiarizer):
 
     def probabilities(self, samples: np.ndarray) -> np.ndarray:
         return self._stream.finish(to_float32(samples))
+
+    def diarize_with_embeddings(
+        self, samples: np.ndarray, num_speakers: int | None = None
+    ) -> DiarizationResult:
+        if len(samples) < HOP:
+            return DiarizationResult([], {})
+        probs = self.probabilities(samples)
+        return self._voiced(probs, samples, num_speakers, self._stream.take_voices())

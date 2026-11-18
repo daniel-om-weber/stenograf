@@ -345,13 +345,90 @@ class _Embedder(VoiceEmbedder):
     """The real rule over a model-free ``embed``: a span's vector is its mean
     sample along x and its length along y, so tests can tell spans apart."""
 
-    def embed(self, audio):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+        self.fail = False
+
+    def load(self, *, fetch=True):
+        return True
+
+    def embed(self, audio, run_options=None):
+        if self.fail or (run_options is not None and run_options.terminate):
+            raise RuntimeError("Exiting due to terminate flag being set to true.")
         if len(audio) == 0:
             return None
+        self.calls += 1
         return np.array([float(audio.mean()), len(audio) / 16000, 1.0], np.float32)
 
     def pool(self):
         return None
+
+
+def _two_voices() -> np.ndarray:
+    """12 s the fake session hears as two slots taking 1.5 s turns."""
+    rng = np.random.default_rng(3)
+    return np.concatenate(
+        [(rng.standard_normal(24000) * (30.0, 1e-3)[k % 2]).astype(np.float32) for k in range(8)]
+    )
+
+
+def _same_voices(a, b) -> bool:
+    return a.turns == b.turns and all(
+        np.array_equal(a.embeddings[k], b.embeddings[k]) for k in a.embeddings | b.embeddings
+    )
+
+
+def test_stream_collects_voices_as_it_goes_and_matches_one_pass(fake_models):
+    make, _ = fake_models
+    audio = _two_voices()
+    want = make().diarize_with_embeddings(audio)
+    assert set(want.embeddings) == {"S0", "S1"}
+    d = make()
+    stream = d.stream()
+    assert _feed(stream, audio, len(audio) - 16000) > 0
+    during = d.embedder.calls
+    assert during > 0  # embedded while "recording"
+    got = stream.resumed().diarize_with_embeddings(audio)
+    assert _same_voices(got, want)
+    assert d.embedder.calls >= during
+
+
+def test_failing_embedding_never_stops_the_steps_and_the_stop_recovers(fake_models):
+    make, _ = fake_models
+    audio = _two_voices()
+    want = make().diarize_with_embeddings(audio)
+    d = make()
+    stream = d.stream()
+    d.embedder.fail = True
+    ran = _feed(stream, audio, len(audio) - 16000)
+    assert ran > 1 and d.embedder.calls == 0  # steps went on without voices
+    d.embedder.fail = False
+    assert _same_voices(stream.resumed().diarize_with_embeddings(audio), want)
+
+
+def test_embedding_abandoned_by_the_stop_is_redone_by_it(fake_models):
+    make, _ = fake_models
+    audio = _two_voices()
+    want = make().diarize_with_embeddings(audio)
+    d = make()
+    stream = d.stream()
+    _feed(stream, audio, 4 * 16000)
+    stream.interrupt()
+    stream._collect_voices(lambda lo, hi: audio[lo:hi])  # the call the stop cut short
+    assert not stream._voices_failed
+    assert _same_voices(stream.resumed().diarize_with_embeddings(audio), want)
+
+
+def test_recomputed_stream_embeds_from_the_start(fake_models, monkeypatch):
+    make, _ = fake_models
+    audio = _two_voices()
+    want = make().diarize_with_embeddings(audio)
+    stream = make().stream()
+    _feed(stream, audio, 4 * 16000)
+    stream._loop.broken = True  # pyright: ignore[reportOptionalMemberAccess]
+    assert _same_voices(stream.resumed().diarize_with_embeddings(audio), want)
+    assert stream.take_voices() is None
 
 
 def test_diarizer_pairs_turns_with_the_shared_embedder(monkeypatch):

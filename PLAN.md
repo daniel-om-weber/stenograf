@@ -669,7 +669,7 @@ smoked the single manylinux_2_28 wheel.
    (a) attribution and count accuracy of the streaming mode on the held-out
    AMI set against the offline 97.8 % (`eval/README.md`); (b) voiceprints
    accumulated per speaker during the meeting instead of over the full
-   audio at the end; (c) the meeting's power budget (~0.6 W live) with the
+   audio at the end — done 2026-11-18 for diarized channels (item 4); (c) the meeting's power budget (~0.6 W live) with the
    diarizer running alongside capture — for the offline chunk loop, which
    runs during the meeting since 2026-11-17, that is 0.014 W for two
    channels (`eval/README.md`, "The chunk loop runs during the meeting");
@@ -679,56 +679,34 @@ smoked the single manylinux_2_28 wheel.
    "Who spoke?" voice samples are already only a few seconds per speaker,
    so they survive this change if collected during the meeting instead.
 
-4. **Name speakers with ReDimNet2-B6 instead of ERes2Net-base (measured
-   2026-11-18, not built).** The checkpoint is `redimnet2-b6-vb2-lm`, trained
-   on VoxBlink2+VoxCeleb2 with large-margin fine-tuning. On 2–3 s clusters it
-   names 85.7 % right against 71.1 % at 1 % stranger accepts; on a 2 s
-   room-mic cluster, 69.7 % against 40.3 %. Full clusters stay at the ceiling.
-   Evidence: `eval/README.md`, "Speaker-embedding models in the naming seat".
-   What a switch has to settle:
-   (a) a variable-length export — the only public ONNX export is fixed at 6 s,
-   and its front end is 72 HTK mel bands, not Kaldi fbank — re-parity-checked
-   against `eval/embedders/redimnet.py`;
-   (b) saved profiles, which are model-bound (`voiceprints.py`), so every
-   user's profiles start over unless they are re-embedded from audio the
-   store does not keep;
-   (c) the threshold, re-picked with `threshold_pick.py` (its own 1 %-FAR
-   points are 0.57–0.62);
-   (d) about 3.4× base's CPU per second of speech (PyTorch reference code,
-   one thread) — the efficiency plan below;
-   (e) the weights' licence: the maintainer called the VoxBlink2 checkpoints
-   CC BY-NC-SA (IDRnD/ReDimNet #24). The VoxCeleb2-only checkpoint ties
-   statistically (83.3 %) if that ever matters.
-
-   **Efficiency plan (Daniel, 2026-11-18): embed during the meeting, as
-   cheaply as possible.** ReDimNet2 is not a streaming model, but a cluster's
-   voiceprint is a duration-weighted mean of per-span vectors, so spans can be
-   embedded as the diarizer's chunk loop settles them and only the mean is
-   left for the stop — the same work as item 3(b). Levers, largest first:
-   1. *Stop once a speaker has enough speech* — the first N seconds, the
-      cut a running meeting offers.
-   2. *Efficiency cores at background QoS*, as the chunk loop runs.
-   3. *A smaller size.*
-   4. *A leaner runtime*: the ONNX export of (a) on the onnxruntime already
-      shipped; the GPU only with spans padded or cut to a few fixed lengths
-      (every new length recompiles — ~10× slower than its fixed-shape
-      benchmark otherwise), and faster is not yet shown to be fewer joules;
-      CoreML/ANE would be a macOS-only path again.
-
-   Measured 2026-11-18 (`eval/README.md`, "How much of a cluster ReDimNet2
-   needs"): B6 names from the first 60 s of a speaker exactly as from the
-   whole cluster, a sixth of the work; of the smaller sizes only B3 on the
-   large training set keeps most of the gain (82.4 against 85.7, not
-   separable), B0 and B2 are no better than the shipped model. So lever 1 is
-   "stop a speaker at 60–120 s", and lever 3 is B3 only if the energy number
-   asks for it.
-
-   Still unmeasured: **energy** per minute of speech,
-   `eval/embedders/energy.sh` — base, B6 and B3 at background QoS and
-   foreground, plus B6 on MPS at one fixed length; quiet M4 Max required.
-   The user's calls exist only on the Mac, so `build` and `build-caps` cover
-   AMI alone elsewhere; embedding a manifest built on the Mac runs anywhere
-   once the wav paths are rewritten.
+4. **ReDimNet2-B6 names speakers (built 2026-11-18) — what it left.**
+   Evidence and every number: `eval/README.md`, "Speaker-embedding models in
+   the naming seat" and the three sections after it.
+   (a) **The model file is not hosted yet, so `main` cannot be released.**
+   `assets.SPEAKER_EMBEDDING` pins `redimnet2-b6-vb2-lm.onnx` as an asset of
+   the GitHub release tagged `models-1` (not a `v*` tag, so the publish
+   workflow ignores it). Until that release exists, `steno setup` fails on a
+   machine without the file; a development machine works from a copy in the
+   model cache. `eval/embedders/export_redimnet.py` rebuilds the file from
+   the publishers' checkpoint.
+   (b) **Energy** per minute of speech, unmeasured:
+   `eval/embedders/energy.sh` with `shipped.py` at background QoS and
+   foreground, on a quiet M4 Max. It decides whether the 120 s budget stays
+   (60 s names as well, with a narrower margin) and whether B3 on the large
+   training set — 82.4 against 85.7, not separable — is worth its saving.
+   (c) **Memory during a meeting.** The embedding session settles at 860 MB
+   while it collects and is held until the meeting ends; measured alone, not
+   beside the live pipeline, and not on an 8–16 GB machine.
+   (d) **Licence.** The weights are CC BY-NC-SA 4.0 by the maintainers'
+   statement (IDRnD/ReDimNet #24) — non-commercial. The VoxCeleb2-only
+   checkpoint ties statistically (83.3 %) if that ever matters.
+   (e) **A solo channel is still embedded at the stop**: with a stated count
+   of one no diarizer runs, so nothing collects during the meeting. Same
+   rule, bounded by the same 120 s.
+   (f) **A fixed-shape path** (GPU, CoreML) would need spans cut or padded to
+   a few lengths, which changes what a voiceprint is for the short clusters
+   the model was chosen for; unscored, and only worth scoring if (b) says the
+   CPU path costs too much.
 
 Out of scope: streaming diarization in live captions — Nemotron has an online
 mode, but live captions carry no speaker labels.
@@ -799,8 +777,8 @@ Kept here so future sessions don't re-open them.
     naming seat, ERes2Net-large (68.8 vs 71.1 % short-cluster naming,
     interval spanning zero, domain-drifting scores) and TitaNet-L (64.1 %,
     collapses headset-to-room) lose; w2v-BERT 2.0 SV beats base but trails
-    ReDimNet2 (`eval/README.md`). No trigger. ReDimNet2 won and is open
-    item 4 of the Nemotron section.
+    ReDimNet2 (`eval/README.md`). No trigger. ReDimNet2 won and ships;
+    what it left is item 4 of the Nemotron section.
   - **Automatic profile updates (2026-08-07, reaffirmed post-ward):**
     ungateable wrong updates above every implementable bar while the oracle
     ties no-update everywhere; growth stays user-confirmed. Re-run

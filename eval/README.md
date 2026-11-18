@@ -1742,6 +1742,33 @@ not re-run: it reads a diarize-and-transcribe pass over the whole corpus made
 with the previous embedder, and these trials cover its arms (headset and
 cluster enrollment, 2 s, 3 s and full) on more sets.
 
+#### Voiceprints collected during the meeting (2026-11-18)
+
+Each diarizer step's speech goes to the `VoiceCollector` in the same wake-up
+(`NemotronStream`), so the stop embeds only what the last step or two
+settled. The production path (`NemotronDiarizer().stream()` fed in 0.5 s
+blocks, then `resumed().diarize_with_embeddings`) against one pass over the
+finished recording, from stored meetings' `audio.opus`, with no count and
+with a count of 2:
+
+| meeting, channel | speakers (no count → count 2) | embedded while recording | left for the stop | turns and voiceprints |
+|---|---|---|---|---|
+| 6.1 min, mic | 2 → 2 | 65 spans, 176 s | 1 span, 1 s | bit-identical |
+| 8.0 min, mic | 2 → 2 | 87 spans, 198 s | 3 spans, 4 s | bit-identical |
+| 25.8 min, mic | 1 → 1 | 44 spans, 81 s | none | bit-identical |
+| 25.8 min, system | 3 → 2 | 157 spans, 360 s | none | bit-identical |
+| 49.4 min, mic | 4 → 2 | 100 spans, 248 s | none | bit-identical |
+
+The stop's voice work fell to 0.2–0.4 s per channel on a performance core,
+the diarizer's last steps included. A slot the count removes costs its
+embeddings and nothing else. The 8-minute meeting replayed at meeting pace
+through `steno start` (live captions, diarization, no count) and again
+unpaced without the live pass gave the same two speakers; their voiceprints
+in `voiceprints.json` differ by 1.5e-8 at most, one float32 step, in the
+sidecar's re-normalisation. Not measured: the collection's energy on the
+efficiency cores, and its memory beside a live meeting — the session alone
+settles at 860 MB (section above).
+
 #### The chunk loop runs during the meeting (2026-11-17)
 
 M4 Max (12 P + 4 E cores), 48 GB, macOS 27.2, onnxruntime 1.27.0, mains. A
