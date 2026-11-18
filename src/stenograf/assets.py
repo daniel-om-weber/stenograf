@@ -61,7 +61,7 @@ SPEAKER_EMBEDDING = ModelAsset(
     # naming short clusters (2026-11-18, eval/README.md). The name is the
     # profile store's model key: changing it retires every saved profile.
     url=f"{_MODELS}/redimnet2-b6-vb2-lm.onnx",
-    sha256="39661e6a793d792cdf318a4eaa3b0efb865decce8199e0c41a6560a84df7ea49",
+    sha256="ac1655c217d86b68e93c8a03ca8bbc16b4373016ae177765059dac38e77a2327",
 )
 
 
