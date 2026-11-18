@@ -41,18 +41,20 @@ def merge(manifest: Path, out: Path, shards: list[Path]) -> None:
         model = str(d["model"])
         seconds += float(d["seconds_cpu"])
         audio += float(d["audio_seconds"])
+        # An .npz member is decompressed again on every access.
+        emb, offsets = d["emb"], d["offsets"]
         for k, iid in enumerate(d["item_ids"]):
-            rows[str(iid)] = d["emb"][d["offsets"][k] : d["offsets"][k + 1]]
+            rows[str(iid)] = emb[offsets[k] : offsets[k + 1]]
     missing = [i for i in order if i not in rows]
     if missing:
         raise SystemExit(f"{len(missing)} items missing, first {missing[0]}")
     parts = [rows[i] for i in order]
-    offsets = np.concatenate([[0], np.cumsum([len(p) for p in parts])]).astype(np.int64)
+    bounds = np.concatenate([[0], np.cumsum([len(p) for p in parts])]).astype(np.int64)
     tmp = out.with_name(out.stem + ".tmp.npz")
     np.savez(
         tmp,
         emb=np.concatenate(parts).astype(np.float32),
-        offsets=offsets,
+        offsets=bounds,
         item_ids=np.array(order),
         model=np.array(model),
         seconds_cpu=np.array(seconds),

@@ -1615,6 +1615,64 @@ Limits:
   processes, one thread each (`eval/embedders/shard.py`); 37 jobs took
   1 h 50 min on 12 cores.
 
+#### How much of a cluster ReDimNet2 needs, and how small it can be (2026-11-18)
+
+Both measured on the frozen items of the section above; the new embeddings
+were computed on a Ryzen HX 370 under Linux, and its vectors match the M4
+Max's (310 clusters embedded on both, cosine 1.00000).
+
+**Cluster cuts.** Every full cluster and every enrollment was cut five ways
+(`reid_models.py build-caps`, 63.8 h in all) and scored on the 287 full-cluster
+trials of the five sets (72/72/72/54/17; `score-caps`), at each model's
+all-duration threshold (base 0.616, B6 0.621). DIR is the macro over the sets;
+margin is the worst trial's true-profile score minus its best stranger's.
+
+| profile cut → cluster cut | base DIR | base margin | B6 DIR | B6 margin |
+|---|---|---|---|---|
+| first 30 s → first 30 s | 99.2 | +0.090 | 99.7 | +0.195 |
+| first 60 s → first 60 s | 99.7 | +0.054 | 100 | +0.162 |
+| first 120 s → first 120 s | 99.7 | +0.108 | 100 | +0.215 |
+| 120 s evenly → 120 s evenly | 99.7 | +0.108 | 100 | +0.218 |
+| whole → whole | 99.7 | +0.088 | 100 | +0.203 |
+| whole → first 30 s | 99.2 | −0.001 | 100 | +0.187 |
+| whole → first 60 s | 99.7 | +0.035 | 100 | +0.173 |
+| first 30 s → whole | 99.7 | +0.188 | 100 | +0.153 |
+
+- **B6 names from the first 60 s of a speaker exactly as from everything.**
+  No trial is lost in any combination at 60 s or more, and its worst margin
+  never falls below +0.13 (first 30 s against first 120 s) — base's goes
+  negative. A whole cluster holds a median 374 s of speech, so the first 60 s
+  is about a sixth of the work.
+- **30 s is the edge**: one room-mic trial of 72 goes unnamed when profile and
+  cluster are both 30 s; none when the profile is whole.
+- The first-60 s vector sits at cosine 0.979 (median; minimum 0.911) to the
+  whole-cluster vector, first-120 s at 0.991 (0.940).
+- Limit: full clusters are at the ceiling, so this shows no loss among 287
+  trials, not that none exists; AMI meetings run about half an hour.
+
+**Smaller sizes.** Decision metric as above (short = mean of 2 s and 3 s macro
+DIR at 1 % stranger accepts; interval against base).
+
+| model | training data | 2 s | 3 s | short | full |
+|---|---|---|---|---|---|
+| base | | 64.5 | 77.6 | 71.1 | 99.4 |
+| `redimnet2-b0-vox2-lm` | VoxCeleb2 | 66.2 | 77.0 | 71.6 [−8.3, +4.4] | 98.9 |
+| `redimnet2-b2-vox2-lm` | VoxCeleb2 | 66.1 | 79.2 | 72.6 [−3.7, +4.3] | 98.9 |
+| `redimnet2-b3-vox2-lm` | VoxCeleb2 | 70.3 | 78.7 | 74.5 [+0.7, +7.3] | 100 |
+| `redimnet2-b3-vb2cnc-lm` | + VoxBlink2, CN-Celeb | 77.8 | 87.0 | 82.4 [+5.9, +15.4] | 100 |
+| `redimnet2-b6-vb2-lm` | + VoxBlink2 | 81.9 | 89.6 | 85.7 [+7.4, +18.6] | 100 |
+
+- **B3 on the large training set is the only smaller size worth having**: it
+  trails B6 by 3.3 points [−0.7, +5.5] — not separable — and is behind on
+  every set at 2 s (room mic 64.2 against 69.7, headset-to-room 53.5 against
+  61.9).
+- **B0 and B2 are no better than base.** They are published on VoxCeleb2
+  only, and at B3 that training set alone costs 8 points, so size and data
+  are confounded below B3.
+- Cost is not settled: the sizes ran on the Ryzen while its power profile
+  changed, so their seconds do not compare. Energy per minute of speech on a
+  quiet machine (`eval/embedders/energy.sh`) is unmeasured.
+
 #### The chunk loop runs during the meeting (2026-11-17)
 
 M4 Max (12 P + 4 E cores), 48 GB, macOS 27.2, onnxruntime 1.27.0, mains. A
