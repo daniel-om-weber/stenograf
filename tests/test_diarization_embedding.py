@@ -23,7 +23,12 @@ import pytest
 
 from stenograf.audio import SAMPLE_RATE, l2_normalize
 from stenograf.diarization.base import SpeakerTurn
-from stenograf.diarization.embedding import VoiceEmbedder, cluster_embeddings
+from stenograf.diarization.embedding import (
+    VoiceCollector,
+    VoiceEmbedder,
+    VoiceRule,
+    cluster_embeddings,
+)
 
 
 class _FakeStream:
@@ -142,9 +147,9 @@ def test_overlap_spans_ignore_self_overlap_and_touching_turns():
     # Touching turns of different clusters share no time.
     assert _overlap_spans({"S0": turns("S0", (0.0, 1.0)), "S1": turns("S1", (1.0, 2.0))}) == []
     # A genuine cross-cluster overlap, exactly the shared interval.
-    assert _overlap_spans(
-        {"S0": turns("S0", (0.0, 2.0)), "S1": turns("S1", (1.0, 3.0))}
-    ) == [(1.0, 2.0)]
+    assert _overlap_spans({"S0": turns("S0", (0.0, 2.0)), "S1": turns("S1", (1.0, 3.0))}) == [
+        (1.0, 2.0)
+    ]
 
 
 def test_subtract_spans_splits_and_clips():
@@ -179,3 +184,120 @@ def test_pool_workers_falls_back_when_probes_fail(monkeypatch):
     ceiling = min(embedding._MAX_THREADS, os.cpu_count() or 1)
     if sys.platform not in ("darwin",) and not sys.platform.startswith("linux"):
         assert workers <= ceiling
+
+
+# -- the rule over diarizer activity ---------------------------------------
+
+_HOP = 160
+
+
+def _span_embed(calls: list[tuple[int, int]] | None = None):
+    """A model-free ``embed`` over audio whose sample i holds the value i:
+    the vector encodes where the span starts and how long it is."""
+
+    def embed(audio: np.ndarray) -> np.ndarray | None:
+        if len(audio) == 0:
+            return None
+        if calls is not None:
+            calls.append((int(audio[0]), int(audio[0]) + len(audio)))
+        return np.array([float(audio[0]) + 1.0, float(len(audio)), 1.0])
+
+    return embed
+
+
+def _ramp(frames: int) -> np.ndarray:
+    return np.arange(frames * _HOP, dtype=np.float64)
+
+
+def _collect(active: np.ndarray, rule: VoiceRule, cuts: list[int], calls=None):
+    audio = _ramp(len(active))
+    collector = VoiceCollector(rule, hop=_HOP)
+    read = lambda lo, hi: audio[lo:hi]  # noqa: E731
+    embed = _span_embed(calls)
+    for lo, hi in zip([0, *cuts], [*cuts, len(active)], strict=True):
+        collector.feed(active[lo:hi], read, embed)
+    raw = {
+        slot: [(0, len(active) * _HOP)] for slot in range(active.shape[1]) if active[:, slot].any()
+    }
+    return collector.finish(raw, read, embed)
+
+
+def _activity(frames: int, *runs: tuple[int, int, int]) -> np.ndarray:
+    active = np.zeros((frames, 3), bool)
+    for slot, lo, hi in runs:
+        active[lo:hi, slot] = True
+    return active
+
+
+_RUNS = _activity(
+    3000,
+    (0, 0, 700),  # crosses the cuts below
+    (1, 600, 640),  # overlaps slot 0: neither banks 600–640
+    (0, 900, 2200),
+    (1, 2300, 2330),  # a fragment only
+    (2, 2500, 3000),  # still running when the activity ends
+)
+
+
+@pytest.mark.parametrize("rule", [VoiceRule(), VoiceRule(budget_s=8.0, max_span_s=3.0)])
+@pytest.mark.parametrize(
+    "cuts", [[1], [650, 651], [100, 999, 2100, 2999], list(range(50, 3000, 50))]
+)
+def test_collector_result_does_not_depend_on_how_activity_is_fed(rule, cuts):
+    whole = _collect(_RUNS, rule, [])
+    streamed = _collect(_RUNS, rule, cuts)
+    assert set(whole) == set(streamed) == {0, 1, 2}
+    for slot in whole:
+        assert np.array_equal(whole[slot], streamed[slot])
+
+
+def test_collector_embeds_only_speech_a_slot_has_alone():
+    calls: list[tuple[int, int]] = []
+    _collect(_RUNS, VoiceRule(), [], calls)
+    spans = sorted((lo // _HOP, hi // _HOP) for lo, hi in calls)
+    # Slot 0: 0–600, 640–700, 900–2200. Slot 1 never had half a second alone,
+    # so its fragment stands in. Slot 2's open run is closed by the end.
+    assert spans == [(0, 600), (640, 700), (900, 2200), (2300, 2330), (2500, 3000)]
+
+
+def test_collector_budget_takes_the_first_seconds_and_splits_long_spans():
+    calls: list[tuple[int, int]] = []
+    _collect(_RUNS, VoiceRule(budget_s=8.0, max_span_s=3.0), [], calls)
+    slot0 = sorted((lo // _HOP, hi // _HOP) for lo, hi in calls if lo < 2300 * _HOP)
+    # 6 s in two equal parts, 0.6 s, then 1.4 s of the third run fills 8 s.
+    assert slot0 == [(0, 300), (300, 600), (640, 700), (900, 1040)]
+
+
+def test_collector_falls_back_to_raw_turns_for_a_slot_never_alone():
+    active = _activity(400, (0, 0, 400), (1, 100, 300))
+    calls: list[tuple[int, int]] = []
+    voices = _collect(active, VoiceRule(), [150], calls)
+    assert set(voices) == {0, 1}
+    assert (0, 400 * _HOP) in calls  # slot 1's raw turn, as handed to finish()
+
+
+def test_collector_keeps_its_state_when_an_embedding_call_is_abandoned():
+    audio = _ramp(len(_RUNS))
+    read = lambda lo, hi: audio[lo:hi]  # noqa: E731
+    collector = VoiceCollector(VoiceRule(), hop=_HOP)
+    collector.feed(_RUNS[:1000], read, _span_embed())
+
+    def abandoned(_audio):
+        raise RuntimeError("terminated")
+
+    with pytest.raises(RuntimeError):
+        collector.feed(_RUNS[1000:], read, abandoned)
+    assert collector.frames == 1000
+    collector.feed(_RUNS[1000:], read, _span_embed())
+    raw = {slot: [(0, 1)] for slot in range(3)}
+    resumed = collector.finish(raw, read, _span_embed())
+    whole = _collect(_RUNS, VoiceRule(), [])
+    assert all(np.array_equal(resumed[slot], whole[slot]) for slot in whole)
+
+
+def test_cluster_embeddings_applies_the_budget_in_time_order():
+    calls: list[tuple[int, int]] = []
+    audio = np.arange(10 * SAMPLE_RATE, dtype=np.float32)
+    turns = _turns(("S0", 4.0, 9.0), ("S0", 0.0, 2.0))
+    cluster_embeddings(turns, audio, _span_embed(calls), rule=VoiceRule(budget_s=3.0))
+    assert calls == [(0, 2 * SAMPLE_RATE), (4 * SAMPLE_RATE, 5 * SAMPLE_RATE)]

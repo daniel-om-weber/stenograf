@@ -43,7 +43,7 @@ from stenograf.diarization.base import (
     Reader,
     SpeakerTurn,
 )
-from stenograf.diarization.embedding import VoiceEmbedder
+from stenograf.diarization.embedding import VoiceCollector, VoiceEmbedder
 
 N_FFT = 512
 WIN_LENGTH = 400
@@ -613,8 +613,35 @@ class NemotronDiarizer(Diarizer):
     def diarize_with_embeddings(
         self, samples: np.ndarray, num_speakers: int | None = None
     ) -> DiarizationResult:
-        turns = self.diarize(samples, num_speakers)
-        return DiarizationResult(turns, self.embedder.cluster_embeddings(turns, samples))
+        if len(samples) < HOP:
+            return DiarizationResult([], {})
+        return self._voiced(self.probabilities(samples), samples, num_speakers, None)
+
+    def _voiced(
+        self,
+        probs: np.ndarray,
+        samples: np.ndarray,
+        num_speakers: int | None,
+        collector: VoiceCollector | None,
+    ) -> DiarizationResult:
+        """Turns, and each kept slot's voice from ``collector`` once it has
+        seen the rest of ``probs`` (a fresh one sees them all)."""
+        turns = turns_from_probs(probs, num_speakers)
+        audio = to_float32(samples)
+        embedder = self.embedder
+        if collector is None or collector.frames > len(probs):
+            collector = embedder.collector(HOP)
+
+        def read(lo: int, hi: int) -> np.ndarray:
+            return audio[lo:hi]
+
+        collector.feed(probs[collector.frames :] > 0.5, read, embedder.embed, pool=embedder.pool())
+        raw: dict[int, list[tuple[int, int]]] = {}
+        for turn in turns:
+            span = (round(turn.start * _FRAMES_PER_SECOND), round(turn.end * _FRAMES_PER_SECOND))
+            raw.setdefault(int(turn.speaker[1:]), []).append((span[0] * HOP, span[1] * HOP))
+        voices = collector.finish(raw, read, embedder.embed, pool=embedder.pool())
+        return DiarizationResult(turns, {f"S{slot}": voice for slot, voice in voices.items()})
 
     def channel_embedding(
         self, samples: np.ndarray, turns: list[SpeakerTurn]

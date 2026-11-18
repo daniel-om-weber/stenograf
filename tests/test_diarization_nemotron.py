@@ -20,6 +20,7 @@ from stenograf import assets
 from stenograf.config import MAX_SPEAKERS
 from stenograf.diarization import nemotron
 from stenograf.diarization.base import SpeakerTurn
+from stenograf.diarization.embedding import VoiceEmbedder
 from stenograf.diarization.nemotron import (
     HOP,
     NUM_MELS,
@@ -340,12 +341,17 @@ def test_stream_never_downloads(monkeypatch):
     assert stream.advance(lambda lo, hi: np.zeros(hi - lo, np.float32), 10 * 16000) == 0
 
 
-class _Embedder:
-    def cluster_embeddings(self, turns, samples):
-        return {t.speaker: np.ones(2, np.float32) for t in turns}
+class _Embedder(VoiceEmbedder):
+    """The real rule over a model-free ``embed``: a span's vector is its mean
+    sample along x and its length along y, so tests can tell spans apart."""
 
-    def channel_embedding(self, samples, turns):
-        return np.ones(2, np.float32) if turns else None
+    def embed(self, audio):
+        if len(audio) == 0:
+            return None
+        return np.array([float(audio.mean()), len(audio) / 16000, 1.0], np.float32)
+
+    def pool(self):
+        return None
 
 
 def test_diarizer_pairs_turns_with_the_shared_embedder(monkeypatch):
@@ -358,6 +364,21 @@ def test_diarizer_pairs_turns_with_the_shared_embedder(monkeypatch):
     assert [t.speaker for t in result.turns] == ["S0", "S3"]
     assert set(result.embeddings) == {"S0", "S3"}
     assert d.diarize(np.zeros(HOP - 1, np.int16)) == []  # no valid frame: no model call
+    assert d.diarize_with_embeddings(np.zeros(HOP - 1, np.int16)).turns == []
+
+
+def test_a_capped_slot_has_no_voice_and_its_overlap_stays_excluded(monkeypatch):
+    d = NemotronDiarizer(embedder=_Embedder())  # pyright: ignore[reportArgumentType]
+    probs = np.zeros((400, 8), np.float32)
+    probs[0:300, 0] = 0.9
+    probs[200:260, 5] = 0.9  # crosstalk over slot 0, removed by the count
+    monkeypatch.setattr(d, "probabilities", lambda samples: probs)
+    audio = np.zeros(4 * 16000, np.float32)
+    audio[200 * HOP : 260 * HOP] = 1.0
+    result = d.diarize_with_embeddings(audio, num_speakers=1)
+    assert {t.speaker for t in result.turns} == {"S0"}
+    assert set(result.embeddings) == {"S0"}
+    assert result.embeddings["S0"][0] == 0.0  # nothing of the overlapped stretch
 
 
 def test_nemotron_assets_share_one_directory():

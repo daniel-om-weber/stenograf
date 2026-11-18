@@ -9,12 +9,15 @@ channel's spans in parallel on the embedder's own worker pool."""
 
 from __future__ import annotations
 
+import copy
+import math
 import os
 import subprocess
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +29,8 @@ from stenograf.diarization.base import SpeakerTurn
 MIN_EMBED_SECONDS = 0.5
 """Speech spans shorter than this are too brief for a reliable voice embedding;
 they are skipped when a cluster has any longer span, and used only as a last
-resort (see :func:`cluster_embeddings`)."""
+resort (see :func:`_preferred`)."""
+_MIN_EMBED_SAMPLES = int(MIN_EMBED_SECONDS * SAMPLE_RATE)
 
 _MAX_THREADS = 8
 """The pool's fallback worker cap where physical cores are unknowable. The
@@ -101,6 +105,21 @@ def _pool_workers() -> int:
     return max(1, fallback)
 
 
+@dataclass(frozen=True)
+class VoiceRule:
+    """Which of a speaker's speech becomes the voiceprint.
+
+    One rule for every path — a live meeting's stop, a transcribed file, an
+    enrollment — because a saved profile is only comparable with a cluster
+    built the same way."""
+
+    budget_s: float | None = None
+    """Speech per speaker, taken in meeting order; ``None`` = all of it."""
+    max_span_s: float | None = None
+    """A longer span is embedded as equal parts no longer than this, which
+    bounds one forward pass's memory and time; ``None`` = never split."""
+
+
 class VoiceEmbedder:
     """The extractor (lazy), its worker pool, and per-cluster voices.
 
@@ -134,11 +153,18 @@ class VoiceEmbedder:
                     )
         return self._pool
 
+    rule = VoiceRule()
+
     def cluster_embeddings(
         self, turns: list[SpeakerTurn], samples: np.ndarray
     ) -> dict[str, np.ndarray]:
         """:func:`cluster_embeddings` through this embedder and its pool."""
-        return cluster_embeddings(turns, samples, self.embed, pool=self.pool())
+        return cluster_embeddings(turns, samples, self.embed, pool=self.pool(), rule=self.rule)
+
+    def collector(self, hop: int) -> VoiceCollector:
+        """A :class:`VoiceCollector` under this embedder's rule, for activity
+        rows ``hop`` samples apart."""
+        return VoiceCollector(self.rule, hop=hop)
 
     def channel_embedding(
         self, samples: np.ndarray, turns: list[SpeakerTurn]
@@ -186,58 +212,213 @@ class VoiceEmbedder:
         return self._extractor
 
 
+Span = tuple[int, int]
+"""``[lo, hi)`` in samples of one channel."""
+
+
+class _Sums:
+    """Per-speaker running sums of duration-weighted span embeddings.
+
+    A voiceprint is a mean, so it needs no span kept: the weighted sum and
+    how much speech was planned are the whole state. Planning and committing
+    are separate so a caller can embed between them and lose nothing when an
+    embedding call is abandoned."""
+
+    def __init__(self, rule: VoiceRule) -> None:
+        self.rule = rule
+        self._sum: dict[Hashable, np.ndarray] = {}
+        self._planned: dict[Hashable, int] = {}  # samples handed to plan(), embedded or not
+
+    def room(self, speaker: Hashable) -> int | None:
+        """Samples ``speaker`` may still bank; ``None`` = no budget."""
+        if self.rule.budget_s is None:
+            return None
+        budget = int(self.rule.budget_s * SAMPLE_RATE)
+        return max(0, budget - self._planned.get(speaker, 0))
+
+    def planned(self, speaker: Hashable) -> bool:
+        return self._planned.get(speaker, 0) > 0
+
+    def plan(self, speaker: Hashable, spans: list[Span]) -> list[tuple[Hashable, Span]]:
+        """The pieces of ``spans`` (time-ordered) to embed for ``speaker``:
+        cut where the budget fills, split at the rule's span limit. Counts
+        them against the budget whether or not they embed — the budget is
+        "the first N seconds of speech", the same seconds on every path."""
+        jobs: list[tuple[Hashable, Span]] = []
+        for lo, hi in spans:
+            room = self.room(speaker)
+            if room is not None:
+                hi = min(hi, lo + room)
+            if hi <= lo:
+                continue
+            self._planned[speaker] = self._planned.get(speaker, 0) + hi - lo
+            jobs += [(speaker, part) for part in self._split(lo, hi)]
+        return jobs
+
+    def _split(self, lo: int, hi: int) -> list[Span]:
+        if self.rule.max_span_s is None:
+            return [(lo, hi)]
+        parts = math.ceil((hi - lo) / (self.rule.max_span_s * SAMPLE_RATE))
+        edges = np.linspace(lo, hi, parts + 1).round().astype(int).tolist()
+        return list(zip(edges[:-1], edges[1:], strict=True))
+
+    def bank(self, jobs: list[tuple[Hashable, Span]], vectors: list[np.ndarray | None]) -> None:
+        for (speaker, (lo, hi)), vector in zip(jobs, vectors, strict=True):
+            if vector is not None:
+                weighted = np.asarray(vector, np.float64) * ((hi - lo) / SAMPLE_RATE)
+                self._sum[speaker] = self._sum.get(speaker, 0.0) + weighted
+
+    def vectors(self) -> dict[Hashable, np.ndarray]:
+        return {k: l2_normalize(v).astype(np.float32) for k, v in self._sum.items()}
+
+
+Embed = Callable[[np.ndarray], np.ndarray | None]
+
+
+def _run(
+    jobs: list[tuple[Hashable, Span]],
+    read: Callable[[int, int], np.ndarray],
+    embed: Embed,
+    pool: ThreadPoolExecutor | None,
+) -> list[np.ndarray | None]:
+    # Order-preserving, so each speaker's sum adds in the sequential order
+    # and the result does not depend on the pool.
+    mapper = pool.map if pool is not None else map
+    return list(mapper(embed, [read(lo, hi) for _, (lo, hi) in jobs]))
+
+
+def _preferred(clean: list[Span], raw: list[Span]) -> list[Span]:
+    """The spans a speaker's voice comes from: clean ones of at least
+    :data:`MIN_EMBED_SECONDS` if there are any, else every clean one, else
+    the raw turns — a contaminated embedding still serves naming and
+    enrollment, an absent one blocks them."""
+    spans = clean or raw
+    return [s for s in spans if s[1] - s[0] >= _MIN_EMBED_SAMPLES] or spans
+
+
+class VoiceCollector:
+    """One channel's voiceprints, fed the diarizer's speaker activity in
+    meeting order — all at once, or step by step while the meeting records.
+
+    Speech counts as a speaker's own only where no other slot is active:
+    overlapped audio measurably worsens the embedding (12.84 → 14.11 % EER
+    with overlap included, and frame-level identity in overlap is near-chance
+    — ``eval/diarization-sota-2026.md``). Activity is judged before any
+    speaker-count cap, which is only known at the stop; a slot the cap later
+    removes is simply never asked for (:meth:`finish`).
+
+    The spans it embeds depend only on the activity, never on how it was cut
+    into :meth:`feed` calls: a run still open at the end of a call waits for
+    the next one. A call that raises leaves the collector as it was, so an
+    abandoned embedding costs only that call."""
+
+    def __init__(self, rule: VoiceRule, *, hop: int) -> None:
+        self._sums = _Sums(rule)
+        self._hop = hop
+        self.frames = 0
+        """Activity rows consumed so far."""
+        self._open: dict[int, int] = {}  # slot → first frame of its running clean stretch
+        self._short: dict[int, list[Span]] = {}  # clean fragments of slots with nothing banked
+
+    def feed(
+        self,
+        active: np.ndarray,
+        read: Callable[[int, int], np.ndarray],
+        embed: Embed,
+        *,
+        pool: ThreadPoolExecutor | None = None,
+    ) -> None:
+        """Consume the next rows of (frames, slots) boolean ``active``."""
+        sums, opened, short = copy.deepcopy((self._sums, self._open, self._short))
+        alone = active & (active.sum(1, keepdims=True) == 1)
+        end = self.frames + len(active)
+        jobs: list[tuple[Hashable, Span]] = []
+        for slot in range(active.shape[1]):
+            if sums.room(slot) == 0:
+                opened.pop(slot, None)
+                continue
+            edges = np.diff(np.concatenate([[0], alone[:, slot].astype(np.int8), [0]]))
+            starts = (np.nonzero(edges == 1)[0] + self.frames).tolist()
+            ends = (np.nonzero(edges == -1)[0] + self.frames).tolist()
+            if slot in opened:  # the stretch the last call left running
+                if starts and starts[0] == self.frames:
+                    starts[0] = opened.pop(slot)
+                else:
+                    starts.insert(0, opened.pop(slot))
+                    ends.insert(0, self.frames)
+            for first, last in zip(starts, ends, strict=True):
+                lo, hi = first * self._hop, last * self._hop
+                room = sums.room(slot)
+                if last == end and (room is None or hi - lo < max(room, _MIN_EMBED_SAMPLES)):
+                    opened[slot] = first  # may still grow; a full budget needs no more of it
+                elif hi - lo >= _MIN_EMBED_SAMPLES:
+                    jobs += sums.plan(slot, [(lo, hi)])
+                    short.pop(slot, None)
+                elif not sums.planned(slot):
+                    short.setdefault(slot, []).append((lo, hi))
+        sums.bank(jobs, _run(jobs, read, embed, pool))
+        self._sums, self._open, self._short = sums, opened, short
+        self.frames = end
+
+    def finish(
+        self,
+        raw: dict[int, list[Span]],
+        read: Callable[[int, int], np.ndarray],
+        embed: Embed,
+        *,
+        pool: ThreadPoolExecutor | None = None,
+    ) -> dict[int, np.ndarray]:
+        """Voiceprints of the slots in ``raw`` (each slot's final turns, the
+        last resort of a slot never heard alone), once the activity ended."""
+        sums = copy.deepcopy(self._sums)
+        jobs: list[tuple[Hashable, Span]] = []
+        for slot, turns in raw.items():
+            clean = list(self._short.get(slot, []))
+            if slot in self._open:
+                clean.append((self._open[slot] * self._hop, self.frames * self._hop))
+            if sums.planned(slot):
+                clean = [s for s in clean if s[1] - s[0] >= _MIN_EMBED_SAMPLES]
+                jobs += sums.plan(slot, clean)
+            else:
+                jobs += sums.plan(slot, _preferred(clean, sorted(turns)))
+        sums.bank(jobs, _run(jobs, read, embed, pool))
+        vectors = sums.vectors()
+        return {slot: vectors[slot] for slot in raw if slot in vectors}
+
+
 def cluster_embeddings(
     turns: list[SpeakerTurn],
     samples: np.ndarray,
-    embed: Callable[[np.ndarray], np.ndarray | None],
+    embed: Embed,
     *,
     pool: ThreadPoolExecutor | None = None,
+    rule: VoiceRule | None = None,
 ) -> dict[str, np.ndarray]:
     """A duration-weighted mean voice embedding per cluster of ``turns``.
 
-    ``embed`` is :meth:`VoiceEmbedder.embed` in production (eval passes
-    others). Spans where a *different* cluster is active too are excluded
-    before embedding: overlapped audio measurably worsens the embedding
-    (12.84 → 14.11 % EER with overlap included, and frame-level identity in
-    overlap is near-chance — the research record in
-    ``eval/diarization-sota-2026.md``). Spans shorter than
-    :data:`MIN_EMBED_SECONDS` are skipped unless they are all a cluster has;
-    a cluster whose speech is entirely overlapped falls back to its raw turns
-    (a contaminated embedding still serves naming and enrollment, an absent
-    one blocks them). Each embedding is L2-normalized,
-    duration-weighted, and averaged, and the mean re-normalized. A cluster
-    with no embeddable audio is omitted. ``pool`` runs the embed calls
-    concurrently (order-preserving, so each cluster's weighted mean sums in
-    the sequential order and the result is bit-identical)."""
+    :class:`VoiceCollector`'s rule for callers that hold turns rather than
+    the diarizer's activity (a solo channel's speech spans, eval's reference
+    turns): spans where a *different* cluster is active too are excluded,
+    then :func:`_preferred` picks, ``rule`` cuts, and the L2-normalized span
+    embeddings are averaged by duration and re-normalized. A cluster with no
+    embeddable audio is omitted."""
     audio = to_float32(samples)
     by_cluster: dict[str, list[SpeakerTurn]] = {}
     for turn in turns:
         by_cluster.setdefault(turn.speaker, []).append(turn)
     overlap = _overlap_spans(by_cluster)
 
-    jobs: list[tuple[str, float, np.ndarray]] = []  # (cluster, weight, audio slice)
+    sums = _Sums(rule or VoiceRule())
+    jobs: list[tuple[Hashable, Span]] = []
     for speaker, cluster_turns in by_cluster.items():
-        raw = [(t.start, t.end) for t in cluster_turns]
-        spans = _subtract_spans(raw, overlap) or raw
-        long = [s for s in spans if s[1] - s[0] >= MIN_EMBED_SECONDS]
-        for start, end in long or spans:
-            slice_ = audio[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)]
-            jobs.append((speaker, end - start, slice_))
-
-    mapper = pool.map if pool is not None else map
-    results = list(mapper(embed, [slice_ for _, _, slice_ in jobs]))
-
-    vectors: dict[str, list[np.ndarray]] = {}
-    weights: dict[str, list[float]] = {}
-    for (speaker, weight, _), vector in zip(jobs, results, strict=True):
-        if vector is not None:
-            vectors.setdefault(speaker, []).append(vector)
-            weights.setdefault(speaker, []).append(weight)
-    embeddings: dict[str, np.ndarray] = {}
-    for speaker, cluster_vectors in vectors.items():
-        mean = np.average(cluster_vectors, axis=0, weights=weights[speaker])
-        embeddings[speaker] = l2_normalize(mean)
-    return embeddings
+        raw = sorted((t.start, t.end) for t in cluster_turns)
+        clean, rough = (
+            [(int(s * SAMPLE_RATE), int(e * SAMPLE_RATE)) for s, e in spans]
+            for spans in (_subtract_spans(raw, overlap), raw)
+        )
+        jobs += sums.plan(speaker, _preferred(clean, rough))
+    sums.bank(jobs, _run(jobs, lambda lo, hi: audio[lo:hi], embed, pool))
+    return {str(k): v for k, v in sums.vectors().items()}
 
 
 def _overlap_spans(by_cluster: dict[str, list[SpeakerTurn]]) -> list[tuple[float, float]]:
