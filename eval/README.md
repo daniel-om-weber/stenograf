@@ -1596,6 +1596,13 @@ What was ruled out:
   calls and under-names on AMI.
 - **TitaNet-L collapses headset-to-room.** At full duration it scores 68.1 %
   where every other model scores 100 %.
+- **ReDimNet2+ does not beat it.** lab260's retraining of B6 for channel and
+  codec shift (`redimnet2-plus-lmft`, `eval/embedders/redimnet_plus.py`, run
+  in the authors' model code) scores 76.8 / 85.7 / 81.2 on the decision
+  metric, 4.5 points [+0.6, +7.6] behind this checkpoint, and trails most
+  where it was meant to help: room mic 62.9 against 69.7 and headset-to-room
+  48.1 against 61.9 at 2 s. It is ahead only on production clusters at 2 s
+  (88.5 against 87.4).
 - **Refused spans do not explain the gap.** Every model refused some spans,
   but all were fragments under 0.1 s, which production's span rule skips
   anyway.
