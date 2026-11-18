@@ -25,7 +25,7 @@ from stenograf.voiceprints import (
     default_store_path,
 )
 
-MODEL = "eres2net-voxceleb-16k.onnx"
+MODEL = "redimnet2-b6-vb2-lm.onnx"
 OTHER_MODEL = "resnet293-lm.onnx"
 
 
@@ -267,9 +267,8 @@ class TestSpeakerReID:
 
 
 def test_default_threshold_matches_plan():
-    # 0.56, measured 2026-08-07 on the ward-clustering matrix
-    # (eval/threshold_pick.py; curves in eval/README.md).
-    assert DEFAULT_THRESHOLD == 0.56
+    # 0.62, measured 2026-11-18 (eval/reid_models.py; curves in eval/README.md).
+    assert DEFAULT_THRESHOLD == 0.62
 
 
 class TestAssign:

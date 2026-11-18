@@ -414,8 +414,11 @@ steno profiles enroll Anna meeting.wav --speakers 4 --speaker S2
 
 Matching is on by default in `steno start`/`transcribe` and does nothing until
 you enroll someone; disable it with `--no-reid`, or adjust the match strictness
-with `--reid-threshold` (0–1, default 0.56). Voiceprints live in the platform data
-dir (not the model cache) and are never uploaded.
+with `--reid-threshold` (0–1, default 0.62). Voiceprints live in the platform data
+dir (not the model cache) and are never uploaded. A voiceprint belongs to the
+model that made it: names saved before the voice model changed stay in the
+library, listed as inactive by `steno profiles list`, and each voice is named
+once more.
 
 ## Vocabulary
 
@@ -536,4 +539,7 @@ for the model-evaluation and AEC-scoring harnesses.
 [MIT](LICENSE). The models are not part of the package: `steno setup`
 downloads them on first run, each under its own licence. The diarizer,
 [NVIDIA Nemotron 3 Diarization](https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX),
-is under OpenMDW-1.1.
+is under OpenMDW-1.1. The voice model that names speakers is
+[ReDimNet2-B6](https://github.com/PalabraAI/redimnet2) by PalabraAI, converted
+to ONNX unchanged; its weights are under CC BY-NC-SA 4.0, as its maintainers
+state.

@@ -8,8 +8,8 @@ manifest format, slicing, L2 normalisation, NaN rows for refused spans,
 caching, timing — is `embedio.py`; `check.py` asserts an output honours it.
 
 ```sh
-# project environment (sherpa-onnx is already a dependency)
-uv run --group eval eval/embedders/base.py     --manifest M.json --out out/base.npz
+# project environment: the shipped embedder, and sherpa-onnx for TitaNet
+uv run --group eval eval/embedders/shipped.py  --manifest M.json --out out/shipped.npz
 uv run --group eval eval/embedders/titanet.py  --manifest M.json --out out/titanet-l.npz
 # self-contained PEP 723 environments (torch 2.8)
 uv run eval/embedders/eres2net_large.py --manifest M.json --out out/eres2net-large.npz
@@ -28,11 +28,17 @@ uv run python eval/embedders/shard.py split M.json 12        # → M.shard{0..11
 uv run python eval/embedders/shard.py merge M.json out/MODEL.npz out/MODEL.shard*.npz
 ```
 
+`export_redimnet.py` writes a ReDimNet2 checkpoint as the single ONNX file
+`stenograf.assets.SPEAKER_EMBEDDING` pins, front end included, and checks it
+against the PyTorch model; `shipped.py` on a manifest another runner embedded
+is the parity check of the production path (2026-11-18: 1,061 spans against
+`redimnet.py`, cosine 1.000000 at worst, the same 21 fragments refused).
+
 `energy.sh` measures one runner's net CPU energy on macOS (powermetrics), at
 background QoS (efficiency cores) or foreground.
 
-Every runner takes `--manifest`, `--out`, `--device cpu|mps` (the two
-sherpa-onnx runners are CPU only) and `--threads`; an existing `--out` with
+Every runner takes `--manifest`, `--out`, `--device cpu|mps` (the
+onnxruntime and sherpa-onnx runners are CPU only) and `--threads`; an existing `--out` with
 the same model, item ids and span counts is reused. Each module docstring names
 its exact code commit, weight file and hash, and every way it departs from the
 upstream inference script.
@@ -47,8 +53,9 @@ runner imports; checkpoints load with `weights_only=True`.
 Parity: each PyTorch runner against its repo's own inference path (the
 upstream loader and file reader on three 10-s AMI clips written to WAV) — min
 cosine 1.0000000 for all six PyTorch models; CPU vs MPS ≥ 0.999999999. The two
-sherpa-onnx runners *are* the reference path (`base` calls the shipped
-`VoiceEmbedder`). w2v-BERT's authors scored under CUDA bfloat16 autocast; the
+sherpa-onnx models *are* the reference path (`base` was the embedder shipped
+until 2026-11-18, ERes2Net-base through sherpa-onnx; its runner went with
+it). w2v-BERT's authors scored under CUDA bfloat16 autocast; the
 runner computes in float32, which differs from CPU bf16 autocast by cosine
 0.99994.
 

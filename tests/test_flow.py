@@ -493,7 +493,7 @@ class TestCaptionStream:
 class TestAssignSpeaker:
     """The rename-once loop: name a meeting speaker, enroll the voice."""
 
-    MODEL = "eres2net-voxceleb-16k.onnx"
+    MODEL = "redimnet2-b6-vb2-lm.onnx"
 
     def _meeting(self, tmp_path, speakers=None):
         from stenograf.config import MeetingProfile
@@ -644,7 +644,7 @@ class TestAssignSpeaker:
 class TestWhoSpoke:
     """The "who spoke?" question: the speakers a meeting can name, and answers."""
 
-    MODEL = "eres2net-voxceleb-16k.onnx"
+    MODEL = "redimnet2-b6-vb2-lm.onnx"
 
     def _meeting(self, tmp_path):
         from stenograf.config import MeetingProfile

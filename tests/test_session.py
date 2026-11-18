@@ -323,7 +323,7 @@ class TestMeetingRecorder:
         # A cluster matching a stored profile is named by re-ID and must NOT be
         # renumbered into the channel template (Remote-1) by finalize's relabel;
         # an unmatched cluster still gets the template label.
-        model = "eres2net-voxceleb-16k.onnx"
+        model = "redimnet2-b6-vb2-lm.onnx"
         store = ProfileStore(
             profiles=[
                 SpeakerProfile(
@@ -350,7 +350,7 @@ class TestMeetingRecorder:
         # The meeting voiceprints (`steno profiles assign`) must be keyed the
         # way the transcript reads: the channel template for unmatched
         # clusters, the profile name for matched ones.
-        model = "eres2net-voxceleb-16k.onnx"
+        model = "redimnet2-b6-vb2-lm.onnx"
         store = ProfileStore(
             profiles=[
                 SpeakerProfile(
@@ -388,7 +388,7 @@ class TestMeetingRecorder:
         # A stated 1:1 channel never diarizes, but with the speaker machinery
         # on (diarizer present) it gets one voice embedding over its speech —
         # matched against the store, so the counterpart is named automatically.
-        model = "eres2net-voxceleb-16k.onnx"
+        model = "redimnet2-b6-vb2-lm.onnx"
         store = ProfileStore(
             profiles=[
                 SpeakerProfile(
@@ -436,7 +436,7 @@ class TestMeetingRecorder:
     def test_one_profile_matched_on_both_channels_merges_its_voices(self):
         # The sidecar holds one vector per label: a profile matched on the mic
         # and on the system channel must keep both voices, not the last one.
-        model = "eres2net-voxceleb-16k.onnx"
+        model = "redimnet2-b6-vb2-lm.onnx"
         store = ProfileStore(
             profiles=[
                 SpeakerProfile(

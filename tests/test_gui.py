@@ -1042,7 +1042,7 @@ class TestWhoSpoke:
         assert notes == [{"Anna"}], "the notes see the name, not the placeholder"
         assert not meeting.state["namesOpen"]
         assert meeting.state["speakers"][0]["label"] == "Anna"
-        assert ProfileStore.load().get("Anna", "eres2net-voxceleb-16k.onnx") is not None
+        assert ProfileStore.load().get("Anna", "redimnet2-b6-vb2-lm.onnx") is not None
 
     def test_a_copied_transcript_carries_names_given_after_the_finalize(
         self, gui, tmp_path, monkeypatch
@@ -1127,7 +1127,7 @@ class TestWhoSpoke:
         from stenograf.voiceprints import ProfileStore
 
         store = ProfileStore()
-        store.enroll("Anna", np.array([1.0, 0.0], np.float32), "eres2net-voxceleb-16k.onnx")
+        store.enroll("Anna", np.array([1.0, 0.0], np.float32), "redimnet2-b6-vb2-lm.onnx")
         store.save()
 
     def test_the_panel_opens_even_when_everyone_was_recognised(
@@ -1171,7 +1171,7 @@ class TestWhoSpoke:
         from stenograf.voiceprints import ProfileStore
 
         store = ProfileStore()
-        store.enroll("Anna", np.array([0.0, 1.0], np.float32), "eres2net-voxceleb-16k.onnx")
+        store.enroll("Anna", np.array([0.0, 1.0], np.float32), "redimnet2-b6-vb2-lm.onnx")
         store.save()
         notes = []
         self._diarized_meeting(monkeypatch, tmp_path, notes)

@@ -39,7 +39,6 @@ mean).
     uv run --group eval eval/reid_models.py build     # items + trials
     (run each model in eval/embedders/ on out/reid_models/manifest.json;
      eval/embedders/shard.py splits it across one-thread processes)
-    uv run --group eval eval/reid_models.py check-cap # after base: the cap is safe
     uv run --group eval eval/reid_models.py score     # → out/reid_models/report.md
 """
 
@@ -48,6 +47,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -66,7 +66,7 @@ FULL_CAP_S = 120.0
 """Clean speech per full cluster or enrollment. Production embeds the whole
 cluster; past two minutes the mean voiceprint has stopped moving, and the cap
 keeps a 1.5-hour AMI speaker from costing one forward pass per span for every
-model. ``check-cap`` measures that claim on the shipped model."""
+model (``score-caps``: ``even120`` against ``whole``)."""
 DURATIONS = (2.0, 3.0, 5.0, 10.0)
 EXCERPTS = 10
 MIN_SPAN_S = 0.5  # stenograf.diarization.embedding.MIN_EMBED_SECONDS
@@ -88,10 +88,27 @@ def _clean(
     return {k: _subtract_spans(sorted(v), overlap) for k, v in by_speaker.items()}
 
 
-CAPS = {"first30": 30.0, "first60": 60.0, "first120": 120.0, "even120": 120.0, "whole": None}
+CAPS = {
+    "first30": 30.0,
+    "first60": 60.0,
+    "first120": 120.0,
+    "even120": 120.0,
+    "whole": None,
+    "first120-split": 120.0,
+    "first120-rule": 120.0,
+    "first120-rule5": 120.0,
+}
 """How much of a cluster becomes its voiceprint (``build-caps``): the first N
 seconds of clean speech, as embedding during the meeting would bank them;
-``even120``, the main run's sampling across the whole meeting; or all of it."""
+``even120``, the main run's sampling across the whole meeting; or all of it.
+``-split`` embeds a span over 10 s as equal parts; ``-rule`` also takes the
+production clusters' spans from the shipped ``VoiceCollector``, which judges
+overlap on the diarizer's activity before the speaker count is applied;
+``-rule5`` is that with parts of at most 5 s."""
+
+
+def _split_s() -> float:
+    return 5.0 if _cap_mode.endswith("5") else 10.0
 _cap_mode = "even120"
 
 
@@ -111,6 +128,8 @@ def _cap_even(
             held += take
             if held >= CAPS[_cap_mode] - 1e-6:
                 break
+        if "-" in _cap_mode:
+            picked = [part for span in picked for part in _split(*span)]
         return picked
     total = sum(e - s for s, e in spans)
     if total <= cap:
@@ -124,6 +143,37 @@ def _cap_even(
         if held >= cap:
             break
     return picked
+
+
+def _split(start: float, end: float) -> list[tuple[float, float]]:
+    edges = np.linspace(start, end, math.ceil((end - start) / _split_s() - 1e-9) + 1).tolist()
+    return list(zip(edges[:-1], edges[1:], strict=True))
+
+
+def _collector_spans(cid: str, labels: set[str]) -> dict[str, list[tuple[float, float]]]:
+    """The spans ``VoiceCollector`` embeds for a channel's kept slots, read
+    off the calls it makes (the vector it is handed back is a dummy)."""
+    from stenograf.audio import SAMPLE_RATE
+    from stenograf.diarization.embedding import VoiceCollector, VoiceRule
+    from stenograf.diarization.nemotron import HOP
+
+    probs = np.load(heldout.OUT_DIR / "probs_nemotron_fp32_cpu" / f"{cid}.npy").astype(np.float32)
+    collector = VoiceCollector(VoiceRule(CAPS[_cap_mode], _split_s()), hop=HOP)
+    active = probs > 0.5
+    calls: list[tuple[int, int]] = []
+
+    def read(lo: int, hi: int) -> np.ndarray:
+        calls.append((lo, hi))
+        return np.zeros(1)
+
+    collector.feed(active, read, lambda audio: np.ones(1))
+    collector.finish({int(label[1:]): [] for label in labels}, read, lambda audio: np.ones(1))
+    out: dict[str, list[tuple[float, float]]] = {label: [] for label in labels}
+    for lo, hi in sorted(calls):
+        label = f"S{int(active[lo // HOP].argmax())}"  # alone there, by the rule
+        if label in out:
+            out[label].append((lo / SAMPLE_RATE, hi / SAMPLE_RATE))
+    return out
 
 
 def _excerpts(
@@ -262,6 +312,9 @@ def build_nemotron(b: Builder) -> None:
         for t in turns:
             by_cluster[t.speaker].append((t.start, t.end))
         clean = _clean(by_cluster)
+        ruled = "-rule" in _cap_mode and c["num_speakers"] != 1
+        if ruled:
+            clean = _collector_spans(cid, set(by_cluster))
         wav = ami.CHANNELS_DIR / f"{cid}.wav"
         for label, spans in sorted(clean.items()):
             true = ami.dominant_speaker([Turn(label, s, e) for s, e in by_cluster[label]], ref)
@@ -269,7 +322,8 @@ def build_nemotron(b: Builder) -> None:
                 continue
             sset["groups"][true] = c["group"]
             if c["session"] == ENROLL:
-                iid = b.item(f"nem/{cid}/{label}/enroll", wav, _cap_even(spans))
+                cut = spans if ruled else _cap_even(spans)
+                iid = b.item(f"nem/{cid}/{label}/enroll", wav, cut)
                 if iid:
                     sset["profiles"].setdefault(true, []).append(iid)
             else:
@@ -398,6 +452,8 @@ def cmd_score_caps() -> int:
         vecs = load_vectors(p, items)
         thr = CAP_THRESHOLDS.get(p.stem)
         for mode in CAPS:
+            if not any(i.endswith("@" + mode) for i in vecs):
+                continue
             cells = defaultdict(list)
             for name in PRIMARY_SETS:
                 key = "owncalls" if name == "owncalls-remote" else name
@@ -779,66 +835,6 @@ def cmd_score(models: list[str] | None) -> int:
     return 0
 
 
-def cmd_check_cap() -> int:
-    """Shipped model, ami-headset enrollments and full trials: capped vs every
-    clean span. The cap is safe if naming and target scores do not move."""
-    import subprocess
-
-    items = {i["id"]: i for i in json.loads((OUT / "manifest.json").read_text())["items"]}
-    sset = json.loads((OUT / "trials.json").read_text())["ami-headset"]
-    sset["trials"] = [t for t in sset["trials"] if t["duration"] == "full"]
-    wanted = {e for v in sset["profiles"].values() for e in v} | {t["item"] for t in sset["trials"]}
-    spans_of: dict[str, list] = {}
-    for group, sessions in GROUPS.items():
-        for session in sessions:
-            meeting = group + session
-            for name, (_, spans) in _ami_meeting(meeting).items():
-                kind = "enroll" if session == ENROLL else "full"
-                spans_of[f"ami/{meeting}/{name}/hs/{kind}"] = [
-                    s for s in spans if s[1] - s[0] >= MIN_SPAN_S
-                ] or spans
-    uncapped = []
-    for iid in sorted(wanted):
-        uncapped.append(
-            {**items[iid], "spans": [[round(s, 3), round(e, 3)] for s, e in spans_of[iid]]}
-        )
-    man = OUT / "manifest_uncapped.json"
-    man.write_text(json.dumps({"items": uncapped}))
-    out = OUT / "emb_uncapped_base.npz"
-    subprocess.run(
-        [
-            "uv",
-            "run",
-            "--group",
-            "eval",
-            "eval/embedders/base.py",
-            "--manifest",
-            str(man),
-            "--out",
-            str(out),
-        ],
-        check=True,
-    )
-    capped = load_vectors(EMB_DIR / "base.npz", items)
-    full = load_vectors(out, {i["id"]: i for i in uncapped})
-    hours = sum(e - s for i in uncapped for s, e in i["spans"]) / 3600
-    drift = [float(capped[i] @ full[i]) for i in wanted if i in capped and i in full]
-    print(
-        f"uncapped: {hours:.1f} h; capped-vs-uncapped cosine "
-        f"min {min(drift):.4f} median {np.median(drift):.4f}"
-    )
-    for label, vecs in (("capped", capped), ("uncapped", full)):
-        rows = trial_scores(sset, vecs)
-        k = metrics(rows, 0.56)
-        d, f = k["fixed"]
-        print(
-            f"{label}: n={k['n']} EER {100 * k['eer']:.2f} rank-1 {100 * k['rank1']:.1f} "
-            f"DIR@1% {100 * k['dir@0.01']:.1f} at 0.56 DIR/FAR {100 * d:.1f}/{100 * f:.1f} "
-            f"mean target {np.mean([r['target'] for r in rows]):.3f}"
-        )
-    return 0
-
-
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -846,7 +842,6 @@ def main() -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch")
     sub.add_parser("build")
-    sub.add_parser("check-cap")
     sub.add_parser("build-caps")
     sub.add_parser("score-caps")
     s = sub.add_parser("score")
@@ -856,8 +851,6 @@ def main() -> int:
         return cmd_fetch()
     if a.cmd == "build":
         return cmd_build()
-    if a.cmd == "check-cap":
-        return cmd_check_cap()
     if a.cmd == "build-caps":
         return cmd_build_caps()
     if a.cmd == "score-caps":

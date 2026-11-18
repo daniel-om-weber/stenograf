@@ -4,7 +4,7 @@ The real-backend test (``test_diarization_loop_real.py``) is gated on cached
 ONNX models + private audio, so on a fresh checkout / Linux CI ``embedding.py``
 executes zero test lines — yet its aggregation feeds every platform's re-ID.
 These drive ``cluster_embeddings`` and ``l2_normalize`` through the real
-``embed`` with a fake ``SpeakerEmbeddingExtractor``, so the aggregation logic
+``embed`` with a fake ONNX session, so the aggregation logic
 (per-cluster unit-norm mean, duration weighting, empty-cluster omission,
 short-turn fallback, overlap exclusion, zero-vector guard) is verified
 without any model.
@@ -14,9 +14,6 @@ broke what every mocked test passed green.
 """
 
 from __future__ import annotations
-
-import os
-import sys
 
 import numpy as np
 import pytest
@@ -31,38 +28,25 @@ from stenograf.diarization.embedding import (
 )
 
 
-class _FakeStream:
-    def accept_waveform(self, rate: int, audio: np.ndarray) -> None:
-        self.audio = audio
-
-    def input_finished(self) -> None:
-        pass
-
-
-class _SeqExtractor:
+class _SeqSession:
     """Returns preset vectors in call order; ``embed`` L2-normalizes the result."""
 
     def __init__(self, vectors: list) -> None:
         self._vectors = [np.asarray(v, dtype=np.float32) for v in vectors]
         self._i = 0
 
-    def create_stream(self) -> _FakeStream:
-        return _FakeStream()
-
-    def is_ready(self, stream: _FakeStream) -> bool:
-        return True
-
-    def compute(self, stream: _FakeStream) -> np.ndarray:
+    def run(self, outputs, feeds, run_options=None):
+        assert feeds["waveform"].ndim == 2 and feeds["waveform"].dtype == np.float32
         vector = self._vectors[self._i]
         self._i += 1
-        return vector
+        return [vector[None]]
 
 
 def _embed(vectors: list):
-    """The real ``embed`` (slice guard + extractor protocol + l2) over fakes:
-    only the extractor seam is replaced, no ONNX loads."""
+    """The real ``embed`` (length guard + session call + l2) over a fake
+    session: only the model seam is replaced, no ONNX loads."""
     embedder = VoiceEmbedder()
-    embedder._extractor = _SeqExtractor(vectors)
+    embedder._session = _SeqSession(vectors)
     return embedder.embed
 
 
@@ -170,20 +154,18 @@ def test_l2_normalize_guards_the_zero_vector():
     assert l2_normalize(np.array([3.0, 4.0, 0.0])) == pytest.approx([0.6, 0.8, 0.0])
 
 
-def test_pool_workers_falls_back_when_probes_fail(monkeypatch):
-    # sysctl dead (macOS branch) and /proc/cpuinfo unreadable (Linux branch)
-    # must land on the capped logical-count fallback, never raise.
+def test_pool_workers_stay_within_the_cap_and_the_affinity_mask(monkeypatch):
     from stenograf.diarization import embedding
 
-    def broken_run(*args, **kwargs):
-        raise OSError("no sysctl here")
+    assert 1 <= embedding._pool_workers() <= embedding._MAX_POOL
+    monkeypatch.setattr(embedding.os, "sched_getaffinity", lambda pid: {0, 1}, raising=False)
+    assert embedding._pool_workers() == 2
 
-    monkeypatch.setattr(embedding.subprocess, "run", broken_run)
-    workers = embedding._pool_workers()
-    assert 1 <= workers <= embedding._MAX_POOL
-    ceiling = min(embedding._MAX_THREADS, os.cpu_count() or 1)
-    if sys.platform not in ("darwin",) and not sys.platform.startswith("linux"):
-        assert workers <= ceiling
+
+def test_embed_refuses_a_slice_too_short_for_the_model():
+    embed = _embed([[1.0, 0.0]])
+    assert embed(np.zeros(799, np.float32)) is None
+    assert embed(np.zeros(800, np.float32)) == pytest.approx([1.0, 0.0])
 
 
 # -- the rule over diarizer activity ---------------------------------------

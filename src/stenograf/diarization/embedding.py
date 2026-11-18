@@ -1,24 +1,25 @@
-"""The voice embedder: ERes2Net via sherpa-onnx's ``SpeakerEmbeddingExtractor``.
+"""The voice embedder: ReDimNet2-B6 on ONNX Runtime, and the rule that turns
+a speaker's speech into one voiceprint.
 
-Re-ID voiceprints must come from one embedding model whichever diarizer
-produced the turns — saved profiles are cosine-matched against
-``assets.SPEAKER_EMBEDDING`` vectors (see that asset for why not CAM++), so a
-second embedding model would silently break every enrolled profile. Hence one
-:class:`VoiceEmbedder` and one :func:`cluster_embeddings`, which embeds a
-channel's spans in parallel on the embedder's own worker pool."""
+Re-ID voiceprints must come from one embedding model whichever path produced
+the turns — saved profiles are cosine-matched against
+``assets.SPEAKER_EMBEDDING`` vectors, so a second embedding model would
+silently break every enrolled profile. Hence one :class:`VoiceEmbedder`, and
+one rule (:class:`VoiceRule`) behind both :class:`VoiceCollector` and
+:func:`cluster_embeddings`."""
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import math
 import os
-import subprocess
-import sys
 import threading
 from collections.abc import Callable, Hashable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -32,77 +33,24 @@ they are skipped when a cluster has any longer span, and used only as a last
 resort (see :func:`_preferred`)."""
 _MIN_EMBED_SAMPLES = int(MIN_EMBED_SECONDS * SAMPLE_RATE)
 
-_MAX_THREADS = 8
-"""The pool's fallback worker cap where physical cores are unknowable. The
-embedder's ORT session runs at ONE intra-op thread and the pool parallelizes
-across calls instead — see :func:`_pool_workers`."""
-
-_MAX_POOL = 16
-"""Hard ceiling on pool workers: efficiency decays past the physical core
-count (2026-08-09: 12 workers ≈ 8 on 16 logical CPUs) and a many-core
-server gains nothing this workload can use."""
+_MAX_POOL = 4
+"""Pool workers at most. The model is memory-bound: four concurrent 5 s spans
+cost 0.82 CPU-s per 10 s of speech against 0.59 for one, eight cost 1.20, and
+each concurrent call adds its share of arena (1.4 GB at four, 2.5 GB at
+eight; M4 Max, 2026-11-18). With two minutes per speaker to embed, four is
+seconds at the stop."""
 
 
 def _pool_workers() -> int:
-    """Worker threads for the embedding pool: one per core worth using.
-
-    Outer call-level threading at one intra-op thread each beats intra-op
-    threading on this workload (2026-08-09, M4 Max, 37.6-min channel:
-    intra-op scaling caps at 1.5× over single-thread while a pool of
-    intra-op-1 workers reaches 2.5–2.6× over the 8-intra-op-thread config,
-    bit-exact against the sequential intra-op-1 reference; the pool wins by
-    less on x86, where intra-op threading scales better — `eval/README.md`).
-    Logical CPUs oversubscribe — hyperthreads and E-cores measured to add
-    nothing (12 workers ≈ 8 on 16 logical CPUs) — so: P-cores via sysctl on
-    macOS, physical cores via /proc/cpuinfo on Linux (bounded by the
-    scheduler affinity mask, so a cgroup-quota'd container never spawns a
-    host-sized pool), logical count capped at :data:`_MAX_THREADS`
-    elsewhere; every branch capped at :data:`_MAX_POOL`.
-
-    The Linux branch counts every physical core, fast or not, where macOS
-    asks for performance cores specifically — no counterpart is universally
-    available here (`cpu_capacity`, `cpuinfo_max_freq` and the PMU's
-    `cpu_core` list each cover only some machines). Measured 2026-08-11 on a
-    4+8 hybrid: counting all 12 is indistinguishable from 8 once arms are
-    interleaved. That was a same-ISA split (Zen5 + Zen5c, clock and cache
-    only); hybrid Intel, where E-cores differ more, is untested."""
-    affinity = None
+    """Worker threads for the embedding pool: :data:`_MAX_POOL`, or fewer
+    where the process may run on fewer processors (the scheduler affinity
+    mask on Linux, so a cgroup-quota'd container is not oversubscribed)."""
+    available = os.cpu_count() or 1
     sched_getaffinity = getattr(os, "sched_getaffinity", None)  # Linux-only
     if sched_getaffinity is not None:
-        try:
-            affinity = len(sched_getaffinity(0))
-        except OSError:
-            affinity = None
-    if sys.platform == "darwin":
-        try:
-            out = subprocess.run(
-                ["/usr/sbin/sysctl", "-n", "hw.perflevel0.physicalcpu"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=True,
-            ).stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            out = ""
-        if out.isdigit() and int(out) > 0:
-            return max(1, min(int(out), _MAX_POOL))
-    if sys.platform.startswith("linux"):
-        cores: set[tuple[str, str]] = set()
-        try:
-            package = ""
-            for line in Path("/proc/cpuinfo").read_text().splitlines():
-                if line.startswith("physical id"):
-                    package = line.split(":", 1)[1].strip()
-                elif line.startswith("core id"):
-                    cores.add((package, line.split(":", 1)[1].strip()))
-        except OSError:
-            cores.clear()
-        if cores:
-            return max(1, min(len(cores), affinity or len(cores), _MAX_POOL))
-    fallback = min(_MAX_THREADS, os.cpu_count() or 1)
-    if affinity is not None:
-        fallback = min(fallback, affinity)
-    return max(1, fallback)
+        with contextlib.suppress(OSError):
+            available = len(sched_getaffinity(0))
+    return max(1, min(_MAX_POOL, available))
 
 
 @dataclass(frozen=True)
@@ -120,10 +68,26 @@ class VoiceRule:
     bounds one forward pass's memory and time; ``None`` = never split."""
 
 
-class VoiceEmbedder:
-    """The extractor (lazy), its worker pool, and per-cluster voices.
+_MIN_INPUT_SAMPLES = 800
+"""The graph's shortest input: 800 samples embed, 400 raise (its front end
+and first stride need the frames; onnxruntime 1.27, 2026-11-18)."""
 
-    ``model`` overrides the fetched ``assets.SPEAKER_EMBEDDING`` (eval A/Bs)."""
+
+class VoiceEmbedder:
+    """The model's session (lazy), its worker pool, and per-cluster voices.
+
+    ``model`` overrides the fetched ``assets.SPEAKER_EMBEDDING`` with another
+    export of the same interface: a ``(1, samples)`` float32 16 kHz waveform
+    in, a ``(1, dim)`` embedding out (``eval/embedders/export_redimnet.py``)."""
+
+    rule = VoiceRule(budget_s=120.0, max_span_s=5.0)
+    """The first two minutes of a speaker name exactly as the whole meeting
+    does, and so does one minute — two keeps the wider worst-case margin,
+    +0.215 against +0.162 (2026-11-18, ``eval/README.md``). Five-second parts
+    because the model's memory grows with the span — about 80 MB per second
+    held by the session's arena, 570 MB at 5 s against 980 MB at 10 s and
+    8 GB at 120 s — and so does its time per second of speech (0.60 CPU-s per
+    10 s at 5 s, 0.68 at 10 s, 1.66 at 120 s; M4 Max, same date)."""
 
     def __init__(
         self,
@@ -133,7 +97,7 @@ class VoiceEmbedder:
     ) -> None:
         self._model = model
         self._progress = progress
-        self._extractor = None
+        self._session: Any = None
         self._pool: ThreadPoolExecutor | None = None
         self._init_lock = threading.Lock()  # guards every lazy field
 
@@ -141,10 +105,9 @@ class VoiceEmbedder:
         """The worker pool every embedding call of this embedder runs on.
 
         One pool, sized once (:func:`_pool_workers`), so concurrent channels
-        share one budget and never oversubscribe the machine. Results are
-        bit-identical at any worker count because each call is independent and
-        the ORT session runs single-threaded (measured 2026-08-09,
-        ``eval/README.md``)."""
+        share one budget and never oversubscribe the machine. Each call is
+        independent and the session runs single-threaded, so the result does
+        not depend on the worker count."""
         if self._pool is None:
             with self._init_lock:
                 if self._pool is None:
@@ -152,8 +115,6 @@ class VoiceEmbedder:
                         max_workers=_pool_workers(), thread_name_prefix="embed"
                     )
         return self._pool
-
-    rule = VoiceRule()
 
     def cluster_embeddings(
         self, turns: list[SpeakerTurn], samples: np.ndarray
@@ -175,41 +136,46 @@ class VoiceEmbedder:
             return None
         return self.cluster_embeddings(turns, samples).get(turns[0].speaker)
 
-    def embed(self, audio: np.ndarray) -> np.ndarray | None:
+    def embed(self, audio: np.ndarray, run_options: Any = None) -> np.ndarray | None:
         """L2-normalized voice embedding of a mono 16 kHz float32 slice, or None
-        when the slice is empty or the extractor cannot form an embedding."""
-        if len(audio) == 0:
+        when the slice is too short for the model. ``run_options`` is an
+        ``onnxruntime.RunOptions`` whose ``terminate`` abandons the call."""
+        if len(audio) < _MIN_INPUT_SAMPLES:
             return None
-        extractor = self._load()
-        stream = extractor.create_stream()
-        stream.accept_waveform(SAMPLE_RATE, np.ascontiguousarray(audio, dtype=np.float32))
-        stream.input_finished()
-        if not extractor.is_ready(stream):
-            return None
-        return l2_normalize(np.asarray(extractor.compute(stream), dtype=np.float32))
+        waveform = np.ascontiguousarray(audio, dtype=np.float32)[None]
+        (embedding,) = self._load().run(None, {"waveform": waveform}, run_options)
+        vector = l2_normalize(np.asarray(embedding[0], dtype=np.float32))
+        return vector if np.isfinite(vector).all() else None
 
-    def _load(self):
-        # ONE shared extractor at ONE intra-op thread, used from every pool
-        # worker concurrently: ORT's Run is thread-safe, per-call fbank state
-        # lives in create_stream(), and sharing was measured bit-exact and as
-        # fast as per-worker copies (which cost 26 MB of weights each) at 8
-        # workers, 2026-08-09. Intra-op stays 1 even for one-off embed()
-        # callers (enroll): parallelism belongs to the pool, and a fixed
-        # thread count is what keeps results identical across all paths.
-        if self._extractor is None:
+    def load(self, *, fetch: bool = True) -> bool:
+        """Load the session now, on the calling thread; ``fetch=False`` loads
+        only from the model cache and answers whether it could."""
+        cached = self._model or assets.cached_path(assets.SPEAKER_EMBEDDING)
+        if cached is None and not fetch:
+            return False
+        self._load()
+        return True
+
+    def _load(self) -> Any:
+        # ONE shared session at ONE intra-op thread, used from every pool
+        # worker concurrently (ORT's Run is thread-safe): the calling thread
+        # does the work, so a caller on the efficiency cores embeds there,
+        # parallelism belongs to the pool, and every path computes the same
+        # vectors.
+        if self._session is None:
             with self._init_lock:
-                if self._extractor is None:
-                    import sherpa_onnx
+                if self._session is None:
+                    import onnxruntime
 
-                    embedding = self._model or assets.fetch(
-                        assets.SPEAKER_EMBEDDING, self._progress
+                    from stenograf import cpu
+
+                    path = self._model or assets.fetch(assets.SPEAKER_EMBEDDING, self._progress)
+                    self._session = onnxruntime.InferenceSession(
+                        str(path),
+                        cpu.session_options(cpu.ThreadPlan(1, None)),
+                        providers=["CPUExecutionProvider"],
                     )
-                    self._extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
-                        sherpa_onnx.SpeakerEmbeddingExtractorConfig(
-                            model=str(embedding), num_threads=1
-                        )
-                    )
-        return self._extractor
+        return self._session
 
 
 Span = tuple[int, int]

@@ -1601,7 +1601,7 @@ What was ruled out:
   anyway.
 - **The 120 s cap does not change the result.** On base, capped and uncapped
   clusters gave identical naming on all 72 full trials. Cosine between capped
-  and uncapped vectors was median 0.995, minimum 0.981 (`check-cap`).
+  and uncapped vectors was median 0.995, minimum 0.981.
 
 Limits:
 
@@ -1672,6 +1672,75 @@ DIR at 1 % stranger accepts; interval against base).
 - Cost is not settled: the sizes ran on the Ryzen while its power profile
   changed, so their seconds do not compare. Energy per minute of speech on a
   quiet machine (`eval/embedders/energy.sh`) is unmeasured.
+
+#### ReDimNet2-B6 as shipped: export, rule, threshold (2026-11-18)
+
+M4 Max, onnxruntime 1.27.0, one intra-op thread unless stated.
+
+**The export** (`eval/embedders/export_redimnet.py`) is the whole reference
+forward pass, front end included, at any input length — the publishers' own
+ONNX file is fixed at 6 s. Against the PyTorch model on noise of 0.5 to 10 s
+the cosine is 1.0000000 (±1e-7) at every length. Through the production
+`VoiceEmbedder` (`eval/embedders/shipped.py`) on 240 of the frozen items,
+1,061 spans, the worst cosine to the reference runner's vectors is 1.000000,
+and both refuse the same 21 fragments. 800 samples embed; 400 raise.
+
+**Cost grows with the span**, in time and in memory the session's arena then
+keeps:
+
+| span | CPU-s per 10 s of speech | process RSS after |
+|---|---|---|
+| 1 s | 0.54 | 242 MB |
+| 2 s | 0.50–0.56 | 320 MB |
+| 5 s | 0.60 | 568 MB |
+| 10 s | 0.68–0.70 | 980 MB |
+| 30 s | 0.86 | 1.7 GB |
+| 120 s | 1.66 | 8.1 GB |
+
+(168 MB loaded and idle.) Over 1,500 calls at 451 distinct lengths up to 5 s
+the process settles at 860 MB and stays there. Switching the arena off, or
+asking it to shrink after each call, returns nothing on macOS. Concurrent
+calls on one session at 5 s: one costs 0.59 CPU-s per 10 s, four 0.82 (1.4 GB),
+eight 1.20 (2.5 GB) — the model is memory-bound, so the pool is four workers.
+
+**The rule** — the first 120 s of a speaker's clean speech, spans over 5 s
+embedded as equal parts, overlap judged on the diarizer's activity before a
+stated speaker count is applied — against the plain first-120 s cut of the
+section above, on the same 287 full-cluster trials (`build-caps` modes
+`first120-split`, `-rule`, `-rule5`; 709 of 9,430 first-120 s spans are longer
+than 10 s):
+
+| cut | named right | worst margin | cosine to whole, median (min) |
+|---|---|---|---|
+| first 120 s, spans as they are | 100 % | +0.215 | 0.9910 (0.9397) |
+| parts of at most 10 s | 100 % | +0.219 | 0.9905 (0.9420) |
+| that, spans chosen by `VoiceCollector` | 100 % | +0.219 | 0.9903 (0.9420) |
+| the same with parts of at most 5 s (shipped) | 100 % | +0.224 | 0.9889 (0.9417) |
+
+Neither change costs anything measurable. On the production-cluster set
+(54 trials) the collector's spans differ from the turn-based ones on 25 of 72
+clusters and move no score by more than 0.001 at the extremes (worst known
+0.796, best stranger 0.481 either way).
+
+**The threshold** is 0.62 (`voiceprints.DEFAULT_THRESHOLD`), read off the
+main run's trials: macro over the five sets, named right / strangers named.
+
+| threshold | 2 s | 3 s | 5 s | 10 s | full |
+|---|---|---|---|---|---|
+| 0.56 | 83.4 / 1.2 | 91.9 / 2.1 | 97.0 / 2.8 | 99.5 / 3.6 | 100 / 6.4 |
+| 0.58 | 80.6 / 0.8 | 90.3 / 1.2 | 96.1 / 2.3 | 99.2 / 2.8 | 100 / 3.5 |
+| 0.60 | 76.9 / 0.4 | 88.4 / 0.9 | 95.3 / 1.4 | 99.2 / 1.9 | 100 / 2.4 |
+| **0.62** | 74.2 / 0.1 | 86.6 / 0.6 | 94.3 / 1.3 | 99.0 / 1.2 | 100 / 2.4 |
+| 0.64 | 70.8 / 0.0 | 84.1 / 0.2 | 93.1 / 1.0 | 98.7 / 1.0 | 100 / 1.2 |
+| 0.68 | 63.0 / 0.0 | 77.2 / 0.1 | 89.5 / 0.1 | 97.6 / 0.3 | 100 / 0.0 |
+
+0.621 is where strangers named average 1 % over all five durations. At full
+length every stranger named comes from the German call set (17 trials, four
+partners: 0.660, 0.621, 0.592); on the four AMI sets no full-length stranger
+scores above 0.579 and no known speaker below 0.697. `threshold_pick.py` was
+not re-run: it reads a diarize-and-transcribe pass over the whole corpus made
+with the previous embedder, and these trials cover its arms (headset and
+cluster enrollment, 2 s, 3 s and full) on more sets.
 
 #### The chunk loop runs during the meeting (2026-11-17)
 

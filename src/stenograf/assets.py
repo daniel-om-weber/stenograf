@@ -2,8 +2,8 @@
 
 The ASR backends manage their own weights (parakeet-mlx pulls from
 HuggingFace); this module covers the plain-file assets with no downloader of
-their own — the sherpa-onnx models and the Nemotron diarization export, each
-pinned by URL and digest. Files land in one cache directory
+their own — the sherpa-onnx VAD, the voice embedder and the Nemotron
+diarization export, each pinned by URL and digest. Files land in one cache
 (:func:`stenograf.paths.cache_dir`; ``$STENOGRAF_CACHE`` overrides it).
 """
 
@@ -49,14 +49,19 @@ SILERO_VAD = ModelAsset(
     sha256="6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396",
 )
 
+_MODELS = "https://github.com/daniel-om-weber/stenograf/releases/download/models-1"
+"""Files this project converted itself, attached to a release whose tag is
+not a version: the publish workflow runs on ``v*`` tags only."""
+
 SPEAKER_EMBEDDING = ModelAsset(
-    name="eres2net-voxceleb-16k.onnx",
-    # Chosen empirically (July 2026, de-1 eval audio): the CAM++ VoxCeleb
-    # export flips cluster identity between segmentation windows, shredding
-    # one speaker into many; eres2net and titanet-small agree with each
-    # other and match the audio. eres2net is the smaller of the two.
-    url=f"{_RELEASES}/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
-    sha256="c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
+    name="redimnet2-b6-vb2-lm.onnx",
+    # ReDimNet2-B6 (github.com/PalabraAI/redimnet2, checkpoint
+    # b6-vb2+vox2_v0-lm, CC BY-NC-SA 4.0), exported with its front end by
+    # eval/embedders/export_redimnet.py. Most accurate of twelve models at
+    # naming short clusters (2026-11-18, eval/README.md). The name is the
+    # profile store's model key: changing it retires every saved profile.
+    url=f"{_MODELS}/redimnet2-b6-vb2-lm.onnx",
+    sha256="39661e6a793d792cdf318a4eaa3b0efb865decce8199e0c41a6560a84df7ea49",
 )
 
 

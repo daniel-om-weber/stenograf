@@ -37,20 +37,16 @@ from stenograf.audio import l2_normalize
 from stenograf.output import atomic_write_text
 from stenograf.paths import data_dir
 
-DEFAULT_THRESHOLD = 0.56
+DEFAULT_THRESHOLD = 0.62
 """Cosine similarity at or above which a cluster is deemed the same speaker as
-a stored profile. Picked from measured curves (2026-08-07, five-group corpus
-harness, `eval/threshold_pick.py`, re-run after the ward clustering swap): the
-smallest threshold rejecting every measured stranger in BOTH enrollment arms
-at every measured duration, with margin — strangers top out at 0.531
-(cross-group diagnostic; 0.529 same-group), so 0.56 keeps a 0.029 margin and
-holds FAR 0 % / FRR 0 % at full duration in both arms. The previous 0.62 was
-calibrated against complete-linkage clusters, whose impure-enrollment leak
-(strangers to 0.860) ward removed; on today's curves it pays 13.7 pts DIR at
-3 s of clean speech and 5.9 at 2 s for no FAR gain. Re-checked on Nemotron 3's
-turns (held-out AMI, `eval/heldout_reid.py`, 2026-11-15): no stranger named at
-0.56 with or without a stated count. Known solo/1:1 matches score 0.870+, far
-above. Override per run with ``--reid-threshold``
+a stored profile. The threshold at which 1 % of strangers are named, averaged
+over five trial sets and over clusters of 2 s to full length (0.621,
+2026-11-18, `eval/reid_models.py`, `eval/README.md`): it names 74 % of 2 s
+clusters, 87 % of 3 s ones and every full one. On the four AMI sets no
+full-length stranger scores above 0.579 and no known speaker below 0.697; the
+strangers it does accept at full length are two of seventeen in the German
+call set (0.621 and 0.660), where four partners are all there is to draw
+from. Override per run with ``--reid-threshold``
 (``steno start``/``transcribe``)."""
 
 _STORE_VERSION = 2

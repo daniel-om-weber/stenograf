@@ -307,7 +307,7 @@ def _reid_format_options(func: Callable) -> Callable:
                 type=click.FloatRange(0, 1),
                 default=None,
                 help="Cosine similarity required to match a saved profile "
-                "[default: [speakers] reid_threshold in settings.toml, else 0.5].",
+                "[default: [speakers] reid_threshold in settings.toml, else 0.62].",
             ),
             click.option(
                 "--format",

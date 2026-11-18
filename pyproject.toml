@@ -30,8 +30,8 @@ classifiers = [
 dependencies = [
     "click>=8.1",
     "numpy>=1.26",
-    # Silero VAD + the ERes2Net voice embedder behind re-ID (ONNX/CPU — works on
-    # every platform; the diarizer itself runs on the onnxruntime below).
+    # Silero VAD (ONNX/CPU — works on every platform; the diarizer and the
+    # voice embedder run on the onnxruntime below).
     # The floor is a memory leak twice over, not a feature. 1.12.x retains
     # ~21 MB per SpeakerEmbeddingExtractor call (measured 2026-08-06), which
     # put one 38-min meeting channel at ~31 GB RSS. 1.13.4 bundles onnxruntime
