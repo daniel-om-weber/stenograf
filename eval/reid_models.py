@@ -88,11 +88,30 @@ def _clean(
     return {k: _subtract_spans(sorted(v), overlap) for k, v in by_speaker.items()}
 
 
+CAPS = {"first30": 30.0, "first60": 60.0, "first120": 120.0, "even120": 120.0, "whole": None}
+"""How much of a cluster becomes its voiceprint (``build-caps``): the first N
+seconds of clean speech, as embedding during the meeting would bank them;
+``even120``, the main run's sampling across the whole meeting; or all of it."""
+_cap_mode = "even120"
+
+
 def _cap_even(
     spans: list[tuple[float, float]], cap: float = FULL_CAP_S
 ) -> list[tuple[float, float]]:
-    """Every k-th span (k fixed by the total) until ``cap`` seconds are held."""
+    """Every k-th span (k fixed by the total) until ``cap`` seconds are held —
+    or the cluster cut as ``_cap_mode`` names."""
     spans = [s for s in spans if s[1] - s[0] >= MIN_SPAN_S] or spans
+    if _cap_mode == "whole":
+        return spans
+    if _cap_mode.startswith("first"):
+        picked, held = [], 0.0
+        for s, e in spans:
+            take = min(e - s, CAPS[_cap_mode] - held)
+            picked.append((s, s + take))
+            held += take
+            if held >= CAPS[_cap_mode] - 1e-6:
+                break
+        return picked
     total = sum(e - s for s, e in spans)
     if total <= cap:
         return spans
@@ -136,9 +155,10 @@ def _excerpts(
 
 
 class Builder:
-    def __init__(self) -> None:
+    def __init__(self, excerpts: bool = True) -> None:
         self.items: dict[str, dict] = {}
         self.sets: dict[str, dict] = {}
+        self.excerpts = excerpts
 
     def item(self, iid: str, wav: Path, spans: list[tuple[float, float]]) -> str | None:
         if not spans:
@@ -160,7 +180,7 @@ class Builder:
             sset["trials"].append(
                 {"item": full, "identity": identity, "duration": "full", "tag": tag}
             )
-        for d in DURATIONS:
+        for d in DURATIONS if self.excerpts else ():
             for k, cluster in enumerate(_excerpts(spans, d, EXCERPTS, f"{prefix}/{d}")):
                 iid = self.item(f"{prefix}/{d:g}s{k}", wav, cluster)
                 if iid:
@@ -328,6 +348,92 @@ def cmd_build() -> int:
             by[t["duration"]] += 1
         print(f"  {name}: {len(sset['profiles'])} profiles, trials {dict(by)}")
     return 0
+
+
+def cmd_build_caps() -> int:
+    """Full clusters and enrollments again, once per entry of ``CAPS``."""
+    global _cap_mode
+    items, sets = [], {}
+    for mode in CAPS:
+        _cap_mode = mode
+        b = Builder(excerpts=False)
+        build_ami(b)
+        build_nemotron(b)
+        build_owncalls(b)
+        items += [{**i, "id": f"{i['id']}@{mode}"} for i in b.items.values()]
+        for sset in b.sets.values():
+            sset["profiles"] = {k: [f"{e}@{mode}" for e in v] for k, v in sset["profiles"].items()}
+            sset["trials"] = [{**t, "item": f"{t['item']}@{mode}"} for t in sset["trials"]]
+        sets[mode] = b.sets
+    _cap_mode = "even120"
+    out = OUT / "caps"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "manifest.json").write_text(json.dumps({"items": items}))
+    (out / "trials.json").write_text(json.dumps(sets))
+    for mode in CAPS:
+        hours = (
+            sum(e - s for i in items if i["id"].endswith("@" + mode) for s, e in i["spans"]) / 3600
+        )
+        print(f"{mode}: {hours:.1f} h")
+    return 0
+
+
+def cmd_score_caps() -> int:
+    """Per model and cut: does the voiceprint still name the same people?"""
+    out = OUT / "caps"
+    items = {i["id"]: i for i in json.loads((out / "manifest.json").read_text())["items"]}
+    sets = json.loads((out / "trials.json").read_text())
+    lines = [
+        "# How much of a cluster the voiceprint needs",
+        "",
+        "Full-cluster trials, profile and trial cut the same way. Macro over "
+        + ", ".join(PRIMARY_SETS)
+        + ". `at T`: DIR / stranger-accept at the model's own all-duration "
+        "threshold from the main run. `cosine`: to the whole-cluster vector.",
+        "",
+        "| model | cut | DIR@1% | EER | at T: DIR / FAR | worst margin | cosine median (min) |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for p in sorted((out / "emb").glob("*.npz")):
+        vecs = load_vectors(p, items)
+        thr = CAP_THRESHOLDS.get(p.stem)
+        for mode in CAPS:
+            cells = defaultdict(list)
+            for name in PRIMARY_SETS:
+                key = "owncalls" if name == "owncalls-remote" else name
+                rows = trial_scores(sets[mode][key], vecs)
+                if name == "owncalls-remote":
+                    rows = [r for r in rows if r["identity"] != "self"]
+                k = metrics(rows, thr)
+                cells["dir"].append(k["dir@0.01"])
+                cells["eer"].append(k["eer"])
+                if thr is not None:
+                    cells["fd"].append(k["fixed"][0])
+                    cells["ff"].append(k["fixed"][1])
+                cells["margin"].append(min(r["target"] - r["stranger"] for r in rows))
+            cos = [
+                float(v @ vecs[i.rsplit("@", 1)[0] + "@whole"])
+                for i, v in vecs.items()
+                if i.endswith("@" + mode)
+            ]
+            fixed = (
+                f"{100 * np.mean(cells['fd']):.1f} / {100 * np.mean(cells['ff']):.1f}"
+                if thr is not None
+                else "—"
+            )
+            lines.append(
+                f"| {p.stem} | {mode} | {100 * np.mean(cells['dir']):.1f} "
+                f"| {100 * np.mean(cells['eer']):.2f} | {fixed} "
+                f"| {min(cells['margin']):+.3f} | {np.median(cos):.4f} ({min(cos):.4f}) |"
+            )
+    (out / "report.md").write_text("\n".join(lines) + "\n")
+    print("\n".join(lines))
+    return 0
+
+
+CAP_THRESHOLDS = {"base": 0.616, "redimnet2-b6-vb2-lm": 0.621}
+"""Each model's one threshold over every duration (1 % macro stranger accepts,
+main run, 2026-11-18) — the operating point a cut has to survive."""
 
 
 # -- scoring -----------------------------------------------------------------
@@ -741,6 +847,8 @@ def main() -> int:
     sub.add_parser("fetch")
     sub.add_parser("build")
     sub.add_parser("check-cap")
+    sub.add_parser("build-caps")
+    sub.add_parser("score-caps")
     s = sub.add_parser("score")
     s.add_argument("--models", nargs="*")
     a = p.parse_args()
@@ -750,6 +858,10 @@ def main() -> int:
         return cmd_build()
     if a.cmd == "check-cap":
         return cmd_check_cap()
+    if a.cmd == "build-caps":
+        return cmd_build_caps()
+    if a.cmd == "score-caps":
+        return cmd_score_caps()
     return cmd_score(a.models)
 
 

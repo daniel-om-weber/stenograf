@@ -694,10 +694,51 @@ smoked the single manylinux_2_28 wheel.
    store does not keep;
    (c) the threshold, re-picked with `threshold_pick.py` (its own 1 %-FAR
    points are 0.57–0.62);
-   (d) about 3.4× base's CPU per second of speech, on the stop path;
+   (d) about 3.4× base's CPU per second of speech (PyTorch reference code,
+   one thread) — the efficiency plan below;
    (e) the weights' licence: the maintainer called the VoxBlink2 checkpoints
    CC BY-NC-SA (IDRnD/ReDimNet #24). The VoxCeleb2-only checkpoint ties
    statistically (83.3 %) if that ever matters.
+
+   **Efficiency plan (Daniel, 2026-11-18): embed during the meeting, as
+   cheaply as possible.** ReDimNet2 is not a streaming model, but a cluster's
+   voiceprint is a duration-weighted mean of per-span vectors, so spans can be
+   embedded as the diarizer's chunk loop settles them and only the mean is
+   left for the stop — the same work as item 3(b). Levers, largest first:
+   1. *Stop once a speaker has enough speech.* On the shipped model 120 s
+      sampled evenly names exactly as the whole cluster does (`eval/README.md`);
+      during a meeting the natural cut is the *first* N seconds, untested.
+   2. *Efficiency cores at background QoS*, as the chunk loop runs.
+   3. *A smaller size* (B0–B5 exist; only B6 is measured).
+   4. *A leaner runtime*: the ONNX export of (a) on the onnxruntime already
+      shipped; the GPU only with spans padded or cut to a few fixed lengths
+      (every new length recompiles — ~10× slower than its fixed-shape
+      benchmark otherwise), and faster is not yet shown to be fewer joules;
+      CoreML/ANE would be a macOS-only path again.
+
+   Three measurements were started 2026-11-18 on the M4 Max and are not
+   finished — no result exists yet:
+   - **Cluster cuts.** `reid_models.py build-caps` writes every full cluster
+     and enrollment cut five ways (first 30/60/120 s, 120 s evenly, whole;
+     63.8 h in all) to `out/reid_models/caps/`; `score-caps` (written, never
+     run on data) reports naming and the cosine to the whole-cluster vector.
+     Models to embed: `base`, `redimnet2-b6-vb2-lm`.
+   - **Smaller sizes** on the main manifest: `redimnet2-b3-vb2cnc-lm`,
+     `-b3-vox2-lm`, `-b2-vox2-lm`, `-b0-vox2-lm` (runner and weights names in
+     `eval/embedders/redimnet.py`), then `reid_models.py score`.
+   - **Energy** per minute of speech, `eval/embedders/energy.sh`: base, B6
+     and the smaller sizes at background QoS and foreground, plus B6 on MPS at
+     one fixed length; quiet machine required.
+
+   The embedding jobs for the first two sit SIGSTOPped on the Mac
+   (`pkill -CONT -f eval/embedders/` resumes them, ~45 min left; a reboot
+   loses them and `out/reid_models/jobs2.txt` re-runs them, ~70 min on 12
+   cores). The user's calls exist only on the Mac, so on another machine
+   `build` and `build-caps` cover AMI alone unless `build_owncalls` is
+   skipped by hand, and AMI audio plus the Nemotron turns must be rebuilt
+   there first (`eval/README.md`, corpus harness). What does not need that
+   data: the variable-length ONNX export and its parity check (a), and the
+   in-meeting accumulation itself.
 
 Out of scope: streaming diarization in live captions — Nemotron has an online
 mode, but live captions carry no speaker labels.

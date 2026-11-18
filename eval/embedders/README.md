@@ -19,6 +19,18 @@ uv run eval/embedders/w2v_bert.py --manifest M.json --out out/w2v-bert-sv.npz --
 python3 eval/embedders/check.py --manifest M.json out/*.npz
 ```
 
+A long manifest runs as one-thread processes, one per shard (MPS is no
+shortcut: every span length is a new shape):
+
+```sh
+uv run python eval/embedders/shard.py split M.json 12        # → M.shard{0..11}.json
+# run the runner on each shard with OMP_NUM_THREADS=1 and --threads 1, 12 at a time, then
+uv run python eval/embedders/shard.py merge M.json out/MODEL.npz out/MODEL.shard*.npz
+```
+
+`energy.sh` measures one runner's net CPU energy on macOS (powermetrics), at
+background QoS (efficiency cores) or foreground.
+
 Every runner takes `--manifest`, `--out`, `--device cpu|mps` (the two
 sherpa-onnx runners are CPU only) and `--threads`; an existing `--out` with
 the same model, item ids and span counts is reused. Each module docstring names

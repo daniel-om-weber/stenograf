@@ -25,6 +25,8 @@ redimnet2-b6-vb2-lm         b6-vb2+vox2_v0-lm.pt                VoxBlink2 + VoxC
 redimnet2-b6-vb2-ptn        b6-vb2+vox2_v0-ptn.pt               same, before LM fine-tune
 redimnet2-b6-vb2cnc-lm      b6-vb2+vox2+cnc2_v0-lm.pt           + CN-Celeb2
 redimnet2-b6-vox2-lm        b6-vox2-lm.pt                       VoxCeleb2 only
+redimnet2-b3-vb2cnc-lm      b3-vb2+vox2+cnc2_v0-lm.pt           VoxBlink2+VoxCeleb2+CN-Celeb2
+redimnet2-b{3,2,0}-vox2-lm  b{3,2,0}-vox2-lm.pt                 VoxCeleb2 only
 ==========================  ==================================  =========================
 
 The ``ptn`` checkpoint is in the set because it was trained on 2 s crops
@@ -57,6 +59,10 @@ CHECKPOINTS = {
     "redimnet2-b6-vb2-ptn": "b6-vb2+vox2_v0-ptn.pt",
     "redimnet2-b6-vb2cnc-lm": "b6-vb2+vox2+cnc2_v0-lm.pt",
     "redimnet2-b6-vox2-lm": "b6-vox2-lm.pt",
+    "redimnet2-b3-vb2cnc-lm": "b3-vb2+vox2+cnc2_v0-lm.pt",
+    "redimnet2-b3-vox2-lm": "b3-vox2-lm.pt",
+    "redimnet2-b2-vox2-lm": "b2-vox2-lm.pt",
+    "redimnet2-b0-vox2-lm": "b0-vox2-lm.pt",
 }
 
 
