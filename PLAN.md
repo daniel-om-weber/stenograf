@@ -635,7 +635,7 @@ never run on, and was deleted on 2026-07-26 with nothing open:
 
 ---
 
-## Diarization: Nemotron 3 — shipped 2026-11-15, three things left
+## Diarization: Nemotron 3 — shipped 2026-11-15, four things left
 
 NVIDIA Nemotron 3 Diarization is the one diarizer; the owned loop, stenodiar
 and the manylinux_2_39 wheel are deleted. The migration record is
@@ -678,6 +678,26 @@ smoked the single manylinux_2_28 wheel.
    audio or would lose speaker separation. The
    "Who spoke?" voice samples are already only a few seconds per speaker,
    so they survive this change if collected during the meeting instead.
+
+4. **Name speakers with ReDimNet2-B6 instead of ERes2Net-base (measured
+   2026-11-18, not built).** The checkpoint is `redimnet2-b6-vb2-lm`, trained
+   on VoxBlink2+VoxCeleb2 with large-margin fine-tuning. On 2–3 s clusters it
+   names 85.7 % right against 71.1 % at 1 % stranger accepts; on a 2 s
+   room-mic cluster, 69.7 % against 40.3 %. Full clusters stay at the ceiling.
+   Evidence: `eval/README.md`, "Speaker-embedding models in the naming seat".
+   What a switch has to settle:
+   (a) a variable-length export — the only public ONNX export is fixed at 6 s,
+   and its front end is 72 HTK mel bands, not Kaldi fbank — re-parity-checked
+   against `eval/embedders/redimnet.py`;
+   (b) saved profiles, which are model-bound (`voiceprints.py`), so every
+   user's profiles start over unless they are re-embedded from audio the
+   store does not keep;
+   (c) the threshold, re-picked with `threshold_pick.py` (its own 1 %-FAR
+   points are 0.57–0.62);
+   (d) about 3.4× base's CPU per second of speech, on the stop path;
+   (e) the weights' licence: the maintainer called the VoxBlink2 checkpoints
+   CC BY-NC-SA (IDRnD/ReDimNet #24). The VoxCeleb2-only checkpoint ties
+   statistically (83.3 %) if that ever matters.
 
 Out of scope: streaming diarization in live captions — Nemotron has an online
 mode, but live captions carry no speaker labels.
@@ -741,16 +761,15 @@ Kept here so future sessions don't re-open them.
     never opens. Trigger: the meeting mix shifts toward many-speaker rooms —
     it won all four ICSI k=4–8 loops while their k=2 duos flipped back — and
     re-opening now means beating Nemotron 3, not the loop it lost to.
-  - **Embedding upgrade (2026-08-07):** ERes2NetV2-zh and ResNet34-LM both
-    regress clustering (6.6/7.6 pts attribution) and *collapse* the
-    short-turn axis (FAR0 thresholds 0.82/0.88 vs 0.605); English ERes2NetV2
-    was never released. Watch: ReDimNet2 with a CC-BY vox2 checkpoint + working ONNX
-    (2026-11-15: the VoxCeleb2-only checkpoints are released; the only proven
-    ONNX export is of the VoxBlink2+VoxCeleb2 B6, non-commercial data, at a
-    fixed 6 s input — half the trigger, and short-turn collapse sank both
-    earlier candidates); an export attempt of
-    `eres2net_large_sv_en_voxceleb_16k` only if a step is actually limited
-    by full-duration embedding accuracy — today none is.
+  - **Embedding upgrade (2026-08-07; naming seat re-measured 2026-11-18):**
+    ERes2NetV2-zh and ResNet34-LM both regressed clustering (6.6/7.6 pts
+    attribution) and *collapsed* the short-turn axis (FAR0 thresholds
+    0.82/0.88 vs 0.605); English ERes2NetV2 was never released. In the
+    naming seat, ERes2Net-large (68.8 vs 71.1 % short-cluster naming,
+    interval spanning zero, domain-drifting scores) and TitaNet-L (64.1 %,
+    collapses headset-to-room) lose; w2v-BERT 2.0 SV beats base but trails
+    ReDimNet2 (`eval/README.md`). No trigger. ReDimNet2 won and is open
+    item 4 of the Nemotron section.
   - **Automatic profile updates (2026-08-07, reaffirmed post-ward):**
     ungateable wrong updates above every implementable bar while the oracle
     ties no-update everywhere; growth stays user-confirmed. Re-run

@@ -1510,6 +1510,111 @@ needs it, unloads the ASR, then diarizes. Re-measured through the real
 11.2 → 7.9 GB, wall unchanged (180 s), and the transcript identical entry for
 entry (speaker, start, text) to the run before the change.
 
+#### Speaker-embedding models in the naming seat: ReDimNet2 wins (2026-11-18)
+
+`eval/reid_models.py` compares the shipped ERes2Net-base against six
+candidates where the embedder now works: turning a finished cluster into a
+voiceprint and matching it against saved profiles. Every model embeds the same
+frozen items in its own reference implementation (`eval/embedders/`, parity
+with each upstream inference path at cosine 1.0000000), so the comparison needs
+no diarization rerun and a conversion bug cannot decide it. There are five trial
+sets, weighted equally:
+
+- AMI headset, AMI room mic (Array1-01), and AMI headset-enrolled with room-mic
+  trials, each 24 people in six series;
+- production Nemotron clusters, 12 people;
+- the user's German one-to-one calls (remote side), 4 partners across calls
+  and 12 within a call.
+
+Every trial is scored twice: once as a known trial, and once as a stranger
+with its own profile removed. Each (person, session) contributes its full
+cluster, capped at 120 s, plus ten random 2/3/5/10 s excerpts. Spans are
+combined by production's rule.
+
+The decision rule was written before any candidate was scored
+(`out/reid_models/decision_rule.md`). Its metric is macro DIR (named, and named
+right) on 2 s and 3 s clusters, at the one threshold per model where the macro
+stranger-accept rate is 1 %. The headline row averages the two durations, with
+95 % paired intervals that resample people within each set.
+
+| model | 2 s | 3 s | short (2+3) vs base | full | CPU s / 10 s speech, 1 thread |
+|---|---|---|---|---|---|
+| ERes2Net-base (shipped) | 64.5 | 77.6 | 71.1 | 99.4 | 0.15 |
+| **ReDimNet2-B6, VoxBlink2+VoxCeleb2, LM** | **81.9** | **89.6** | **85.7 [+7.4, +18.6]** | 100 | 0.51 |
+| ReDimNet2-B6, VoxBlink2+VoxCeleb2+CN-Celeb, LM | 80.9 | 89.4 | 85.2 [+7.3, +18.5] | 99.2 | 0.51 |
+| ReDimNet2-B6, VoxBlink2+VoxCeleb2, before LM | 79.9 | 87.2 | 83.5 [+4.8, +16.2] | 100 | 0.51 |
+| ReDimNet2-B6, VoxCeleb2 only, LM | 81.7 | 84.9 | 83.3 [+5.7, +16.2] | 100 | 0.51 |
+| w2v-BERT 2.0 SV (580 M) | 76.4 | 86.8 | 81.6 [+4.9, +14.2] | 100 | 0.76 |
+| ERes2Net-large (VoxCeleb) | 61.9 | 75.7 | 68.8 [−7.9, +1.1] | 99.4 | 0.24 |
+| TitaNet-L | 58.8 | 69.4 | 64.1 [−12.5, −3.4] | 93.6 | 0.07 |
+
+**The verdict is ReDimNet2-B6 trained on VoxBlink2+VoxCeleb2 with large-margin
+fine-tuning (`redimnet2-b6-vb2-lm`).** Head to head, it beats every
+non-ReDimNet model, and the "before LM" checkpoint, with intervals clear of
+zero:
+
+- w2v-BERT by +4.1 [+1.1, +6.5];
+- the before-LM checkpoint by +2.2 [+1.0, +3.9].
+
+It ties two siblings:
+
+- the CN-Celeb variant, +0.6 [−1.5, +2.0], whose order flips when any one set
+  is left out;
+- the VoxCeleb2-only checkpoint, +2.4 [−0.3, +5.6].
+
+The pre-registered tie-breaks pick it. On the room-mic sets (room and cross,
+2 s and 3 s) it scores 73.0 against 71.8 and 69.6. The CN-Celeb variant also
+drops three of 72 full-length room trials, against none for this checkpoint.
+
+The gain sits where the product is weakest: short clusters on a room mic. At
+2 s, room-mic DIR goes from 40.3 to 69.7 and headset-to-room from 34.2 to 61.9.
+Equal-error rates fall in every set, from 4.7 to 1.9 % on headset and from 9.2
+to 7.1 % on room.
+
+In each robustness check, first place goes to this checkpoint or its CN-Celeb
+sibling, never more than 1.5 points apart, and base trails by 9 or more:
+
+- at 5 % FAR (92.3 vs base 83.3);
+- with one threshold shared across all durations, as production has: 2 s 74.2
+  vs 51.6, full 100 vs 99.7;
+- leaving out any one set.
+
+At production's literal 0.56 without recalibration, it scores 83.4 vs 64.8 at
+2 s with FAR 1.2 vs 1.4 %. Its own 1 %-FAR thresholds sit at 0.57–0.62, so a
+switch would re-pick the threshold near where it is now (`threshold_pick.py`).
+Its calibration spread across sets at 2 s is 0.145, the same as base's 0.146.
+
+What was ruled out:
+
+- **Large-margin fine-tuning does not hurt short clips here.** WeSpeaker and
+  DAME report it does below 3 s; on this data the LM checkpoint beats its own
+  pre-LM weights at 2 s and 3 s.
+- **CN-Celeb data adds nothing measurable** on German and English meetings.
+- **ERes2Net-large is not worse at ranking.** Its per-set 2 s DIR@1 % is
+  higher than base's (headset 92.5 vs 87.9), but its scores drift by domain
+  (threshold spread 0.206). One fixed threshold therefore over-names on the
+  calls and under-names on AMI.
+- **TitaNet-L collapses headset-to-room.** At full duration it scores 68.1 %
+  where every other model scores 100 %.
+- **Refused spans do not explain the gap.** Every model refused some spans,
+  but all were fragments under 0.1 s, which production's span rule skips
+  anyway.
+- **The 120 s cap does not change the result.** On base, capped and uncapped
+  clusters gave identical naming on all 72 full trials. Cosine between capped
+  and uncapped vectors was median 0.995, minimum 0.981 (`check-cap`).
+
+Limits:
+
+- The German calls hold only four cross-call partners, so on that set one
+  person moves DIR by up to 25 points.
+- Every model accepts about 4 % of call-side strangers at 2 s; they all share
+  that weakness, so it does not separate them.
+- ReDimNet2 costs about 3.4× base's CPU per second of speech.
+- MPS is no shortcut for variable-length spans: per-shape compilation made
+  ERes2Net-large about 10× slower than its benchmark. The run used CPU
+  processes, one thread each (`eval/embedders/shard.py`); 37 jobs took
+  1 h 50 min on 12 cores.
+
 #### The chunk loop runs during the meeting (2026-11-17)
 
 M4 Max (12 P + 4 E cores), 48 GB, macOS 27.2, onnxruntime 1.27.0, mains. A
