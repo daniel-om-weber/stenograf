@@ -329,8 +329,11 @@ jobs:
         with:
           name: dist-linux-x86_64
           path: dist
-      # Qt's offscreen platform, as in smoke-linux.
-      - run: sudo apt-get install -y libegl1
+      # Qt's offscreen platform, as in smoke-linux; and libpulse, which the
+      # capture helper links and every Linux desktop with sound has. Without it
+      # the helper cannot start, and the updater's self-check rightly refuses
+      # the release ("capture helper does not run here").
+      - run: sudo apt-get install -y libegl1 libpulse0
       - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*manylinux_2_28_x86_64.whl
 
   update-windows:
