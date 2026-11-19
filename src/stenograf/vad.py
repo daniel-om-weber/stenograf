@@ -42,7 +42,7 @@ def _drain_vad(
 
 
 class SileroVAD:
-    """Silero v5 via sherpa-onnx (ONNX/CPU on every platform)."""
+    """Silero v6 via sherpa-onnx (ONNX/CPU on every platform)."""
 
     def __init__(
         self,
@@ -53,7 +53,7 @@ class SileroVAD:
         min_speech: float = 0.25,
         max_speech: float = 28.0,
     ) -> None:
-        # threshold 0.5: 0.4 was tried (2026-07-19, to recover quiet mic
+        # threshold 0.5: 0.4 was tried (2026-07-19, on v5, to recover quiet mic
         # interjections the drop check found missed) and REVERTED the same day.
         # On a busy channel the looser gate stops yielding the min_silence
         # pauses that close a run, runs slam into max_speech, and pack_windows

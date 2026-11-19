@@ -815,7 +815,9 @@ Kept here so future sessions don't re-open them.
   slice overhang stands as a separate candidate. Any of these re-runs the full
   battery against a control worktree.
 - **Never move VAD window bounds.** Both bound-moving fixes were tried and
-  reverted; only the decode slice may change.
+  reverted; only the decode slice may change. A detector swap moves every
+  bound and is judged on what it buys against that churn: Silero v6 passed
+  2026-11-19 on speakerphone calls (`eval/README.md`, "Speech detector").
 - **livekit — re-ask deferred from the capture-helper plan, and its trigger
   has now fired.** 25.6 MB installed for one class (`rtc.AudioProcessingModule`,
   AEC3, imported in exactly one place — `aec.py`). It was never a

@@ -2027,6 +2027,61 @@ the two; the battery fuel gauge reports in ~420 mWh steps, too coarse to
 arbitrate at this run length. Untested on Windows: another power mode, and
 the real app's window states.
 
+## Speech detector: Silero v6 (2026-11-19)
+
+**Why it changed.** A phone on speakerphone next to the Mac reaches only the
+mic channel, quietly and band-limited, and Silero v5 at threshold 0.5 called
+most of it silence. Reference per recording: Parakeet over the whole mic
+channel with no gate, cut at quiet points; score: share of its words a
+re-transcription reproduces in order. On four of seven calls v5 kept 29 %,
+35 %, 62 % and 69 %. Lowering the threshold or levelling the signal before
+the detector helped unevenly; a better detector did not. Over ten
+recordings (the seven calls plus three ordinary ones, 18 k reference words),
+each detector feeding the shipped decode path:
+
+| detector (threshold 0.5) | worst four calls | the other six |
+|---|---|---|
+| Silero v5 (before) | 29 / 35 / 62 / 69 % | 86–97 % |
+| **Silero v6** | **90 / 83 / 89 / 85 %** | 87–97 %, none lower |
+| TEN VAD | 84 / 72 / 81 / 81 % | 85–97 % |
+| Nemotron activity (all speakers merged) | 93 / 83 / 92 / 93 % | 90–98 % |
+
+Nemotron was not chosen: it already runs on multi-speaker meetings, but
+using its activity as the gate would make every one-speaker recording pay
+for it (~9× v5's CPU, +690 MB RSS on 13.9 min) and delay captions by its
+27.2 s chunk plus 3.2 s look-ahead (simulated on the same call: median 19 →
+34 s), for a few points on two calls.
+
+**End-to-end, both arms through `steno transcribe --no-notes
+--no-diarization`** (control = the same commit with v5, sixteen recordings):
+
+- Calls and ordinary recordings, the ten above: **73.7 % → 90.2 %** of the
+  reference words, 639 → 921 words beyond them.
+- The six window-study meetings (`retranscribe_compare.py --old-dir`,
+  7.4 h): **61 153 → 61 706 words (+553)**, 425 added regions (383 of at
+  most three words), 196 removed, 839 changed. Whisper refereed the changed
+  regions 113 : 111 (99 ties), so those are churn, not gain. The new
+  detector moves every window bound, and the greedy decode's tail instability
+  (window-length study) re-rolls with it. Passages of five or more words
+  that shrink to at most half: 15 lost (144 words, a few of them removed
+  hallucinations such as ten "nein"s), 39 gained (277 words); one German
+  passage on 0714-160212 decodes as English. The threshold-0.4 failure mode
+  does not reappear: windows ending inside speech 15 → 18, runs
+  force-closed at `max_speech` 47 → 58, over both channels of the six
+  meetings.
+- Nemotron as the gate, the same arms (merged turns, then Silero's 0.5 s /
+  0.25 s / 28 s rules; batch only, the live path has no adapter): the ten
+  recordings reach **92.6 %** (1144 extra words), the six meetings **+834
+  words**, 16 passages lost (123 words) and 49 gained (354), referee 147 :
+  132 (131 ties), the 0714-160212 flip absent. Batch wall time with
+  diarization off: +21 % over the v6 arm (sixteen recordings, 728 s vs
+  600 s).
+- `live.py`: 0.0 % WER against finalize on de-1 and en-1, no monotonicity
+  violations; the reuse guarantee holds. The stream-vs-batch and
+  byte-identical-slice tests pass on v6.
+
+Cost: 2.43 s CPU vs 2.35 s on 13.9 min of audio, +92 MB vs +87 MB RSS.
+
 ## Echo cancellation
 
 Layer-0 signal scoring of the AEC path. A meeting run with `--aec-dump DIR`

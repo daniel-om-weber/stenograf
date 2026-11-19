@@ -19,8 +19,6 @@ from pathlib import Path
 
 from stenograf.paths import cache_dir
 
-_RELEASES = "https://github.com/k2-fsa/sherpa-onnx/releases/download"
-
 _DOWNLOAD_TIMEOUT_S = 30.0
 """Socket timeout per connect/read, not for the whole download — a stalled
 server raises instead of hanging ``fetch`` forever."""
@@ -44,9 +42,15 @@ class ModelAsset:
 
 
 SILERO_VAD = ModelAsset(
-    name="silero_vad_v5.onnx",
-    url=f"{_RELEASES}/asr-models/silero_vad_v5.onnx",
-    sha256="6b99cbfd39246b6706f98ec13c7c50c6b299181f2474fa05cbc8046acc274396",
+    name="silero_vad_v6.onnx",
+    # Silero VAD v6 (MIT), the file shipped in the snakers4/silero-vad
+    # package at tag v6.2.3. v5 missed most of a speakerphone voice on the
+    # mic channel (eval/README.md, "Speech detector").
+    url=(
+        "https://github.com/snakers4/silero-vad/raw/"
+        "5cd7945676eb32225748052e2e6a0580e4686a08/src/silero_vad/data/silero_vad.onnx"
+    ),
+    sha256="1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
 )
 
 _MODELS = "https://github.com/daniel-om-weber/stenograf/releases/download/models-1"
