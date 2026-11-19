@@ -437,7 +437,10 @@ def test_every_process_shares_the_lock_and_the_updater_excludes_them(tmp_path):
         for process in (first, second):
             process.kill()
             process.wait(timeout=TOOL_TIMEOUT_S)
-    _updater.acquire(path, exclusive=True).close()
+    # Windows frees a killed process's LockFileEx lock a moment after the
+    # process is reaped: up to 2.2 ms, and in 21 of 30 kills not at once
+    # (2026-11-19, Windows 11). The updater polls, so only the test must wait.
+    _updater.acquire_within(path, exclusive=True, seconds=1.0).close()
 
 
 def test_a_command_started_during_the_swap_steps_aside():
