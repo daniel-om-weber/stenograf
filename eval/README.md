@@ -1776,6 +1776,55 @@ sidecar's re-normalisation. Not measured: the collection's energy on the
 efficiency cores, and its memory beside a live meeting — the session alone
 settles at 860 MB (section above).
 
+#### Profiles carried across an embedder change by translation (2026-11-19)
+
+A profile entry is readable only by the embedder that made it, so a model
+change leaves every saved profile inactive. `eval/reid_bridge.py` asks whether
+a map fitted on corpus audio both models embedded can translate stored
+ERes2Net-base vectors into ReDimNet2-B6 space well enough to keep naming
+people. It reuses `reid_models`' frozen items and trials (no re-embedding, 15 s
+a run): profile entries are translated old vectors, trials are native
+new-model vectors — the state right after an upgrade. The map never sees its
+test people: AMI and Nemotron items fold by meeting series (fit on the other
+five, about 20 voices, all English meetings), and the user's German calls are
+tested with a map fitted on AMI alone. Fitted on deliberately mispaired spans,
+the map names 0.2 % — the harness measures the map.
+
+Macro DIR at each arm's own 1 %-stranger threshold, as in the section above;
+brackets are the paired 95 % interval against ERes2Net-base:
+
+| arm | 2–3 s | full | its threshold (2 s / full) |
+|---|---|---|---|
+| ERes2Net-base end to end | 71.1 | 99.4 | 0.562 / 0.663 |
+| ReDimNet2-B6 end to end | 85.7 | 100.0 | 0.572 / 0.660 |
+| translated by rotation (orthogonal Procrustes) | 85.7 [+6.5, +19.2] | 96.6 [−7.1, +0.8] | 0.462 / 0.532 |
+| translated by ridge regression | 74.5 [−3.5, +7.7] | 92.0 [−17.2, −2.5] | 0.530 / 0.607 |
+
+- The rotation names short clusters as well as fresh profiles do and better
+  than the old model did; on full clusters it misses about three points
+  against the old model, not resolved at this size (some 35 people, one full
+  trial is 1.4 points of a set). Ridge, with more freedom, overfits 20 voices.
+- On the user's calls, a map that never heard German or a phone codec: 97.6 %
+  named at 2 s with 1.2 % strangers named, against 93.5 % / 4.7 % for the old
+  model (about eleven partners).
+- Translated entries need their own threshold. At the shipped 0.621 they name
+  nobody wrongly but far fewer people (calls at 2 s: 42 % against 83 %).
+  Their 1 %-stranger point barely moves between headset, room mic and phone
+  (spread 0.021, against 0.145 for either model), so one fixed value should
+  carry — inferred; every threshold here is picked on the test trials, and one
+  chosen in advance has not been checked on unseen people.
+- More voices help up to about twelve, then the gain stops showing at this
+  size: fitted on 4 / 8 / 12 / 16 / 20 people (ten random draws below 20)
+  the rotation reaches cosine 0.71 / 0.77 / 0.80 / 0.80 / 0.82 to the native
+  vector, 70 / 78 / 84 / 84 / 86 % DIR on 2–3 s clusters and
+  84 / 93 / 97 / 95 / 97 % on full ones. Fitted on everything, test people
+  included, it reaches 0.94 and 99.4 % — partly memorisation, so a bound,
+  not a target. Whether a map fitted on thousands of public voices closes
+  part of that gap is open.
+
+Not built: the store has no notion of a translated entry, and how a profile
+mixing translated and native entries should be scored is open.
+
 #### The chunk loop runs during the meeting (2026-11-17)
 
 M4 Max (12 P + 4 E cores), 48 GB, macOS 27.2, onnxruntime 1.27.0, mains. A
