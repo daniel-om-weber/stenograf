@@ -148,6 +148,12 @@ SETTINGS_TEMPLATE = """\
 [notes.export]
 # dir = "~/Obsidian/Meetings"              # also write one combined note here
 
+[updates]
+# check = true                             # once a day, ask pypi.org whether a
+#                                          # newer stenograf exists. false = never
+#                                          # ask and never mention updates, in the
+#                                          # app and in the terminal alike
+
 # Meeting presets ("Besprechungsart") — everything a *kind* of meeting sets,
 # selected per run with `--preset NAME` and listed by `steno presets`. Keys a
 # preset leaves unset fall through to the tables above; [meetings.*.vocab]
@@ -323,6 +329,14 @@ class MeetingPreset:
 
 
 @dataclass(frozen=True)
+class UpdateSettings:
+    check: bool | None = None
+    """``False`` switches the daily update check off, and with it every mention
+    of updates: no request to PyPI, no line in the app, no notice in the
+    terminal. Unset (``None``) or ``True`` = on, the built-in default."""
+
+
+@dataclass(frozen=True)
 class Settings:
     transcript: TranscriptSettings = field(default_factory=TranscriptSettings)
     vocab: VocabSettings = field(default_factory=VocabSettings)
@@ -331,6 +345,7 @@ class Settings:
     speakers: SpeakerSettings = field(default_factory=SpeakerSettings)
     asr: AsrSettings = field(default_factory=AsrSettings)
     notes: NotesSettings = field(default_factory=NotesSettings)
+    updates: UpdateSettings = field(default_factory=UpdateSettings)
     meetings: dict[str, MeetingPreset] = field(default_factory=dict)
 
 
@@ -370,6 +385,7 @@ def load_settings(path: Path | None = None) -> Settings:
             speakers=_speakers_from_table(top.table("speakers")),
             asr=_asr_from_table(top.table("asr")),
             notes=_notes_from_table(top.table("notes")),
+            updates=_updates_from_table(top.table("updates")),
             meetings=_presets_from_table(top.table("meetings")),
         )
         top.reject_unknown()
@@ -539,6 +555,13 @@ def _asr_from_table(data: dict) -> AsrSettings:
     boost = t.number("boost", 0, 10)
     t.reject_unknown()
     return AsrSettings(backend=backend, ep=ep, boost=boost)
+
+
+def _updates_from_table(data: dict) -> UpdateSettings:
+    t = _Table("updates", data)
+    check = t.bool_("check")
+    t.reject_unknown()
+    return UpdateSettings(check=check)
 
 
 def _notes_from_table(data: dict, label: str = "notes") -> NotesSettings:
@@ -794,6 +817,7 @@ def settings_rows(
             None,
         ),
         ("notes.export", "dir", settings.notes.export_dir, "(off)", None),
+        ("updates", "check", settings.updates.check, True, None),
     ]
 
     set_by_preset, cleared_by_preset = _preset_keys(preset)

@@ -64,6 +64,23 @@ jobs:
           dir "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Stenograf.lnk" || exit /b 1
           dir "%USERPROFILE%\Desktop\Stenograf.lnk" || exit /b 1
 
+      # The installer is the repair of last resort for an install an
+      # interrupted update left without its receipt: uv then refuses the
+      # upgrade ("Executable already exists") until told to overwrite.
+      - name: A damaged install is rebuilt
+        shell: cmd
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+        run: |
+          rem uv's tool directory on Windows, where nothing has moved it.
+          del "%APPDATA%\uv\tools\stenograf\uv-receipt.toml" || exit /b 1
+          powershell -NoProfile -ExecutionPolicy Bypass -c "Get-Content -Raw -Encoding UTF8 install.ps1 | iex" > repair.txt 2>&1
+          set rc=%errorlevel%
+          type repair.txt
+          if not %rc%==0 (echo ::error::the installer could not rebuild a damaged install & exit /b 1)
+          dir "%APPDATA%\uv\tools\stenograf\uv-receipt.toml" || exit /b 1
+          "%USERPROFILE%\.local\bin\steno.exe" --version || exit /b 1
+
       # Windows PowerShell 5.1 ignores a program's exit code unless the script
       # checks it; this upgrade cannot reach any package index, so the
       # installer must fail and must not print its success line.

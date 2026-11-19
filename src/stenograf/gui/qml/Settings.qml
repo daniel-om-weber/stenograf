@@ -9,6 +9,7 @@ Panel {
     id: page
 
     property var screen
+    readonly property var updates: page.app.screen("Update")
 
     heading: "Settings"
     hint: "Where each value comes from: an environment override, a meeting type, settings.toml, or the built-in default."
@@ -58,6 +59,26 @@ Panel {
         selectionColor: Theme.accent
         selectedTextColor: Theme.accentText
         Layout.fillWidth: true
+    }
+
+    // The one place to ask on demand; the daily check needs no button.
+    RowLayout {
+        spacing: 10
+        Layout.fillWidth: true
+        Layout.topMargin: 10
+
+        Text {
+            text: page.updates.state.summary
+            color: Theme.muted
+            font.pixelSize: 12
+            elide: Text.ElideRight
+            Layout.fillWidth: true
+        }
+
+        Btn {
+            text: "Check for updates"
+            onClicked: page.updates.check_now()
+        }
     }
 
     RowLayout {

@@ -210,6 +210,29 @@ def test_unknown_notes_and_export_keys_are_rejected(tmp_path):
         load_settings(path)
 
 
+def test_the_update_check_is_one_switch(tmp_path):
+    path = tmp_path / "settings.toml"
+    assert load_settings(path).updates.check is None  # unset: the default (on) applies
+    path.write_text("[updates]\ncheck = false\n", encoding="utf-8")
+    assert load_settings(path).updates.check is False
+    path.write_text("[updates]\nchek = false\n", encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"in \[updates\]: chek"):
+        load_settings(path)
+    path.write_text('[updates]\ncheck = "no"\n', encoding="utf-8")
+    with pytest.raises(SettingsError, match=r"updates\.check"):
+        load_settings(path)
+
+
+def test_the_update_switch_is_a_row_of_the_settings_report(tmp_path):
+    path = tmp_path / "settings.toml"
+    path.write_text("[updates]\ncheck = false\n", encoding="utf-8")
+    tables = dict(settings_mod.settings_rows(load_settings(path)))
+    assert tables["updates"] == [("check", "false", "settings.toml")]
+    assert dict(settings_mod.settings_rows(Settings()))["updates"] == [
+        ("check", "true", "default")
+    ]
+
+
 def test_unknown_asr_backend_is_rejected_with_choices(tmp_path):
     path = tmp_path / "settings.toml"
     path.write_text('[asr]\nbackend = "whisper"\n', encoding="utf-8")

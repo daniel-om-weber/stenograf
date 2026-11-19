@@ -56,7 +56,15 @@ main() {
     # --python: uv picks the interpreter before it reads requires-python, so
     # on a machine with no Python 3.12/3.13 it fetches the newest one, and
     # stenograf has no install there (see pyproject.toml).
-    "$UV" tool install --upgrade --python 3.13 stenograf
+    #
+    # The retry repairs an install whose folder is damaged or gone while its
+    # `steno` command is still there: an interrupted update leaves exactly
+    # that, and uv then refuses with "Executable already exists" until it is
+    # told to overwrite (measured 2026-11-19, eval/update_mechanics.sh).
+    if ! "$UV" tool install --upgrade --python 3.13 stenograf; then
+        echo "that did not work — reinstalling from scratch ..."
+        "$UV" tool install --force --python 3.13 stenograf
+    fi
 
     # A freshly created uv bin dir isn't on this shell's PATH yet — ask uv where it is.
     STENO=$(command -v steno || true)

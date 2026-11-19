@@ -75,9 +75,20 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
         with contextlib.suppress(ValueError, OSError):  # not on the main thread
             signal.signal(signal.SIGTERM, _sigterm_becomes_interrupt)
 
+    # Before anything loads from disk again: an updater holding this lock is
+    # replacing the very files this process would go on to import.
+    from stenograf import update
+
+    if update.hold_lock() == "updating":
+        raise click.ClickException("Stenograf is being updated — try again in a minute.")
+
     if ctx.invoked_subcommand is not None:
         if gui or tray:  # both are about the entry, not about any one command
             raise click.UsageError("--gui opens the desktop app; it takes no subcommand")
+        if ctx.invoked_subcommand in _LONG_COMMANDS:
+            update.check_in_background()
+        if ctx.invoked_subcommand not in _OWN_UPDATE_REPORT:
+            ctx.call_on_close(_update_notice)
         return
     if tray and not gui:
         raise click.UsageError("--tray is a mode of the desktop app; pass --gui as well")
@@ -103,6 +114,29 @@ def main(ctx: click.Context, gui: bool, tray: bool) -> None:
         click.echo(ctx.get_help())
 
 
+_LONG_COMMANDS = frozenset({"start", "transcribe", "notes"})
+"""The commands with minutes to spare for a background request. A short one
+only reads what the last check stored, so it is never the one that waits."""
+
+_OWN_UPDATE_REPORT = frozenset({"doctor", "setup"})
+"""`steno doctor` reports updates as a row; a notice under it would say it twice."""
+
+
+def _update_notice() -> None:
+    """One line, as a command ends, that a newer release exists.
+
+    Only to a person: with any of the three streams redirected this is a pipe,
+    a script or CI, where an unexpected line on stderr breaks things. At most
+    once a day, and never with ``[updates] check = false``."""
+    if not _person_at_terminal():
+        return
+    from stenograf import update
+
+    line = update.notice()
+    if line is not None:
+        click.echo(line, err=True)
+
+
 def _sigterm_becomes_interrupt(signum: int, frame: object) -> None:
     """SIGTERM raises KeyboardInterrupt, so every Ctrl-C path handles it too.
 
@@ -115,6 +149,11 @@ def _sigterm_becomes_interrupt(signum: int, frame: object) -> None:
     if signal.getsignal(signal.SIGINT) is signal.SIG_IGN:
         return
     raise KeyboardInterrupt
+
+
+def _person_at_terminal() -> bool:
+    """All three streams are a TTY (patchable seam)."""
+    return sys.stderr.isatty() and _interactive_terminal()
 
 
 def _interactive_terminal() -> bool:

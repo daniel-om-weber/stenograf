@@ -298,11 +298,75 @@ jobs:
           steno start --replay smoke.wav --local 1 --remote 0 --lang en --out smoke-out
           test -f smoke-out/transcript.json
 
+  # The self-update, on the wheel about to be published: an installed copy of
+  # it finds a newer release, prepares it, swaps itself and starts again — and
+  # goes back when the newer release does not start (scripts/update_e2e.py says
+  # what stands in for PyPI and for the user). A release that cannot be updated
+  # *to* strands nobody; one that cannot update *from* strands every install it
+  # reaches, and the only repair is asking each user to run the installer. So
+  # these gate the publish.
+  update-macos:
+    needs: build-macos
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-macos
+          path: dist
+      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*.whl
+
+  update-linux:
+    needs: build-linux-x86_64
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-linux-x86_64
+          path: dist
+      # Qt's offscreen platform, as in smoke-linux.
+      - run: sudo apt-get install -y libegl1
+      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*manylinux_2_28_x86_64.whl
+
+  update-windows:
+    # Informative, not a gate, and deliberately absent from publish's needs:
+    # the swap has not been measured on Windows, so the app there only tells
+    # the user about a new release (update.SWAP_MEASURED). This job runs the
+    # swap anyway; when it is green and a real desktop session agrees, Windows
+    # joins SWAP_MEASURED and this job joins the gate.
+    needs: build-windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-windows
+          path: dist
+      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*win_amd64.whl
+
   publish:
     # build-pure is listed explicitly: no smoke leg installs the pure wheel any
     # more (each platform now smokes its own), but PyPI still needs it and the
     # sdist, and download-artifact below collects whatever has finished.
-    needs: [build-pure, smoke-macos, smoke-linux, smoke-linux-old-glibc, smoke-windows]
+    needs:
+      - build-pure
+      - smoke-macos
+      - smoke-linux
+      - smoke-linux-old-glibc
+      - smoke-windows
+      - update-macos
+      - update-linux
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15

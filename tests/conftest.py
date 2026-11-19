@@ -47,6 +47,8 @@ _ENV_OVERRIDES = (
     "STENOGRAF_CAPTURE_HELPER",
     "STENOGRAF_DIAR_HELPER",
     "STENOGRAF_APP_BUNDLE",
+    "STENOGRAF_UPDATE_URL",
+    "STENOGRAF_UPDATE_UNMEASURED",
 )
 
 
@@ -61,12 +63,25 @@ def _isolated_machine(tmp_path, monkeypatch):
     before every other function-scope fixture — fixture-time code (the GUI
     shell build) sees only the isolated paths too.
     """
-    from stenograf import output
+    from stenograf import output, update
 
     monkeypatch.setenv("STENOGRAF_DATA", str(tmp_path / "steno-data"))
     monkeypatch.setattr(output, "default_output_home", lambda: tmp_path / "meetings-home")
     for name in _ENV_OVERRIDES:
         monkeypatch.delenv(name, raising=False)
+    # Update state has a fixed home that no variable moves (the lock every
+    # command takes is in it), so it is the function that is redirected. The
+    # lock is per process and would otherwise outlive the test that took it;
+    # and no test asks PyPI anything.
+    monkeypatch.setattr(update, "root", lambda: tmp_path / "steno-update")
+    monkeypatch.setattr(update, "_held", None)
+    monkeypatch.setattr(update, "_lock_state", "")
+    monkeypatch.setattr(update, "_uv", None)
+    monkeypatch.setattr(update, "fetch", _no_network)
+
+
+def _no_network():
+    raise OSError("tests do not reach the network")
 
 
 def write_settings(body: str) -> Path:

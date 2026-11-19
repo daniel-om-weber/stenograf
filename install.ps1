@@ -41,7 +41,16 @@ Assert-Exists $uv "uv"
 # --python: uv picks the interpreter before it reads requires-python, so on a
 # PC with no Python 3.12/3.13 it fetches the newest one, and stenograf has no
 # install there (see pyproject.toml).
+#
+# The retry repairs an install whose folder is damaged or gone while its
+# steno.exe is still there: an interrupted update leaves exactly that, and uv
+# then refuses with "Executable already exists" until it is told to overwrite
+# (measured 2026-11-19, eval/update_mechanics.sh).
 & $uv tool install --upgrade --python 3.13 stenograf
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "that did not work - reinstalling from scratch ..."
+    & $uv tool install --force --python 3.13 stenograf
+}
 Assert-Ran "Installing stenograf"
 
 # A freshly created uv bin dir isn't on this shell's PATH yet — ask uv where it is.

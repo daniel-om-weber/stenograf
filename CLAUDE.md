@@ -74,6 +74,21 @@ DiariZen meeting-base, both embedding-upgrade candidates, automatic profile
 updates, custom GPU kernels — lives in PLAN.md with measured reasons and
 re-open triggers.
 
+**The app updates itself (built 2026-11-19, macOS and Linux; Windows shows a
+notice until its swap is measured).** `update.py` checks PyPI once a day and
+decides who is offered what; `gui/updates.py` is the home-screen line; the swap
+is `_updater.py`, and **the updater that runs is the *new* release's copy of
+that file**, fetched from uv's cache and run by the *old* app on a bare
+interpreter. So its command line, its request file and its result file are a
+contract with every release already installed — read `_updater.py`'s module
+docstring before touching it: fields may be added with defaults, nothing may be
+renamed or removed, and it must stay standard-library-only. `PLAN-UPDATE.md`
+holds the design, the uv measurements behind it (`eval/update_mechanics.sh`
+re-runs them) and what is still open; `scripts/update_e2e.py` runs a whole
+update and a rollback on a real uv in a throwaway home and gates every
+release. Never try an update against the machine's own install: the updater
+rewrites the launcher files in the home directory.
+
 **Nine side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 (2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`

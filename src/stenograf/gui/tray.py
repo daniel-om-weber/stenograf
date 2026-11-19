@@ -190,7 +190,7 @@ def set_dock_icon(visible: bool) -> bool:
 
 
 class Tray(QObject):
-    """The status item: an icon that follows the meeting and a five-item menu.
+    """The status item: an icon that follows the meeting and a short menu.
 
     Every entry is a shortcut to something the window can already do, because
     the menu bar is a second front door to the same app, not a second app.
@@ -235,6 +235,10 @@ class Tray(QObject):
             action.setCheckable(True)
             action.setVisible(False)
         self.folder = self._item("Open meetings folder", self._open_folder)
+        # Present only while there is an update to take and no meeting to
+        # disturb: the menu is read mid-meeting, and that is not the moment.
+        self.update = self._item("", self._update)
+        self.update.setVisible(False)
         self.menu.addSeparator()
         self.quit = self._item("Quit Stenograf", shell.quit_app)
 
@@ -386,6 +390,12 @@ class Tray(QObject):
         self.quit.setText(
             "Quit now (abandons the finalize)" if self.shell.quitting_now else "Quit Stenograf"
         )
+        updates = self.shell.updates
+        phase = updates.get("phase")
+        self.update.setVisible(self.state() == "idle" and phase in ("available", "ready"))
+        self.update.setText(
+            "Restart to update" if phase == "ready" else f"Update to {updates.get('version')}…"
+        )
 
     @Slot(QSystemTrayIcon.ActivationReason)
     def _clicked(self, reason: QSystemTrayIcon.ActivationReason) -> None:
@@ -426,6 +436,15 @@ class Tray(QObject):
     def _mute(self, channel: str) -> None:
         meeting = self._meeting()
         meeting.mute(channel, not meeting.get(f"{channel}Muted"))
+
+    @Slot()
+    def _update(self) -> None:
+        # With the window, so the preparing line is somewhere to be seen.
+        self.shell.show_window()
+        if self.shell.updates.get("phase") == "ready":
+            self.shell.updates.restart()
+        else:
+            self.shell.updates.install()
 
     @Slot()
     def _open_folder(self) -> None:

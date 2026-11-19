@@ -68,7 +68,37 @@ def run_checks() -> list[Check]:
     checks.append(_settings_check())
     checks.append(_notes_check())
     checks.extend(_preset_checks())
+    checks.append(_update_check())
     return checks
+
+
+def _update_check() -> Check:
+    """Whether a newer release exists — the terminal's notice, as a row.
+
+    Optional, since an older version is a working one. Asks PyPI itself when
+    the stored answer is over a day old: a setup check is run by someone who
+    is waiting for exactly this kind of answer."""
+    from stenograf import __version__, update
+
+    if not update.enabled():
+        if update.describe_install().kind == "source" or update.parse_version(__version__) is None:
+            detail = f"{__version__}, a development install — not checked"
+        else:
+            detail = f"{__version__} — the check is switched off ([updates] check = false)"
+        return Check(name="Updates", ok=True, detail=detail, optional=True)
+    update.check()
+    found = update.offer(include_failed=True)
+    if found is None:
+        return Check(
+            name="Updates", ok=True, detail=f"{__version__} — no newer release known", optional=True
+        )
+    how = f"update with `{found.command}`" if found.command else found.reason
+    return Check(
+        name="Updates",
+        ok=False,
+        detail=f"{found.version} is available (this is {__version__}) — {how}",
+        optional=True,
+    )
 
 
 def _settings_check() -> Check:

@@ -258,6 +258,7 @@ class StenografGui(QObject):
             SetupScreen,
             TranscribeScreen,
         )
+        from stenograf.gui.updates import UpdateScreen
 
         self.window: QWindow | None = None
         """The one window, once the QML has produced it (see :func:`build`)."""
@@ -272,6 +273,10 @@ class StenografGui(QObject):
             "Settings": SettingsScreen(self),
             "Doctor": DoctorScreen(self),
         }
+        # Not a page — there is no Update.qml — but reached the same way: the
+        # home screen, the Settings page and the menu bar all ask for it by name.
+        self.updates = UpdateScreen(self)
+        self._screens["Update"] = self.updates
 
     @Property("QVariantList", constant=True)  # type: ignore[operator]  # PySide decorator
     def menu(self) -> list[dict[str, str]]:
@@ -636,6 +641,9 @@ def run(*, tray: bool = False) -> int:
         gui.hide_window()
     else:
         gui.show_window()
+    # After the window exists: this is what tells a waiting updater that the
+    # version it just installed got as far as its interface.
+    gui.updates.begin(tray=tray and status_item is not None)
     if instance.hasPendingConnections():
         # A launch that raced the QML load: `newConnection` fired before the slot
         # above existed, and Qt does not re-emit it. Answered here rather than

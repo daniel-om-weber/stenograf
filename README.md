@@ -66,6 +66,44 @@ Windows any DX12 GPU can be opted into with `[asr] provider = "dml"`.
 On Linux the desktop app (Qt) sets the install floor: glibc 2.34 on x86_64,
 2.39 on arm64, and no musl (Alpine) builds — Qt ships no wheels for those.
 
+### Updates
+
+Once a day stenograf asks PyPI for the list of its releases — the same public
+page a browser gets, with nothing about you, your machine or your meetings in
+the request. When there is a newer one:
+
+- **In the app**, a line appears at the foot of the home screen. On macOS and
+  Linux, **Update** downloads the new version while you keep working, then
+  restarts the app into it — one click, and never while a meeting, a
+  transcription or a notes run is going. The new version is tried out before
+  anything installed is touched, and if it does not start afterwards the
+  previous one is put back and the app says so. On Windows the line names the
+  command to run instead; replacing a running install in place has not been
+  verified there yet.
+- **In a terminal**, a command ends with one line naming the new version and
+  the command below — at most once a day, and only when a person is at the
+  terminal (never in a pipe or a script).
+
+To update by hand, re-run the install command above, or:
+
+```sh
+uv tool install --upgrade --python 3.13 stenograf   # not while a meeting is running
+```
+
+To switch all of it off — no request, no line, no notice — put this in
+`settings.toml` (`steno settings edit`):
+
+```toml
+[updates]
+check = false
+```
+
+Only an install made the standard way updates itself. One you pinned to a
+version, gave extras or a custom package index, or installed with pip is
+yours: it is told about the release and never changed. A checkout is not even
+told. Versions up to 0.7.0 have no update check at all — run the install
+command once to move on from them.
+
 ### Manual install
 
 With [uv](https://docs.astral.sh/uv/) already installed:
@@ -505,6 +543,9 @@ provider = "cpu"                  # ONNX execution provider for parakeet-onnx:
 
 [notes]                           # see "Meeting notes" above
 backend = "mlx"
+
+[updates]
+check = false                     # no daily look for a new release (see "Updates")
 ```
 
 Typos fail loudly: an unknown table or key is an error, and `steno doctor`
