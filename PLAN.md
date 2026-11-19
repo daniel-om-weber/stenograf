@@ -682,13 +682,10 @@ smoked the single manylinux_2_28 wheel.
 4. **ReDimNet2-B6 names speakers (built 2026-11-18) — what it left.**
    Evidence and every number: `eval/README.md`, "Speaker-embedding models in
    the naming seat" and the three sections after it.
-   (a) **The model file is not hosted yet, so `main` cannot be released.**
-   `assets.SPEAKER_EMBEDDING` pins `redimnet2-b6-vb2-lm.onnx` as an asset of
-   the GitHub release tagged `models-1` (not a `v*` tag, so the publish
-   workflow ignores it). Until that release exists, `steno setup` fails on a
-   machine without the file; a development machine works from a copy in the
-   model cache. `eval/embedders/export_redimnet.py` rebuilds the file from
-   the publishers' checkpoint.
+   (a) **Hosted 2026-11-19** as the one asset of the GitHub release
+   `models-1` (not a `v*` tag, so the publish workflow ignores it; its notes
+   carry the origin and the licence). `eval/embedders/export_redimnet.py`
+   rebuilds the file from the publishers' checkpoint.
    (b) **Energy** per minute of speech, unmeasured:
    `eval/embedders/energy.sh` with `shipped.py` at background QoS and
    foreground, on a quiet M4 Max. It decides whether the 120 s budget stays
