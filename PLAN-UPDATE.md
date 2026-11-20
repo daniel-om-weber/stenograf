@@ -499,10 +499,15 @@ release dry run of 2026-11-20.
   there** (`update.SWAP_MEASURED`; Windows joined 2026-11-20).
   `STENOGRAF_UPDATE_UNMEASURED=1` switches the button on for such a
   measurement.
-- **U9: the speech-recognition weights are not fetched during prepare**, only
-  the plain model files (voice-activity, diarization, speaker embedding).
-  Fetching the weights means loading that backend's libraries beside the
-  running app; they still download on first use.
+- **U9: the speech model is downloaded during prepare, never loaded.** Besides
+  the plain model files (voice-activity, diarization, speaker embedding),
+  prepare fetches the files of the speech model the settings select
+  (`_updater._fetch_speech_model`), because a release that re-pins it would
+  otherwise make the first meeting after the update wait for ~2.5 GB.
+  Loading it to prove it works would put that backend's libraries beside the
+  running app, so it is not loaded. The cost: a re-pinned model makes
+  "Preparing…" a multi-GB download with no progress of its own; an unchanged
+  model costs nothing.
 - **Only a version that was installed and taken out again is marked as
   failed** (U16 says any failure is). A failed download is usually the
   network, and an update that never began — a meeting running in a terminal, a

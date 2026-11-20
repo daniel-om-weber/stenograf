@@ -86,6 +86,7 @@ To update by hand, re-run the install command above, or:
 
 ```sh
 uv tool install --upgrade --python 3.13 stenograf   # not while a meeting is running
+steno setup                                          # fetches the new release's models
 ```
 
 To switch all of it off — no request, no line, no notice — put this in
@@ -97,8 +98,8 @@ check = false
 ```
 
 Only an install made the standard way updates itself. One you pinned to a
-version, gave extras or a custom package index, or installed with pip is
-yours: it is told about the release and never changed. A checkout is not even
+version, gave extras other than `[gui]` or `[ollama]` or a custom package
+index, or installed with pip is yours: it is told about the release and never changed. A checkout is not even
 told. Versions up to 0.7.0 have no update check at all — run the install
 command once to move on from them.
 
@@ -452,9 +453,8 @@ Matching is on by default in `steno start`/`transcribe` and does nothing until
 you enroll someone; disable it with `--no-reid`, or adjust the match strictness
 with `--reid-threshold` (0–1, default 0.62). Voiceprints live in the platform data
 dir (not the model cache) and are never uploaded. A voiceprint belongs to the
-model that made it: names saved before the voice model changed stay in the
-library, listed as inactive by `steno profiles list`, and each voice is named
-once more.
+model that made it: 0.8.0 changed the voice model and deletes the names saved
+before it, so each voice is named once more.
 
 ## Vocabulary
 
@@ -531,7 +531,7 @@ dir = "~/Documents/Meetings"      # where meeting folders are created (default:
 [speakers]
 diarization = true                # separate speakers within a channel (off by
                                   # default; a per-run flag or count also enables)
-reid_threshold = 0.5              # cross-meeting voice match strictness (0–1)
+reid_threshold = 0.62             # cross-meeting voice match strictness (0–1)
 profile_store = "~/steno/profiles.json"
 
 [asr]

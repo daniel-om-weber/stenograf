@@ -10,7 +10,13 @@ survive customization.
 from __future__ import annotations
 
 from stenograf.config import Language
-from stenograf.transcript import Transcript, TranscriptEntry, format_timestamp, with_muted
+from stenograf.transcript import (
+    MutedSpan,
+    Transcript,
+    TranscriptEntry,
+    format_timestamp,
+    with_muted,
+)
 
 
 def template_instruction(template: str) -> str:
@@ -116,9 +122,7 @@ def build_messages(
     if entries is None:
         entries, muted = transcript.entries, transcript.muted
     else:
-        # A chunk names the gaps inside its own stretch of the meeting.
-        span = (entries[0].start, entries[-1].end) if entries else (0.0, -1.0)
-        muted = [m for m in transcript.muted if span[0] <= m.start <= span[1]]
+        muted = _muted_in_chunk(transcript, entries)
     body = "\n\n".join(with_muted(entries, muted, _render_entry)) + "\n"
     user = f"The meeting transcript:\n\n{body}"
     if partial:
@@ -129,6 +133,23 @@ def build_messages(
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
+
+
+def _muted_in_chunk(transcript: Transcript, chunk: list[TranscriptEntry]) -> list[MutedSpan]:
+    """The muted spans a chunk names: each belongs to the chunk holding the
+    entry it precedes in the whole transcript (:func:`with_muted`'s rule), and
+    one after every entry to the last chunk. Muting falls in a pause, between
+    entries — a chunk's own time range would hold almost none of them."""
+    entries = transcript.entries
+    if not entries or not chunk:
+        return []
+    held = {id(entry) for entry in chunk}
+    owned = []
+    for span in transcript.muted:
+        owner = next((e for e in entries if span.start <= e.start), entries[-1])
+        if id(owner) in held:
+            owned.append(span)
+    return owned
 
 
 def build_reduce_messages(

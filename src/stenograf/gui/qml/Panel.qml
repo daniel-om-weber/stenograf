@@ -39,7 +39,8 @@ Item {
 
         anchors.fill: parent
         enabled: panel.dropHint.length > 0 && !panel.busy
-        onEntered: drag => drag.accepted = drag.hasUrls
+        // Files only: a link from a browser is a URL too, but names nothing here.
+        onEntered: drag => drag.accepted = drag.hasUrls && drag.urls.length > 0 && drag.urls[0].toString().startsWith("file:")
         onDropped: drop => {
             if (drop.hasUrls && drop.urls.length > 0) {
                 drop.acceptProposedAction();

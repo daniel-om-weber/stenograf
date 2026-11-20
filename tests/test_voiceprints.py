@@ -344,3 +344,25 @@ class TestMeetingVoiceprints:
         from stenograf.voiceprints import load_meeting_voiceprints
 
         assert load_meeting_voiceprints(tmp_path) is None
+
+
+class TestRetiredModels:
+    def test_load_deletes_the_retired_models_profiles_from_the_file(self, tmp_path):
+        from stenograf.voiceprints import RETIRED_MODELS
+
+        path = tmp_path / "profiles.json"
+        retired = next(iter(RETIRED_MODELS))
+        profiles = [profile("Anna", retired, ANNA), profile("Daniel", MODEL, DANIEL)]
+        ProfileStore(path, profiles).save()
+        store = ProfileStore.load(path)
+        assert [p.name for p in store.profiles()] == ["Daniel"]
+        assert retired not in path.read_text(encoding="utf-8")
+
+    def test_a_store_without_retired_profiles_is_not_rewritten(self, tmp_path):
+        path = tmp_path / "profiles.json"
+        ProfileStore(path, [profile("Daniel", MODEL, DANIEL)]).save()
+        before = path.stat().st_mtime_ns
+        path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        stamp = path.stat().st_mtime_ns
+        ProfileStore.load(path)
+        assert path.stat().st_mtime_ns == stamp >= before

@@ -1823,7 +1823,10 @@ brackets are the paired 95 % interval against ERes2Net-base:
   part of that gap is open.
 
 Not built: the store has no notion of a translated entry, and how a profile
-mixing translated and native entries should be scored is open.
+mixing translated and native entries should be scored is open. For the
+ERes2Net-to-ReDimNet2 change it was not needed: those profiles were never used
+in practice, so the store deletes them on load (`voiceprints.RETIRED_MODELS`,
+Daniel's call, 2026-11-20). The next embedder change decides afresh.
 
 #### The chunk loop runs during the meeting (2026-11-17)
 

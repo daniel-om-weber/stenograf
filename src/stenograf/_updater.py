@@ -422,7 +422,13 @@ class _Swap:
     launcher_copies: Path = field(init=False)
     open: bool = False
     """The environment is parked and the swap neither committed nor undone."""
+    installed: bool = False
+    """uv finished and left a complete environment. A rollback before that
+    took out nothing of the new version: uv missing, a full disk, a cache
+    pruned since ``prepare``, all of which say nothing against the release."""
     rolled_back: bool = False
+    """Written to the result: the old app holds the version against itself
+    for good, so only a rollback of an *installed* version counts."""
 
     def __post_init__(self) -> None:
         self.parked = parked_path(self.request.tool_dir)
@@ -505,6 +511,7 @@ class _Swap:
             )
         if not names_stenograf(request.environment):
             raise _Failed("The new version was not installed completely.")
+        self.installed = True
 
     def verify(self) -> None:
         """Ask the installed program which version it is, and believe only that.
@@ -629,7 +636,7 @@ class _Swap:
             _rename(environment, self.trash)
         _rename(self.parked, environment)
         self.open = False
-        self.rolled_back = True
+        self.rolled_back = self.installed
         self.restore_launchers()
         self.note("rolled back to the previous version")
         self.close_journal()
@@ -900,6 +907,13 @@ def _fetch_missing_models() -> None:
     Files only — loading the speech model to prove it works would put several
     GB next to the running app on every update. A failed download is not a
     failed update: the models still download on first use."""
+    # huggingface_hub's progress bars write to sys.stderr, and under pythonw
+    # there is none: the write raises or the download hangs (measured
+    # 2026-11-20 with sys.stderr set to None, macOS).
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 — lives as long as the process
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 — as above
     try:
         from stenograf import assets
 
@@ -908,14 +922,49 @@ def _fetch_missing_models() -> None:
                 assets.fetch(asset, lambda *_: None)
     except Exception as exc:  # noqa: BLE001 — see the docstring
         print(f"models were not prefetched: {exc}", file=sys.stderr)
+    try:
+        _fetch_speech_model()
+    except Exception as exc:  # noqa: BLE001 — see the docstring
+        print(f"the speech model was not prefetched: {exc}", file=sys.stderr)
+
+
+def _fetch_speech_model() -> None:
+    """Download the speech model the next meeting will load, without loading it.
+
+    The ONNX model lives in stenograf's own cache folder, keyed by its
+    revision, so a release that moves or re-pins it would otherwise cost the
+    first meeting after the update a ~2.5 GB download. That download now
+    happens here instead, while the update line says "Preparing…", with no
+    progress of its own; an unchanged model costs nothing."""
+    from stenograf.asr import default_backend_name
+    from stenograf.settings import SettingsError, load_settings
+
+    try:
+        configured = load_settings().asr.backend
+    except SettingsError:
+        configured = None
+    name = default_backend_name(configured)
+    if name == "parakeet-onnx":
+        from stenograf.asr import parakeet_onnx
+
+        parakeet_onnx.model_dir()
+    elif name == "parakeet":
+        from huggingface_hub import hf_hub_download
+
+        from stenograf.asr import parakeet
+
+        if parakeet._cached_snapshot(parakeet.MODEL_ID) is None:
+            for filename in ("config.json", "model.safetensors"):
+                hf_hub_download(parakeet.MODEL_ID, filename)
 
 
 def post_install() -> int:
-    """Rewrite this release's launchers; run by ``apply`` in the new environment."""
-    from stenograf.shortcut import install_shortcut
+    """Rewrite this release's launchers that are still there; run by ``apply``
+    in the new environment."""
+    from stenograf.shortcut import refresh_shortcut
 
     try:
-        launcher = install_shortcut()
+        launcher = refresh_shortcut()
     except OSError as exc:
         print(f"launcher not written: {exc}")
         return 1

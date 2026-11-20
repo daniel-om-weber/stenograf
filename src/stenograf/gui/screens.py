@@ -43,11 +43,16 @@ def _url(path: Path) -> str:
     return QUrl.fromLocalFile(str(path)).toString() if path.is_dir() else ""
 
 
-def _local(url: str) -> Path:
-    """The path a QML file dialog handed back (it deals in ``file:`` URLs)."""
+def _local(url: str) -> Path | None:
+    """The path a QML file dialog or a drop handed back (they deal in ``file:``
+    URLs); ``None`` for anything else — a link dragged from a browser, which
+    would otherwise read as the current directory."""
     from PySide6.QtCore import QUrl
 
-    return Path(QUrl(url).toLocalFile())
+    parsed = QUrl(url)
+    if not parsed.isLocalFile() or not parsed.toLocalFile():
+        return None
+    return Path(parsed.toLocalFile())
 
 
 def _device_entries(devices: list, pinned: str | None) -> list[dict[str, str]]:
@@ -273,6 +278,9 @@ class TranscribeScreen(Screen):
     @Slot(str)
     def choose(self, url: str) -> None:
         path = _local(url)
+        if path is None:
+            self.set(status="Only a file on this computer can be transcribed")
+            return
         if path.is_dir():  # dropped onto the window; the dialog only offers files
             self.set(status=f"{path.name} is a folder — drop an audio or video file")
             return
@@ -350,6 +358,9 @@ class NotesScreen(Screen):
     @Slot(str)
     def choose(self, url: str) -> None:
         path = _local(url)
+        if path is None:
+            self.set(status="Only a meeting folder on this computer can be chosen")
+            return
         # A transcript dropped onto the window stands for its meeting folder.
         self.set(meeting=str(path.parent if path.is_file() else path), status="")
 

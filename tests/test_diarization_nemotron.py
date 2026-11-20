@@ -431,6 +431,93 @@ def test_recomputed_stream_embeds_from_the_start(fake_models, monkeypatch):
     assert stream.take_voices() is None
 
 
+def test_a_failing_voice_model_keeps_the_turns_and_reports_once(fake_models):
+    make, _ = fake_models
+    audio = _two_voices()
+    want = make().diarize(audio)
+    assert len({t.speaker for t in want}) == 2
+    d = make()
+    d.embedder.fail = True
+    result = d.diarize_with_embeddings(audio)
+    assert result.turns == want and result.embeddings == {}
+    assert isinstance(d.take_voice_failure(), RuntimeError)
+    assert d.take_voice_failure() is None  # told once
+
+
+def test_a_voice_model_that_cannot_download_keeps_the_turns(fake_models, monkeypatch):
+    make, _ = fake_models
+    audio = _two_voices()
+    want = make().diarize(audio)
+    d = make()
+    d.embedder = VoiceEmbedder()  # the real one: its load fetches the model
+
+    def offline(*args, **kwargs):
+        raise OSError("network unreachable")
+
+    monkeypatch.setattr(assets, "cached_path", lambda asset: None)
+    monkeypatch.setattr(assets, "fetch", offline)
+    result = d.diarize_with_embeddings(audio)
+    assert result.turns == want and result.embeddings == {}
+    assert isinstance(d.take_voice_failure(), OSError)
+
+
+def test_a_voice_model_failing_all_meeting_keeps_the_stop_turns(fake_models):
+    make, _ = fake_models
+    audio = _two_voices()
+    want = make().diarize(audio)
+    d = make()
+    stream = d.stream()
+    d.embedder.fail = True
+    _feed(stream, audio, len(audio) - 16000)
+    resumed = stream.resumed()
+    result = resumed.diarize_with_embeddings(audio)
+    assert result.turns == want and result.embeddings == {}
+    assert resumed.take_voice_failure() is not None
+
+
+def test_the_stop_keeps_separation_when_the_voice_model_fails(fake_models):
+    from conftest import FakeASR
+
+    from stenograf.asr.base import Word
+    from stenograf.audio import to_int16
+    from stenograf.capture.base import AudioFrame, Channel
+    from stenograf.config import MeetingProfile
+    from stenograf.session import MeetingRecorder, SessionStore, plan_channels
+    from stenograf.view import LiveView
+
+    class Errors(LiveView):
+        def __init__(self) -> None:
+            self.errors: list[str] = []
+
+        def error(self, message: str) -> None:
+            self.errors.append(message)
+
+    make, _ = fake_models
+    store = SessionStore({Channel.SYSTEM})
+    store.append(AudioFrame(Channel.SYSTEM, 0.0, to_int16(_two_voices())))
+    longest: dict[str, SpeakerTurn] = {}
+    for turn in make().diarize(store.samples(Channel.SYSTEM)):
+        held = longest.get(turn.speaker)
+        if held is None or turn.end - turn.start > held.end - held.start:
+            longest[turn.speaker] = turn
+    assert len(longest) == 2
+    words = tuple(
+        Word(f"w{k}", (t.start + t.end) / 2 - 0.005, (t.start + t.end) / 2 + 0.005)
+        for k, t in enumerate(sorted(longest.values(), key=lambda t: t.start))
+    )
+    d = make()
+    d.embedder.fail = True
+    profile = MeetingProfile(local_speakers=0, remote_speakers=None)
+    recorder = MeetingRecorder(profile, asr=FakeASR(), diarizer=d)
+    view = Errors()
+    result = recorder.finalize(
+        store, plan_channels(profile), view=view, live_words={Channel.SYSTEM: words}
+    )
+    assert len({e.speaker for e in result.transcript.entries}) == 2  # not one fallback speaker
+    assert result.speaker_embeddings == {}
+    assert len(view.errors) == 1 and "voice embedding failed" in view.errors[0]
+
+
 def test_diarizer_pairs_turns_with_the_shared_embedder(monkeypatch):
     d = NemotronDiarizer(embedder=_Embedder())  # pyright: ignore[reportArgumentType]
     probs = np.zeros((300, 8), np.float32)

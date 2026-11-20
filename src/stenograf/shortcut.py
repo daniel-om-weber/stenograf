@@ -172,6 +172,34 @@ def install_shortcut() -> Path | None:
     return None
 
 
+def refresh_shortcut() -> Path | None:
+    """Rewrite the launchers that are still there; returns the first (``None`` if none).
+
+    What an update runs instead of :func:`install_shortcut`: one the user
+    removed stays removed. Re-created on every update, a deleted Desktop link
+    came back each time, and a ``Stenograf.app`` moved out of
+    ``~/Applications`` gained a second copy there — two apps in Spotlight.
+    macOS still gets its launch target written, since that file is what points
+    the app, wherever it is, at the new environment.
+    """
+    if sys.platform == "darwin":
+        _write_launch_target()
+        _retire_command_file()
+        target = _app_path()
+        if not target.is_dir():
+            return None
+        if not _bundle_is_current(target):
+            _replace_bundle(target)
+        return target
+    if sys.platform.startswith("linux"):
+        entry = _desktop_entry_path()
+        return _install_desktop_entry() if entry.is_file() else None
+    if sys.platform == "win32":
+        present = [path for path in _windows_link_paths() if path.is_file()]
+        return _install_windows_links(present) if present else None
+    return None
+
+
 def launch_target_path() -> Path:
     """The file naming the command ``Stenograf.app`` launches.
 
@@ -190,11 +218,9 @@ def _install_desktop_entry() -> Path:
     retired TUI (``Terminal=true``, no ``--gui``) converts into the app entry
     instead of leaving a second Stenograf in the menu.
     """
-    data_home = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser()
-    apps = data_home / "applications"
-    apps.mkdir(parents=True, exist_ok=True)
-    target = apps / f"{DESKTOP_FILE_NAME}.desktop"
-    _install_icon(data_home)
+    target = _desktop_entry_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _install_icon(target.parent.parent)
     content = _LINUX_DESKTOP.format(
         python=sys.executable,
         icon=DESKTOP_FILE_NAME,
@@ -202,6 +228,11 @@ def _install_desktop_entry() -> Path:
     )
     target.write_text(content, encoding="utf-8")
     return target
+
+
+def _desktop_entry_path() -> Path:
+    data_home = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser()
+    return data_home / "applications" / f"{DESKTOP_FILE_NAME}.desktop"
 
 
 def _install_icon(data_home: Path) -> Path:
@@ -233,8 +264,9 @@ def _windows_link_paths() -> list[Path]:
     return [_windows_programs() / "Stenograf.lnk", _windows_desktop() / "Stenograf.lnk"]
 
 
-def _install_windows_links() -> Path:
-    """Write both shell links, retire the batch file, and return the Start-menu one.
+def _install_windows_links(paths: list[Path] | None = None) -> Path:
+    """Write both shell links (or just ``paths``), retire the batch file, and
+    return the first — the Start-menu one, when it is written.
 
     Raises ``OSError`` when COM refuses (policy, a locked-down profile); the
     caller reports it. The links carry two things a batch file could not — an
@@ -248,7 +280,7 @@ def _install_windows_links() -> Path:
     # win32-only call path at runtime.
     from stenograf.winlink import write_shortcut  # pyright: ignore[reportAttributeAccessIssue]
 
-    paths = _windows_link_paths()
+    paths = paths if paths is not None else _windows_link_paths()
     for path in paths:
         write_shortcut(
             path,
@@ -300,17 +332,23 @@ def _install_app() -> Path:
     TCC keys on the bundle's contents, not its path — so the app can be moved
     or dragged to the Dock afterwards.
     """
-    target = Path.home() / "Applications" / "Stenograf.app"
+    target = _app_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-
-    path = launch_target_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_LAUNCH_TARGET.format(command="\n".join(_launch_command())), encoding="utf-8")
-
+    _write_launch_target()
     if not _bundle_is_current(target):
         _replace_bundle(target)
     _retire_command_file()
     return target
+
+
+def _app_path() -> Path:
+    return Path.home() / "Applications" / "Stenograf.app"
+
+
+def _write_launch_target() -> None:
+    path = launch_target_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_LAUNCH_TARGET.format(command="\n".join(_launch_command())), encoding="utf-8")
 
 
 def _launch_command() -> list[str]:

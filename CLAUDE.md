@@ -57,9 +57,10 @@ twelve seconds.
 Diarization (fp32 ONNX on the onnxruntime the wheel already ships, CPU only)
 replaced both the owned clustering loop and the stenodiar/speakrs helper: it
 counts the speakers itself, a stated count is applied afterwards as a cap, and
-count 1 still skips the diarizer. Re-ID is unchanged in kind — ERes2Net
-voiceprints (`diarization/embedding.py`, model-bound to the embedder, not the
-diarizer) matched at 0.56 — with two additions from the migration: a profile
+count 1 still skips the diarizer. Re-ID is unchanged in kind — voiceprints
+(`diarization/embedding.py`, model-bound to the embedder, not the diarizer;
+ReDimNet2-B6 since 2026-11-18, matched at 0.62 — `voiceprints.DEFAULT_THRESHOLD`)
+— with two additions from the migration: a profile
 matches by the *median* of its entries' scores, and `steno profiles assign`
 refuses a voice below the threshold unless `--force`d. The migration plan
 closed and was deleted (`git log --follow -p PLAN-NEMOTRON.md`); what it left —
@@ -216,10 +217,12 @@ both dispatch gates by design.
 - **MLX on background threads**: materialize weights on the load thread or
   inference dies with "no Stream(gpu, 0)"; verify MLX-threading changes
   against the real backend, not mocks.
-- **Diarization licensing**: DiariZen's multi-domain checkpoints are
-  CC-BY-NC — unshippable; its `meeting-base` checkpoint is MIT (trained only
-  on AMI/AISHELL-4/AliMeeting), was measured on the harness 2026-08-09 and
-  declined on accuracy (`eval/README.md`).
+- **Model licensing**: a non-commercial licence is no obstacle to shipping
+  (Daniel, 2026-11-20) — the voice model, ReDimNet2-B6, is CC BY-NC-SA 4.0,
+  served from the `models-1` release and named in the README. DiariZen was
+  declined on accuracy, not licence: its `meeting-base` checkpoint (MIT,
+  trained only on AMI/AISHELL-4/AliMeeting) was measured on the harness
+  2026-08-09 (`eval/README.md`).
   Nemotron 3 Diarization is OpenMDW-1.1 (use, modification and commercial use
   without field-of-use limits, nothing on outputs); redistributing the weights
   would owe licence and origin notices, so stenograf downloads them at first

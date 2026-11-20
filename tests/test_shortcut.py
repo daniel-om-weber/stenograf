@@ -421,6 +421,62 @@ def test_windows_shell_folders_resolve(folder):
     assert resolved.is_dir()
 
 
+# -- an update's refresh: what the user removed stays removed ----------------
+
+
+def test_an_update_never_puts_back_an_app_the_user_moved(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path)
+    shutil.move(shortcut.install_shortcut(), tmp_path / "Stenograf.app")
+    shortcut.launch_target_path().write_text("/old/steno\n", encoding="utf-8")
+
+    assert shortcut.refresh_shortcut() is None
+
+    assert not (tmp_path / "Applications" / "Stenograf.app").exists()
+    # The moved app reads the same target, so it opens the new version.
+    assert "/old/steno" not in shortcut.launch_target_path().read_text(encoding="utf-8")
+
+
+def test_an_update_refreshes_the_app_where_setup_put_it(tmp_path, monkeypatch):
+    _macos(monkeypatch, tmp_path)
+    target = shortcut.install_shortcut()
+    (target / "Contents" / "MacOS" / "Stenograf").write_bytes(b"damaged")
+
+    assert shortcut.refresh_shortcut() == target
+    assert _fingerprint(target) == BUNDLE_FINGERPRINT
+
+
+def test_an_update_leaves_a_removed_linux_entry_removed(tmp_path, monkeypatch):
+    _linux(monkeypatch, tmp_path)
+    entry = shortcut.install_shortcut()
+    assert entry is not None
+    entry.write_text("stale", encoding="utf-8")
+
+    assert shortcut.refresh_shortcut() == entry
+    assert "--gui" in entry.read_text(encoding="utf-8")
+    entry.unlink()
+    assert shortcut.refresh_shortcut() is None
+    assert not entry.exists()
+
+
+def test_an_update_rewrites_only_the_windows_links_still_there(tmp_path, monkeypatch):
+    import types
+
+    _windows(monkeypatch, tmp_path)
+    written = []
+    # The real module refuses to import off Windows; only the paths matter here.
+    fake = types.SimpleNamespace(write_shortcut=lambda path, **kwargs: written.append(path))
+    monkeypatch.setitem(sys.modules, "stenograf.winlink", fake)
+    start = tmp_path / "Programs" / "Stenograf.lnk"
+    start.parent.mkdir(parents=True)
+    start.write_bytes(b"link")  # the Desktop copy was deleted by the user
+
+    assert shortcut.refresh_shortcut() == start
+    assert written == [start]
+    start.unlink()
+    assert shortcut.refresh_shortcut() is None
+    assert written == [start]
+
+
 def test_unsupported_platform_installs_nothing(tmp_path, monkeypatch):
     # `steno transcribe` works anywhere Python does; setup must not fail there.
     monkeypatch.setattr(sys, "platform", "freebsd14")

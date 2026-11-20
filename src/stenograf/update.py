@@ -172,7 +172,9 @@ def python_allowed(spec: str | None, version: tuple[int, ...]) -> bool | None:
     """Whether ``requires_python`` admits ``version``; ``None`` if it cannot be read.
 
     The clauses a release of this project uses, not all of PEP 440: anything
-    else answers ``None``, and the caller then offers no self-update."""
+    else answers ``None``, and the caller then offers no self-update. Both
+    sides are compared padded with zeros, as PEP 440 does: ``3.13.0`` is not
+    ``>3.13``, though as plain tuples ``(3, 13, 0) > (3, 13)``."""
     if not spec or not spec.strip():
         return True
     for clause in spec.split(","):
@@ -181,25 +183,27 @@ def python_allowed(spec: str | None, version: tuple[int, ...]) -> bool | None:
             return None
         operator, number, wildcard = match.groups()
         bound = tuple(int(part) for part in number.split("."))
-        prefix = version[: len(bound)]
+        ours = _padded(version, bound)
+        theirs = _padded(bound, version)
         if wildcard:
             if operator not in ("==", "!="):
                 return None
-            holds = (prefix == bound) == (operator == "==")
+            holds = (ours[: len(bound)] == bound) == (operator == "==")
         elif operator == ">=":
-            holds = version >= bound
+            holds = ours >= theirs
         elif operator == ">":
-            holds = version > bound
+            holds = ours > theirs
         elif operator == "<=":
-            holds = _padded(version, bound) <= _padded(bound, version)
+            holds = ours <= theirs
         elif operator == "<":
-            holds = version < bound
+            holds = ours < theirs
         elif operator == "==":
-            holds = _padded(version, bound) == _padded(bound, version)
+            holds = ours == theirs
         elif operator == "!=":
-            holds = _padded(version, bound) != _padded(bound, version)
+            holds = ours != theirs
         else:  # ~=X.Y means >=X.Y and the same X
-            holds = len(bound) >= 2 and version >= bound and prefix[:-1] == bound[:-1]
+            same = ours[: len(bound) - 1] == bound[:-1]
+            holds = len(bound) >= 2 and ours >= theirs and same
         if not holds:
             return False
     return True
@@ -222,10 +226,15 @@ def newest_release(
 
     Newer than the installed one, a final release, not withdrawn ("yanked" —
     the brake for a bad release), and uploaded completely an hour ago
-    (:data:`SETTLE_S`)."""
+    (:data:`SETTLE_S`).
+
+    PyPI documents ``releases`` as deprecated and liable to go. Without it the
+    newest release alone is judged — ``info.version`` with its files in
+    ``urls`` — which costs only the fallback to an older release while the
+    newest is still uploading."""
     releases = payload.get("releases")
     if not isinstance(releases, dict):
-        return None
+        releases = _newest_only(payload)
     best: tuple[tuple[int, ...], str, list[dict[str, Any]]] | None = None
     for text, files in releases.items():
         version = parse_version(str(text))
@@ -244,6 +253,15 @@ def newest_release(
         (item["requires_python"] for item in best[2] if item.get("requires_python")), None
     )
     return Release(version=best[1], requires_python=requires)
+
+
+def _newest_only(payload: dict[str, Any]) -> dict[str, Any]:
+    info = payload.get("info")
+    version = info.get("version") if isinstance(info, dict) else None
+    files = payload.get("urls")
+    if not isinstance(version, str) or not isinstance(files, list):
+        return {}
+    return {version: files}
 
 
 def _timestamp(text: object) -> float | None:
@@ -389,6 +407,23 @@ def load_state() -> dict[str, Any]:
     return state if isinstance(state, dict) else {}
 
 
+def _stored_time(state: dict[str, Any], key: str) -> float:
+    """A time from :func:`load_state`, or 0 — "long ago" — for anything that is
+    not a number. A rollback runs this release on whatever state a later one
+    wrote, and a corrupt file must cost a check, not every command."""
+    try:
+        return float(state.get(key) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _failed_versions(state: dict[str, Any]) -> list[str]:
+    failed = state.get("failed")
+    if not isinstance(failed, list):
+        return []
+    return [item for item in failed if isinstance(item, str)]
+
+
 def save_state(state: dict[str, Any]) -> None:
     """Best effort, and atomic: a background check and a command's exit can
     both write, and a half-written file would read as no state at all."""
@@ -430,7 +465,7 @@ def check(*, force: bool = False) -> None:
     now = time.time()
     # A stored time in the future — the clock was wrong once — counts as old,
     # or the check would stay silent until real time caught up with it.
-    if not force and 0 <= now - float(state.get("checked_at") or 0) < CHECK_INTERVAL_S:
+    if not force and 0 <= now - _stored_time(state, "checked_at") < CHECK_INTERVAL_S:
         return
     installed = parse_version(__version__)
     if installed is None:
@@ -481,7 +516,7 @@ def offer(*, include_failed: bool = False) -> Offer | None:
     newer = parse_version(latest)
     if newer is None or newer <= installed:
         return None
-    if not include_failed and latest in (state.get("failed") or ()):
+    if not include_failed and latest in _failed_versions(state):
         return None
     install = describe_install()
     if install.kind == "pip":
@@ -523,7 +558,7 @@ def notice() -> str | None:
     now = time.time()
     # Before anything else: working out the offer runs `uv --version`, and a
     # command that has already said its line today must not pay for that.
-    if 0 <= now - float(state.get("noticed_at") or 0) < NOTICE_INTERVAL_S:
+    if 0 <= now - _stored_time(state, "noticed_at") < NOTICE_INTERVAL_S:
         return None
     found = offer(include_failed=True)
     if found is None:
@@ -660,7 +695,7 @@ def hand_over(
     if uv is None:
         raise UpdateError("uv was not found.")
     request_file = prepared / "request.json"
-    _updater.Request(
+    request = _updater.Request(
         target_version=version,
         python=running_python(),
         environment=install.environment,
@@ -673,7 +708,11 @@ def hand_over(
         restart=tuple(restart),
         launcher_files=tuple(launcher_files),
         direct=bool(restart) and Path(restart[0]).name not in _LAUNCHERS,
-    ).write(request_file)
+    )
+    try:
+        request.write(request_file)
+    except OSError as exc:  # a full disk, a folder pruned since prepare
+        raise UpdateError(f"The update could not be handed over ({exc}).") from exc
 
     state = load_state()
     state["pending"] = {"target": version, "from": __version__}
@@ -748,8 +787,7 @@ def launcher_files() -> list[Path]:
     elif sys.platform == "win32":
         candidates = shortcut._windows_link_paths()
     else:
-        data_home = Path(os.environ.get("XDG_DATA_HOME", "~/.local/share")).expanduser()
-        candidates = [data_home / "applications" / f"{shortcut.DESKTOP_FILE_NAME}.desktop"]
+        candidates = [shortcut._desktop_entry_path()]
     return [path for path in candidates if path.is_file()]
 
 
@@ -799,8 +837,7 @@ def settle() -> Report | None:
             # Only a version that was installed here and had to be taken out
             # again. An update that never began — a meeting in a terminal, a
             # file in use — says nothing against the version.
-            failed = [item for item in state.get("failed") or () if isinstance(item, str)]
-            state["failed"] = sorted({*failed, target})
+            state["failed"] = sorted({*_failed_versions(state), target})
         report = Report(False, target, message)
     save_state(state)
     with contextlib.suppress(OSError):

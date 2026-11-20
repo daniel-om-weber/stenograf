@@ -106,6 +106,29 @@ def test_requires_python_against_313(spec, expected):
     assert update.python_allowed(spec, (3, 13, 5)) is expected
 
 
+@pytest.mark.parametrize(
+    ("spec", "version", "expected"),
+    [
+        (">3.13", (3, 13, 0), False),  # 3.13.0 is 3.13, not above it
+        (">3.13", (3, 13, 1), True),
+        (">3.13.0", (3, 13), False),
+        (">=3.13.0", (3, 13), True),
+        ("<3.13.0", (3, 13), False),
+        ("<3.13", (3, 13, 0), False),
+        ("<=3.13", (3, 13, 0), True),
+        ("<=3.13.0", (3, 13), True),
+        ("==3.13", (3, 13, 0), True),
+        ("!=3.13", (3, 13, 0), False),
+        ("==3.13.*", (3, 13), True),
+        ("~=3.13.0", (3, 13), True),
+        ("~=3.13.0", (3, 14, 0), False),
+        ("~=3.12", (3, 12), True),
+    ],
+)
+def test_requires_python_compares_versions_padded_with_zeros(spec, version, expected):
+    assert update.python_allowed(spec, version) is expected
+
+
 # -- which release is offered ------------------------------------------------
 
 
@@ -149,6 +172,22 @@ def test_a_release_still_uploading_is_not_offered_yet():
 def test_a_malformed_answer_offers_nothing():
     assert update.newest_release({"releases": "nope"}, installed=(0, 7, 0), now=NOW) is None
     assert update.newest_release({}, installed=(0, 7, 0), now=NOW) is None
+    broken = {"info": {"version": 8}, "urls": release()}
+    assert update.newest_release(broken, installed=(0, 7, 0), now=NOW) is None
+
+
+def test_without_the_deprecated_release_list_the_newest_release_is_judged():
+    """PyPI may drop ``releases``; ``info`` and ``urls`` describe the newest."""
+    payload = {"info": {"version": "0.8.0"}, "urls": release()}
+    assert update.newest_release(payload, installed=(0, 7, 0), now=NOW) == update.Release(
+        "0.8.0", ">=3.12,<3.14"
+    )
+    assert update.newest_release(payload, installed=(0, 8, 0), now=NOW) is None
+    for files in (release(yanked=True), release(uploaded="2027-01-15T07:59:00.000000Z"), []):
+        payload = {"info": {"version": "0.8.0"}, "urls": files}
+        assert update.newest_release(payload, installed=(0, 7, 0), now=NOW) is None
+    prerelease = {"info": {"version": "0.9.0rc1"}, "urls": release()}
+    assert update.newest_release(prerelease, installed=(0, 7, 0), now=NOW) is None
 
 
 # -- which install may take it -----------------------------------------------
@@ -245,6 +284,30 @@ def test_a_clock_that_was_once_ahead_does_not_silence_the_check(standard, monkey
     update.save_state({"checked_at": time.time() + 10 * 86400})
     update.check()
     assert asked == [1]
+
+
+@pytest.mark.parametrize("stored", ["yesterday", [1], {"at": 1}, "1e999", 10**400])
+def test_a_stored_time_that_is_not_a_number_counts_as_long_ago(standard, monkeypatch, stored):
+    """A rollback runs this release on whatever state a later one wrote."""
+    asked = []
+    monkeypatch.setattr(update, "fetch", lambda: asked.append(1) or {"releases": {}})
+    update.save_state({"checked_at": stored})
+    update.check()
+    assert asked == [1]
+    found(noticed_at=stored, failed=stored)
+    assert update.offer() is not None
+    assert update.notice() is not None
+
+
+def test_a_failed_list_that_is_not_a_list_neither_crashes_nor_matches_by_substring(standard):
+    found(failed="0.8.0.1")
+    assert update.offer() is not None
+    update.save_state({"pending": {"target": "0.8.0"}, "failed": 7})
+    _updater.result_path(update.work_dir()).write_text(
+        json.dumps({"version": "0.8.0", "message": "x", "rolled_back": True})
+    )
+    update.settle()
+    assert update.load_state()["failed"] == ["0.8.0"]
 
 
 def test_a_check_that_cannot_reach_pypi_is_silent_and_tries_again(standard):
@@ -547,6 +610,19 @@ def test_hand_over_writes_the_request_and_starts_the_new_release_s_updater(
     assert update.load_state()["pending"] == {"target": "0.8.0", "from": "0.7.0"}
 
 
+def test_a_request_that_cannot_be_written_is_an_update_error(standard, monkeypatch, tmp_path):
+    # The app's line catches UpdateError; a bare OSError left it on
+    # "Preparing…" with only a Cancel that no longer does anything.
+    started = []
+    monkeypatch.setattr(subprocess, "Popen", lambda argv, **kwargs: started.append(argv))
+    with pytest.raises(update.UpdateError, match="could not be handed over"):
+        update.hand_over(
+            "0.8.0", tmp_path / "pruned", restart=[], wait_pids=[], launcher_files=[]
+        )
+    assert started == []
+    assert "pending" not in update.load_state()
+
+
 def test_a_non_standard_install_refuses_to_hand_over(tmp_path):
     with pytest.raises(update.UpdateError):
         update.hand_over("0.8.0", tmp_path, restart=[], wait_pids=[], launcher_files=[])
@@ -609,6 +685,34 @@ def test_an_update_that_never_began_is_not_held_against_the_version(standard):
     assert "failed" not in update.load_state()
     update.save_state({**update.load_state(), "checked_at": time.time()})
     assert update.offer() is not None
+
+
+def test_an_install_that_never_ran_is_not_rolled_back_against_the_version(tmp_path):
+    """uv missing, a full disk: the old version comes back, and the release
+    stays on offer, as the sentence asking to run the update again promises."""
+    from fake_uv import build_environment
+
+    environment = tmp_path / "tools" / "stenograf"
+    build_environment(environment, "0.7.0")
+    work = tmp_path / "work"
+    work.mkdir()
+    request = work / "request.json"
+    _updater.Request(
+        target_version="0.8.0",
+        python="3.13",
+        environment=environment,
+        tool_dir=environment.parent,
+        bin_dir=tmp_path / "bin",
+        uv=str(tmp_path / "no-such-uv"),
+        work_dir=work,
+        lock_file=work / "in-use.lock",
+    ).write(request)
+    assert _updater.apply(request) == 1
+    assert (environment / "version.txt").read_text(encoding="utf-8") == "0.7.0"
+    result = json.loads(_updater.result_path(work).read_text(encoding="utf-8"))
+    assert result["ok"] is False
+    assert result["message"].endswith("The previous version was restored.")
+    assert result["rolled_back"] is False
 
 
 def test_an_updater_that_vanished_still_gets_a_sentence(standard):
@@ -724,3 +828,68 @@ def test_the_names_two_releases_must_agree_on_have_not_changed(standard, monkeyp
     tools = Path(sys.prefix).parent
     assert _updater.parked_path(tools) == tools.parent / "tools-stenograf-previous"
     assert _updater.trash_path(tools) == tools.parent / "tools-stenograf-failed"
+
+
+# -- models fetched while preparing ------------------------------------------
+
+
+@pytest.fixture
+def no_small_models(monkeypatch):
+    from stenograf import assets
+
+    monkeypatch.setattr(assets, "cached_path", lambda asset: Path("cached"))
+
+
+def test_preparing_fetches_the_onnx_speech_model_files(monkeypatch, no_small_models):
+    """It lives in stenograf's own cache folder, which a release may re-key."""
+    from stenograf.asr import parakeet_onnx
+
+    fetched = []
+    monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet-onnx")
+    monkeypatch.setattr(parakeet_onnx, "model_dir", lambda *a: fetched.append(a) or Path("m"))
+    _updater._fetch_missing_models()
+    assert fetched == [()]
+
+
+def test_preparing_fetches_the_mlx_speech_model_files_and_never_loads_them(
+    monkeypatch, no_small_models
+):
+    import huggingface_hub
+
+    from stenograf.asr import parakeet
+
+    fetched = []
+    monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
+    monkeypatch.setattr(parakeet, "_cached_snapshot", lambda model_id: None)
+    monkeypatch.setattr(
+        huggingface_hub, "hf_hub_download", lambda repo, name: fetched.append((repo, name))
+    )
+    monkeypatch.setattr(
+        parakeet.ParakeetMLXBackend, "load", lambda self: pytest.fail("loaded the weights")
+    )
+    _updater._fetch_missing_models()
+    assert fetched == [
+        (parakeet.MODEL_ID, "config.json"),
+        (parakeet.MODEL_ID, "model.safetensors"),
+    ]
+
+
+def test_preparing_without_a_stderr_still_downloads_and_never_fails(monkeypatch, no_small_models):
+    """pythonw has no stderr, and huggingface_hub's progress bars write to it."""
+    from stenograf.asr import parakeet_onnx
+
+    def download(*args):
+        sys.stderr.write("progress\n")
+        raise OSError("the network went away")
+
+    monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet-onnx")
+    monkeypatch.setattr(parakeet_onnx, "model_dir", download)
+    monkeypatch.setattr(sys, "stderr", None)
+    monkeypatch.setattr(sys, "stdout", None)
+    try:
+        _updater._fetch_missing_models()  # neither the write nor the failure raises
+        assert sys.stderr is not None and sys.stdout is not None
+    finally:
+        for stream in (sys.stderr, sys.stdout):
+            if stream is not None:
+                stream.close()

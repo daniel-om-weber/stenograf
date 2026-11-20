@@ -136,7 +136,9 @@ Rectangle {
                     }
 
                     Text {
-                        text: card.screen.preview(titleField.text)
+                        // The folder too: the page is built before the meeting
+                        // exists, and an unchanged title would never re-ask.
+                        text: card.st.folder ? card.screen.preview(titleField.text) : ""
                         color: Theme.dim
                         font.pixelSize: Theme.textSmall
                         font.family: Theme.mono

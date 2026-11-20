@@ -186,7 +186,19 @@ def load_backends(
     _say(announce, f"asr: loading {asr.model_id or asr.name}")
     asr.load()  # an explicit accelerator that can't deliver raises here, loudly
     vad = SileroVAD(assets.fetch(assets.SILERO_VAD, download_progress(announce)))
-    diarizer = load_diarizer(announce=announce) if need_diarizer else None
+    diarizer = None
+    if need_diarizer:
+        # Fetched here, not left to the diarizer's first use: that use is a
+        # meeting's stop, and the meeting's stream (which never downloads)
+        # would have run idle until then. Unlike the VAD's, a failure here
+        # only warns: capture is already running, and a meeting without
+        # speaker separation beats no meeting — the stop tries once more.
+        try:
+            for asset in (*assets.NEMOTRON, assets.SPEAKER_EMBEDDING):
+                assets.fetch(asset, download_progress(announce))
+        except Exception as exc:  # noqa: BLE001 — see above
+            _say(announce, f"warning: diarization models not downloaded ({exc})")
+        diarizer = load_diarizer(announce=announce)
     return asr, vad, diarizer
 
 

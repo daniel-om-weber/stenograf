@@ -392,7 +392,9 @@ Item {
                 text: page.phase === "rec" ? (page.screen.state.canStop ? "Stop & finalize" : "Cancel") : page.phase === "finalizing" ? "Finalizing…" : "Back to menu"
                 glyph: page.phase === "rec" && page.screen.state.canStop ? "stop" : ""
                 primary: page.phase === "rec"
-                enabled: page.phase !== "finalizing"
+                // Not while the card saves: leaving settles the notes without
+                // the choices that save is about to hand over.
+                enabled: page.phase !== "finalizing" && !page.screen.state.namesBusy
                 implicitWidth: 150
                 onClicked: page.screen.stop()
             }

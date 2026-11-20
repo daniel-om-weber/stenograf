@@ -251,6 +251,9 @@ def checkpoint_writer(out_dir: Path, basename: str) -> Callable[[Transcript], No
 
 _TITLE_DROP = re.compile(r"[^\w\s-]")  # keep letters (umlauts too), digits, spaces, dashes
 _TITLE_MAX_CHARS = 60
+_TITLE_MAX_BYTES = 200
+"""File names are capped at 255 bytes, not characters; the date prefix and a
+``-NN`` clash suffix need the rest."""
 
 
 def titled_dir_name(created_at: datetime, title: str | None) -> str:
@@ -259,8 +262,26 @@ def titled_dir_name(created_at: datetime, title: str | None) -> str:
     folders still sort by when the meeting was."""
     base = f"meeting-{created_at:%Y%m%d-%H%M%S}"
     slug = "-".join(_TITLE_DROP.sub("", (title or "").casefold()).replace("_", " ").split())
-    slug = slug[:_TITLE_MAX_CHARS].strip("-")
+    slug = slug[:_TITLE_MAX_CHARS].encode()[:_TITLE_MAX_BYTES].decode(errors="ignore")
+    slug = slug.strip("-")
     return f"{base}-{slug}" if slug else base
+
+
+def carries_title(folder: Path, title: str | None) -> bool:
+    """Whether ``folder``'s name already says ``title`` — exactly, or with the
+    ``-2``, ``-3``, … a name clash added.
+
+    A clash suffix counts only while the folder it clashed with is there: a
+    title can end in digits itself, and ``…-sprint-12`` is "Sprint 12", not
+    "Sprint" a twelfth time."""
+    created_at = created_at_from_dir_name(folder.name)
+    if created_at is None:
+        return False
+    name = titled_dir_name(created_at, title)
+    if folder.name == name:
+        return True
+    clash = re.fullmatch(rf"{re.escape(name)}-\d+", folder.name) is not None
+    return clash and folder.with_name(name).exists()
 
 
 def retitle_meeting_dir(folder: Path, title: str | None) -> Path:
@@ -273,9 +294,9 @@ def retitle_meeting_dir(folder: Path, title: str | None) -> Path:
     created_at = created_at_from_dir_name(folder.name)
     if created_at is None:
         raise ValueError(f"{folder.name} is not a date-named meeting folder")
-    name = titled_dir_name(created_at, title)
-    if name == folder.name:
+    if carries_title(folder, title):
         return folder
+    name = titled_dir_name(created_at, title)
     target = folder.with_name(name)
     suffix = 2
     while target.exists():

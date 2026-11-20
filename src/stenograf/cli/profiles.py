@@ -8,12 +8,29 @@ from typing import TYPE_CHECKING
 import click
 
 from stenograf import loaders
+from stenograf.cli.run import _library_errors
 from stenograf.config import MAX_SPEAKERS
 
 if TYPE_CHECKING:
     import numpy as np
 
     from stenograf.diarization.base import SpeakerTurn
+    from stenograf.voiceprints import ProfileStore
+
+
+def _store() -> ProfileStore:
+    """The voice library meetings use: ``[speakers] profile_store`` and
+    ``reid_threshold`` from settings.toml, so a correction made here is the one
+    the next meeting sees."""
+    from stenograf.settings import load_settings
+    from stenograf.voiceprints import DEFAULT_THRESHOLD, ProfileStore
+
+    speakers = load_settings().speakers
+    threshold = speakers.reid_threshold
+    return ProfileStore.load(
+        speakers.profile_store,
+        threshold=DEFAULT_THRESHOLD if threshold is None else threshold,
+    )
 
 
 @click.group()
@@ -26,19 +43,19 @@ def profiles() -> None:
 
 
 @profiles.command("list")
+@_library_errors
 def profiles_list() -> None:
     """List enrolled speaker profiles."""
     from stenograf import assets
-    from stenograf.voiceprints import ProfileStore, default_store_path
 
-    store = ProfileStore.load()
+    store = _store()
     all_profiles = store.profiles()
     if not all_profiles:
-        click.echo(f"no speaker profiles yet ({default_store_path()})")
+        click.echo(f"no speaker profiles yet ({store.path})")
         click.echo("enroll one with: steno profiles enroll NAME sample.wav")
         return
     active_model = assets.SPEAKER_EMBEDDING.name
-    click.echo(f"speaker profiles ({default_store_path()}):")
+    click.echo(f"speaker profiles ({store.path}):")
     for p in sorted(all_profiles, key=lambda p: (p.embedding_model, p.name.lower())):
         count = len(p.embeddings)
         noun = "sample" if count == 1 else "samples"
@@ -78,6 +95,7 @@ def profiles_list() -> None:
     help="With --reinforce: add the sample even when it does not match the voice "
     "already stored in the profile.",
 )
+@_library_errors
 def profiles_enroll(
     name: str,
     audio_file: Path,
@@ -96,7 +114,7 @@ def profiles_enroll(
     """
     from stenograf import assets
     from stenograf.audio import load_audio
-    from stenograf.voiceprints import ProfileStore, VoiceMismatchError
+    from stenograf.voiceprints import VoiceMismatchError
 
     samples = load_audio(audio_file)
     diarizer = loaders.load_diarizer()
@@ -104,6 +122,8 @@ def profiles_enroll(
     # single-voice clip comes back as one cluster even if crosstalk got a slot.
     result = diarizer.diarize_with_embeddings(samples, num_speakers=speakers)
     turns, embeddings = result.turns, result.embeddings
+    if (failure := diarizer.take_voice_failure()) is not None:
+        raise click.ClickException(f"the voice model failed: {failure}")
     if not embeddings:
         raise click.ClickException(
             f"no embeddable speech found in {audio_file.name}; is it silent or too short?"
@@ -111,7 +131,7 @@ def profiles_enroll(
     embedding = _choose_cluster(embeddings, turns, cluster)
 
     model = assets.SPEAKER_EMBEDDING.name
-    store = ProfileStore.load()
+    store = _store()
     existing = store.get(name, model)
     if reinforce:
         if existing is None:
@@ -176,6 +196,7 @@ def _choose_cluster(
     help="Add the voice to NAME's profile even when it does not match the voice "
     "already stored there.",
 )
+@_library_errors
 def profiles_assign(
     label: str, name: str, meeting: Path | None, last: bool, force: bool
 ) -> None:
@@ -205,7 +226,10 @@ def profiles_assign(
             raise click.ClickException(f"no finished meetings in {home}")
         click.echo(f"meeting: {meeting}")  # say which one --last picked
     try:
-        result = assign_speaker(meeting, label, name, force=force)
+        store = _store()
+        result = assign_speaker(
+            meeting, label, name, store_path=store.path, threshold=store.threshold, force=force
+        )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     verb = "enrolled" if result.created else "reinforced"
@@ -220,12 +244,12 @@ def profiles_assign(
 @profiles.command("rename")
 @click.argument("old")
 @click.argument("new")
+@_library_errors
 def profiles_rename(old: str, new: str) -> None:
     """Rename speaker profile OLD to NEW."""
     from stenograf import assets
-    from stenograf.voiceprints import ProfileStore
 
-    store = ProfileStore.load()
+    store = _store()
     profile = store.get(old, assets.SPEAKER_EMBEDDING.name)
     if profile is None:
         raise click.ClickException(f"no profile named {old!r}")
@@ -240,12 +264,12 @@ def profiles_rename(old: str, new: str) -> None:
 @profiles.command("remove")
 @click.argument("name")
 @click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+@_library_errors
 def profiles_remove(name: str, yes: bool) -> None:
     """Delete speaker profile NAME."""
     from stenograf import assets
-    from stenograf.voiceprints import ProfileStore
 
-    store = ProfileStore.load()
+    store = _store()
     profile = store.get(name, assets.SPEAKER_EMBEDDING.name)
     if profile is None:
         raise click.ClickException(f"no profile named {name!r}")

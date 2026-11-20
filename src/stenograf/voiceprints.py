@@ -25,6 +25,7 @@ per-cluster mean vector; turning those into names is this module's job.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -50,6 +51,12 @@ from. Override per run with ``--reid-threshold``
 (``steno start``/``transcribe``)."""
 
 _STORE_VERSION = 2
+
+RETIRED_MODELS = frozenset({"eres2net-voxceleb-16k.onnx"})
+"""Embedding models whose profiles are deleted when a store loads. The first
+voice model's profiles were never used in practice, so they are dropped rather
+than translated (Daniel, 2026-11-20); kept here so they cannot reappear as
+unremovable inactive entries."""
 
 
 class VoiceMismatchError(ValueError):
@@ -192,8 +199,14 @@ class ProfileStore:
         if not path.exists():
             return cls(path, threshold=threshold)
         data = json.loads(path.read_text(encoding="utf-8"))
-        profiles = [SpeakerProfile._from_json(p) for p in data.get("profiles", [])]
-        return cls(path, profiles, threshold=threshold)
+        loaded = [SpeakerProfile._from_json(p) for p in data.get("profiles", [])]
+        profiles = [p for p in loaded if p.embedding_model not in RETIRED_MODELS]
+        store = cls(path, profiles, threshold=threshold)
+        if len(profiles) != len(loaded):
+            # Voiceprints are biometric data: gone from the file, not only hidden.
+            with contextlib.suppress(OSError):
+                store.save()
+        return store
 
     def save(self) -> None:
         """Write the store to ``self.path`` atomically (temp file + replace)."""

@@ -181,6 +181,25 @@ class TestTheTranscriptLine:
         first = build_messages(transcript, entries=transcript.entries[:1])[1]["content"]
         assert "muted" not in first
 
+    def test_split_notes_name_every_gap_exactly_once(self):
+        spans = [
+            MutedSpan("mic", 0.0, 0.0 + 1e-3),  # pressed before anyone spoke
+            MutedSpan("mic", 30.0, 62.0),  # between the chunks
+            MutedSpan("system", 80.0, 90.0),  # after the last line
+        ]
+        transcript = _transcript(spans)
+        chunks = [transcript.entries[:1], transcript.entries[1:]]
+        prompts = [build_messages(transcript, entries=c)[1]["content"] for c in chunks]
+        for span in spans:
+            assert sum(span.line() in prompt for prompt in prompts) == 1, span
+        assert spans[0].line() in prompts[0] and spans[2].line() in prompts[1]
+
+    def test_a_span_with_a_field_this_build_does_not_know_still_loads(self):
+        transcript = _transcript([MutedSpan("mic", 30.0, 62.0)])
+        newer = json.loads(transcript.to_json())
+        newer["muted"][0]["reason"] = "phone call"
+        assert Transcript.from_json(json.dumps(newer)).muted == transcript.muted
+
 
 class TestEchoCancellerKeepsItsReference:
     def test_muting_system_audio_leaves_the_mic_cancellation_unchanged(self):

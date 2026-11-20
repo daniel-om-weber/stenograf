@@ -328,10 +328,20 @@ class MeetingRun:
         knows whether the user is in the middle of typing."""
         self._names_settled = threading.Event()
         self._finish: FinishChoices | None = None
+        self._late_names: list[tuple[str, str]] = []
+        """Names given while the notes were being written: those notes come
+        from the transcript as it was, so the names follow once they are in."""
+        self._naming = threading.Lock()
+        """Held while names are applied and while the notes step ends, so a
+        name lands either in the queue the notes drain or in the notes file
+        they wrote — never between the two."""
         self.voice_clips: dict[str, list[np.ndarray]] = {}
         """Each speaker's voice samples (``MeetingResult.voice_clips``), under
         the labels the transcript shows as names are given; in memory only,
         and gone with :meth:`discard_voice_clips`."""
+        self._clips_dropped = False
+        """The screen asking was left before the samples arrived: they must not
+        arrive afterwards."""
         self.created_at = datetime.now()
         # A fresh date-named folder under the visible output home (which cannot
         # collide with an existing meeting), or options.out as the folder —
@@ -393,7 +403,8 @@ class MeetingRun:
 
         The audio becomes silence before it is stored, so nothing said while
         muted reaches memory, the transcript, the notes or ``audio.opus``; the
-        transcript marks the span. A meeting always starts unmuted."""
+        transcript marks the span. A channel starts unmuted unless the request
+        lists it in ``start_muted``."""
         self._muting.set(channel, muted)
 
     def muted(self, channel: Channel) -> bool:
@@ -584,6 +595,8 @@ class MeetingRun:
                     else:
                         view.status(f"recorded audio: {tee.path}")
             self.result = result
+            if self._clips_dropped:
+                result.voice_clips.clear()
             self.voice_clips = dict(result.voice_clips)
             _report_lost_reference(result, view)
             transcript = result.transcript
@@ -612,7 +625,9 @@ class MeetingRun:
                     and bool(speakers)
                     and all(s.recognised for s in speakers)
                 )
-                if self.ask_names:
+                # Settled already: the screen that would ask was left, and a
+                # card offered now would open on a page nobody is on.
+                if self.ask_names and not self._names_settled.is_set():
                     view.speakers(speakers, ask=ask)
                 notes_ok = True
                 if ask and not self.abandon_notes.is_set():
@@ -626,7 +641,10 @@ class MeetingRun:
                     try:
                         notes_ok = self._run_notes_step(view, transcript, warm)
                     finally:
-                        self.notes_running = False
+                        with self._naming:
+                            self.notes_running = False
+                            late, self._late_names = self._late_names, []
+                            self._rename_in_notes(late)
                 if notes_ok:  # a notes failure keeps its own message visible
                     # No "press q" hint: two views render this line and only one
                     # of them is a terminal. Each says how to leave in its own
@@ -636,6 +654,13 @@ class MeetingRun:
         finally:
             if notes_warmer is not None:
                 notes_warmer.cancel()  # idempotent; a consumed warmer already exited
+
+    @property
+    def reid_threshold(self) -> float | None:
+        """The naming threshold this run matches with (``None`` = the default)."""
+        if self.options.reid_threshold is not None:
+            return self.options.reid_threshold
+        return self.request.settings.speakers.reid_threshold
 
     @property
     def profile_store(self) -> Path | None:
@@ -649,16 +674,47 @@ class MeetingRun:
         """Answer "who spoke?" for this meeting (:func:`name_speakers`); safe
         while the notes wait, which reread the transcript once settled. The
         voice samples follow each applied name."""
-        outcomes = name_speakers(self.out_dir, names, store_path=self.profile_store, force=force)
+        with self._naming:
+            outcomes = name_speakers(
+                self.out_dir,
+                names,
+                store_path=self.profile_store,
+                threshold=self.reid_threshold,
+                force=force,
+            )
+            applied = [(o.label, o.name) for o in outcomes if o.applied]
+            if self.notes_running:
+                self._late_names.extend(applied)
+            else:
+                # Notes that finished while the names were being applied were
+                # written from the old labels after the rename passed them by.
+                self._rename_in_notes(applied)
         for outcome in outcomes:
             if outcome.applied and outcome.label in self.voice_clips:
                 moved = self.voice_clips.pop(outcome.label)
                 self.voice_clips[outcome.name] = [*self.voice_clips.get(outcome.name, []), *moved]
         return outcomes
 
+    def _rename_in_notes(self, names: list[tuple[str, str]]) -> None:
+        """Carry names into the notes file, if there is one. Repeating a
+        rename is harmless: the old label is no longer in the text."""
+        path = self.out_dir / f"{output.TRANSCRIPT_STEM}.notes.md"
+        if not names or not path.is_file():
+            return
+        notes = path.read_text(encoding="utf-8")
+        renamed = notes
+        for label, name in names:
+            renamed = rename_speaker_in_text(renamed, label, name)
+        if renamed != notes:
+            output.atomic_write_text(path, renamed)
+
     def discard_voice_clips(self) -> None:
-        """Drop the voice samples: the question is over and nothing may outlive it."""
+        """Drop the voice samples: the question is over and nothing may outlive it,
+        including the result's own copy, which lives as long as this run."""
+        self._clips_dropped = True
         self.voice_clips = {}
+        if self.result is not None:
+            self.result.voice_clips.clear()
 
     def settle_names(self) -> None:
         """The names are saved or skipped: notes waiting on them start. Idempotent."""
@@ -679,6 +735,12 @@ class MeetingRun:
         Refused while the notes are being written into the folder; before and
         after them it is safe, and anything already in the folder moves along."""
         if self.notes_running:
+            unchanged = (
+                output.carries_title(self.out_dir, title)
+                and output.load_transcript(self.out_dir)[0].profile.title == title
+            )
+            if unchanged:  # a Done that only names speakers renames nothing
+                return self.out_dir
             raise RuntimeError("the notes are being written — rename once they are done")
         self._update_profile(title=title)
         folder = output.retitle_meeting_dir(self.out_dir, title)
@@ -951,6 +1013,8 @@ def transcribe_recording(
             on_embeddings=speaker_embeddings.update,
         )
         elapsed = time.monotonic() - started
+        if diarizer is not None and (failure := diarizer.take_voice_failure()) is not None:
+            on_status(f"warning: voice embedding failed ({failure}); speakers kept but not named")
 
     paths = output.write_transcript(transcript, out_dir, output.TRANSCRIPT_STEM, write_formats)
     persist_voiceprints(
@@ -990,6 +1054,7 @@ def assign_speaker(
     name: str,
     *,
     store_path: Path | None = None,
+    threshold: float | None = None,
     force: bool = False,
 ) -> AssignResult:
     """Name a meeting's speaker and enroll that voice — the rename-once loop.
@@ -1010,10 +1075,13 @@ def assign_speaker(
     anything is written (:meth:`~stenograf.voiceprints.ProfileStore.assign`;
     ``force`` admits it). Raises :class:`ValueError` with a user-facing
     message for every way this can fail (no transcript, no sidecar, unknown
-    label, a refused voice)."""
+    label, a refused voice, a voiceprint from another voice model).
+    ``threshold`` is the configured naming threshold (``None`` = the default)."""
+    from stenograf import assets
     from stenograf.audio import merge_voices
     from stenograf.transcript import FORMATS, speech_seconds
     from stenograf.voiceprints import (
+        DEFAULT_THRESHOLD,
         MEETING_VOICEPRINTS_NAME,
         ProfileStore,
         load_meeting_voiceprints,
@@ -1035,8 +1103,17 @@ def assign_speaker(
             f"no speaker {label!r} in {meeting_dir.name}; speakers with a stored "
             f"voiceprint: {known}"
         )
+    if voiceprints.embedding_model != assets.SPEAKER_EMBEDDING.name:
+        # A vector from another model never matches the profiles meetings use.
+        raise ValueError(
+            f"{meeting_dir.name} was recorded with an older voice model, so its "
+            "voices cannot be saved; enroll from a voice sample instead "
+            "(steno profiles enroll)"
+        )
 
-    store = ProfileStore.load(store_path)
+    store = ProfileStore.load(
+        store_path, threshold=DEFAULT_THRESHOLD if threshold is None else threshold
+    )
     profile, created = store.assign(
         name,
         voiceprints.speakers[label],
@@ -1114,6 +1191,7 @@ def meeting_speakers(meeting_dir: Path, *, store_path: Path | None = None) -> li
     """The speakers of a finished meeting that can be named, in order of first
     appearance; empty when the meeting has no voiceprints (diarization off) or
     no ``transcript.json`` to rewrite."""
+    from stenograf import assets
     from stenograf.transcript import speech_seconds
     from stenograf.voiceprints import ProfileStore, load_meeting_voiceprints
 
@@ -1122,7 +1200,7 @@ def meeting_speakers(meeting_dir: Path, *, store_path: Path | None = None) -> li
     except ValueError:
         return []
     voiceprints = load_meeting_voiceprints(json_path.parent)
-    if voiceprints is None:
+    if voiceprints is None or voiceprints.embedding_model != assets.SPEAKER_EMBEDDING.name:
         return []
     store = ProfileStore.load(store_path)
     seconds = speech_seconds(transcript.entries)
@@ -1193,6 +1271,7 @@ def name_speakers(
     names: Mapping[str, str],
     *,
     store_path: Path | None = None,
+    threshold: float | None = None,
     force: Collection[str] = (),
 ) -> list[NamingOutcome]:
     """Answer "who spoke?" for several speakers at once — :func:`assign_speaker`
@@ -1218,7 +1297,14 @@ def name_speakers(
     for label in sorted(answers, key=lambda label: label not in targets):
         name = answers[label]
         try:
-            assign_speaker(meeting_dir, label, name, store_path=store_path, force=label in force)
+            assign_speaker(
+                meeting_dir,
+                label,
+                name,
+                store_path=store_path,
+                threshold=threshold,
+                force=label in force,
+            )
         except VoiceMismatchError as exc:
             outcomes.append(NamingOutcome(label, name, refused_similarity=exc.similarity))
         except (ValueError, OSError) as exc:

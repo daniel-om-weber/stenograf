@@ -538,6 +538,33 @@ class TestAssignSpeaker:
         write_meeting_voiceprints(mdir, speakers, self.MODEL, date="2026-08-01")
         return mdir
 
+    def test_assign_refuses_a_voiceprint_from_another_model(self, tmp_path):
+        from stenograf.voiceprints import ProfileStore, write_meeting_voiceprints
+
+        mdir = self._meeting(tmp_path)
+        write_meeting_voiceprints(
+            mdir, {"Remote-1": np.array([1.0, 0.0], np.float32)}, "old.onnx", date=None
+        )
+        store_path = tmp_path / "p.json"
+        with pytest.raises(ValueError, match="older voice model"):
+            flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path)
+        assert ProfileStore.load(store_path).profiles() == []
+        assert flow.meeting_speakers(mdir, store_path=store_path) == []
+
+    def test_assign_refuses_by_the_configured_threshold(self, tmp_path):
+        from stenograf.voiceprints import ProfileStore, VoiceMismatchError
+
+        mdir = self._meeting(tmp_path)
+        store_path = tmp_path / "p.json"
+        store = ProfileStore(store_path)
+        # cosine 0.7 against Remote-1's [1, 0]: above the default 0.62
+        store.enroll("Anna", np.array([0.7, 0.714], np.float32), self.MODEL)
+        store.save()
+        with pytest.raises(VoiceMismatchError):
+            flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path, threshold=0.8)
+        result = flow.assign_speaker(mdir, "Remote-1", "Anna", store_path=store_path)
+        assert not result.created
+
     def test_assign_enrolls_and_rewrites_the_transcript(self, tmp_path):
         from stenograf.output import load_transcript
         from stenograf.voiceprints import ProfileStore, load_meeting_voiceprints

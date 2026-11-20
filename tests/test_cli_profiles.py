@@ -233,3 +233,40 @@ def test_profiles_assign_unknown_label_lists_speakers(tmp_path):
     result = CliRunner().invoke(cli.main, ["profiles", "assign", "Remote-9", "Anna", str(mdir)])
     assert result.exit_code != 0
     assert "Remote-1" in result.output
+
+
+def test_profiles_commands_use_the_configured_store_and_threshold(tmp_path):
+    import numpy as np
+
+    from stenograf import assets
+    from stenograf.settings import settings_path
+    from stenograf.voiceprints import ProfileStore
+
+    custom = tmp_path / "custom.json"
+    settings_path().parent.mkdir(parents=True, exist_ok=True)
+    settings_path().write_text(
+        f'[speakers]\nprofile_store = "{custom.as_posix()}"\nreid_threshold = 0.9\n',
+        encoding="utf-8",
+    )
+    mdir = _assignable_meeting(tmp_path)
+    store = ProfileStore(custom)
+    # cosine 0.8 against Remote-1's [1, 0, 0]: kept at 0.62, refused at 0.9
+    store.enroll("Anna", np.array([0.8, 0.6, 0.0], np.float32), assets.SPEAKER_EMBEDDING.name)
+    store.save()
+    listing = CliRunner().invoke(cli.main, ["profiles", "list"])
+    assert "Anna" in listing.output and str(custom) in listing.output
+    refused = CliRunner().invoke(cli.main, ["profiles", "assign", "Remote-1", "Anna", str(mdir)])
+    assert refused.exit_code != 0 and "--force" in refused.output
+    assert not (custom.parent / "steno-data" / "profiles.json").exists()
+
+
+def test_profiles_commands_report_a_broken_settings_file_cleanly():
+    from stenograf.settings import settings_path
+
+    settings_path().parent.mkdir(parents=True, exist_ok=True)
+    settings_path().write_text("[speakers]\nreid_threshhold = 0.7\n", encoding="utf-8")
+    for args in (["list"], ["rename", "A", "B"], ["remove", "A", "--yes"]):
+        result = CliRunner().invoke(cli.main, ["profiles", *args])
+        assert result.exit_code == 1, result.output
+        assert "reid_threshhold" in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)

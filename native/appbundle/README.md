@@ -66,7 +66,14 @@ and this is the only chance to build diagnostics in:
   gone, or the stub would be unkillable while an alert is on screen.
 - `PATH` gains `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`
   (appended, so system copies still win): launchd hands a GUI app a bare PATH.
-- `STENOGRAF_APP_BUNDLE` marks the launch as coming from the app.
+- `STENOGRAF_APP_BUNDLE` marks the launch as coming from the app and carries
+  the bundle's path, wherever the user moved it. `steno doctor` reads it, and
+  the self-updater depends on it: `update.restart_command` reopens the new
+  version with `open` on that path (so the microphone grant still applies),
+  and `update.launch_chain` waits for this stub to exit only when it is set.
+  Its name and value are therefore as fixed as the stub itself; `main.c`'s
+  comment calling it a breadcrumb nothing depends on is out of date, and stays
+  so because the stub's bytes are frozen.
 
 ## The grant, as actually stored (2026-07-25)
 

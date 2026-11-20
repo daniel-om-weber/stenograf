@@ -313,6 +313,11 @@ def transcribe(
             on_embeddings=speaker_embeddings.update,
         )
         elapsed = time.monotonic() - started
+        if diarizer is not None and (failure := diarizer.take_voice_failure()) is not None:
+            click.echo(
+                f"warning: voice embedding failed ({failure}); speakers kept but not named",
+                err=True,
+            )
 
     entries = transcript.entries
     language = transcript.language

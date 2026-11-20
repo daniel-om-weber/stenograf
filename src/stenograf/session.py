@@ -1392,6 +1392,12 @@ class MeetingRecorder:
                 segments=segments,
                 on_embeddings=embedded.update,
             )
+            failure = diarizer.take_voice_failure() if diarizer is not None else None
+            if failure is not None:
+                view.error(
+                    f"{plan.channel}: voice embedding failed ({failure}); "
+                    "speakers kept but not named"
+                )
             if solo_voice and raw:
                 raw, embedded = self._name_solo_channel(samples, raw, view, plan)
             labeled = relabel_speakers(raw, plan.label_template)

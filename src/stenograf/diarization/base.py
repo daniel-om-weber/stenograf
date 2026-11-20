@@ -96,6 +96,16 @@ class Diarizer(ABC):
         overrides it with :class:`~stenograf.diarization.embedding.VoiceEmbedder`."""
         return DiarizationResult(self.diarize(samples, num_speakers), {})
 
+    def take_voice_failure(self) -> Exception | None:
+        """Why the last :meth:`diarize_with_embeddings` came back with turns
+        but no voices, then ``None`` until the next failure.
+
+        A voice model that cannot load or run costs the speakers their names,
+        never their separation, so the diarizer keeps the turns and leaves the
+        telling to the caller, which owns the user's status surface. ``None``
+        by default: a diarizer that does not embed has nothing to report."""
+        return None
+
     def channel_embedding(
         self, samples: np.ndarray, turns: list[SpeakerTurn]
     ) -> np.ndarray | None:

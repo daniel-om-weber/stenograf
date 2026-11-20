@@ -30,9 +30,11 @@ classifiers = [
 dependencies = [
     "click>=8.1",
     "numpy>=1.26",
-    # Silero VAD (ONNX/CPU — works on every platform; the diarizer and the
+    # Silero VAD only (ONNX/CPU — works on every platform; the diarizer and the
     # voice embedder run on the onnxruntime below).
-    # The floor is a memory leak twice over, not a feature. 1.12.x retains
+    # The floor is a memory leak twice over, not a feature: it was measured on
+    # sherpa's speaker extractor, which nothing here runs any more, but the
+    # VAD loads the same bundled onnxruntime. 1.12.x retains
     # ~21 MB per SpeakerEmbeddingExtractor call (measured 2026-08-06), which
     # put one 38-min meeting channel at ~31 GB RSS. 1.13.4 bundles onnxruntime
     # 1.27, whose CPU kernels keep process-wide state for every distinct input
@@ -82,7 +84,9 @@ dependencies = [
     # SUPER). DirectML is in maintenance mode upstream but its wheels track ORT
     # patch releases; if they ever stop, swap the marker back to plain
     # onnxruntime and the provider setting degrades to CPU with a warning.
-    "onnxruntime>=1.18.1; sys_platform != 'win32'",
+    # The floor is the same 1.27 leak as sherpa's above: the voice embedder
+    # feeds this onnxruntime clips of every length.
+    "onnxruntime>=1.28.2; sys_platform != 'win32'",
     "onnxruntime-directml>=1.24; sys_platform == 'win32'",
     # In-process notes LLM (Stage D) — the zero-setup default backend on Apple
     # Silicon. Pinned to the 0.29 line (verified 2026-07-10): mlx-lm >=0.30

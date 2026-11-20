@@ -292,6 +292,10 @@ _ROUNDTRIP_CASES = {
             )
         ],
     ),
+    "diarization_switched_on": lambda: Transcript(
+        language=None,
+        profile=MeetingProfile(diarization=True),
+    ),
     "listen_only_channel_zero_count": lambda: Transcript(
         language=Language.GERMAN,
         profile=MeetingProfile(language=Language.GERMAN, local_speakers=2, remote_speakers=0),

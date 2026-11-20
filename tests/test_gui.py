@@ -1045,6 +1045,51 @@ class TestWhoSpoke:
         assert meeting.state["speakers"][0]["label"] == "Anna"
         assert ProfileStore.load().get("Anna", "redimnet2-b6-vb2-lm.onnx") is not None
 
+    def test_the_folder_preview_shows_when_the_card_opens(self, gui, tmp_path, monkeypatch):
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        expected = meeting.preview("")
+        assert expected.startswith("meeting-")
+        texts = [
+            item.property("text")
+            for item in _items(shell)
+            if item.metaObject().className().startswith("QQuickText")
+        ]
+        assert expected in texts, "blank until the user types a title"
+
+    def test_leaving_before_the_samples_arrive_keeps_none(self, gui, tmp_path, monkeypatch):
+        # The page reads done at the finalized event; the run stores the
+        # samples only after the recorder returns (the audio file closes in
+        # between). A Back to menu in that gap must still drop them.
+        from stenograf import flow
+
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        release = threading.Event()
+
+        class SlowReturn(flow.MeetingRecorder):
+            def run(self, *args, **kwargs):
+                result = super().run(*args, **kwargs)
+                release.wait(10)
+                return result
+
+        monkeypatch.setattr(flow, "MeetingRecorder", SlowReturn)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["phase"] == "done")
+        meeting.stop()
+        run = meeting._run
+        release.set()
+        pump(lambda: not meeting.running, timeout=10)
+        assert run.result is not None
+        assert run.voice_clips == {} and run.result.voice_clips == {}
+        assert not meeting.state["namesOpen"]
+
     def test_a_copied_transcript_carries_names_given_after_the_finalize(
         self, gui, tmp_path, monkeypatch
     ):
@@ -1165,6 +1210,41 @@ class TestWhoSpoke:
         assert notes == [{"Anna"}]
         assert not meeting.state["namesOpen"]
         assert meeting.state["speakers"], "the footer button can still open it"
+        assert meeting.state["notesLocked"], "the notes went ahead; Edit must not offer them"
+
+    def test_a_name_given_while_the_notes_run_reaches_the_notes(
+        self, gui, tmp_path, monkeypatch
+    ):
+        import threading
+
+        from stenograf.notes import run as notes_run
+
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        writing, release = threading.Event(), threading.Event()
+
+        def slow_notes(view, transcript, out_dir, basename, **kwargs):
+            writing.set()
+            release.wait(10)
+            speaker = transcript.entries[0].speaker
+            (out_dir / f"{basename}.notes.md").write_text(f"- {speaker} spoke\n", encoding="utf-8")
+            return True
+
+        monkeypatch.setattr(notes_run, "run_notes", slow_notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        self._done(meeting)
+        pump(lambda: writing.is_set())
+        meeting.open_names()
+        self._done(meeting, {"Local-1": "Anna"})
+        pump(lambda: not meeting.state["namesBusy"])
+        assert "not renamed" not in meeting.state["status"], meeting.state["status"]
+        release.set()
+        pump(lambda: not meeting.running)
+        notes_md = Path(meeting.state["folder"]) / "transcript.notes.md"
+        assert notes_md.read_text(encoding="utf-8") == "- Anna spoke\n"
 
     def test_a_refused_voice_keeps_the_panel_and_the_notes_waiting(
         self, gui, tmp_path, monkeypatch
@@ -1358,6 +1438,35 @@ class TestWhoSpoke:
         assert "pop" in moves, "back to the menu"
         pump(lambda: not meeting.running)
         assert notes == [], "a discarded meeting writes no notes"
+
+    def test_a_refused_trash_keeps_the_meeting_and_its_notes(self, gui, tmp_path, monkeypatch):
+        from PySide6.QtCore import QFile
+
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        monkeypatch.setattr(QFile, "moveToTrash", staticmethod(lambda path: False))
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        meeting.discard()
+        assert "could not move" in meeting.state["status"]
+        self._done(meeting)
+        pump(lambda: notes != [] and not meeting.running)
+        assert len(notes) == 1, "the card's Done still writes the notes"
+
+    def test_leaving_drops_every_copy_of_the_voice_samples(self, gui, tmp_path, monkeypatch):
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        run = meeting._run
+        assert run is not None and run.result is not None
+        meeting.left()
+        pump(lambda: not meeting.running)
+        assert run.voice_clips == {} and run.result.voice_clips == {}
 
 
 def _items(shell):
@@ -1978,6 +2087,17 @@ class TestDroppedPaths:
         assert screen.state["meeting"] == str(transcript.parent)
         screen.choose(transcript.parent.as_uri())
         assert screen.state["meeting"] == str(transcript.parent)
+
+    def test_a_link_that_is_not_a_file_is_refused(self, gui):
+        shell, _engine = gui
+        transcribe = shell.screen("Transcribe")
+        transcribe.choose("https://example.com/talk.mp3")
+        assert transcribe.state["file"] == ""
+        assert "on this computer" in transcribe.state["status"]
+        notes = shell.screen("Notes")
+        before = notes.state["meeting"]
+        notes.choose("https://example.com/")
+        assert notes.state["meeting"] == before
 
     def test_a_folder_dropped_on_transcribe_is_refused(self, gui, tmp_path):
         shell, _engine = gui

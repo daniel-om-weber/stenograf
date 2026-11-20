@@ -44,6 +44,7 @@ from stenograf.diarization.base import (
     SpeakerTurn,
 )
 from stenograf.diarization.embedding import VoiceCollector, VoiceEmbedder
+from stenograf.log import logger
 
 N_FFT = 512
 WIN_LENGTH = 400
@@ -609,6 +610,7 @@ class NemotronDiarizer(Diarizer):
     ) -> None:
         self.embedder = embedder if embedder is not None else VoiceEmbedder(progress=progress)
         self._models = _Models(model_dir, progress)
+        self._voice_failure: Exception | None = None
 
     def probabilities(self, samples: np.ndarray) -> np.ndarray:
         """(10-ms frames, slots) speaker probabilities of mono 16 kHz PCM."""
@@ -638,9 +640,26 @@ class NemotronDiarizer(Diarizer):
         collector: VoiceCollector | None,
     ) -> DiarizationResult:
         """Turns, and each kept slot's voice from ``collector`` once it has
-        seen the rest of ``probs`` (a fresh one sees them all)."""
+        seen the rest of ``probs`` (a fresh one sees them all). A voice model
+        that cannot load or run (no download, a broken file, an ONNX Runtime
+        error) costs the voices, never the turns: the failure is kept for
+        :meth:`take_voice_failure`."""
         turns = turns_from_probs(probs, num_speakers)
-        audio = to_float32(samples)
+        try:
+            voices = self._slot_voices(probs, to_float32(samples), turns, collector)
+        except Exception as exc:  # noqa: BLE001 — naming is lost, separation must not be
+            logger.warning("voice embedding failed (%s); speakers kept, not named", exc)
+            self._voice_failure = exc
+            voices = {}
+        return DiarizationResult(turns, {f"S{slot}": voice for slot, voice in voices.items()})
+
+    def _slot_voices(
+        self,
+        probs: np.ndarray,
+        audio: np.ndarray,
+        turns: list[SpeakerTurn],
+        collector: VoiceCollector | None,
+    ) -> dict[int, np.ndarray]:
         embedder = self.embedder
         if collector is None or collector.frames > len(probs):
             collector = embedder.collector(HOP)
@@ -653,8 +672,11 @@ class NemotronDiarizer(Diarizer):
         for turn in turns:
             span = (round(turn.start * _FRAMES_PER_SECOND), round(turn.end * _FRAMES_PER_SECOND))
             raw.setdefault(int(turn.speaker[1:]), []).append((span[0] * HOP, span[1] * HOP))
-        voices = collector.finish(raw, read, embedder.embed, pool=embedder.pool())
-        return DiarizationResult(turns, {f"S{slot}": voice for slot, voice in voices.items()})
+        return collector.finish(raw, read, embedder.embed, pool=embedder.pool())
+
+    def take_voice_failure(self) -> Exception | None:
+        failure, self._voice_failure = self._voice_failure, None
+        return failure
 
     def channel_embedding(
         self, samples: np.ndarray, turns: list[SpeakerTurn]
@@ -790,6 +812,7 @@ class _ResumedNemotron(NemotronDiarizer):
         self.embedder = parent.embedder
         self._models = parent._models
         self._stream = stream
+        self._voice_failure = None
 
     def probabilities(self, samples: np.ndarray) -> np.ndarray:
         return self._stream.finish(to_float32(samples))

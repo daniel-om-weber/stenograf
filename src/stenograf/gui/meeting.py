@@ -492,6 +492,7 @@ class MeetingScreen(Screen):
         self.hold_names()
         self.set(namesBusy=True)
         locked = bool(self._state.get("notesLocked"))
+        run_id = self._run_id
 
         def job() -> _Saved:
             from stenograf import output
@@ -528,7 +529,14 @@ class MeetingScreen(Screen):
                 outcomes, speakers, transcript, finished, str(run.out_dir), problem, applied_title
             )
 
-        self.work(job, done=self._names_saved, failed=self._names_failed, name="gui-names")
+        # A new meeting may have begun by the time the job ends: its result
+        # belongs to the meeting it was started for, not the one on screen.
+        self.work(
+            job,
+            done=lambda saved: self._for_run(run_id, self._names_saved, saved),
+            failed=lambda message: self._for_run(run_id, self._names_failed, message),
+            name="gui-names",
+        )
 
     @Slot(str, result=str)
     def preview(self, title: str) -> str:
@@ -542,11 +550,18 @@ class MeetingScreen(Screen):
 
     @Slot()
     def open_transcript(self) -> None:
-        """Open ``transcript.md`` in the desktop's app for it."""
+        """Open the transcript in the desktop's app for it: ``transcript.md``,
+        else whichever format ``[transcript] formats`` wrote."""
         from stenograf.gui.app import open_file
+        from stenograf.output import TRANSCRIPT_STEM
+        from stenograf.transcript import FORMATS
 
         folder = str(self._state.get("folder", ""))
-        if folder and (problem := open_file(Path(folder) / "transcript.md")):
+        if not folder:
+            return
+        candidates = [Path(folder) / f"{TRANSCRIPT_STEM}.{fmt}" for fmt in ("md", *FORMATS)]
+        path = next((c for c in candidates if c.is_file()), candidates[0])
+        if problem := open_file(path):
             self.set(status=problem)
 
     @Slot()
@@ -562,12 +577,15 @@ class MeetingScreen(Screen):
         if run.notes_running:
             self.set(status="the notes are being written — discard once they are done")
             return
-        run.abandon_notes.set()
-        run.settle_names()
         self._stop_playback()
+        # The move first: a meeting the trash refuses is kept, and so are the
+        # notes still waiting on its card. The run cannot get past the card in
+        # between — it waits for exactly the two signals set below.
         if not QFile.moveToTrash(folder):
             self.set(status=f"could not move {folder} to the trash")
             return
+        run.abandon_notes.set()
+        run.settle_names()
         run.discard_voice_clips()
         self.set(speakers=[], namesOpen=False)
         self.app.back()
@@ -686,7 +704,9 @@ class MeetingScreen(Screen):
             if self._run is not None:
                 self._run.settle_names()
             return
-        self.set(speakers=rows, knownNames=known, namesOpen=ask, clipNext={})
+        # Without ask the run is not waiting on the card: its notes went ahead
+        # on the start form's choices, so the card must not offer them again.
+        self.set(speakers=rows, knownNames=known, namesOpen=ask, notesLocked=not ask, clipNext={})
         timeout = self._run.request.settings.speakers.names_panel_timeout_s if self._run else None
         if ask and timeout:
             self.set(namesCountdown=max(1, round(timeout)))

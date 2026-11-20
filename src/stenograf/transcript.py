@@ -145,7 +145,10 @@ class Transcript:
             profile=_profile_from_json(obj["profile"]),
             entries=[_entry_from_json(e) for e in obj.get("entries", [])],
             parameters=_parameters_from_json(obj.get("parameters")),
-            muted=[MutedSpan(**span) for span in obj.get("muted", [])],
+            muted=[
+                MutedSpan(channel=span["channel"], start=span["start"], end=span["end"])
+                for span in obj.get("muted", [])
+            ],
         )
 
     def to_markdown(self) -> str:
@@ -237,6 +240,7 @@ def _profile_from_json(obj: dict) -> MeetingProfile:
         speaker_profile_store=obj.get("speaker_profile_store"),
         title=obj.get("title"),
         context=obj.get("context"),
+        diarization=obj.get("diarization"),
     )
 
 
