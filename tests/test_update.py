@@ -291,7 +291,7 @@ def test_a_version_that_failed_here_is_not_offered_again_unasked(standard):
 
 
 def test_an_unmeasured_system_gets_the_notice_not_the_button(standard, monkeypatch):
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", "freebsd")
     found()
     offer = update.offer()
     assert offer is not None and not offer.installable

@@ -337,15 +337,9 @@ jobs:
       - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*manylinux_2_28_x86_64.whl
 
   update-windows:
-    # Informative, not a gate, and deliberately absent from publish's needs:
-    # the swap has not been measured on Windows, so the app there only tells
-    # the user about a new release (update.SWAP_MEASURED). This job runs the
-    # swap anyway; when it is green and a real desktop session agrees, Windows
-    # joins SWAP_MEASURED and this job joins the gate.
     needs: build-windows
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: true
     defaults:
       run:
         shell: bash
@@ -370,6 +364,7 @@ jobs:
       - smoke-windows
       - update-macos
       - update-linux
+      - update-windows
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 15

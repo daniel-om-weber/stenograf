@@ -1,10 +1,10 @@
 # PLAN-UPDATE — updating stenograf from inside the app with one click
 
-Status: **built for macOS and Linux on 2026-11-19; not committed, not released.**
-Steps 1 to 8 of §8 are done and §11 says what was verified and how, and where
-the build departs from the plan. Still open: the Windows measurements (step 0,
-skipped for now on Daniel's word — until then Windows shows the notice instead
-of the button), the gates on real machines (§9), and one half of the release
+Status: **built for macOS and Linux on 2026-11-19, switched on for Windows on
+2026-11-20; not released.** Steps 1 to 8 of §8 are done and §11 says what was
+verified and how, and where the build departs from the plan. Step 0 was
+replaced by measuring the built feature on Windows (§11). Still open: the
+remaining gates on real machines (§9), and one half of the release
 gate that cannot exist before a release carrying the updater is published
 (§11). The plan itself was written and independently reviewed the same day;
 the review's two blockers were reproduced (§2, M9 and M10) and are fixed in the
@@ -473,19 +473,32 @@ changed.
 - 1 250-odd unit tests, among them one per row of §5 that can be simulated
   against `tests/fake_uv.py`.
 
-**Not verified:** everything on Windows (lock, detached start, rename, the
-installer's new retry and the new step in `install.yml`); the restart through
+**Windows, measured 2026-11-19/20** (GPD, Windows 11, Defender on):
+`scripts/update_e2e.py` green on that machine and on GitHub's runner (lock,
+detached start, rename, rollback of a release that dies at start; the lock test
+needed a wait, since Windows frees a killed holder's lock up to 2.2 ms late).
+Then a whole update from the app's own **Update** button in a real desktop
+session, the app started from its Start-menu link: click to new window in 18 s;
+the updater rewrote both shell links to the same target and restarted the app
+through the Start-menu link; the tray icon kept its one `NotifyIconSettings`
+entry, still promoted; a window logger polling every 20 ms saw no console
+window during the swap. A pinned taskbar item was not tried (none existed); it
+points at the same unchanged target, so it is inferred to keep working.
+
+**Not verified:** the installer's new retry and the new step in `install.yml`
+on Windows; the restart through
 `open Stenograf.app` and the microphone permission after it (the first gate of
 §9 — it needs the real launcher in `~/Applications`); the Settings row by eye
 (it lies below the fold of a long report; its bindings are covered by the QML
-warning test); the two new jobs in `release.yml` have not run on GitHub yet.
+warning test). The three update jobs in `release.yml` ran green in the
+release dry run of 2026-11-20.
 
 **Departures from the plan, and additions:**
 
-- **Windows offers the notice, not the button** (`update.SWAP_MEASURED`),
-  until step 0 is done. `STENOGRAF_UPDATE_UNMEASURED=1` switches the button on
-  for the measurement itself; `release.yml` has a Windows job that runs the
-  whole update with it and is allowed to fail.
+- **A system offers the notice, not the button, until the swap is measured
+  there** (`update.SWAP_MEASURED`; Windows joined 2026-11-20).
+  `STENOGRAF_UPDATE_UNMEASURED=1` switches the button on for such a
+  measurement.
 - **U9: the speech-recognition weights are not fetched during prepare**, only
   the plain model files (voice-activity, diarization, speaker embedding).
   Fetching the weights means loading that backend's libraries beside the

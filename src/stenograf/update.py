@@ -65,10 +65,12 @@ FETCH_TIMEOUT_S = 10.0
 UPGRADE_COMMAND = "uv tool install --upgrade --python 3.13 stenograf"
 RELEASE_URL = "https://github.com/daniel-om-weber/stenograf/releases/tag/v{version}"
 
-SWAP_MEASURED = ("darwin", "linux")
+SWAP_MEASURED = ("darwin", "linux", "win32")
 """Where renaming the environment aside and back has been measured
-(``eval/update_mechanics.sh``, 2026-11-19). Elsewhere the app shows the notice
-instead of the button until the same has been measured there."""
+(``eval/update_mechanics.sh``, 2026-11-19; on Windows 11 with Defender on, a
+whole update from the app's own button in a desktop session, 2026-11-20).
+Elsewhere the app shows the notice instead of the button until the same has
+been measured there."""
 
 MIN_UV = (0, 5, 0)
 """Below this the commands used here are not all there. Tested with 0.13.7 and

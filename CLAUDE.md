@@ -74,8 +74,8 @@ DiariZen meeting-base, both embedding-upgrade candidates, automatic profile
 updates, custom GPU kernels — lives in PLAN.md with measured reasons and
 re-open triggers.
 
-**The app updates itself (built 2026-11-19, macOS and Linux; Windows shows a
-notice until its swap is measured).** `update.py` checks PyPI once a day and
+**The app updates itself (built 2026-11-19; Windows measured and switched on
+2026-11-20).** `update.py` checks PyPI once a day and
 decides who is offered what; `gui/updates.py` is the home-screen line; the swap
 is `_updater.py`, and **the updater that runs is the *new* release's copy of
 that file**, fetched from uv's cache and run by the *old* app on a bare

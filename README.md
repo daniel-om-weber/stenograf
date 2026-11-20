@@ -72,14 +72,12 @@ Once a day stenograf asks PyPI for the list of its releases — the same public
 page a browser gets, with nothing about you, your machine or your meetings in
 the request. When there is a newer one:
 
-- **In the app**, a line appears at the foot of the home screen. On macOS and
-  Linux, **Update** downloads the new version while you keep working, then
-  restarts the app into it — one click, and never while a meeting, a
-  transcription or a notes run is going. The new version is tried out before
-  anything installed is touched, and if it does not start afterwards the
-  previous one is put back and the app says so. On Windows the line names the
-  command to run instead; replacing a running install in place has not been
-  verified there yet.
+- **In the app**, a line appears at the foot of the home screen. **Update**
+  downloads the new version while you keep working, then restarts the app into
+  it — one click, and never while a meeting, a transcription or a notes run is
+  going. The new version is tried out before anything installed is touched,
+  and if it does not start afterwards the previous one is put back and the app
+  says so.
 - **In a terminal**, a command ends with one line naming the new version and
   the command below — at most once a day, and only when a person is at the
   terminal (never in a pipe or a script).

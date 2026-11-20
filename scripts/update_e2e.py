@@ -208,9 +208,6 @@ class Sandbox:
             STENOGRAF_UPDATE_URL=self.listing.as_uri(),
             QT_QPA_PLATFORM="offscreen",
         )
-        if sys.platform == "win32":
-            # The swap is not measured there yet; this run is the measurement.
-            env["STENOGRAF_UPDATE_UNMEASURED"] = "1"
         if model_cache is not None:
             env["STENOGRAF_CACHE"] = str(model_cache)
         for name in list(env):
