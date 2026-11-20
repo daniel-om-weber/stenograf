@@ -1053,6 +1053,7 @@ class TestWhoSpoke:
         assert not meeting.state["namesOpen"]
         assert meeting.state["speakers"][0]["label"] == "Anna"
         assert ProfileStore.load().get("Anna", "redimnet2-b6-vb2-lm.onnx") is not None
+        assert meeting.suggest("an") == ["Anna"], "a name saved here is offered next"
 
     def test_the_folder_preview_shows_when_the_card_opens(self, gui, tmp_path, monkeypatch):
         notes = []
@@ -1414,6 +1415,108 @@ class TestWhoSpoke:
         pump(lambda: meeting.state["folder"].endswith("-weekly-sync-2"))
         assert len(notes) == 1, "a second Done never writes the notes again"
 
+    def test_typing_a_name_offers_the_known_ones_without_insisting(
+        self, gui, tmp_path, monkeypatch
+    ):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        from stenograf.voiceprints import ProfileStore
+
+        store = ProfileStore()  # a voice unlike this meeting's, so the row stays unknown
+        store.enroll("Annika Schulz", np.array([0.0, 1.0], np.float32), "redimnet2-b6-vb2-lm.onnx")
+        store.save()
+        notes = []
+        self._diarized_meeting(monkeypatch, tmp_path, notes)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        assert meeting.suggest("schu") == ["Annika Schulz"]
+
+        def offered():
+            return [
+                i.property("text")
+                for i in _items(shell)
+                if "ItemDelegate" in i.metaObject().className() and i.isVisible()
+            ]
+
+        shell.show_window()
+        try:
+            field = next(
+                i for i in _items(shell) if i.property("placeholderText") == "Who is this?"
+            )
+            field.forceActiveFocus()
+            pump(lambda: field.hasActiveFocus())
+            for key in "ann":
+                QTest.keyClick(field.window(), key)
+            pump(lambda: offered() == ["Annika Schulz"])  # the list lives in the overlay
+            QTest.keyClick(field.window(), Qt.Key.Key_Down)
+            QTest.keyClick(field.window(), Qt.Key.Key_Return)
+            pump(lambda: True)
+            assert field.property("text") == "Annika Schulz"
+            assert meeting.state["namesOpen"], "Return took the offer, not the card"
+            assert offered() == []
+
+            field.setProperty("text", "")
+            for key in "Ann":
+                QTest.keyClick(field.window(), key)
+            pump(lambda: offered() == ["Annika Schulz"])
+            QTest.keyClick(field.window(), Qt.Key.Key_Down)
+            QTest.keyClick(field.window(), Qt.Key.Key_Escape)  # the closing forgets the pick
+            pump(lambda: offered() == [])
+            QTest.keyClick(field.window(), Qt.Key.Key_Return)  # so the typed name is the answer
+            pump(lambda: notes != [] and not meeting.running)
+        finally:
+            shell.hide_window()
+        assert notes == [{"Ann"}]
+
+    def test_keeping_the_recognised_name_closes_the_offers(self, gui, tmp_path, monkeypatch):
+        from PySide6.QtCore import QMetaObject
+        from PySide6.QtTest import QTest
+
+        from stenograf.voiceprints import ProfileStore
+
+        store = ProfileStore()
+        store.enroll("Anna", np.array([1.0, 0.0], np.float32), "redimnet2-b6-vb2-lm.onnx")
+        store.enroll("Annika", np.array([0.0, 1.0], np.float32), "redimnet2-b6-vb2-lm.onnx")
+        store.save()
+        self._diarized_meeting(monkeypatch, tmp_path, [])
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        self._start(shell)
+        pump(lambda: meeting.state["namesOpen"])
+        shell.show_window()
+        try:
+            items = _items(shell)
+            change = next(  # the recognised name, drawn as a button
+                i
+                for i in items
+                if i.inherits("QQuickAbstractButton")
+                and any(c.property("text") == "Anna" for c in _items_under(i))
+            )
+            keep = next(i for i in items if i.property("tip") == "Keep Anna")
+            field = next(i for i in items if i.property("placeholderText") == "Who is this?")
+            QMetaObject.invokeMethod(change, "clicked")
+            pump(lambda: field.hasActiveFocus())
+            for key in "ann":  # the first replaces the selected "Anna"
+                QTest.keyClick(field.window(), key)
+
+            def offered():
+                return [
+                    i.property("text")
+                    for i in _items(shell)
+                    if "ItemDelegate" in i.metaObject().className() and i.isVisible()
+                ]
+
+            pump(lambda: offered() == ["Anna", "Annika"])
+            QMetaObject.invokeMethod(keep, "clicked")
+            pump(lambda: offered() == [])
+        finally:
+            shell.hide_window()
+        meeting.skip_names()
+        meeting.join()
+
     def test_the_card_can_switch_notes_on_and_off(self, gui, tmp_path, monkeypatch):
         notes = []
         self._diarized_meeting(monkeypatch, tmp_path, notes)
@@ -1488,6 +1591,12 @@ def _items(shell):
 
     assert shell.window is not None
     return list(walk(shell.window.contentItem()))
+
+
+def _items_under(item):
+    for child in item.childItems():
+        yield child
+        yield from _items_under(child)
 
 
 def _switches(shell):

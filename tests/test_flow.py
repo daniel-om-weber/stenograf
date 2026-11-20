@@ -768,6 +768,34 @@ class TestWhoSpoke:
         names = flow.known_speaker_names(store_path=store, attendee_names=("anna", "DANIEL"))
         assert names == ["anna", "Daniel"]
 
+    @pytest.mark.parametrize(
+        ("typed", "offered"),
+        [
+            ("", []),
+            ("d", ["Dana", "Daniel Weber"]),  # a start first, then alphabetical
+            ("we", ["Daniel Weber"]),  # a later word's start
+            ("muller", ["Thomas Müller"]),  # neither case nor accents matter
+            ("Danei", ["Daniel Weber"]),  # a typo while typing
+            ("dannie", ["Daniel Weber"]),  # a doubled letter
+            ("dan", ["Dana", "Daniel Weber"]),  # not "Anna": a typo keeps the first letter
+            ("mar", []),  # not "Max": two letters of three is no typo
+            ("x", []),
+            ("Jonas", []),  # typed out exactly: nothing to offer
+            ("jonas", ["Jonas"]),  # but the library's spelling is
+        ],
+    )
+    def test_suggestions_rank_starts_then_words_then_typos(self, typed, offered):
+        known = ["Anna", "Dana", "Daniel Weber", "Jonas", "Max", "Thomas Müller"]
+        assert flow.suggest_speaker_names(typed, known) == offered
+
+    def test_suggestions_pass_over_blank_names(self):
+        # settings.toml's attendee lists keep blank entries as written.
+        assert flow.suggest_speaker_names("anna", ["", " ", "\u0301", "Anna"]) == ["Anna"]
+
+    def test_suggestions_stop_at_the_limit(self):
+        known = [f"Anna {i}" for i in range(9)]
+        assert len(flow.suggest_speaker_names("an", known)) == flow.SUGGESTED_NAMES
+
     def test_answers_take_the_library_spelling_and_blanks_change_nothing(self, tmp_path):
         from stenograf.output import load_transcript
 

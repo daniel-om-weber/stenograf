@@ -1248,6 +1248,71 @@ def known_speaker_names(
     return sorted(names, key=str.casefold)
 
 
+SUGGESTED_NAMES = 5
+_TYPO_RATIO = 0.75
+"""How close a typed prefix must be to a name's start to count as a typo of
+it: one wrong, missing or swapped letter in "Danei" still offers "Daniel",
+while two in a short prefix no longer does."""
+
+
+def suggest_speaker_names(
+    typed: str, known: Sequence[str], *, limit: int = SUGGESTED_NAMES
+) -> list[str]:
+    """The known names an answer being typed is most likely heading for, best first.
+
+    A name whose start matches comes first, then one with a later word that
+    does ("mül" → "Thomas Müller"), then one containing the text, then one the
+    text reads as a typo of. Case and accents never matter — "muller" finds
+    "Müller" — and a name typed out exactly is not offered back."""
+    from difflib import SequenceMatcher
+
+    query = _fold(typed)
+    if not query:
+        return []
+    ranked: list[tuple[int, float, str]] = []
+    for name in known:
+        if name == typed.strip():
+            continue
+        folded = _fold(name)
+        if not folded:  # a blank attendee entry in settings.toml
+            continue
+        words = folded.split()
+        if folded.startswith(query):
+            ranked.append((0, 0.0, name))
+        elif any(word.startswith(query) for word in words[1:]):
+            ranked.append((1, 0.0, name))
+        elif len(query) >= 2 and query in folded:
+            ranked.append((2, 0.0, name))
+        elif len(query) >= 3:
+            # Against the name's (and each word's) start, one letter shorter,
+            # as long, and one longer than the text: a dropped or doubled
+            # letter must not cost the comparison a whole character. The first
+            # letter must agree: without that "dan" reads as a typo of "Anna".
+            # One shorter only from four letters: against a two-letter start,
+            # "mar" would read as a typo of "Max".
+            starts = [w for w in (folded, *words[1:]) if w[0] == query[0]]
+            score = max(
+                (
+                    SequenceMatcher(None, query, start[: len(query) + extra]).ratio()
+                    for start in starts
+                    for extra in ((-1, 0, 1) if len(query) >= 4 else (0, 1))
+                ),
+                default=0.0,
+            )
+            if score >= _TYPO_RATIO:
+                ranked.append((3, -score, name))
+    ranked.sort(key=lambda r: (r[0], r[1], r[2].casefold()))
+    return [name for _, _, name in ranked[:limit]]
+
+
+def _fold(text: str) -> str:
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFKD", text)
+    bare = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return " ".join(bare.casefold().split())
+
+
 @dataclass(frozen=True)
 class NamingOutcome:
     """What one answer to "who spoke?" did (:func:`name_speakers`)."""

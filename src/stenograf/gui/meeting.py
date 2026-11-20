@@ -149,6 +149,7 @@ class MeetingScreen(Screen):
 
     def _reset(self) -> None:
         self._names_clock.stop()
+        self._known: list[str] = []
         self._stop_playback()
         self._set_phase(
             Phase.REC,
@@ -496,7 +497,7 @@ class MeetingScreen(Screen):
 
         def job() -> _Saved:
             from stenograf import output
-            from stenograf.flow import meeting_speakers
+            from stenograf.flow import known_speaker_names, meeting_speakers
 
             outcomes = (
                 run.name_speakers(
@@ -525,8 +526,19 @@ class MeetingScreen(Screen):
             except ValueError:
                 transcript = None
             speakers = meeting_speakers(run.out_dir, store_path=run.profile_store)
+            # A name saved just now is one the next voice may also be.
+            known = known_speaker_names(
+                store_path=run.profile_store, attendee_names=run.request.profile.attendee_names
+            )
             return _Saved(
-                outcomes, speakers, transcript, finished, str(run.out_dir), problem, applied_title
+                outcomes,
+                speakers,
+                transcript,
+                finished,
+                str(run.out_dir),
+                problem,
+                applied_title,
+                known,
             )
 
         # A new meeting may have begun by the time the job ends: its result
@@ -537,6 +549,13 @@ class MeetingScreen(Screen):
             failed=lambda message: self._for_run(run_id, self._names_failed, message),
             name="gui-names",
         )
+
+    @Slot(str, result="QVariantList")
+    def suggest(self, typed: str) -> list[str]:
+        """The known names a "who is this?" answer being typed may be heading for."""
+        from stenograf.flow import suggest_speaker_names
+
+        return suggest_speaker_names(typed, self._known)
 
     @Slot(str, result=str)
     def preview(self, title: str) -> str:
@@ -649,7 +668,8 @@ class MeetingScreen(Screen):
 
     def _names_saved(self, result: _Saved) -> None:
         outcomes, speakers, transcript = result.outcomes, result.speakers, result.transcript
-        self.set(folder=result.folder)
+        self._known = result.known
+        self.set(folder=result.folder, knownNames=", ".join(result.known))
         if result.title is not None:  # what the card shows when it is reopened
             self.set(title=result.title)
         if result.problem:
@@ -696,17 +716,19 @@ class MeetingScreen(Screen):
         self._stop_capture = stop
         self.post(self.set, canStop=True)
 
-    def _offer_names(self, rows: list[dict[str, object]], known: str, ask: bool) -> None:
+    def _offer_names(self, rows: list[dict[str, object]], known: list[str], ask: bool) -> None:
+        self._known = known
+        self.set(knownNames=", ".join(known))
         if ask and self._unattended and not self._watched():
             # Stopped from the menu bar: the card waits for whenever the window
             # is opened, but the notes go ahead with the start form's choices.
-            self.set(speakers=rows, knownNames=known, namesOpen=True, notesLocked=True, clipNext={})
+            self.set(speakers=rows, namesOpen=True, notesLocked=True, clipNext={})
             if self._run is not None:
                 self._run.settle_names()
             return
         # Without ask the run is not waiting on the card: its notes went ahead
         # on the start form's choices, so the card must not offer them again.
-        self.set(speakers=rows, knownNames=known, namesOpen=ask, notesLocked=not ask, clipNext={})
+        self.set(speakers=rows, namesOpen=ask, notesLocked=not ask, clipNext={})
         timeout = self._run.request.settings.speakers.names_panel_timeout_s if self._run else None
         if ask and timeout:
             self.set(namesCountdown=max(1, round(timeout)))
@@ -845,7 +867,7 @@ class _RunView(LiveView):
             store_path=run.profile_store, attendee_names=run.request.profile.attendee_names
         )
         rows = _speaker_rows(speakers, _clip_counts(run))
-        self.show(self._screen._offer_names, rows, ", ".join(known), ask)
+        self.show(self._screen._offer_names, rows, known, ask)
 
 
 @dataclass(frozen=True)
@@ -860,6 +882,7 @@ class _Saved:
     problem: str
     title: str | None
     """The title Done applied (``None``: unchanged)."""
+    known: list[str]
 
 
 def _clip_counts(run: MeetingRun | None) -> dict[str, int]:

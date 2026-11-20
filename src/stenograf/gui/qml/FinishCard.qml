@@ -170,7 +170,34 @@ Rectangle {
                     // from fixing. A refused answer reopens the field.
                     property bool editing: !speakerRow.modelData.recognised || speakerRow.modelData.refused.length > 0
                     readonly property string answer: nameField.text.trim()
+                    // The known names the text being typed may be heading for,
+                    // and which one the arrow keys have picked (none: Return
+                    // keeps exactly what was typed).
+                    property var suggestions: []
+                    property int pick: -1
+
+                    // Opened and closed here, not bound: a popup that closes itself
+                    // would break a binding on its visible.
+                    onSuggestionsChanged: {
+                        // However the list empties (Escape, focus leaving, Keep),
+                        // the pick goes with it: a stale one would swallow Return.
+                        speakerRow.pick = -1;
+                        speakerRow.suggestions.length > 0 ? suggestionList.open() : suggestionList.close();
+                    }
+                    // "Keep" hides the field without taking its focus.
+                    onEditingChanged: if (!speakerRow.editing)
+                        speakerRow.suggestions = []
                     readonly property string initials: speakerRow.modelData.recognised ? speakerRow.modelData.label.split(/\s+/).map(w => w.charAt(0)).join("").slice(0, 2).toUpperCase() : ""
+
+                    function suggest() {
+                        speakerRow.suggestions = nameField.activeFocus && speakerRow.editing ? card.screen.suggest(nameField.text) : [];
+                    }
+
+                    function choose(name) {
+                        card.screen.hold_names();
+                        nameField.text = name;
+                        speakerRow.suggestions = [];
+                    }
 
                     function edit() {
                         card.screen.hold_names();
@@ -286,7 +313,94 @@ Rectangle {
                                     ToolTip.visible: activeFocus && card.st.knownNames.length > 0 && text.length === 0
                                     ToolTip.text: "Known: " + card.st.knownNames
                                     onAccepted: card.done()
-                                    onTextEdited: card.screen.hold_names()
+                                    onTextEdited: {
+                                        card.screen.hold_names();
+                                        speakerRow.suggest();
+                                    }
+                                    onActiveFocusChanged: if (!activeFocus)
+                                        speakerRow.suggestions = []
+                                    Keys.onDownPressed: event => {
+                                        event.accepted = speakerRow.suggestions.length > 0;
+                                        if (event.accepted)
+                                            speakerRow.pick = Math.min(speakerRow.pick + 1, speakerRow.suggestions.length - 1);
+                                    }
+                                    Keys.onUpPressed: event => {
+                                        event.accepted = speakerRow.pick >= 0;
+                                        if (event.accepted)
+                                            speakerRow.pick -= 1;
+                                    }
+                                    Keys.onEscapePressed: event => {
+                                        event.accepted = speakerRow.suggestions.length > 0;
+                                        speakerRow.suggestions = [];
+                                    }
+                                    // Return takes the picked name; with none picked it
+                                    // falls through to onAccepted, as before.
+                                    Keys.onReturnPressed: event => {
+                                        event.accepted = speakerRow.pick >= 0;
+                                        if (event.accepted)
+                                            speakerRow.choose(speakerRow.suggestions[speakerRow.pick]);
+                                    }
+                                    Keys.onEnterPressed: event => {
+                                        event.accepted = speakerRow.pick >= 0;
+                                        if (event.accepted)
+                                            speakerRow.choose(speakerRow.suggestions[speakerRow.pick]);
+                                    }
+
+                                    // Offers, never insists: it takes no focus, so typing
+                                    // goes on in the field and a full name typed past the
+                                    // list is the answer.
+                                    Popup {
+                                        id: suggestionList
+
+                                        y: nameField.height + 4
+                                        width: nameField.width
+                                        padding: 1
+                                        focus: false
+                                        closePolicy: Popup.CloseOnPressOutsideParent
+                                        onClosed: speakerRow.suggestions = []
+
+                                        background: Rectangle {
+                                            radius: 8
+                                            color: Theme.surface
+                                            border.width: 1
+                                            border.color: Theme.line
+                                        }
+
+                                        contentItem: Column {
+                                            Repeater {
+                                                model: speakerRow.suggestions
+
+                                                delegate: ItemDelegate {
+                                                    id: option
+
+                                                    required property string modelData
+                                                    required property int index
+
+                                                    text: option.modelData
+                                                    width: suggestionList.availableWidth
+                                                    implicitHeight: 30
+                                                    focusPolicy: Qt.NoFocus
+                                                    hoverEnabled: true
+                                                    highlighted: speakerRow.pick === option.index || option.hovered
+                                                    onClicked: speakerRow.choose(option.modelData)
+
+                                                    background: Rectangle {
+                                                        radius: 7
+                                                        color: option.highlighted ? Theme.surfaceHi : "transparent"
+                                                    }
+
+                                                    contentItem: Text {
+                                                        leftPadding: 11
+                                                        text: option.text
+                                                        color: Theme.text
+                                                        font.pixelSize: Theme.textBody
+                                                        verticalAlignment: Text.AlignVCenter
+                                                        elide: Text.ElideRight
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
                                 IconButton {
