@@ -1047,10 +1047,11 @@ class TestWhoSpoke:
             assert "press Done" in meeting.state["status"]
 
             self._done(meeting, {"Local-1": "Anna"})
-            pump(lambda: notes != [] and not meeting.running)
+            # The card closes when the names job returns, which may be after
+            # the notes it released have finished (Windows CI, 2026-11-20).
+            pump(lambda: notes != [] and not meeting.running and not meeting.state["namesOpen"])
         assert log.seen == []
         assert notes == [{"Anna"}], "the notes see the name, not the placeholder"
-        assert not meeting.state["namesOpen"]
         assert meeting.state["speakers"][0]["label"] == "Anna"
         assert ProfileStore.load().get("Anna", "redimnet2-b6-vb2-lm.onnx") is not None
         assert meeting.suggest("an") == ["Anna"], "a name saved here is offered next"
@@ -1385,8 +1386,7 @@ class TestWhoSpoke:
         time.sleep(0.3)
         assert notes == []
         self._done(meeting)
-        pump(lambda: notes != [] and not meeting.running)
-        assert not meeting.state["namesOpen"]
+        pump(lambda: notes != [] and not meeting.running and not meeting.state["namesOpen"])
 
     def test_done_renames_the_folder_and_titles_the_transcript(
         self, gui, tmp_path, monkeypatch
@@ -1401,7 +1401,9 @@ class TestWhoSpoke:
             before = Path(meeting.state["folder"])
             assert meeting.preview("Weekly sync") == before.name + "-weekly-sync"
             self._done(meeting, title="Weekly sync", context="Budget freigeben")
-            pump(lambda: notes != [] and not meeting.running)
+            # The folder line is set when the names job returns, which may be
+            # after the notes it released have finished.
+            pump(lambda: notes != [] and not meeting.running and not meeting.state["namesOpen"])
         assert log.seen == []
         after = Path(meeting.state["folder"])
         assert after.name == before.name + "-weekly-sync" and not before.exists()
