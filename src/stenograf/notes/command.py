@@ -16,6 +16,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from stenograf.notes.backend import NotesBackendUnavailableError, NotesGenerationError
+from stenograf.proc import no_window
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -122,6 +123,7 @@ class CommandBackend:
                 timeout=self.timeout_s,
                 cwd=self.cwd,
                 env={**os.environ, **self.extra_env} if self.extra_env else None,
+                creationflags=no_window(),
             )
         except FileNotFoundError as exc:
             raise NotesBackendUnavailableError(

@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from stenograf.capture.base import SAMPLE_RATE  # one owner; re-exported for DSP callers
+from stenograf.proc import no_window
 
 
 def to_float32(samples: np.ndarray) -> np.ndarray:
@@ -152,6 +153,7 @@ def audio_channel_count(path: Path | str) -> int:
         [ffmpeg_exe(), "-nostdin", "-hide_banner", "-i", str(path)],
         capture_output=True,
         text=True,
+        creationflags=no_window(),
     )
     return _parse_channel_count(proc.stderr)
 
@@ -233,7 +235,7 @@ def _load_via_ffmpeg(path: Path, *, channels: int = 1) -> np.ndarray:
         "-ac", str(channels), "-ar", str(SAMPLE_RATE),
         "-",
     ]  # fmt: skip
-    proc = subprocess.run(cmd, capture_output=True)
+    proc = subprocess.run(cmd, capture_output=True, creationflags=no_window())
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg failed on {path.name}: {proc.stderr.decode().strip()}")
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()

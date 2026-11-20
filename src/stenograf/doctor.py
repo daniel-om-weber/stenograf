@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from stenograf.proc import no_window
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -315,6 +317,7 @@ def _desktop_app_check() -> Check:
             text=True,
             timeout=180,
             env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+            creationflags=no_window(),
         )
     except subprocess.TimeoutExpired:
         # Not the exception's own message: it quotes the command, and the

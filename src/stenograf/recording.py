@@ -53,6 +53,7 @@ from stenograf.capture.base import (
     Channel,
     GapPaddedBuffer,
 )
+from stenograf.proc import no_window
 
 _BYTES_PER_SAMPLE = 2  # int16
 _BITS_PER_SAMPLE = 16
@@ -226,6 +227,7 @@ class _OpusSink:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=no_window(),
             )
         except (OSError, RuntimeError) as exc:
             self._engage_fallback(exc)  # pre-capture, so blocking open is fine

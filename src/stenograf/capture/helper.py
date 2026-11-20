@@ -77,6 +77,7 @@ from stenograf.capture.base import (
     Channel,
 )
 from stenograf.capture.streaming import read_exact, relay_lines
+from stenograf.proc import no_window
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -223,7 +224,11 @@ def _ask_helper(argv: list[str], fallback: str) -> bytes:
     """
     try:
         result = subprocess.run(
-            [str(find_helper()), *argv], capture_output=True, timeout=15, check=False
+            [str(find_helper()), *argv],
+            capture_output=True,
+            timeout=15,
+            check=False,
+            creationflags=no_window(),
         )
     except OSError as exc:
         raise CaptureUnavailableError(f"the capture helper could not be run ({exc})") from exc
@@ -385,7 +390,9 @@ class HelperCaptureProvider(CaptureProvider):
         # keeping the helper's chatter off the GUI's screen (class docstring).
         stderr = None if self._on_log is None else subprocess.PIPE
         stdin = subprocess.PIPE if self._stop_signal is None else None
-        self._proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=stderr)
+        self._proc = subprocess.Popen(
+            argv, stdin=stdin, stdout=subprocess.PIPE, stderr=stderr, creationflags=no_window()
+        )
         assert self._proc.stdout is not None
         if self._on_log is not None:
             assert self._proc.stderr is not None
