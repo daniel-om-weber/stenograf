@@ -73,7 +73,7 @@ _RECORD_DEFAULT = "\0default"
     help="Run (or skip) speaker diarization; skipped, the diarizer model is "
     "never loaded and each captured channel is attributed to a single speaker "
     "(Local-1/Remote-1). --no-diarization conflicts with a --local/--remote "
-    "count above 1 [default: [speakers] diarization in settings.toml, else off].",
+    "count above 1 [default: [speakers] diarization in settings.toml, else on].",
 )
 @click.option(
     "--mic-device",
@@ -260,10 +260,10 @@ def start(
         notes_backend = notes_backend or cfg.preset.notes.backend
 
     diarize = _resolve_diarization(
-        diarization_flag, cfg.settings.speakers.diarization, local_speakers, remote_speakers
+        diarization_flag, cfg.settings.speakers.diarizes, local_speakers, remote_speakers
     )
     if not diarize and diarization_flag is None:  # off without an explicit flag — say so
-        click.echo("diarization: off (--diarization or a speaker count enables it)")
+        click.echo("diarization: off ([speakers] diarization = false; --diarization runs it)")
     local_speakers, remote_speakers = _apply_no_diarization(
         not diarize, local_speakers, remote_speakers
     )

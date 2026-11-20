@@ -113,9 +113,9 @@ SETTINGS_TEMPLATE = """\
 #                                          # --record-audio
 
 [speakers]
-# diarization = false                      # true = separate speakers within a channel
-#                                          # (a per-run --diarization flag or a speaker
-#                                          # count above 1 also turns it on)
+# diarization = true                       # false = one speaker per channel, and the
+#                                          # diarizer model is never loaded (a per-run
+#                                          # --diarization/--no-diarization beats it)
 # reid_threshold = 0.62                    # voice-match strictness 0-1
 # profile_store = "~/steno/profiles.json"  # re-ID voiceprint store location
 # names_panel_timeout_s = 60               # app: the finish card settles on its own
@@ -219,13 +219,20 @@ class OutputSettings:
 @dataclass(frozen=True)
 class SpeakerSettings:
     diarization: bool | None = None
-    """``True`` separates speakers within each channel. Unset (``None``) or
-    ``False`` = off, the built-in default: each channel is attributed to one
-    speaker and the diarizer model is never loaded — it costs minutes on some
-    machines. A per-run ``--diarization`` flag or an explicit speaker count
-    above 1 also turns it on."""
+    """Separate speakers within each channel. Unset (``None``) = on, the
+    built-in default (Daniel's call, 2026-11-20): who said what is most of a
+    meeting transcript's worth. ``False`` attributes each channel to one
+    speaker and never loads the diarizer model — the choice for a machine
+    short on memory or time. A per-run ``--diarization/--no-diarization`` flag
+    beats it, and so does an explicit speaker count above 1. Read it through
+    :attr:`diarizes`, never as a bare value."""
     reid_threshold: float | None = None
     profile_store: Path | None = None
+
+    @property
+    def diarizes(self) -> bool:
+        """Whether speakers are separated when nothing else decides."""
+        return self.diarization is not False
     names_panel_timeout_s: float | None = None
     """Seconds the app's "Who spoke?" panel stays open untouched before it
     closes as if skipped; ``None`` or 0 keeps it open until saved or skipped.
@@ -762,7 +769,7 @@ def settings_rows(
         ("capture", "mic_device", settings.capture.mic_device, "(the system default)", None),
         ("output", "dir", settings.output.dir, default_output_home(), None),
         ("output", "record_audio", settings.output.record_audio, False, None),
-        ("speakers", "diarization", settings.speakers.diarization, False, None),
+        ("speakers", "diarization", settings.speakers.diarization, True, None),
         ("speakers", "reid_threshold", settings.speakers.reid_threshold, REID_THRESHOLD, None),
         ("speakers", "profile_store", settings.speakers.profile_store, default_store_path(), None),
         (

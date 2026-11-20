@@ -576,6 +576,15 @@ language = "de"
         assert setup.state["notes"] is True
         assert setup.state["recordAudio"] is False
 
+    def test_speakers_are_separated_unless_the_settings_say_not(self, gui):
+        shell, _engine = gui
+        setup = shell.screen("Setup")
+        setup.opened()
+        assert setup.state["diarize"] is True, "on with no settings file"
+        write_settings("[speakers]\ndiarization = false\n")
+        setup.opened()
+        assert setup.state["diarize"] is False
+
 
 class TestMeetingScreen:
     def test_a_whole_meeting_runs_from_the_start_button(self, gui, tmp_path, monkeypatch):

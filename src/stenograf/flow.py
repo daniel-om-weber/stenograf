@@ -941,10 +941,10 @@ def transcribe_recording(
     write_formats = list(settings.transcript.formats or DEFAULT_FORMATS)
 
     split_pcms, _correlation = resolve_split_channels(audio_file, "auto")
-    # Diarization is off unless [speakers] diarization = true — the button UIs'
-    # only switch for it (or rerun with the CLI's --diarization): counts collapse
-    # to one speaker per channel and the diarizer is never loaded.
-    diarize = settings.speakers.diarization is True
+    # [speakers] diarization is this screen's only switch for it (the CLI has
+    # --no-diarization): off, counts collapse to one speaker per channel and
+    # the diarizer is never loaded.
+    diarize = settings.speakers.diarizes
     profile = MeetingProfile(
         glossary=glossary_terms, attendee_names=attendee_names, title=audio_file.stem
     )

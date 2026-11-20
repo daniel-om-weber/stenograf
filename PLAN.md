@@ -711,8 +711,9 @@ mode, but live captions carry no speaker labels.
 Measured for the record (`eval/README.md`, "A real finalize, and its peak
 memory"): diarizing a 1 h 45 min meeting raised the finalize's peak memory
 from 6.9 to 11.2 GB on the M4 Max; since the stop releases the ASR before it
-diarizes, 7.9 GB. Diarization is off by default, so only users who turn it on
-pay it; an 8–16 GB machine is the unmeasured case.
+diarizes, 7.9 GB. Diarization is on by default since 2026-11-20, so every
+user pays it: an 8–16 GB machine is the unmeasured case, and now the common
+one (`[speakers] diarization = false` is the way out).
 
 ---
 

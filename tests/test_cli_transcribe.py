@@ -115,30 +115,30 @@ def test_apply_no_diarization_preserves_a_disabled_channel():
 
 
 def test_resolve_diarization_precedence():
-    # flag > explicit count > settings.toml > off.
+    # flag > explicit count > settings.toml (whose unset value means on).
+    from stenograf.settings import SpeakerSettings
+
     resolve = cli.run._resolve_diarization
-    assert resolve(None, None, None) is False  # everything unset → off
-    assert resolve(None, False, None) is False  # explicit off in the file too
-    assert resolve(None, None, 3) is True  # an explicit count asks to diarize
-    assert resolve(None, False, 3) is True  # …and beats an explicit file off too
+    assert SpeakerSettings().diarizes is True  # nothing in the file → on
+    assert SpeakerSettings(diarization=False).diarizes is False
+    assert resolve(None, True, None) is True  # the file's value decides
+    assert resolve(None, False, None) is False  # an explicit off in the file
+    assert resolve(None, False, 3) is True  # an explicit count beats the file's off
     assert resolve(True, False, None) is True  # --diarization beats the file
-    assert resolve(False, None, 3) is False  # --no-diarization wins (UsageError later)
-    assert resolve(None, True, None, 1) is True  # explicit on in the file
+    assert resolve(False, True, None) is False  # --no-diarization beats it too
+    assert resolve(False, True, 3) is False  # and wins over a count (UsageError later)
 
 
-def test_transcribe_diarization_off_by_default(tmp_path, backend_calls):
-    # No settings file, no flag, no count: diarization must not run — the
-    # built-in default is off, and the run says so.
+def test_transcribe_diarizes_by_default(tmp_path, backend_calls):
+    # No settings file, no flag, no count: speakers are separated, silently.
     audio = tmp_path / "meeting.wav"
     write_wav(audio)
 
     result = CliRunner().invoke(cli.main, ["transcribe", str(audio), "--out", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert backend_calls["need_diarizer"] is False
-    assert "diarization: off" in result.output
-    entries = json.loads((tmp_path / "transcript.json").read_text())["entries"]
-    assert {e["speaker"] for e in entries} == {"Speaker 1"}
+    assert backend_calls["need_diarizer"] is True
+    assert "diarization: off" not in result.output
 
 
 def test_transcribe_settings_diarization_off_skips_the_diarizer(tmp_path, backend_calls):

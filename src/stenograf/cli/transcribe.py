@@ -90,7 +90,7 @@ from stenograf.output import prepare_output, write_transcript
     help="Run (or skip) speaker diarization; skipped, the diarizer model is "
     "never loaded and each voice channel (or the mixed stream) is attributed "
     "to a single speaker. --no-diarization conflicts with a speaker count "
-    "above 1 [default: [speakers] diarization in settings.toml, else off].",
+    "above 1 [default: [speakers] diarization in settings.toml, else on].",
 )
 @click.option(
     "--out",
@@ -204,13 +204,13 @@ def transcribe(
             "transcribes one mixed stream (--channels split to force splitting)"
         )
     diarize = _resolve_diarization(
-        diarization_flag, settings.speakers.diarization, speakers, local_speakers, remote_speakers
+        diarization_flag, settings.speakers.diarizes, speakers, local_speakers, remote_speakers
     )
     if not diarize:
         if (speakers or 0) > 1:
             raise click.UsageError("--no-diarization conflicts with a speaker count above 1")
         if diarization_flag is None:  # off without an explicit flag — say so, a flag user knows
-            click.echo("diarization: off (--diarization or a speaker count enables it)")
+            click.echo("diarization: off ([speakers] diarization = false; --diarization runs it)")
         if split_pcms is None:
             speakers = 1
         else:

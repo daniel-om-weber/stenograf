@@ -211,21 +211,21 @@ def _parse_formats(spec: str) -> list[str]:
     return formats
 
 
-def _resolve_diarization(flag: bool | None, setting: bool | None, *counts: int | None) -> bool:
-    """Whether diarization runs this run: flag > explicit count > settings > off.
+def _resolve_diarization(flag: bool | None, setting: bool, *counts: int | None) -> bool:
+    """Whether diarization runs this run: flag > explicit count > settings.
 
     The per-run ``--diarization/--no-diarization`` flag wins outright (an
     explicit ``--no-diarization`` beside a count above 1 stays the
     :func:`_apply_no_diarization` UsageError). Without a flag, an explicit
     speaker count above 1 is itself a request to diarize, so it beats the
-    settings value; otherwise that value decides, and the built-in default
-    is off — each channel is one speaker and the diarizer is never loaded.
+    settings value; otherwise that value decides (``SpeakerSettings.diarizes``,
+    on unless ``[speakers] diarization = false``).
     """
     if flag is not None:
         return flag
     if any((count or 0) > 1 for count in counts):
         return True
-    return setting if setting is not None else False
+    return setting
 
 
 def _apply_no_diarization(

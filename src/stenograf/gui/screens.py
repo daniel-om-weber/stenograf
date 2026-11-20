@@ -127,7 +127,7 @@ class SetupScreen(Screen):
         # describe a selection differently from the meeting it starts.
         pinned = resolve_mic_device(None, standing)
         self.set(
-            diarize=standing.speakers.diarization is True,
+            diarize=standing.speakers.diarizes,
             recordAudio=standing.output.record_audio is True,
             notes=standing.notes.auto is True,
             presets=self._presets(standing),
