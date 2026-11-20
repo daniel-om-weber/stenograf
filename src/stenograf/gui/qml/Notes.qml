@@ -17,6 +17,8 @@ Panel {
     heading: "Generate notes"
     hint: "Summarizes a meeting's transcript into notes.md next to it."
     busy: page.screen.state.busy
+    dropHint: "Drop to use this meeting"
+    onDropped: url => page.screen.choose(url)
 
     Component.onCompleted: if (page.screen)
         page.screen.opened()
@@ -40,7 +42,7 @@ Panel {
         }
 
         Text {
-            text: page.screen.state.meeting || "No meeting selected."
+            text: page.screen.state.meeting || "No meeting selected — or drop its folder here."
             color: page.screen.state.meeting ? Theme.text : Theme.muted
             font.pixelSize: Theme.textBody
             elide: Text.ElideMiddle

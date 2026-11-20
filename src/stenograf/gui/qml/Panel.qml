@@ -18,6 +18,12 @@ Item {
     property bool busy: false
     property int cardWidth: 620
 
+    // Set to accept a file dropped anywhere on the page; the text says what
+    // the drop will do, over the page while something is dragged across it.
+    property string dropHint: ""
+
+    signal dropped(string url)
+
     default property alias content: column.data
     // The buttons pinned under the scrolling body, laid out in a row.
     property alias actions: actionRow.data
@@ -26,6 +32,20 @@ Item {
         sequences: [StandardKey.Cancel]
         onActivated: if (!panel.busy && panel.app)
             panel.app.back()
+    }
+
+    DropArea {
+        id: dropZone
+
+        anchors.fill: parent
+        enabled: panel.dropHint.length > 0 && !panel.busy
+        onEntered: drag => drag.accepted = drag.hasUrls
+        onDropped: drop => {
+            if (drop.hasUrls && drop.urls.length > 0) {
+                drop.acceptProposedAction();
+                panel.dropped(drop.urls[0].toString());
+            }
+        }
     }
 
     Rectangle {
@@ -102,6 +122,33 @@ Item {
                 margins: card.pad
             }
             spacing: 10
+        }
+    }
+
+    Rectangle {
+        visible: dropZone.containsDrag
+        anchors.fill: card
+        radius: card.radius
+        color: Qt.rgba(Theme.bg.r, Theme.bg.g, Theme.bg.b, 0.92)
+        border.width: 2
+        border.color: Theme.accent
+
+        Column {
+            anchors.centerIn: parent
+            spacing: 10
+
+            Icon {
+                anchors.horizontalCenter: parent.horizontalCenter
+                name: "upload"
+                color: Theme.accent
+                size: 28
+            }
+
+            Text {
+                text: panel.dropHint
+                color: Theme.text
+                font.pixelSize: Theme.textLabel
+            }
         }
     }
 }

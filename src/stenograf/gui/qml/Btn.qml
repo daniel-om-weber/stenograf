@@ -8,7 +8,9 @@ Button {
 
     property bool primary: false
     property string glyph: ""  // an Icon name shown before the text; not `icon`, which Button owns
-    readonly property color ink: !control.enabled ? Theme.dim : control.primary ? Theme.accentText : Theme.text
+    // `flat` (Button's own property) is the quiet variant: no fill or border
+    // until hovered, muted ink — for a way out that should not compete.
+    readonly property color ink: !control.enabled ? Theme.dim : control.primary ? Theme.accentText : control.flat && !control.hovered ? Theme.muted : Theme.text
 
     implicitHeight: 36
     leftPadding: 16
@@ -17,8 +19,8 @@ Button {
 
     background: Rectangle {
         radius: 8
-        color: !control.enabled ? Theme.surfaceHi : control.primary ? (control.hovered ? Qt.lighter(Theme.accent, 1.12) : Theme.accent) : (control.hovered ? Theme.surfaceHi : Theme.control)
-        border.width: control.primary ? 0 : 1
+        color: control.flat ? (control.hovered ? Theme.surfaceHi : "transparent") : !control.enabled ? Theme.surfaceHi : control.primary ? (control.hovered ? Qt.lighter(Theme.accent, 1.12) : Theme.accent) : (control.hovered ? Theme.surfaceHi : Theme.control)
+        border.width: control.primary || (control.flat && !control.activeFocus) ? 0 : 1
         border.color: control.activeFocus ? Theme.accent : Theme.line
 
         Behavior on color {

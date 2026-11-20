@@ -272,7 +272,11 @@ class TranscribeScreen(Screen):
 
     @Slot(str)
     def choose(self, url: str) -> None:
-        self.set(file=str(_local(url)), status="", folder="")
+        path = _local(url)
+        if path.is_dir():  # dropped onto the window; the dialog only offers files
+            self.set(status=f"{path.name} is a folder — drop an audio or video file")
+            return
+        self.set(file=str(path), status="", folder="")
 
     @Slot()
     def reveal(self) -> None:
@@ -345,7 +349,9 @@ class NotesScreen(Screen):
 
     @Slot(str)
     def choose(self, url: str) -> None:
-        self.set(meeting=str(_local(url)), status="")
+        path = _local(url)
+        # A transcript dropped onto the window stands for its meeting folder.
+        self.set(meeting=str(path.parent if path.is_file() else path), status="")
 
     @Slot()
     def start(self) -> None:
@@ -389,7 +395,9 @@ class SettingsScreen(Screen):
     def __init__(self, app: StenografGui) -> None:
         super().__init__(app)
         self.lines: list[str] = []  # plain-text mirror (tests, debugging)
-        self.set(text="", ok=True, path="", preset="", presets=[])
+        self.set(
+            text="", ok=True, path="", present=True, notes=[], sections=[], preset="", presets=[]
+        )
 
     @Slot()
     def opened(self) -> None:
@@ -408,10 +416,29 @@ class SettingsScreen(Screen):
     @Slot(str)
     def show(self, preset: str) -> None:
         """Render the report, optionally under a meeting preset (``""`` = none)."""
-        from stenograf.flow import settings_report
+        from stenograf.flow import settings_lines, settings_view
 
-        self.lines, ok = settings_report(preset or None)
-        self.set(preset=preset, text="\n".join(self.lines), ok=ok)
+        view = settings_view(preset or None)
+        self.lines = settings_lines(view)
+        self.set(
+            preset=preset,
+            ok=view.error is None,
+            path=str(view.path),
+            present=view.present,
+            notes=list(view.preset_notes),
+            # The error, when there is one; the sections carry everything else.
+            text=view.error or "",
+            sections=[
+                {
+                    "table": table,
+                    "rows": [
+                        {"key": key, "value": value, "source": source}
+                        for key, value, source in rows
+                    ],
+                }
+                for table, rows in view.sections
+            ],
+        )
 
     @Slot()
     def edit(self) -> None:
@@ -423,7 +450,9 @@ class SettingsScreen(Screen):
 
         path, _created = ensure_settings_file()
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
-            self.set(text=f"Nothing on this machine opens .toml files — edit {path} directly.")
+            self.set(
+                ok=False, text=f"Nothing on this machine opens .toml files — edit {path} directly."
+            )
 
 
 class DoctorScreen(Screen):
@@ -454,20 +483,26 @@ class DoctorScreen(Screen):
     def _report(self, checks: list) -> None:
         # ok → good, failed-but-optional → optional (an opt-in feature the
         # machine can healthily lack), failed → bad. QML colours from that.
+        rows = [
+            {
+                "name": check.name,
+                "detail": check.detail,
+                "state": "good" if check.ok else ("optional" if check.optional else "bad"),
+            }
+            for check in checks
+        ]
+        # Problems first: the screen is opened to find out what is wrong, and
+        # a failure under a dozen green lines is one the user scrolls past.
+        # Stable, so each group keeps the order the checks run in.
+        rank = {"bad": 0, "optional": 1, "good": 2}
+        rows.sort(key=lambda row: rank[row["state"]])
         self.set(
             busy=False,
-            checks=[
-                {
-                    "name": check.name,
-                    "detail": check.detail,
-                    "state": "good" if check.ok else ("optional" if check.optional else "bad"),
-                }
-                for check in checks
-            ],
+            checks=rows,
             status=(
                 "Everything looks good."
                 if (problems := sum(1 for c in checks if not (c.ok or c.optional))) == 0
-                else f"{problems} problem(s) found — fix them and reopen this screen."
+                else f"{problems} problem(s) found — fix them, then check again."
             ),
         )
 

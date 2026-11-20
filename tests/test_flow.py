@@ -18,7 +18,13 @@ from stenograf.captions import (
     CaptionStream,
 )
 from stenograf.capture.base import Channel
-from stenograf.flow import MeetingRequestError, resolve_meeting_request, settings_report
+from stenograf.flow import (
+    MeetingRequestError,
+    resolve_meeting_request,
+    settings_lines,
+    settings_report,
+    settings_view,
+)
 
 
 def _words(text, start=0.0, step=0.3):
@@ -136,6 +142,22 @@ attendees = ["Preset Name"]
         assert ok is True
         assert lines[0].startswith("settings: ")
         assert "[asr]" in lines
+
+    def test_the_view_and_the_report_are_the_same_configuration(self):
+        # The app lays out the view; the CLI prints the report. One source,
+        # so the two cannot disagree about a value or its provenance.
+        write_settings('[transcript]\nformats = ["md"]\n')
+        view = settings_view()
+        assert view.error is None and view.present is True
+        tables = dict(view.sections)
+        assert ("formats", '["md"]', "settings.toml") in tables["transcript"]
+        assert settings_lines(view) == settings_report()[0]
+
+    def test_a_broken_file_is_an_error_with_no_sections(self):
+        write_settings("not toml [")
+        view = settings_view()
+        assert view.error and view.sections == ()
+        assert settings_report() == (settings_lines(view), False)
 
     def test_the_report_attributes_a_presets_keys_to_it(self, tmp_path, monkeypatch):
         # The picker's whole point: which values does *this* meeting type

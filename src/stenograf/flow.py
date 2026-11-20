@@ -1228,48 +1228,80 @@ def name_speakers(
     return outcomes
 
 
-def settings_report(preset: str | None = None) -> tuple[list[str], bool]:
-    """``steno settings show`` as plain lines, plus whether the file loaded.
+@dataclass(frozen=True)
+class SettingsView:
+    """The effective configuration, structured: what :func:`settings_report`
+    prints as lines and the app lays out as sections."""
 
-    Every key with its value and where it came from (env override, a meeting
-    preset, settings.toml, built-in default), rendered through the same
+    path: Path
+    present: bool
+    """Whether settings.toml exists; without it every value is a default."""
+    preset_notes: tuple[str, ...]
+    """What the chosen meeting type is and does, one line each; empty without one."""
+    sections: tuple[tuple[str, tuple[tuple[str, str, str], ...]], ...]
+    """``(table, ((key, value, source), …))`` in file order."""
+    error: str | None
+    """Why the file (or the meeting type) could not be read; no sections then."""
+
+
+def settings_view(preset: str | None = None) -> SettingsView:
+    """Every key with its value and where it came from (env override, a meeting
+    preset, settings.toml, built-in default), from the same
     :func:`~stenograf.settings.settings_rows` helper the CLI prints from, so no
-    two entries can disagree about the effective configuration. A broken file
-    renders its error instead and returns ``False`` — what to *do* about it is
-    the calling UI's line to write, since one has a keybinding and the other a
-    button.
+    two entries can disagree about the effective configuration.
 
     ``preset`` answers "what does this meeting type actually change?" the way
     ``steno settings show --preset NAME`` does: the ``[meetings.<name>]``
     overlay applied, its keys attributed to it. An unknown name is a failure
-    like an unreadable file — same error rendering, same ``False``, because a
-    picker offering a name settings.toml no longer defines is exactly as
-    broken."""
+    like an unreadable file, because a picker offering a name settings.toml no
+    longer defines is exactly as broken."""
     path = settings_path()
-    suffix = "" if path.exists() else " (not present — all defaults)"
-    lines = [f"settings: {path}{suffix}"]
+    present = path.exists()
     try:
         settings = load_settings()
         preset_obj = None
         if preset is not None:
             settings, preset_obj = apply_meeting_preset(settings, preset)
     except SettingsError as exc:
-        return [*lines, "", str(exc)], False
+        return SettingsView(path, present, (), (), str(exc))
+    notes: list[str] = []
     if preset_obj is not None:
         summary = preset_obj.summary()
-        lines.append(
-            f"preset:   [meetings.{preset_obj.name}]" + (f" — {summary}" if summary else "")
-        )
+        notes.append(f"[meetings.{preset_obj.name}]" + (f" — {summary}" if summary else ""))
         if preset_obj.vocab.attendees or preset_obj.vocab.glossary_file:
             # Vocabulary merges rather than overlays, so no row can show it.
-            lines.append("          its [vocab] merges into the standing vocabulary")
-    for table, rows in settings_rows(settings, preset_obj):
+            notes.append("its [vocab] merges into the standing vocabulary")
+    sections = tuple(
+        (table, tuple(rows)) for table, rows in settings_rows(settings, preset_obj)
+    )
+    return SettingsView(path, present, tuple(notes), sections, None)
+
+
+def settings_report(preset: str | None = None) -> tuple[list[str], bool]:
+    """``steno settings show`` as plain lines, plus whether the file loaded.
+
+    A broken file renders its error instead and returns ``False`` — what to
+    *do* about it is the calling UI's line to write, since one has a
+    keybinding and the other a button."""
+    view = settings_view(preset)
+    return settings_lines(view), view.error is None
+
+
+def settings_lines(view: SettingsView) -> list[str]:
+    """:func:`settings_view` rendered as the text ``steno settings show`` prints."""
+    suffix = "" if view.present else " (not present — all defaults)"
+    lines = [f"settings: {view.path}{suffix}"]
+    if view.error is not None:
+        return [*lines, "", view.error]
+    for n, note in enumerate(view.preset_notes):
+        lines.append(("preset:   " if n == 0 else "          ") + note)
+    for table, rows in view.sections:
         lines.append("")
         lines.append(f"[{table}]")
         width = max(len(key) for key, _, _ in rows)
         for key, value, source in rows:
             lines.append(f"  {key:<{width}} = {value}  ({source})")
-    return lines, True
+    return lines
 
 
 def notes_home() -> Path:
@@ -1310,11 +1342,14 @@ __all__ = [
     "MeetingRequestError",
     "MeetingRun",
     "RunOptions",
+    "SettingsView",
     "TranscribeResult",
     "generate_notes_for",
     "notes_home",
     "resolve_meeting_request",
+    "settings_lines",
     "settings_report",
+    "settings_view",
     "standing_settings",
     "transcribe_recording",
 ]

@@ -83,15 +83,16 @@ Generous for what it covers: the connection is accepted by the kernel from the
 listening socket's backlog, so an instance whose GUI thread is busy still answers
 instantly. A name with nothing behind it is refused immediately and never waits."""
 
-MENU: tuple[tuple[str, str, str], ...] = (
-    ("Setup", "Start meeting", "Capture this meeting with live captions."),
-    ("Transcribe", "Transcribe a recording", "Turn an audio file into a transcript."),
-    ("Notes", "Generate notes", "Summarize a finished meeting's transcript."),
-    ("Settings", "Settings", "Show the active configuration."),
-    ("Doctor", "Check setup", "Verify models, permissions, and audio devices."),
-    ("quit", "Quit", "Leave the app."),
+MENU: tuple[tuple[str, str, str, str], ...] = (
+    ("Setup", "Start meeting", "Capture this meeting with live captions.", "mic"),
+    ("Transcribe", "Transcribe a recording", "Turn an audio file into a transcript.", "headphones"),
+    ("Notes", "Generate notes", "Summarize a finished meeting's transcript.", "sparkles"),
+    ("Settings", "Settings", "Show the active configuration.", "sliders"),
+    ("Doctor", "Check setup", "Verify models, permissions, and audio devices.", "check-circle"),
+    ("quit", "Quit", "Leave the app.", "power"),
 )
-"""``(page, label, description)`` per home-menu entry, in display order. ``page``
+"""``(page, label, description, icon)`` per home-menu entry, in display order.
+The first is the menu's main action and the last its way out; ``page``
 names the QML file a click opens; ``quit`` is the one entry that is not a page."""
 
 _T = TypeVar("_T")
@@ -285,7 +286,15 @@ class StenografGui(QObject):
 
     @Property("QVariantList", constant=True)  # type: ignore[operator]  # PySide decorator
     def menu(self) -> list[dict[str, str]]:
-        return [{"page": page, "label": label, "description": desc} for page, label, desc in MENU]
+        return [
+            {"page": page, "label": label, "description": desc, "icon": icon}
+            for page, label, desc, icon in MENU
+        ]
+
+    @Property(str, constant=True)  # type: ignore[operator]  # PySide decorator
+    def icon_url(self) -> str:
+        """The app icon, for the menu's header — the same file the window uses."""
+        return QUrl.fromLocalFile(str(ASSETS / "icon.png")).toString()
 
     @Slot(str, result=QObject)
     def screen(self, page: str) -> Screen | None:

@@ -16,6 +16,23 @@ Panel {
     heading: "Start meeting"
     hint: "Formats, vocabulary and the rest come from your settings."
 
+    function begin() {
+        page.screen.start({
+            "preset": preset.value || "",
+            // || "": an empty model yields undefined, which crosses to
+            // Python as a missing key rather than "no device chosen".
+            "micDevice": micDevice.value || "",
+            "mic": mic.checked,
+            "system": system.checked,
+            "diarize": diarize.checked,
+            "local": localCount.value,
+            "remote": remoteCount.value,
+            "title": title.text,
+            "recordAudio": record.checked,
+            "notes": notes.checked
+        });
+    }
+
     // The standing defaults are copied into the switches once, after opened()
     // refreshed them — never bound: the microphone listing lands a moment
     // later through the same state map, and a binding re-evaluated then would
@@ -62,6 +79,10 @@ Panel {
         }
     }
 
+    SectionLabel {
+        text: "Sources"
+    }
+
     Toggle {
         id: mic
 
@@ -79,6 +100,7 @@ Panel {
     ColumnLayout {
         spacing: 6
         Layout.fillWidth: true
+        Layout.leftMargin: 56  // under the switch's label: it belongs to it
 
         Text {
             text: "Record from"
@@ -113,6 +135,10 @@ Panel {
         hint: system.checked ? "Calls, videos — anything playing on this machine." : "Starts muted — switch it on in the meeting."
     }
 
+    SectionLabel {
+        text: "Speakers"
+    }
+
     Toggle {
         id: diarize
 
@@ -124,6 +150,7 @@ Panel {
         spacing: 8
         visible: diarize.checked
         Layout.fillWidth: true
+        Layout.leftMargin: 56
         Layout.topMargin: 4
 
         Text {
@@ -159,6 +186,10 @@ Panel {
         }
     }
 
+    SectionLabel {
+        text: "After the meeting"
+    }
+
     Text {
         text: "Title (optional; used by notes)"
         color: Theme.text
@@ -171,6 +202,9 @@ Panel {
 
         placeholderText: "e.g. Weekly sync"
         Layout.fillWidth: true
+        // Enter in the last thing typed starts the meeting, as a form's
+        // default button would.
+        onAccepted: page.begin()
     }
 
     Toggle {
@@ -201,20 +235,7 @@ Panel {
             text: "Start"
             primary: true
             Layout.fillWidth: true
-            onClicked: page.screen.start({
-                "preset": preset.value || "",
-                // || "": an empty model yields undefined, which crosses to
-                // Python as a missing key rather than "no device chosen".
-                "micDevice": micDevice.value || "",
-                "mic": mic.checked,
-                "system": system.checked,
-                "diarize": diarize.checked,
-                "local": localCount.value,
-                "remote": remoteCount.value,
-                "title": title.text,
-                "recordAudio": record.checked,
-                "notes": notes.checked
-            })
+            onClicked: page.begin()
         },
 
         Btn {

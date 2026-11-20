@@ -17,6 +17,18 @@ Item {
     property var screen
 
     readonly property string phase: page.screen.state.phase
+    // One reading column for the committed captions and the live line under
+    // them, centred: left-anchored, a maximized window left its right half
+    // blank. The speaker column is shared so the names line up across both.
+    readonly property int readingWidth: Math.min(page.width - 36 - 14, 900)
+    readonly property int whoWidth: 110
+
+    // A caption is plain text, but the live line is drawn as styled text (to
+    // colour its provisional tail inline), so its markup characters must not
+    // be read as tags.
+    function escaped(text) {
+        return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
     // The transcript line a "Who spoke?" quote was clicked for, shown in the
     // accent colour until the next click; -1 = none.
     property int jumpedLine: -1
@@ -191,7 +203,9 @@ Item {
         boundsBehavior: Flickable.StopAtBounds
         ScrollBar.vertical: ScrollBar {}
 
-        delegate: RowLayout {
+        // A full-width row holding the centred one: a vertical ListView
+        // places its delegates at x 0, so a delegate cannot centre itself.
+        delegate: Item {
             id: row
 
             required property int index
@@ -203,38 +217,46 @@ Item {
 
             readonly property bool jumped: row.index === page.jumpedLine
 
-            width: Math.min(captions.width - 14, 900)
-            spacing: 14
+            width: captions.width - 14
+            height: rowLayout.implicitHeight
 
-            Text {
-                text: row.who
-                color: row.jumped ? Theme.accent : row.channel === "mic" ? Theme.mic : row.channel === "system" ? Theme.remote : Theme.text
-                font.pixelSize: Theme.textBody
-                font.weight: Font.DemiBold
-                horizontalAlignment: Text.AlignRight
-                elide: Text.ElideRight
-                // Wide enough for a name once the voices are named, not only
-                // for "Remote-1".
-                Layout.preferredWidth: 110
-                Layout.alignment: Qt.AlignTop
-            }
+            RowLayout {
+                id: rowLayout
 
-            Text {
-                text: row.stamp
-                visible: row.stamp.length > 0
-                color: Theme.dim
-                font.pixelSize: Theme.textSmall
-                font.family: Theme.mono
-                Layout.alignment: Qt.AlignTop
-            }
+                x: Math.max(0, (row.width - width) / 2)
+                width: page.readingWidth
+                spacing: 14
 
-            Text {
-                text: row.line
-                color: row.jumped ? Theme.accent : row.faded ? Theme.muted : Theme.text
-                font.pixelSize: Theme.textReading
-                lineHeight: 1.35
-                wrapMode: Text.WordWrap
-                Layout.fillWidth: true
+                Text {
+                    text: row.who
+                    color: row.jumped ? Theme.accent : row.channel === "mic" ? Theme.mic : row.channel === "system" ? Theme.remote : Theme.text
+                    font.pixelSize: Theme.textBody
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
+                    // Wide enough for a name once the voices are named, not only
+                    // for "Remote-1".
+                    Layout.preferredWidth: page.whoWidth
+                    Layout.alignment: Qt.AlignTop
+                }
+
+                Text {
+                    text: row.stamp
+                    visible: row.stamp.length > 0
+                    color: Theme.dim
+                    font.pixelSize: Theme.textSmall
+                    font.family: Theme.mono
+                    Layout.alignment: Qt.AlignTop
+                }
+
+                Text {
+                    text: row.line
+                    color: row.jumped ? Theme.accent : row.faded ? Theme.muted : Theme.text
+                    font.pixelSize: Theme.textReading
+                    lineHeight: 1.35
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
             }
         }
     }
@@ -246,12 +268,11 @@ Item {
 
         anchors {
             left: parent.left
-            right: parent.right
             bottom: footer.top
-            leftMargin: 18
-            rightMargin: 18
+            leftMargin: 18 + Math.max(0, (page.width - 36 - 14 - page.readingWidth) / 2)
             bottomMargin: 8
         }
+        width: page.readingWidth
         spacing: 6
 
         Repeater {
@@ -272,24 +293,17 @@ Item {
                     font.pixelSize: Theme.textBody
                     font.weight: Font.DemiBold
                     horizontalAlignment: Text.AlignRight
-                    Layout.preferredWidth: 78
+                    Layout.preferredWidth: page.whoWidth
                     Layout.alignment: Qt.AlignTop
                 }
 
+                // The open line and its grey provisional tail as one paragraph,
+                // so the tail wraps on from where the line ends.
                 Text {
-                    text: tail.modelData.open
-                    visible: text.length > 0
+                    text: page.escaped(tail.modelData.open) + (tail.modelData.open && tail.modelData.tail ? " " : "") + "<font color=\"" + Theme.dim + "\">" + page.escaped(tail.modelData.tail) + "</font>"
+                    textFormat: Text.StyledText
+                    lineHeight: 1.35
                     color: Theme.text
-                    font.pixelSize: Theme.textReading
-                    wrapMode: Text.WordWrap
-                    Layout.maximumWidth: 460
-                    Layout.alignment: Qt.AlignTop
-                }
-
-                Text {
-                    text: tail.modelData.tail
-                    visible: text.length > 0
-                    color: Theme.dim
                     font.pixelSize: Theme.textReading
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true

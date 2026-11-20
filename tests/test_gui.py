@@ -189,6 +189,7 @@ class TestQmlTree:
                 if re.match(r"\s*(glyph|name):", line) and page.name != "Icon.qml":
                     line = re.sub(r'[!=]==\s*"[^"]*"', "", line)  # conditions, not names
                     used.update(word for word in re.findall(r'"([^"]*)"', line) if word)
+        used.update(icon for _page, _label, _description, icon in MENU)  # named in Python
         assert used and used <= known, used - known
 
     def test_a_failed_load_carries_qts_reason(self, qt_app, monkeypatch, tmp_path):
@@ -222,7 +223,7 @@ class TestQmlTree:
 
     def test_every_menu_entry_opens_a_real_page(self, gui):
         shell, _engine = gui
-        for page, _label, _description in MENU:
+        for page, _label, _description, _icon in MENU:
             if page == "quit":
                 continue
             assert (QML_DIR / f"{page}.qml").is_file(), f"no QML file for menu entry {page}"
@@ -1963,6 +1964,29 @@ class TestNotesScreen:
         assert "No finished meeting" in screen.state["status"]
 
 
+class TestDroppedPaths:
+    """A file or folder dropped onto the window arrives as a ``file:`` URL,
+    and unlike a dialog's it can be the wrong kind."""
+
+    def test_a_transcript_dropped_on_notes_stands_for_its_folder(self, gui, tmp_path):
+        transcript = tmp_path / "meeting-20260101-090000" / "transcript.md"
+        transcript.parent.mkdir()
+        transcript.write_text("x", encoding="utf-8")
+        shell, _engine = gui
+        screen = shell.screen("Notes")
+        screen.choose(transcript.as_uri())
+        assert screen.state["meeting"] == str(transcript.parent)
+        screen.choose(transcript.parent.as_uri())
+        assert screen.state["meeting"] == str(transcript.parent)
+
+    def test_a_folder_dropped_on_transcribe_is_refused(self, gui, tmp_path):
+        shell, _engine = gui
+        screen = shell.screen("Transcribe")
+        screen.choose(tmp_path.as_uri())
+        assert screen.state["file"] == ""
+        assert "folder" in screen.state["status"]
+
+
 class TestSettingsScreen:
     def test_renders_every_table_with_value_provenance(self, gui, tmp_path, monkeypatch):
         write_settings('[transcript]\nformats = ["md"]\n')
@@ -2047,7 +2071,8 @@ class TestDoctorScreen:
         screen = shell.screen("Doctor")
         screen.opened()
         pump(lambda: not screen.state["busy"])
-        assert [check["state"] for check in screen.state["checks"]] == ["good", "optional", "bad"]
+        # Problems first, whatever order the checks ran in.
+        assert [check["state"] for check in screen.state["checks"]] == ["bad", "optional", "good"]
         assert "1 problem(s)" in screen.state["status"]
 
 

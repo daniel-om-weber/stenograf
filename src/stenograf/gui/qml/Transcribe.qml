@@ -14,6 +14,8 @@ Panel {
     heading: "Transcribe a recording"
     hint: "Pick an audio or video file; its audio track is transcribed into a new meeting folder."
     busy: page.screen.state.busy
+    dropHint: "Drop to transcribe this file"
+    onDropped: url => page.screen.choose(url)
 
     Component.onCompleted: if (page.screen)
         page.screen.opened()
@@ -38,7 +40,7 @@ Panel {
         }
 
         Text {
-            text: page.screen.state.file || "No file selected."
+            text: page.screen.state.file || "No file selected — or drop one here."
             color: page.screen.state.file ? Theme.text : Theme.muted
             font.pixelSize: Theme.textBody
             elide: Text.ElideMiddle

@@ -31,6 +31,13 @@ Item {
             "message": "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
             "layout": "M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M3 9h18 M9 21V9",
             "x": "M18 6L6 18 M6 6l12 12",
+            "headphones": "M3 18v-6a9 9 0 0 1 18 0v6 M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3z M3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z",
+            "sliders": "M4 21v-7 M4 10V3 M12 21v-9 M12 8V3 M20 21v-5 M20 12V3 M1 14h6 M9 8h6 M17 16h6",
+            "power": "M18.36 6.64a9 9 0 1 1-12.73 0 M12 2v10",
+            "chevron-right": "M9 18l6-6-6-6",
+            "alert-circle": "M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0z M12 8v4 M12 16h.01",
+            "minus-circle": "M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0z M8 12h8",
+            "upload": "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
             "sparkles": "M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"
         })
     readonly property bool filled: name === "stop" || name === "play"

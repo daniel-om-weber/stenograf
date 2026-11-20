@@ -45,6 +45,7 @@ QtObject {
     readonly property int textBody: Math.round(13 * textScale)
     readonly property int textLabel: Math.round(14 * textScale)
     readonly property int textReading: Math.round(15 * textScale)
+    readonly property int textTitle: Math.round(17 * textScale)
     readonly property int textHeading: Math.round(20 * textScale)
     readonly property int textDisplay: Math.round(34 * textScale)
 
