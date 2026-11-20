@@ -318,3 +318,32 @@ class TestTrayEntry:
         tray.update.trigger()
         assert updates.state["phase"] == "restarting"
         assert updates.world["quit"] == [True]
+
+
+def test_an_older_check_finishing_last_does_not_overwrite_a_newer_one(updates, monkeypatch):
+    import threading
+
+    begun(updates, "available")
+    updates.dismiss()
+    gate = threading.Event()
+    asked: list[update.Offer] = []
+
+    def offer(*, include_failed=False):
+        current = updates.world["offer"]
+        asked.append(current)
+        if len(asked) == 1:
+            gate.wait(5)  # this check read the dismissed release, and answers last
+        return current
+
+    monkeypatch.setattr(update, "offer", offer)
+    updates._look(force=False)
+    pump(lambda: len(asked) == 1)
+    updates.world["offer"] = update.Offer("0.8.1", True, update.UPGRADE_COMMAND, "")
+    updates._look(force=False)
+    pump(lambda: updates.state["phase"] == "available")
+    gate.set()
+    late = threading.Event()
+    threading.Timer(1.0, late.set).start()
+    pump(late.is_set)  # the late answer is delivered in that second
+    assert updates.state["phase"] == "available"
+    assert updates.state["version"] == "0.8.1"

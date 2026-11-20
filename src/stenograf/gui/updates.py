@@ -47,6 +47,7 @@ class UpdateScreen(Screen):
         super().__init__(app)
         self._offer: update.Offer | None = None
         self._dismissed = ""
+        self._looks = 0
         self._prepared: Path | None = None
         self._cancel = threading.Event()
         self._tray = False
@@ -88,9 +89,16 @@ class UpdateScreen(Screen):
             update.check(force=force)
             return True, update.offer(include_failed=force)
 
-        self.work(job, done=self._looked, name="gui-update-check")
+        # The daily look and "Check for updates" can overlap, and each runs on
+        # its own thread: only the newest look's answer may land, or an older
+        # one finishing last puts back what the newer one replaced.
+        self._looks += 1
+        look = self._looks
+        self.work(job, done=lambda outcome: self._looked(outcome, look), name="gui-update-check")
 
-    def _looked(self, outcome: tuple[bool, update.Offer | None]) -> None:
+    def _looked(self, outcome: tuple[bool, update.Offer | None], look: int) -> None:
+        if look != self._looks:
+            return
         checking, found = outcome
         self._offer = found
         if not checking:
