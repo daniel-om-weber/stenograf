@@ -68,7 +68,11 @@ jobs:
       STENOGRAF_BUNDLE_HELPERS: "1"
     steps:
       - uses: actions/checkout@v7
-      - run: dnf install -y pulseaudio-libs-devel unzip binutils
+      # EPEL is switched on in the image but supplies nothing here (libpulse is
+      # in AppStream, unzip and binutils are preinstalled), and refreshing its
+      # index alone once took 19 of the job's 20 minutes on a slow mirror
+      # (2026-11-20); the step usually takes 25-60 s.
+      - run: dnf install -y --disablerepo='epel*' pulseaudio-libs-devel unzip binutils
       - name: Install a Rust toolchain
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
       - name: Build the wheel

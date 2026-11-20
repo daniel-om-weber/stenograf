@@ -358,7 +358,9 @@ def check(box: Sandbox, wheel: Path) -> None:
     assert facts["offer"] is None, facts
     work_dir = Path(facts["work"])
     if sys.platform != "win32":  # there the launchers are the real user's shell links
-        box.run("from stenograf._updater import post_install; raise SystemExit(post_install())")
+        # What `steno setup` does: the updater's post-install only rewrites
+        # launchers that are already there, so it cannot stand in for setup.
+        box.run("from stenograf.shortcut import install_shortcut; install_shortcut()")
         assert box.facts()["launchers"], "setup wrote no launcher to refresh"
 
     # -- a good update ------------------------------------------------------
