@@ -15,6 +15,7 @@ import pytest
 from click.testing import CliRunner
 from conftest import TOOL_TIMEOUT_S, write_settings
 
+import stenograf
 from stenograf import _updater, cli, update
 from stenograf.cli import main
 
@@ -54,6 +55,7 @@ def standard(monkeypatch, tmp_path):
         '[tool]\nrequirements = [{ name = "stenograf" }]\n' + ENTRYPOINTS,
     )
     monkeypatch.setattr(update, "__version__", "0.7.0")
+    monkeypatch.setattr(stenograf, "__version__", "0.7.0")  # what doctor reads
     monkeypatch.setattr(sys, "prefix", str(prefix))
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(update, "find_uv", lambda: "/usr/bin/uv")
