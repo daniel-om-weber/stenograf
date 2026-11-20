@@ -36,7 +36,7 @@ Item {
             verticalCenter: parent.verticalCenter
         }
         color: link.ink
-        font.pixelSize: 11
+        font.pixelSize: Theme.textSmall
         font.underline: area.containsMouse
         elide: Text.ElideMiddle
     }

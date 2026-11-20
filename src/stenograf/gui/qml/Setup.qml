@@ -42,7 +42,7 @@ Panel {
         Text {
             text: "Meeting type"
             color: Theme.text
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
         }
 
         Combo {
@@ -56,7 +56,7 @@ Panel {
             text: preset.currentOption ? (preset.currentOption.hint || "") : ""
             visible: text.length > 0
             color: Theme.muted
-            font.pixelSize: 12
+            font.pixelSize: Theme.textSmall
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
@@ -84,7 +84,7 @@ Panel {
             text: "Record from"
             visible: micDevice.visible
             color: Theme.text
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
         }
 
         Combo {
@@ -99,7 +99,7 @@ Panel {
             text: page.screen.state.micError
             visible: text.length > 0
             color: Theme.muted
-            font.pixelSize: 12
+            font.pixelSize: Theme.textSmall
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
@@ -129,7 +129,7 @@ Panel {
         Text {
             text: "Speakers in the room (microphone)"
             color: Theme.text
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
         }
 
         Combo {
@@ -142,7 +142,7 @@ Panel {
         Text {
             text: "Remote speakers (system audio)"
             color: Theme.text
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
         }
 
         Combo {
@@ -155,14 +155,14 @@ Panel {
         Text {
             text: "Auto-detect counts speakers well; an exact count drops stray voices."
             color: Theme.muted
-            font.pixelSize: 12
+            font.pixelSize: Theme.textSmall
         }
     }
 
     Text {
         text: "Title (optional; used by notes)"
         color: Theme.text
-        font.pixelSize: 13
+        font.pixelSize: Theme.textBody
         Layout.topMargin: 4
     }
 
@@ -190,17 +190,13 @@ Panel {
         text: page.screen.state.error
         visible: text.length > 0
         color: Theme.bad
-        font.pixelSize: 13
+        font.pixelSize: Theme.textBody
         wrapMode: Text.WordWrap
         Layout.fillWidth: true
         Layout.topMargin: 4
     }
 
-    RowLayout {
-        spacing: 10
-        Layout.fillWidth: true
-        Layout.topMargin: 8
-
+    actions: [
         Btn {
             text: "Start"
             primary: true
@@ -219,12 +215,12 @@ Panel {
                 "recordAudio": record.checked,
                 "notes": notes.checked
             })
-        }
+        },
 
         Btn {
             text: "Back"
             Layout.fillWidth: true
             onClicked: page.app.back()
         }
-    }
+    ]
 }

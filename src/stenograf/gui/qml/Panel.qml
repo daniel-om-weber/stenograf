@@ -1,7 +1,9 @@
 // The shape every non-meeting screen has: a centred card with a heading, an
-// optional hint, and whatever the page puts inside it. The card scrolls rather
-// than clipping when the window is shorter than its content, and Escape leaves
-// — unless the page says it is busy, because a worker thread cannot be
+// optional hint, whatever the page puts inside it, and a row of actions. The
+// body scrolls when the window is shorter than the card; the actions do not —
+// a Start below the fold is a form with no Start (measured at 960x500,
+// 2026-11-20, the scaling a 7-inch 1080p panel gets at 200 %). Escape leaves —
+// unless the page says it is busy, because a worker thread cannot be
 // interrupted safely and finishing behind a closed page would surprise more.
 import QtQuick
 import QtQuick.Controls.Basic
@@ -17,6 +19,8 @@ Item {
     property int cardWidth: 620
 
     default property alias content: column.data
+    // The buttons pinned under the scrolling body, laid out in a row.
+    property alias actions: actionRow.data
 
     Shortcut {
         sequences: [StandardKey.Cancel]
@@ -24,40 +28,54 @@ Item {
             panel.app.back()
     }
 
-    Flickable {
-        id: flick
+    Rectangle {
+        id: card
+
+        readonly property int pad: 22
+        readonly property int footer: actionRow.children.length > 0 ? actionRow.implicitHeight + card.pad : 0
 
         anchors.centerIn: parent
-        width: Math.min(panel.cardWidth, panel.width - 56)
-        height: Math.min(card.height, panel.height - 48)
-        contentWidth: width
-        contentHeight: card.height
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
-        ScrollBar.vertical: ScrollBar {}
+        width: Math.min(panel.cardWidth, panel.width - 32)
+        height: Math.min(column.implicitHeight + 2 * card.pad + card.footer, panel.height - 32)
+        radius: 14
+        color: Theme.surface
+        border.width: 1
+        border.color: Theme.line
 
-        Rectangle {
-            id: card
+        Flickable {
+            id: flick
 
-            width: flick.width
-            height: column.implicitHeight + 44
-            radius: 14
-            color: Theme.surface
-            border.width: 1
-            border.color: Theme.line
+            anchors {
+                top: parent.top
+                left: parent.left
+                right: parent.right
+                bottom: actionRow.top
+                topMargin: card.pad
+                // The scrollbar sits in the card's padding, clear of the text.
+                rightMargin: 6
+                bottomMargin: actionRow.children.length > 0 ? card.pad : 0
+            }
+            contentWidth: width
+            contentHeight: column.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            // Basic's scrollbar shows only while scrolling, which makes a
+            // clipped body look complete.
+            ScrollBar.vertical: ScrollBar {
+                policy: flick.contentHeight > flick.height ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            }
 
             ColumnLayout {
                 id: column
 
-                x: 22
-                y: 22
-                width: parent.width - 44
+                x: card.pad
+                width: card.width - 2 * card.pad
                 spacing: 10
 
                 Text {
                     text: panel.heading
                     color: Theme.text
-                    font.pixelSize: 20
+                    font.pixelSize: Theme.textHeading
                     font.weight: Font.Medium
                     Layout.fillWidth: true
                 }
@@ -66,12 +84,24 @@ Item {
                     text: panel.hint
                     visible: panel.hint.length > 0
                     color: Theme.muted
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.textBody
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                     Layout.bottomMargin: 6
                 }
             }
+        }
+
+        RowLayout {
+            id: actionRow
+
+            anchors {
+                left: parent.left
+                right: parent.right
+                bottom: parent.bottom
+                margins: card.pad
+            }
+            spacing: 10
         }
     }
 }

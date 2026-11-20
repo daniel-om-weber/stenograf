@@ -11,7 +11,10 @@ QtObject {
     readonly property color line: "#2a2f39"
     readonly property color text: "#e7e9ee"
     readonly property color muted: "#8b93a1"
-    readonly property color dim: "#5d6472"
+    // 4.6:1 on `surface` and 5:1 on `bg` — the 4.5:1 that normal-size text
+    // needs. It carries real reading matter (the provisional caption tail,
+    // timestamps, the folder path), not only decoration.
+    readonly property color dim: "#7d8594"
     readonly property color accent: "#6aa2ff"
     readonly property color accentText: "#0d1117"
 
@@ -32,6 +35,18 @@ QtObject {
     readonly property color muteFill: "#2c1c1c"
     readonly property color muteInk: "#ff9b95"
     readonly property color bad: "#ff5f56"
+
+    // The type scale, in logical pixels. Every text size in the app is one of
+    // these, so `textScale` enlarges all of them together and the layouts —
+    // which size themselves from their text — follow. Nothing smaller than 12:
+    // on a 7-inch 1080p panel at 150 % an 11 px line is about 1.3 mm tall.
+    readonly property real textScale: 1.0
+    readonly property int textSmall: Math.round(12 * textScale)
+    readonly property int textBody: Math.round(13 * textScale)
+    readonly property int textLabel: Math.round(14 * textScale)
+    readonly property int textReading: Math.round(15 * textScale)
+    readonly property int textHeading: Math.round(20 * textScale)
+    readonly property int textDisplay: Math.round(34 * textScale)
 
     readonly property string mono: Qt.platform.os === "windows" ? "Consolas"
                                  : Qt.platform.os === "osx" ? "Menlo" : "monospace"

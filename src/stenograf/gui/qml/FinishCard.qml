@@ -96,7 +96,7 @@ Rectangle {
                     id: titleField
 
                     placeholderText: "Untitled meeting"
-                    font.pixelSize: 19
+                    font.pixelSize: Theme.textHeading
                     color: Theme.text
                     placeholderTextColor: Theme.dim
                     selectionColor: Theme.accent
@@ -138,7 +138,7 @@ Rectangle {
                     Text {
                         text: card.screen.preview(titleField.text)
                         color: Theme.dim
-                        font.pixelSize: 11
+                        font.pixelSize: Theme.textSmall
                         font.family: Theme.mono
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
@@ -199,7 +199,7 @@ Rectangle {
                                 visible: speakerRow.initials.length > 0
                                 text: speakerRow.initials
                                 color: Theme.accent
-                                font.pixelSize: 12
+                                font.pixelSize: Theme.textSmall
                                 font.weight: Font.DemiBold
                             }
 
@@ -249,7 +249,7 @@ Rectangle {
                                             anchors.verticalCenter: parent.verticalCenter
                                             text: speakerRow.modelData.label
                                             color: Theme.text
-                                            font.pixelSize: 14
+                                            font.pixelSize: Theme.textLabel
                                         }
 
                                         Icon {
@@ -308,7 +308,7 @@ Rectangle {
                                 visible: first !== null
                                 text: first ? first.text : ""
                                 color: quoteMouse.containsMouse ? Theme.text : Theme.muted
-                                font.pixelSize: 12
+                                font.pixelSize: Theme.textSmall
                                 font.italic: true
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
@@ -339,7 +339,7 @@ Rectangle {
                             Text {
                                 text: speakerRow.modelData.spoke
                                 color: Theme.dim
-                                font.pixelSize: 11
+                                font.pixelSize: Theme.textSmall
                                 font.family: Theme.mono
                             }
                         }
@@ -365,7 +365,7 @@ Rectangle {
                         Text {
                             text: speakerRow.modelData.refused
                             color: Theme.busy
-                            font.pixelSize: 12
+                            font.pixelSize: Theme.textSmall
                             wrapMode: Text.WordWrap
                             Layout.fillWidth: true
                         }
@@ -526,7 +526,7 @@ Rectangle {
             Text {
                 text: card.st.namesCountdown + " s"
                 color: Theme.dim
-                font.pixelSize: 12
+                font.pixelSize: Theme.textSmall
                 font.family: Theme.mono
             }
         }

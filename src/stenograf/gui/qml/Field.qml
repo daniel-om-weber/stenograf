@@ -8,7 +8,7 @@ TextField {
     implicitHeight: 36
     leftPadding: 12
     rightPadding: 12
-    font.pixelSize: 13
+    font.pixelSize: Theme.textBody
     color: Theme.text
     placeholderTextColor: Theme.dim
     selectionColor: Theme.accent

@@ -61,7 +61,7 @@ AbstractButton {
                 anchors.verticalCenter: parent.verticalCenter
                 text: (chip.mic ? "You" : "Remote") + (chip.muted ? " · muted" : " · live")
                 color: chip.ink
-                font.pixelSize: 12
+                font.pixelSize: Theme.textSmall
             }
         }
     }

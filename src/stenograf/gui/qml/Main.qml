@@ -24,11 +24,15 @@ ApplicationWindow {
     // so 720 clamps nothing), X11 reports the work area (690), and either way
     // these are content sizes while the compositor fits the decorated frame. Its
     // own shrink to 1000x690 is what actually keeps the window on screen, and
-    // the layout holds at that size.
+    // the layout holds at that size. On a screen this small the window opens
+    // maximized instead (gui/app.py, `opens_maximized`).
     width: Math.min(1000, Screen.desktopAvailableWidth)
     height: Math.min(680, Screen.desktopAvailableHeight)
-    minimumWidth: 720
-    minimumHeight: 520
+    // Below a 1080p panel at 200 % (960x540 logical, less its panel and title
+    // bar): every screen scrolls its body and pins its buttons, so the floor is
+    // only where the meeting header's chips stop fitting.
+    minimumWidth: 600
+    minimumHeight: 440
     // No applicationDisplayName is set (gui/app.py says why), so this is the
     // whole window title rather than the first half of "stenograf — Stenograf".
     title: "stenograf"

@@ -30,7 +30,7 @@ Panel {
         Text {
             text: "Meeting type"
             color: Theme.text
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
         }
 
         Combo {
@@ -51,7 +51,7 @@ Panel {
     TextEdit {
         text: page.screen.state.text
         color: page.screen.state.ok ? Theme.text : Theme.bad
-        font.pixelSize: 12
+        font.pixelSize: Theme.textSmall
         font.family: Theme.mono
         wrapMode: Text.Wrap
         readOnly: true
@@ -70,7 +70,7 @@ Panel {
         Text {
             text: page.updates.state.summary
             color: Theme.muted
-            font.pixelSize: 12
+            font.pixelSize: Theme.textSmall
             elide: Text.ElideRight
             Layout.fillWidth: true
         }
@@ -81,27 +81,23 @@ Panel {
         }
     }
 
-    RowLayout {
-        spacing: 10
-        Layout.fillWidth: true
-        Layout.topMargin: 10
-
+    actions: [
         Btn {
             text: "Open settings.toml"
             Layout.fillWidth: true
             onClicked: page.screen.edit()
-        }
+        },
 
         Btn {
             text: "Reload"
             Layout.fillWidth: true
             onClicked: page.screen.opened()
-        }
+        },
 
         Btn {
             text: "Back"
             Layout.fillWidth: true
             onClicked: page.app.back()
         }
-    }
+    ]
 }

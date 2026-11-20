@@ -13,7 +13,7 @@ Button {
     implicitHeight: 36
     leftPadding: 16
     rightPadding: 16
-    font.pixelSize: 13
+    font.pixelSize: Theme.textBody
 
     background: Rectangle {
         radius: 8

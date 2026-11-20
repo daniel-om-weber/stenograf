@@ -40,7 +40,7 @@ Panel {
         Text {
             text: page.screen.state.file || "No file selected."
             color: page.screen.state.file ? Theme.text : Theme.muted
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
             elide: Text.ElideMiddle
             Layout.fillWidth: true
         }
@@ -66,7 +66,7 @@ Panel {
         text: page.screen.state.status
         visible: text.length > 0
         color: Theme.muted
-        font.pixelSize: 12
+        font.pixelSize: Theme.textSmall
         wrapMode: Text.WordWrap
         Layout.fillWidth: true
         Layout.topMargin: 4
@@ -100,18 +100,14 @@ Panel {
         }
     }
 
-    RowLayout {
-        spacing: 10
-        Layout.fillWidth: true
-        Layout.topMargin: 8
-
+    actions: [
         Btn {
             text: "Transcribe"
             primary: true
             enabled: !page.screen.state.busy && page.screen.state.file.length > 0
             Layout.fillWidth: true
             onClicked: page.screen.start()
-        }
+        },
 
         Btn {
             // Leaving mid-run is refused rather than silently allowed: the
@@ -121,5 +117,5 @@ Panel {
             Layout.fillWidth: true
             onClicked: page.app.back()
         }
-    }
+    ]
 }

@@ -116,7 +116,7 @@ Item {
             Text {
                 text: page.screen.state.phaseLabel
                 color: Theme.text
-                font.pixelSize: 13
+                font.pixelSize: Theme.textBody
                 font.weight: Font.DemiBold
                 font.letterSpacing: 0.6
             }
@@ -124,7 +124,7 @@ Item {
             Text {
                 text: page.screen.state.elapsed
                 color: Theme.text
-                font.pixelSize: 13
+                font.pixelSize: Theme.textBody
                 font.family: Theme.mono
             }
 
@@ -135,7 +135,7 @@ Item {
                 // the start when a meeting type fixes it.
                 text: (page.screen.state.language ? page.screen.state.language + "  ·  " : "") + page.screen.state.profile
                 color: Theme.muted
-                font.pixelSize: 12
+                font.pixelSize: Theme.textSmall
                 elide: Text.ElideRight
                 horizontalAlignment: Text.AlignRight
                 Layout.fillWidth: true
@@ -157,7 +157,10 @@ Item {
     }
 
     // The finish card, over the transcript once it is on disk; its quotes
-    // jump to their lines below. The run's notes wait for it.
+    // jump to their lines below, so a few of those lines stay in sight however
+    // short the window — at a flat 70 % of it the transcript vanished at
+    // 960x500 (2026-11-20). The card scrolls inside itself, Done pinned. The
+    // run's notes wait for it.
     FinishCard {
         id: names
 
@@ -168,7 +171,7 @@ Item {
             left: parent.left
             right: parent.right
         }
-        height: visible ? Math.min(implicitHeight, page.height * 0.7) : 0
+        height: visible ? Math.min(implicitHeight, Math.max(180, page.height - header.height - footer.height - interim.height - 110)) : 0
         onJump: line => page.jumpTo(line)
     }
 
@@ -206,7 +209,7 @@ Item {
             Text {
                 text: row.who
                 color: row.jumped ? Theme.accent : row.channel === "mic" ? Theme.mic : row.channel === "system" ? Theme.remote : Theme.text
-                font.pixelSize: 13
+                font.pixelSize: Theme.textBody
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignRight
                 elide: Text.ElideRight
@@ -220,7 +223,7 @@ Item {
                 text: row.stamp
                 visible: row.stamp.length > 0
                 color: Theme.dim
-                font.pixelSize: 12
+                font.pixelSize: Theme.textSmall
                 font.family: Theme.mono
                 Layout.alignment: Qt.AlignTop
             }
@@ -228,7 +231,7 @@ Item {
             Text {
                 text: row.line
                 color: row.jumped ? Theme.accent : row.faded ? Theme.muted : Theme.text
-                font.pixelSize: 15
+                font.pixelSize: Theme.textReading
                 lineHeight: 1.35
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
@@ -266,7 +269,7 @@ Item {
                     text: tail.modelData.speaker
                     color: tail.modelData.channel === "mic" ? Theme.mic : Theme.remote
                     opacity: 0.5
-                    font.pixelSize: 13
+                    font.pixelSize: Theme.textBody
                     font.weight: Font.DemiBold
                     horizontalAlignment: Text.AlignRight
                     Layout.preferredWidth: 78
@@ -277,7 +280,7 @@ Item {
                     text: tail.modelData.open
                     visible: text.length > 0
                     color: Theme.text
-                    font.pixelSize: 15
+                    font.pixelSize: Theme.textReading
                     wrapMode: Text.WordWrap
                     Layout.maximumWidth: 460
                     Layout.alignment: Qt.AlignTop
@@ -287,7 +290,7 @@ Item {
                     text: tail.modelData.tail
                     visible: text.length > 0
                     color: Theme.dim
-                    font.pixelSize: 15
+                    font.pixelSize: Theme.textReading
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                     Layout.alignment: Qt.AlignTop
@@ -327,7 +330,7 @@ Item {
                     text: page.screen.state.status
                     visible: text.length > 0
                     color: page.phase === "failed" ? Theme.bad : Theme.muted
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.textSmall
                     elide: Text.ElideRight
                     Layout.fillWidth: true
                 }

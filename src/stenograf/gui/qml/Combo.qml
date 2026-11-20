@@ -14,7 +14,7 @@ ComboBox {
     readonly property var value: control.currentOption ? control.currentOption[control.valueRole] : undefined
 
     implicitHeight: 36
-    font.pixelSize: 13
+    font.pixelSize: Theme.textBody
     textRole: "label"
     valueRole: "value"
 
@@ -40,7 +40,7 @@ ComboBox {
         y: (control.height - height) / 2
         text: "▾"
         color: Theme.muted
-        font.pixelSize: 12
+        font.pixelSize: Theme.textSmall
     }
 
     delegate: ItemDelegate {
@@ -61,7 +61,7 @@ ComboBox {
             leftPadding: 12
             text: option.modelData[control.textRole]
             color: Theme.text
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }

@@ -1635,6 +1635,151 @@ class TestFinishCardLayout:
         meeting.join()
 
 
+class TestSmallWindow:
+    """Every page in the smallest window the app allows — below a 1080p panel at
+    200 %, the scaling a 7-inch handheld gets. A centred layout taller than the
+    window used to run off both edges, so a Start, a Quit or a Back could be
+    out of sight with nothing on screen saying it was there."""
+
+    @staticmethod
+    def _smallest(shell):
+        window = shell.window
+        assert window is not None
+        window.setWidth(window.minimumWidth())
+        window.setHeight(window.minimumHeight())
+        shell.show_window()
+        pump(lambda: True)
+        return window
+
+    @staticmethod
+    def _scene_rect(item):
+        from PySide6.QtCore import QPointF
+
+        top_left = item.mapToScene(QPointF(0, 0))
+        bottom_right = item.mapToScene(QPointF(item.width(), item.height()))
+        return top_left.x(), top_left.y(), bottom_right.x(), bottom_right.y()
+
+    def _assert_in_window(self, window, item):
+        """Inside the window and inside every clipping ancestor: a button
+        under a scrolled body's edge is in the window and still not seen."""
+        left, top, right, bottom = self._scene_rect(item)
+        bounds = [(0.0, 0.0, float(window.width()), float(window.height()))]
+        ancestor = item.parentItem()
+        while ancestor is not None:
+            if ancestor.clip():
+                bounds.append(self._scene_rect(ancestor))
+            ancestor = ancestor.parentItem()
+        for b_left, b_top, b_right, b_bottom in bounds:
+            assert b_left <= left and b_top <= top, item.property("text")
+            assert right <= b_right and bottom <= b_bottom, item.property("text")
+
+    @pytest.mark.parametrize(
+        ("page", "button"),
+        [
+            ("Setup", "Start"),
+            ("Transcribe", "Transcribe"),
+            ("Notes", "Generate notes"),
+            ("Settings", "Back"),
+            ("Doctor", "Back"),
+        ],
+    )
+    def test_a_forms_buttons_stay_in_the_window(self, gui, monkeypatch, page, button):
+        from stenograf import doctor
+
+        monkeypatch.setattr(doctor, "run_checks", lambda: [])
+        shell, _engine = gui
+        window = self._smallest(shell)
+        try:
+            shell.open(page)
+            pump(lambda: True)
+            if page == "Setup":
+                # Every switch on: diarization adds the two speaker counts,
+                # which is the form at its tallest.
+                for switch in _switches(shell):
+                    if not switch.property("checked"):
+                        _toggle(switch)
+                pump(lambda: True)
+                flicks = [
+                    i for i in _items(shell) if i.metaObject().className() == "QQuickFlickable"
+                ]
+                assert any(f.property("contentHeight") > f.height() for f in flicks), (
+                    "the form must overflow here, or this test proves nothing"
+                )
+            target = next(
+                i for i in _items(shell) if i.property("text") == button and i.isVisible()
+            )
+            self._assert_in_window(window, target)
+        finally:
+            shell.back()
+            shell.hide_window()
+
+    def test_the_menu_scrolls_to_quit_above_an_update_offer(self, gui):
+        shell, _engine = gui
+        shell.screen("Update").set(
+            phase="available", version="9.9.9", text="Stenograf 9.9.9 is available", detail=""
+        )
+        window = self._smallest(shell)
+        try:
+            wordmark = next(i for i in _items(shell) if i.property("text") == "stenograf")
+            self._assert_in_window(window, wordmark)
+            update = next(
+                i for i in _items(shell) if i.property("text") == "Update" and i.isVisible()
+            )
+            self._assert_in_window(window, update)
+            flick = next(
+                i
+                for i in _items(shell)
+                if i.metaObject().className() == "QQuickFlickable" and i.isVisible()
+            )
+            flick.setProperty(
+                "contentY", max(0.0, flick.property("contentHeight") - flick.height())
+            )
+            pump(lambda: True)
+            quit_label = next(i for i in _items(shell) if i.property("text") == "Quit")
+            banner_top = self._scene_rect(update)[1]
+            assert self._scene_rect(quit_label)[3] <= min(banner_top, window.height())
+        finally:
+            shell.screen("Update").set(phase="none")
+            shell.hide_window()
+
+
+class TestOpeningSize:
+    class _Window:
+        def __init__(self, width, height):
+            from PySide6.QtCore import QSize
+
+            size = QSize(width, height)
+            self._screen = type("S", (), {"availableSize": lambda _self: size})()
+
+        def screen(self):
+            return self._screen
+
+    @pytest.mark.parametrize(
+        ("width", "height", "maximized"),
+        [
+            (1280, 720, True),  # a 1080p handheld at 150 %
+            (960, 540, True),  # the same at 200 %
+            (1512, 945, False),  # a 14-inch MacBook Pro at its default scaling
+            (1920, 1040, False),
+        ],
+    )
+    def test_a_small_desktop_opens_the_window_maximized(self, width, height, maximized):
+        from stenograf.gui.app import opens_maximized
+
+        assert opens_maximized(self._Window(width, height)) is maximized  # type: ignore[arg-type]
+
+    def test_only_the_first_show_maximizes(self, gui):
+        shell, _engine = gui
+        window = shell.window
+        assert window is not None
+        shell.maximize_on_first_show = True
+        try:
+            shell.show_window()
+            assert shell.maximize_on_first_show is False
+        finally:
+            shell.hide_window()
+
+
 class TestSetupFormInputs:
     def test_a_flipped_switch_survives_the_microphone_listing(self, gui):
         # The listing lands after the form is up, through the same state map;

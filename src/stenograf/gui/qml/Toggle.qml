@@ -66,7 +66,7 @@ RowLayout {
         Text {
             text: row.label
             color: Theme.text
-            font.pixelSize: 14
+            font.pixelSize: Theme.textLabel
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
@@ -75,7 +75,7 @@ RowLayout {
             text: row.hint
             visible: row.hint.length > 0
             color: Theme.muted
-            font.pixelSize: 12
+            font.pixelSize: Theme.textSmall
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }

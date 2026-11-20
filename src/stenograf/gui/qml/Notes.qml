@@ -42,7 +42,7 @@ Panel {
         Text {
             text: page.screen.state.meeting || "No meeting selected."
             color: page.screen.state.meeting ? Theme.text : Theme.muted
-            font.pixelSize: 13
+            font.pixelSize: Theme.textBody
             elide: Text.ElideMiddle
             Layout.fillWidth: true
         }
@@ -52,24 +52,20 @@ Panel {
         text: page.screen.state.status
         visible: text.length > 0
         color: Theme.muted
-        font.pixelSize: 12
+        font.pixelSize: Theme.textSmall
         wrapMode: Text.WordWrap
         Layout.fillWidth: true
         Layout.topMargin: 4
     }
 
-    RowLayout {
-        spacing: 10
-        Layout.fillWidth: true
-        Layout.topMargin: 8
-
+    actions: [
         Btn {
             text: "Generate notes"
             primary: true
             enabled: !page.screen.state.busy && page.screen.state.meeting.length > 0
             Layout.fillWidth: true
             onClicked: page.screen.start()
-        }
+        },
 
         Btn {
             text: "Back"
@@ -77,5 +73,5 @@ Panel {
             Layout.fillWidth: true
             onClicked: page.app.back()
         }
-    }
+    ]
 }

@@ -263,6 +263,11 @@ class StenografGui(QObject):
         self.window: QWindow | None = None
         """The one window, once the QML has produced it (see :func:`build`)."""
 
+        self.maximize_on_first_show = False
+        """Set by :func:`run` when the screen is small (:func:`opens_maximized`);
+        spent by the first :meth:`show_window`, so a later show from the menu
+        bar keeps whatever size the user left the window at."""
+
         self._quitting = False
         self._abandoned = False
         self._screens: dict[str, Screen] = {
@@ -325,7 +330,11 @@ class StenografGui(QObject):
         # brought to the front, so a show() first would raise a window that
         # stays behind the frontmost app.
         set_dock_icon(True)
-        self.window.show()
+        if self.maximize_on_first_show:
+            self.maximize_on_first_show = False
+            self.window.showMaximized()
+        else:
+            self.window.show()
         self.window.raise_()
         self.window.requestActivate()
 
@@ -439,6 +448,28 @@ def build(app: QGuiApplication) -> tuple[QQmlApplicationEngine, StenografGui]:
         raise RuntimeError(f"the interface failed to load from {QML_DIR}: {detail}")
     gui.window = engine.rootObjects()[0]  # type: ignore[assignment]  # an ApplicationWindow is a QWindow
     return engine, gui
+
+
+_ROOMY = (1080, 760)
+"""The smallest available desktop, in logical pixels, on which the window opens
+at its own 1000x680 rather than maximized: that size plus a margin to see the
+desktop around it."""
+
+
+def opens_maximized(window: QWindow | None) -> bool:
+    """Whether the window should start maximized on the screen it opens on.
+
+    On a desktop barely larger than the window (a 1080p handheld at 150 % is
+    1280x720 logical) a floating 1000x680 window only wastes the edges; filling
+    the screen gives every page the room. Wayland reports the whole panel as
+    available, so the margin in :data:`_ROOMY` is what catches that case too."""
+    if window is None:
+        return False
+    screen = window.screen()
+    if screen is None:
+        return False
+    available = screen.availableSize()
+    return available.width() < _ROOMY[0] or available.height() < _ROOMY[1]
 
 
 def claim_single_instance(parent: QObject | None = None) -> QLocalServer | None:
@@ -635,6 +666,7 @@ def run(*, tray: bool = False) -> int:
         )
     # Shown from here, not by the QML: a headless test can build the whole tree
     # (catching every QML error) without a window ever being realized.
+    gui.maximize_on_first_show = opens_maximized(gui.window)
     if tray and status_item is not None:
         # The window was never shown, so this only drops the Dock tile — an app
         # asked for the menu bar must not start life as a tile with no window.
