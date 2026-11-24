@@ -62,7 +62,10 @@ would install the *first* run's code and pass or fail on that (it did, on
 Linux, 2026-11-19). :func:`Sandbox.same_code` is the check that nothing like
 it happens again."""
 LINGER_S = 20
-"""How long the headless app stays up before it exits by itself."""
+"""The longest the headless app stays up. It leaves sooner when the test says
+so (:meth:`Sandbox.let_app_exit`), which it does only once the updater's
+verdict on it is on disk: waiting out the full span made up about 16 of the
+26 s of every hand-over after the first (2026-11-24, macOS and CI logs)."""
 
 BREAK = '''
 
@@ -71,10 +74,16 @@ def run(*, tray: bool = False) -> int:  # this release exists to fail at start
 '''
 
 APP = f"""
-import os, sys, threading
-timer = threading.Timer({LINGER_S}, lambda: os._exit(0))
-timer.daemon = True  # or a release that fails at start would linger too
-timer.start()
+import os, sys, threading, time
+
+def linger():
+    deadline = time.monotonic() + {LINGER_S}
+    while time.monotonic() < deadline and not os.path.exists(os.environ["UPDATE_E2E_STOP"]):
+        time.sleep(0.2)
+    os._exit(0)
+
+# daemon, or a release that fails at start would linger too
+threading.Thread(target=linger, daemon=True).start()
 sys.argv = ["steno", "--gui"]
 from stenograf.cli import main
 main()
@@ -104,7 +113,8 @@ print("handed over", offer.version)
 """What the app's Update button does (``gui/updates.py``). With
 ``--from-published`` this runs on the *published* release, so it may call only
 what every release still being updated from has: when a later release changes
-one of these functions, keep the old call here beside the new one."""
+one of these functions, keep the old call here beside the new one. The same
+holds for FACTS and LOCK_FREE below."""
 
 FACTS = """
 import json
@@ -126,9 +136,11 @@ import sys
 from stenograf import _updater, update
 try:
     _updater.acquire(update.lock_path(), exclusive=True).close()
+    _updater.acquire(_updater.alive_path(update.work_dir()), exclusive=True).close()
 except OSError:
     sys.exit(1)
 """
+"""Exits 0 once no stenograf process and no updater is running."""
 
 
 def say(text: str) -> None:
@@ -194,6 +206,7 @@ class Sandbox:
         self.wheels = work / "wheels"
         self.staging = work / "staging"
         self.listing = work / "releases.json"
+        self.stop_file = work / "app-may-exit"
         self.tool_dir, self.bin_dir = work / "uv-tools", work / "uv-bin"
         home, scratch = work / "home", work / "t"
         for folder in (self.wheels, self.staging, home, scratch):
@@ -221,6 +234,7 @@ class Sandbox:
             TMP=str(scratch),
             UV_CONFIG_FILE=str(config),
             STENOGRAF_UPDATE_URL=self.listing.as_uri(),
+            UPDATE_E2E_STOP=str(self.stop_file),
             QT_QPA_PLATFORM="offscreen",
         )
         if model_cache is not None:
@@ -300,6 +314,9 @@ class Sandbox:
 
     def update_to(self, version: str, wheel: Path) -> None:
         """Hand over to ``version``, whose updater must be ``wheel``'s."""
+        # Left behind, it would make the app exit before it reports its start,
+        # which the updater rightly reads as a release that does not start.
+        assert not self.stop_file.exists(), "the previous app was not let go"
         done = self.run(DRIVER, version, APP, check=False)
         sys.stdout.write(done.stdout)
         if done.returncode != 0:
@@ -317,6 +334,15 @@ class Sandbox:
 
     def app_gone(self) -> bool:
         return self.run(LOCK_FREE, check=False).returncode == 0
+
+    def let_app_exit(self) -> None:
+        """Tell the app to go, and wait until it and the updater have.
+
+        Call only after the updater's verdict is visible on disk: an app that
+        leaves before it reports its start is a failed start."""
+        self.stop_file.touch()
+        self.wait("the app and the updater to exit", self.app_gone, LINGER_S + 60)
+        self.stop_file.unlink()
 
 
 def state_of(work_dir: Path) -> dict:
@@ -399,7 +425,7 @@ def check(box: Sandbox, wheel: Path) -> None:
     box.update_to(NEW, wheel)
     box.wait("the new app to report its start", lambda: "pending" not in state_of(work_dir), 600)
     box.wait("the previous version to be removed", lambda: not box.leftovers(), 60)
-    box.wait("the app to exit", box.app_gone, LINGER_S + 60)
+    box.let_app_exit()
     assert box.version() == NEW, box.version()
     assert (box.bin_dir / ("steno.exe" if os.name == "nt" else "steno")).exists()
     box.forget_test_source()
@@ -421,7 +447,7 @@ def check(box: Sandbox, wheel: Path) -> None:
         600,
     )
     box.wait("the failed version to be removed", lambda: not box.leftovers(), 60)
-    box.wait("the app to exit", box.app_gone, LINGER_S + 60)
+    box.let_app_exit()
     assert box.version() == NEW, f"not rolled back: {box.version()}"
     box.same_code(wheel)
     for path, before in launchers.items():
@@ -470,7 +496,7 @@ def check_published(box: Sandbox, wheel: Path) -> None:
         600,
     )
     box.wait("the failed version to be removed", lambda: not box.leftovers(), 60)
-    box.wait("the app to exit", box.app_gone, LINGER_S + 60)
+    box.let_app_exit()
     assert box.version() == old, f"not rolled back: {box.version()}"
     for path, before in launchers.items():
         assert Path(path).read_bytes() == before, f"{path} was not put back"
@@ -485,7 +511,7 @@ def check_published(box: Sandbox, wheel: Path) -> None:
     box.update_to(new_version, wheel)
     box.wait("the new app to report its start", lambda: "pending" not in state_of(work_dir), 600)
     box.wait("the previous version to be removed", lambda: not box.leftovers(), 60)
-    box.wait("the app to exit", box.app_gone, LINGER_S + 60)
+    box.let_app_exit()
     assert box.version() == new_version, box.version()
     assert (box.bin_dir / ("steno.exe" if os.name == "nt" else "steno")).exists()
     box.forget_test_source()
