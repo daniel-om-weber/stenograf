@@ -29,8 +29,8 @@ macOS and Windows are both driven; the Windows-only pieces (SAPI source clip,
 ``winsound`` playback, endpoint volume) live in ``aec_windows.py``. On Windows
 with no ``--source`` the far end is synthesized on the spot, because
 ``eval/audio/`` is gitignored and a fresh checkout has no speech in it. Linux
-is not wired up: ``parec``-side far-end alignment is an open question in
-PLAN.md and wants its own session.
+has no playback driver here; its capture helper stamps both channels on one
+clock, so alignment is not in question there, only ERLE (unmeasured).
 
 Usage (macOS):
     uv run --group eval eval/aec_rig.py far-only [--seconds 60] [--no-aec]

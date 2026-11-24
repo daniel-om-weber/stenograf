@@ -25,14 +25,19 @@ nothing. Extend that harness, not a mock layer.
 
 Patch `stenograf.output.default_output_home` to a scratch dir first. On a
 machine with audio devices the harness can run the REAL provider + models end
-to end. When a test must fake (CI has no audio), fake at the hardware
-boundary (`capture.windows.default_devices`, `capture.helper.list_input_devices`,
-the provider class), never at `loaders.make_provider`/`load_backends` — faking
-the orchestration seam is exactly what hid the EBADF crash from the UI suite.
-Both device seams take a `mic_device` keyword; a stub that forgets it fails the
-run with a TypeError from a worker thread, which reads as a hang. The setup
-form lists microphones on every visit, so the `gui` fixture must stub
-`list_input_devices` or every GUI test spawns the real helper.
+to end. When a test must fake capture (CI has no audio), fake at the hardware
+boundary — the device preflights `capture.helper.query_devices` (macOS when a
+microphone is pinned, Linux always) and `capture.windows.default_devices`
+(Windows), or the provider class — not at `load_backends`, and not at
+`loaders.make_provider` when the test is *about* starting a meeting: faking the
+orchestration seam is exactly what hid the EBADF crash from the UI suite. Both
+preflights take a `mic_device` keyword; a stub that forgets it fails the run
+with a TypeError from a worker thread, which reads as a hang. The `gui`
+fixture does stub `make_provider` (to raise) — that is for the many tests that
+never start capture; a test that drives a meeting through the UI must
+re-patch below it. The setup form lists microphones on every visit, so the
+fixture also stubs `capture.helper.list_input_devices` (no arguments), or
+every GUI test spawns the real helper.
 
 Rendering itself still needs eyes — nothing headless can tell whether the
 live caption screen reads well over half an hour. `QQuickWindow.grabWindow()`
@@ -49,7 +54,8 @@ uv run steno start --local 1 --remote 1 --no-aec \
 ```
 
 - `--out DIR` is the meeting's own folder — files land directly in it as
-  `transcript.{md,json,txt}`. Without it, a `meeting-YYYYMMDD-HHMMSS/` folder
+  `transcript.{md,json,txt}`, plus `voiceprints.json` when speakers were
+  separated (the default). Without it, a `meeting-YYYYMMDD-HHMMSS/` folder
   is created under the output home (`[output] dir` in settings.toml, else
   `~/Documents/Meetings`) — always pass `--out` when testing to stay out of
   the user's real meetings. Re-running into the same `--out` needs `--force`
@@ -121,8 +127,9 @@ remote-only scenario. TTS reads continuously — good stand-in for a monologue.
   checks; pick distinctive sentinel words (e.g. "provisioning", "October").
 - `--no-aec` avoids the echo canceller wrapping the provider (one less
   variable when the mic channel is silent anyway).
-- Model load adds ~4–8 s before capture starts; account for it when mapping
-  audio time to wall time (capture itself starts immediately and buffers).
+- Model load adds ~4–8 s before the first captions appear; capture itself
+  starts immediately and buffers, so account for the delay when mapping wall
+  time to audio time.
 - A user's real `steno start` (installed via uv tool) may be running — check
   `pgrep -fl steno` before killing anything.
 - Backgrounded runs cannot be stopped with `kill -INT`: POSIX non-interactive

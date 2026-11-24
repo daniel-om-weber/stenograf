@@ -1,5 +1,8 @@
 // The palette and the two type choices, in one place. A singleton so every page
 // reads it without plumbing (see qmldir); nothing here is computed at runtime.
+// No property may be named on<Something> (hence accentText, not onAccent): QML
+// parses it as a signal handler, and the whole singleton fails to load with
+// "Cannot assign a value to a signal".
 pragma Singleton
 import QtQuick
 

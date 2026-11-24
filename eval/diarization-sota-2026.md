@@ -1,5 +1,19 @@
 # Speaker diarization & voice-profile re-ID — state of the art, August 2026
 
+> **Historical record, superseded.** On 2026-11-15 NVIDIA Nemotron 3
+> Diarization replaced the owned clustering loop, the sherpa-onnx diarizer
+> (segmentation-3.0 + ERes2Net) and speakrs; on 2026-11-18 ReDimNet2-B6,
+> matched at 0.62, became the voice model. In the body, "today", "ships" and
+> "shipped" mean August 2026; code citations describe the code of that date,
+> and `diarization/sherpa.py` (with its line numbers) no longer exists. Its
+> architecture conclusion and the Sortformer disqualification (§1.4, §1.7,
+> §7) were overturned: the shipped diarizer is Sortformer's end-to-end
+> successor, counts speakers itself and takes a stated count only as a cap,
+> and the shared-trunk speedup §1.5 and §7 call a live candidate died with
+> the loop it was meant to speed up. What stands today is `PLAN.md`'s
+> deferred-and-declined list and `eval/README.md`. The plan files cited
+> below are deleted; read them with `git log --follow -p <file>`.
+
 Research record for the diarization + re-ID program (`PLAN-DIARIZATION.md`,
 closed 2026-08-09 with every step measured — `git log --follow -p` for the
 step record, `eval/README.md` for the harness evidence). Compiled 2026-08-02 from three
@@ -191,8 +205,8 @@ extreme is SDBench's):
 Why meeting-base escapes DiariZen's NC restriction: it is trained only on
 AMI + AISHELL-4 + AliMeeting; the NC tag on the other checkpoints protects
 non-commercial corpora in their larger training mixture (DiariZen's own
-compliance note). CLAUDE.md's blanket "DiariZen is CC-BY-NC" predates this
-checkpoint.
+compliance note). CLAUDE.md's blanket "DiariZen is CC-BY-NC" at the time
+predated this checkpoint; it has since been corrected.
 
 ### 1.7 Disqualified candidates, with reasons
 
@@ -222,7 +236,7 @@ checkpoint.
 |---|---|---|---|---|---|
 | ERes2Net-base (**shipped today**) | 6.6 M | 0.84 | **3.28** | Apache-2.0 | collapses on short turns — worse at 2 s than ECAPA (1.95) and ResNet34 (2.12); arXiv:2406.02167 |
 | **ERes2NetV2** | 17.8 M | 0.61 | **1.48** | Apache-2.0 | successor, fixes the short-turn cliff; 12.6 GMACs |
-| CAM++ | 7.2 M | 0.65 | — | Apache-2.0 | cheapest (RTF 0.013 1-thread) — but **rejected empirically in-repo 2026-07**: the VoxCeleb export flips cluster identity between segmentation windows (`assets.py`) |
+| CAM++ | 7.2 M | 0.65 | — | Apache-2.0 | cheapest (RTF 0.013 1-thread) — but **rejected empirically in-repo 2026-07**: the VoxCeleb export flips cluster identity between segmentation windows (a note in `assets.py` until 2026-11-18, `git show efda525`) |
 | WeSpeaker ResNet34-LM | 6.6 M | 0.66–0.87 | 2.12 | CC-BY-4.0 | the embedding pyannote 3.1/community-1 actually use — known-good pairing with segmentation-3.0 |
 | WeSpeaker ResNet293-LM | 28.6 M | 0.425 | — | CC-BY-4.0 | accuracy/size ceiling of the shippable set |
 | NeMo TitaNet-Large | ~23 M | 0.66 | — | CC-BY-4.0 | |

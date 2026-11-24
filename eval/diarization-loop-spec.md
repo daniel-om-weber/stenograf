@@ -1,5 +1,15 @@
 # Owning the diarization loop — reference spec
 
+> **Historical record.** The owned loop this spec was written for, the
+> sherpa-onnx diarizer it reimplemented and the pyannote segmentation asset
+> were deleted on 2026-11-15, when NVIDIA Nemotron 3 Diarization became the
+> one diarizer; on 2026-11-18 ReDimNet2-B6, matched at 0.62, became the voice
+> model. "Our current baseline", "our own default" and similar wording mean
+> August 2026; its `src/stenograf/diarization/sherpa.py` line citations point
+> to a deleted file, and the cached `pyannote-segmentation-3-0.onnx` the
+> measurements read is no longer downloaded. Kept because `PLAN.md` and
+> `eval/README.md` cite its measurements.
+
 Citations: sherpa-onnx at commit `f737aebe7ca86b1fb029b2b62ce655080994c47d` (master, 2026-08-06),
 clone in scratchpad. Line numbers are from that commit. **Installed package is
 `sherpa_onnx` 1.13.4** — one behavioural difference from master is flagged in §1.1.

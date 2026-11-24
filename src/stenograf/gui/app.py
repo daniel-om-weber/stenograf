@@ -21,8 +21,10 @@ thread; :meth:`Screen.post` is the single hop back, built on the fact that a
 signal emitted off-thread to a slot on a GUI-thread object queues itself.
 
 **The redraw budget**: bind the view to model updates,
-never to a clock. There is exactly one periodic timer in the whole app — the meeting
-screen's 1 Hz elapsed clock — and no idle animations; the StackView's page
+never to a clock. There is exactly one timer that repaints for a whole meeting —
+the meeting screen's 1 Hz elapsed clock; the others either run only while their
+panel is on screen (the names countdown) or fire hourly (the update check) — and
+no idle animations; the StackView's page
 transitions are switched off in ``Main.qml`` for the same reason. Hover
 feedback animates because it is event-driven and stops. A spinner, a pulsing
 REC dot or a caption easing would hold the compositor awake for a whole

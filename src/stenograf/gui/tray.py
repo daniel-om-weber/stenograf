@@ -5,12 +5,17 @@ it from: the video call is in front, stenograf is behind it, and the two
 questions that matter for the next half hour — *is it still recording?* and
 *stop it* — should not cost an application switch. So the app grows a status
 item: the mark from its icon in the menu bar, tinted while a meeting is live,
-with a menu that can start, stop and quit without a window existing at all.
+with a menu that can stop a meeting, mute it and quit without a window existing
+at all. Starting one opens the window on the setup form, since a meeting needs
+its choices made.
 
 That also makes the window optional, which is where the power argument lands:
 a *visible* Qt Quick window is woken at the display's refresh rate no matter
-how disciplined the QML is, and a hidden one wakes ~100× less (measured; the
-full record is in PLAN.md), so closing to the tray is worth roughly two orders
+how disciplined the QML is — ~120 wakeups/s on the idle home screen, the same
+as a QML-only replica with no Python behind it — while the same window covered
+by another one drops to ~1/s (``powermetrics --samplers tasks``, M4 Max,
+2026-07-25). A hidden window should be at least as cheap as a covered one, but
+that number was not taken. So closing to the tray is worth roughly two orders
 of magnitude for the majority of a meeting's runtime. Hence the two behaviour
 changes here, both conditional on a tray host actually existing:
 

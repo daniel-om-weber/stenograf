@@ -25,8 +25,8 @@ would be a bug to "clean up".
 
 Failures surface as ``OSError``: every method is bound with a
 :data:`ctypes.HRESULT` result type, which makes ctypes raise on any failing
-HRESULT rather than returning a number nobody checks. Callers that would rather
-degrade than fail — ``steno setup`` writes a batch file instead — catch it.
+HRESULT rather than returning a number nobody checks. ``steno setup`` catches
+it and reports a clear error; there is no degraded fallback.
 """
 
 from __future__ import annotations

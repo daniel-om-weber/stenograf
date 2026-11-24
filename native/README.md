@@ -100,7 +100,7 @@ the sample at the read position is (`pa_stream_get_latency`, refreshed every
 second), so each chunk is stamped `CLOCK_MONOTONIC − latency` — for a monitor
 the server folds in the sink's own latency, so its stamps mark when the audio
 becomes audible, the same render-side semantics as loopback's QPC stamps
-(measured band ±10 ms against a sample-count line, `stenocap/src/pulse.rs`).
+(measured band ±7 ms against a sample-count line, `stenocap/src/pulse.rs`).
 Three Windows traps, all measured (`eval/wasapi_timestamps.py` re-runs the
 evidence in twelve seconds) and all silent if got wrong:
 
@@ -175,27 +175,33 @@ channel its own hidden offset, and the echo canceller — which pairs the two by
 timestamp — is handed a reference that does not line up with the echo it must
 remove. Measured on Windows, that was the difference between 2.6 dB and 13.7 dB
 ERLE. So each implementation stamps from the OS's own clock for both taps: Mach
-host time on macOS, `pu64QPCPosition` on Windows.
+host time on macOS, `pu64QPCPosition` on Windows, and `CLOCK_MONOTONIC` minus
+the server's stream latency on Linux.
 
 ## Build
 
     sh stenocap-macos/build.sh          # macOS
     powershell -File stenocap/build.ps1 # Windows (rustup + VS Build Tools)
+    sh stenocap/build.sh                # Linux (rustup + libpulse headers)
 
-Either way the binary is a build artifact (gitignored), and the Python side
+In every case the binary is a build artifact (gitignored), and the Python side
 finds it the same three ways: next to its sources in the checkout, a packaged
 `stenograf/bin/stenocap[.exe]` in a wheel, or the `STENOGRAF_CAPTURE_HELPER`
 environment override.
 
 The macOS build compiles + ad-hoc signs `stenocap-macos/stenocap` (swiftc; no
-Apple Developer account needed — PLAN.md "Deployment & distribution"). TCC usage
+Apple Developer account needed — PLAN.md's history, `git log --follow -p
+PLAN.md`). TCC usage
 strings are embedded from `stenocap-macos/Info.plist`; on first run the terminal
-is granted mic + system-audio permission once. The Windows build is plain
-`cargo build --release --locked`, and signs nothing.
+is granted mic + system-audio permission once. The Windows and Linux builds are
+plain `cargo build --release --locked`, and sign nothing.
 
-Both are **mandatory** where they apply, which is why `hatch_build.py` fails the
-wheel if either fails to build: without one there is no live capture on that
-platform at all.
+Each is **mandatory** where it applies, which is why `hatch_build.py` fails the
+wheel if it fails to build: without it there is no live capture on that
+platform at all. Three wheels carry a helper — macOS arm64, win_amd64 and
+manylinux_2_28 x86_64. On macOS every wheel build compiles it; off macOS the
+hook builds it only when `STENOGRAF_BUNDLE_HELPERS` is set (the release build),
+and otherwise produces the pure wheel with no helper.
 
 Reference implementations this was built from:
 

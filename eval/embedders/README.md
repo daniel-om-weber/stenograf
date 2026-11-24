@@ -2,7 +2,8 @@
 
 One runner per candidate model. Each reads a manifest, embeds every span in
 the model's own reference implementation (3D-Speaker / ReDimNet2 / w2v-BERT
-PyTorch code, sherpa-onnx for the ONNX models) and writes one `.npz`, so a
+PyTorch code; the shipped embedder through its production class on
+onnxruntime; TitaNet through sherpa-onnx) and writes one `.npz`, so a
 scorer compares models on sample-identical inputs. The shared contract —
 manifest format, slicing, L2 normalisation, NaN rows for refused spans,
 caching, timing — is `embedio.py`; `check.py` asserts an output honours it.

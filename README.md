@@ -2,15 +2,18 @@
 
 Accuracy-first, fully local meeting transcription for **German** and **English**
 (one language per meeting), with speaker labels. Audio is processed entirely
-**in memory** — nothing lands on disk but the transcript, unless you
-explicitly opt into keeping a recording.
+**in memory** — no audio lands on disk unless you explicitly opt into keeping
+a recording; what a meeting leaves behind is its transcript (and, with speaker
+separation on, each speaker's voiceprint — see
+[Where your files land](#where-your-files-land)).
 
 Built for Apple Silicon (M-series) first; Linux and Windows support is designed
 in from the start.
 
-> **Status: early release.** On macOS, Linux and Windows the pipeline is
-> complete end to end: live system-audio + microphone capture, live captions,
-> and the high-accuracy speaker-labelled finalize pass. Meeting notes need
+> **Status: early release.** On macOS (Apple Silicon), Linux (x86_64) and
+> Windows (x64) the pipeline is complete end to end: live system-audio +
+> microphone capture, live captions, and the speaker-labelled transcript at
+> the stop. Meeting notes need
 > [Ollama](https://ollama.com) on Linux and Windows; on Apple Silicon they run
 > in-process with no setup.
 
@@ -18,11 +21,14 @@ in from the start.
 
 - **No audio on disk.** Live transcription of a meeting has far lighter
   legal requirements than recording it. stenograf keeps the session's audio in
-  RAM only and writes nothing but text; keeping a WAV is a per-run opt-in
-  (`--record-audio`).
-- **Accuracy first.** A two-pass design: fast live captions while the meeting
-  runs, then a high-accuracy re-transcription of the full in-memory buffer the
-  moment it ends. German is a first-class citizen, not an afterthought.
+  RAM only and writes no audio; keeping a recording is an opt-in
+  (`--record-audio`, or `[output] record_audio` in the settings).
+- **Accuracy first.** The live captions are decoded on the same windows, with
+  the same model, that a full re-transcription would use — so they are not a
+  rough draft: when the meeting ends their words are kept, and the stop adds
+  speaker labels, recognised names and vocabulary corrections. (`--no-live`
+  or `--full-finalize` decodes everything at the stop instead.) German is a
+  first-class citizen, not an afterthought.
 - **Channel-aware speakers.** Microphone and system audio are captured as
   separate streams, so local and remote voices never get confused, and
   diarization separates further speakers within a channel (up to 8).
@@ -57,20 +63,24 @@ Spotlight or the Dock (macOS), the application menu (Linux) or the Start menu
 the command upgrades stenograf.
 
 Works on macOS 14.4+ on Apple Silicon (the wheel ships the signed capture
-helper — no toolchain needed), Linux with PipeWire or PulseAudio (the wheel
-ships a capture helper that speaks the PulseAudio protocol — mic plus the
-default output's monitor), and Windows 10/11 (capture is WASAPI, mic plus
-loopback of whatever is playing). Off Apple Silicon, ASR runs ONNX on CPU; on
-Windows any DX12 GPU can be opted into with `[asr] provider = "dml"`.
+helper — no toolchain needed), Linux x86_64 with PipeWire or PulseAudio (the
+wheel ships a capture helper that speaks the PulseAudio protocol — mic plus the
+default output's monitor), and Windows 10/11 on x64 (capture is WASAPI, mic
+plus loopback of whatever is playing). Off Apple Silicon, ASR runs ONNX on CPU;
+on Windows any DX12 GPU can be opted into with `[asr] provider = "dml"`.
 
 On Linux the desktop app (Qt) sets the install floor: glibc 2.34 on x86_64,
 2.39 on arm64, and no musl (Alpine) builds — Qt ships no wheels for those.
+Linux on arm64 installs, but no capture helper is built for it, so it can
+transcribe files (`steno transcribe`) and cannot capture a live meeting.
+Windows on ARM cannot install stenograf at all.
 
 ### Updates
 
 Once a day stenograf asks PyPI for the list of its releases — the same public
-page a browser gets, with nothing about you, your machine or your meetings in
-the request. When there is a newer one:
+page a browser gets. The only thing the request says about you is the
+installed stenograf version (in its `User-Agent`); nothing about your machine
+or your meetings. When there is a newer one:
 
 - **In the app**, a line appears at the foot of the home screen. **Update**
   downloads the new version while you keep working, then restarts the app into
@@ -117,9 +127,11 @@ macOS scopes the permission grant to the app the prompt came from, so run
 `steno setup` once from each terminal app (or IDE) you'll start meetings from.
 
 Pre-release channel: `uv tool install --python 3.13 git+https://github.com/daniel-om-weber/stenograf`
-installs the current main branch; building from the repository compiles the
-capture helper on your machine, which needs the Xcode command-line tools
-(`xcode-select --install`).
+installs the current main branch. On macOS, building from the repository
+compiles the capture helper on your machine, which needs the Xcode
+command-line tools (`xcode-select --install`). On Linux and Windows a source
+install carries no capture helper, so it cannot capture live meetings unless
+you build the helper from a checkout (below).
 
 ### Windows
 
@@ -142,10 +154,15 @@ works without it (`steno doctor` reports it as an optional check).
 git clone https://github.com/daniel-om-weber/stenograf
 cd stenograf
 uv sync
-sh native/stenocap-macos/build.sh   # builds + ad-hoc signs the capture helper
+sh native/stenocap-macos/build.sh   # macOS: builds + ad-hoc signs the capture helper
 uv run steno doctor
 uv run steno setup
 ```
+
+On Linux build the helper with `sh native/stenocap/build.sh` (needs a Rust
+toolchain and the libpulse development headers — `libpulse-dev` or
+`pulseaudio-libs-devel`); on Windows with
+`powershell -File native/stenocap/build.ps1` (needs Rust).
 
 Every command below is then `uv run steno …` from the repo.
 
@@ -180,8 +197,9 @@ notifications arrive under the name *Stenograf* rather than *pythonw.exe*.
 
 The app also lives in the **menu bar** (system tray on Windows and Linux),
 which is where it belongs for most of a meeting: the icon turns red while
-you are recording, and its menu can start, stop and finish a meeting without
-a window. Closing the window puts the app there rather than quitting it — a
+you are recording, and its menu can stop and finish a meeting and mute
+either source without a window (*Start meeting…* opens the window on the
+setup form). Closing the window puts the app there rather than quitting it — a
 meeting in progress keeps running — and re-opening the app brings the window
 back. Start that way with:
 
@@ -242,9 +260,9 @@ steno transcribe recording.mov              # batch-transcribe an existing file
 
 `steno start` streams **live captions** while the meeting runs — committed
 lines, one per utterance, equally readable on a terminal or piped into a log —
-and replaces them with the high-accuracy, speaker-labelled transcript the
-moment you stop (Ctrl-C). The audio stays in RAM throughout; only the
-transcript is written. (The desktop app's meeting screen shows the same
+and replaces them with the speaker-labelled transcript the moment you stop
+(Ctrl-C). The audio stays in RAM throughout; no audio is written unless you
+ask for a recording. (The desktop app's meeting screen shows the same
 captions with a live interim tail.)
 
 Useful flags:
@@ -310,7 +328,8 @@ it on Linux (`~/Dokumente/Meetings` on a German one):
 ~/Documents/Meetings/meeting-20260710-091500/
     transcript.md / .json / .txt        # the transcript (--format adds srt/vtt)
     transcript.notes.md                 # if you generated notes
-    audio.opus                          # only with --record-audio
+    voiceprints.json                    # each speaker's voiceprint (speaker separation on)
+    audio.opus                          # only if you keep the recording
 ```
 
 That's it — there is no separate library or index to manage. Browse with
@@ -319,9 +338,19 @@ Finder or `ls`, read with anything that opens markdown, delete with `rm`.
 location with `[output] dir` in settings.toml, or give one
 run its own folder with `--out DIR` (files land directly in it; if DIR already
 holds a transcript, stenograf refuses to replace it unless you add `--force`).
-Audio is stored only when you passed `--record-audio` (Ogg Opus; measured
-~34 MB per hour for a stereo mic+system meeting, ~6–14 MB mono; pass a `.wav`
-PATH instead for raw PCM); without it a meeting folder holds text alone.
+Audio is stored only when you ask for it — `--record-audio` for one run,
+`[output] record_audio = true` as the standing choice (then `--no-record-audio`
+skips it once), or the app's "Keep the audio recording" switch. It is Ogg Opus
+(measured ~34 MB per hour for a stereo mic+system meeting, ~6–14 MB mono); pass
+`--record-audio PATH.wav` for raw PCM instead. Without it a meeting folder
+holds no audio.
+
+`voiceprints.json` holds one voice embedding per speaker — numbers derived from
+the voice, not audio. It is what lets you name a voice after the meeting
+(`steno profiles assign`, the finish card) and have it recognised in later
+meetings. It is written whenever speaker separation ran; turn speaker
+separation off (`--no-diarization`, the app's "Tell speakers apart" switch,
+or `[speakers] diarization = false`) and no voiceprints are kept.
 
 ## Meeting notes (LLM summaries)
 
@@ -384,7 +413,7 @@ backend = "ollama"          # fully local via `ollama serve`
 model = "qwen3:8b"
 ```
 
-or drive any CLI you already have (prompt on stdin, JSON out):
+or drive any CLI you already have (prompt on stdin, markdown on stdout):
 
 ```toml
 [notes]
@@ -403,7 +432,7 @@ themselves. Three more levers in `[notes]`: `instructions = "~/style.md"`
 appends your house style to the built-in prompt, `thinking = false` skips the
 mlx model's reasoning pass (faster, less careful), and `auto = true` makes
 notes the default for every meeting — `steno start` summarizes without
-`--notes`, and the app's "Generate notes after the meeting" switch starts
+`--notes`, and the app's "Generate notes afterwards" switch starts
 on. Out of the box notes never run unless you ask (`--notes`, the app's
 switch, or `steno notes` afterwards); with `auto = true`, `--no-notes` still
 skips them for one run. A notes failure never touches the transcript.
@@ -416,7 +445,9 @@ apart" on lists its voices on the [finish card](#the-desktop-app), each with a
 button that plays a few seconds of it — cut at the stop, held in memory only,
 and dropped when you leave the screen. An unknown voice shows a "Who is this?"
 field; a recognised one shows its name as a button, and clicking it opens the
-field to correct a wrong match. The name you type joins the voice library and
+field to correct a wrong match. As you type, the field suggests the saved
+voices and the meeting's attendees that match (a typo still finds the name).
+The name you enter joins the voice library and
 replaces the label in the transcript. A name that already belongs to a
 different-sounding voice is refused with the reason, and **Add anyway** files
 it regardless. Two `[speakers]` settings shorten the card:
@@ -451,8 +482,9 @@ steno profiles enroll Anna meeting.wav --speakers 4 --speaker S2
 
 Matching is on by default in `steno start`/`transcribe` and does nothing until
 you enroll someone; disable it with `--no-reid`, or adjust the match strictness
-with `--reid-threshold` (0–1, default 0.62). Voiceprints live in the platform data
-dir (not the model cache) and are never uploaded. A voiceprint belongs to the
+with `--reid-threshold` (0–1, default 0.62). The named voices live in the
+platform data dir (not the model cache); each meeting's own voiceprints sit in
+its folder as `voiceprints.json`. stenograf uploads none of them. A voiceprint belongs to the
 model that made it: 0.8.0 changed the voice model and deletes the names saved
 before it, so each voice is named once more.
 
@@ -470,8 +502,8 @@ steno transcribe rec.mov --glossary-file terms.txt
 Write a term the way it appears in a sentence. A capitalized term (`Kubernetes`,
 `iOS`) is imposed verbatim; an all-lowercase one asserts the spelling but leaves
 the model's capitalization alone. In the correction pass a term and its
-transcription must share a word count — `gRPC` can fix `G R P C` spoken as one
-word, but not a term split across word boundaries.
+transcription must share a word count — `gRPC` fixes `GRPC` or `G-R-P-C`, but
+not `G R P C` transcribed as four separate words.
 
 **An acronym you pronounce as a word needs both spellings.** Biasing rewards the
 exact token path you write, so `NIRS` only ever rewards `N-I-R-S` — a spelling
@@ -535,12 +567,12 @@ reid_threshold = 0.62             # cross-meeting voice match strictness (0–1)
 profile_store = "~/steno/profiles.json"
 
 [asr]
-backend = "parakeet"
+backend = "parakeet"              # Apple Silicon; elsewhere "parakeet-onnx"
 provider = "cpu"                  # ONNX execution provider for parakeet-onnx:
                                   # cpu | dml (DX12 GPUs, Windows) | cuda | auto
 
 [notes]                           # see "Meeting notes" above
-backend = "mlx"
+backend = "mlx"                   # Apple Silicon; elsewhere "ollama"
 
 [updates]
 check = false                     # no daily look for a new release (see "Updates")

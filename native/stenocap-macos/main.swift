@@ -1,4 +1,4 @@
-// stenocap — stenograf's macOS capture helper (PLAN.md §2).
+// stenocap — stenograf's macOS capture helper.
 //
 // Captures two independent channels and streams them to the Python core:
 //   --system : whole-system audio via a Core Audio process tap (macOS 14.4+)

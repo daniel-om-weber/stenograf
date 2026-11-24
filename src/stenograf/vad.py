@@ -293,7 +293,7 @@ def context_start(start: float, end: float) -> float:
     their span. Window packing is untouched: this changes only what the model
     reads, never the window bounds.
 
-    Both decode paths — ``pipeline._decode`` and
+    Both decode paths — ``pipeline.decode_channel`` and
     ``WindowedLiveDecoder._decode_window`` — and the byte-identity test call
     this one function; diverging from it silently breaks the finalize pass's
     reuse of live decodes.

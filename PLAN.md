@@ -1,847 +1,317 @@
-# stenograf — remaining work
+# stenograf — open work, gates, and what was declined
 
-**This file holds only what is not built yet.** Everything shipped —
-phases 0–7, the architecture and model-choice research, the AEC design, the
-code-cleanup backlog, the biasing evaluation — was removed on 2026-07-25 and
-lives in this file's git history (`git log --follow -p PLAN.md`, plus the
-deleted `PLAN-AEC.md` and `PLAN-CLEANUP.md`). Locked product scope and
-platform decisions are in `CLAUDE.md`; measured evidence for the shipped
-defaults is in `eval/README.md` and in the code's own docstrings.
-
-**Three side-plans are live.** `PLAN-FINISH.md` (built 2026-11-16: the
-finish card after a meeting — title that renames the folder, speakers with
-editable recognised names, notes switch/type/context, file actions; the
-real-meeting gate remains). `PLAN-MUTE.md` (built 2026-11-16: the microphone
-or system audio is muted mid-meeting from the meeting screen or the menu-bar
-icon; muted audio becomes silence after the echo canceller, stamped on the
-capture clock, and the transcript marks the gap; what remains is §8's hardware
-gates, and a system-wide shortcut is researched but deferred).
-`PLAN-MIC-DEVICE.md` (built 2026-08-12: the mic
-channel records from a chosen device on all three platforms — `[capture]
-mic_device`, `steno devices`, `--mic-device`, and the setup form's picker;
-what remains is §7's hardware gates, and its §4a is superseded by the measured
-macOS design in `native/README.md`). `PLAN-NEMOTRON.md`, the migration to
-Nemotron 3 as the one diarizer, closed 2026-11-15 (`git log --follow -p
-PLAN-NEMOTRON.md`; what it left is in the Diarization section below), and
-`PLAN-DIARIZATION-SPEED.md` closed the same day
-when the owned loop and stenodiar it was speeding up were deleted
-(`git log --follow -p PLAN-DIARIZATION-SPEED.md`; numbers in
-`eval/README.md`). Two of its facts outlive it: the shared-trunk embedding
-route (one embedder trunk pass over long blocks, masked statistics pooling per
-span — SDBench's "per-chunk" method) now reaches only the re-ID embeddings,
-measured at ~10–15 s per channel (2026-08-09), and it is still the only way to
-put the embedder on an execution provider, because sherpa's bundled
-onnxruntime silently ignores the provider it is given; and repeats of one
-config on the x86 handheld span 11–21 %, so any future timing ladder there
-must interleave its arms and treat anything under ~15 % as unmeasured.
-`PLAN-DIARIZATION.md` (2026-08-09, all five steps
-measured to a verdict — the declined list below carries the survivors; read
-`eval/diarization-sota-2026.md` and `eval/README.md`'s corpus-harness
-sections before touching `diarization/`, `voiceprints.py`, or evaluating any
-diarization or speaker-embedding model), `PLAN-CAPTURE-HELPER.md` (2026-08-02, built
-— both halves shipped and the arrival-stamped transports are gone),
-`PLAN-LINUX.md` (2026-07-26), `PLAN-WINDOWS.md` and `PLAN-ASR-CHALLENGER.md`
-(both 2026-07-27), and `PLAN-NOTES-MARKDOWN.md` + `PLAN-MEETING-PRESETS.md`
-(both 2026-07-30, built) were deleted; each one's evidence, decisions and
-rejected alternatives survive under `git log --follow -p <file>`, and what
-stayed open out of them is folded into the sections below. Read the Windows
-history before re-measuring anything on that platform — in particular its last
-section, which is the observation recipe for a real Windows desktop session
-(screenshot DPI, SAPI voice selection, the German-locale traps, how to drive
-the TUI without a pty). Read the capture-helper history before touching
-capture, `aec.py` or the wheel matrix — its evidence section
-(`eval/wasapi_timestamps.py` re-runs in twelve seconds) and its
-decided/not-candidates lists are the part not to re-derive.
-
-What ships today: `steno start` (live captions → diarized transcript → notes)
-on macOS, Linux and Windows, published to PyPI as `stenograf`, driven either by
-the CLI or by the Qt desktop app (bare `steno`, `steno --gui`, or the app
-icon). The Textual launcher was retired 2026-07-30 with step 7's flip.
+This file holds three things only: **open work** (needs code or a measurement),
+**gates** (needs real hardware or Daniel's eyes, no code), and **deferred and
+declined** ideas, kept so they are not re-proposed. Everything shipped is in
+git history: this file's own (`git log --follow -p PLAN.md` — the GUI build,
+notes and presets, the Windows and Linux platform work, the diarization
+program, all pruned 2026-11-24) and the deleted plan files, each retrievable
+with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
+`PLAN-GUI-DEFAULT.md`, `PLAN-LINUX.md`, `PLAN-WINDOWS.md`,
+`PLAN-ASR-CHALLENGER.md`, `PLAN-NOTES-MARKDOWN.md`, `PLAN-MEETING-PRESETS.md`,
+`PLAN-CAPTURE-HELPER.md`, `PLAN-DIARIZATION.md`, `PLAN-DIARIZATION-SPEED.md`,
+`PLAN-NEMOTRON.md`, `PLAN-FINISH.md`, `PLAN-MUTE.md`, `PLAN-MIC-DEVICE.md` and
+`PLAN-UPDATE.md`. Measured evidence for every shipped default is in
+`eval/README.md`; design reasons live in the code's docstrings.
 
 ---
 
-## Phase 8 — native GUI (Qt Quick). CLOSED 2026-07-30: all seven steps shipped; only step 1's deferred watt measurement remains open (below).
+## Open work
 
-**Decision: the launcher becomes a real desktop application built on Qt Quick
-(PySide6), and `Stenograf.app` is installed locally by `steno setup`.** This
-absorbed the old Phase 7 Tier 2 (tray + packaged installers). **Step 7 shipped
-2026-07-30: PySide6 is a base dependency, bare `steno` in an interactive
-terminal with a display opens the window, and the Textual front-end is retired
-entirely** — Daniel declared the use-gate met (the desktop app / tray icon is
-the default way of using the tool) and picked retirement over a no-display
-fallback: one real UI (Qt), one thin line-oriented CLI. The full design,
-review findings and accepted costs are in the deleted `PLAN-GUI-DEFAULT.md`
-(`git log --follow -p PLAN-GUI-DEFAULT.md`); in one breath: a double dispatch
-gate (TTY + display seam) instead of a graceful-error promise, because a Qt
-platform-plugin failure is an uncatchable C++ abort; `--plain` a hidden no-op;
-`--gui` gate-free forever (the frozen stub); the glibc-2.39 arm64 install
-floor accepted; setup's terminal-launcher arms deleted with the retirement
-calls kept.
+1. **Release gate: the last *published* release updates itself to the fresh
+   build — overdue.** `release.yml`'s `update-macos`/`-linux`/`-windows` run
+   `scripts/update_e2e.py`, which re-versions the fresh wheel into
+   old/new/broken: it proves the fresh build updates from *itself*. Real users
+   run the *installed* release's `update.py` driving the *new* release's
+   `_updater.py`, so a release that breaks that contract (`_updater.py`'s
+   module docstring) passes today's jobs and strands every install. Due with
+   the first release after 0.8.0; 0.8.1 shipped without it. How: install the
+   last PyPI release the way `install.sh` does, offer the fresh wheel through
+   the script's `find-links` + `STENOGRAF_UPDATE_URL`, drive the update,
+   expect the fresh version running; add the jobs to `publish.needs` on all
+   three platforms. Traps: an exact pin or `--exclude-newer` sticks in uv's
+   receipt and makes the install "pinned" (no button) — `forget_test_source()`
+   already rewrites the receipt; the `DRIVER` snippet runs on the *old*
+   install, so it may only call what that release has. Falsify it: rename a
+   request field in a scratch build and watch the job fail.
 
-**The gate list is green (observed 2026-07-30).** The plain-mode replay
-meeting, the pipe/script help check, and Daniel's three launch gestures on
-this Mac — bare `steno` from a terminal, the app icon, and bare `steno` with
-the tray app already running (it printed its one line) — all passed. The one
-unobserved case stays optional and blocked on enabling Remote Login: an SSH
-bare-`steno` to see the macOS arm of the display heuristic on the case it
-bets on.
+2. **One stop gesture for the capture helpers (macOS-gated).** The last
+   per-platform difference in `capture/helper.py` is `_stop_signal`: SIGINT
+   for the Swift helper, stdin EOF for the Rust one. Teach
+   `native/stenocap-macos/main.swift` to exit on stdin EOF (mirror the stdin
+   watcher in `native/stenocap/src/main.rs`), then delete `_stop_signal` and
+   the signal arm of `_request_exit`. The helper is not inside the frozen app
+   bundle, so this is allowed, but it recompiles and re-signs a signed binary:
+   do it in a real macOS session and finish with a live-capture meeting.
 
-**Built 2026-07-25 (steps 3 + 4): `stenograf/gui/` — all six screens, opt-in
-behind `steno --gui`,** with PySide6 as the optional `[gui]` extra; step 5 put
-them behind a double-clickable `~/Applications/Stenograf.app`. Getting
-there moved the shared work into the library, which is what keeps two
-front-ends from drifting: `stenograf/flow.py` (meeting-request resolution, the
-meeting run, transcribe, notes, the settings report) and
-`stenograf/captions.py` (the live-caption line rules). The Textual screens were
-rewritten onto both and are now as thin as the Qt ones. Tests are headless
-(`tests/test_gui.py`, `QT_QPA_PLATFORM=offscreen`): every page is instantiated
-with its real controller and the Qt message handler must stay silent — a QML
-binding error is a warning, not an exception, so an unwatched app "works" while
-rendering nothing.
+3. **Stop holding the whole meeting audio in RAM (deferred 2026-11-16,
+   Daniel's call).** `SessionStore` (`session.py`) keeps every channel's
+   audio until the stop (~115 MB/hour/channel, never on disk). The motive is
+   privacy — the voice should exist as briefly as possible. Already done:
+   diarization and voiceprint collection run during the meeting. Still to
+   answer: Nemotron's streaming-mode accuracy on held-out AMI against the
+   offline 97.8 % (`eval/README.md`), and what the fallbacks (live pass off
+   or failed) do without audio — they would lose speaker separation. The
+   finish card's voice samples survive if cut during the meeting.
 
-Landmines paid for while building it, beyond the spike's (they outlive the
-retired Textual screens — the Qt app keeps all three):
+4. **Memory on 8–16 GB machines — unmeasured, and now the common case.**
+   Diarization is on by default since 0.8.1. On the M4 Max a 1 h 45 min
+   meeting's finalize peaks at 7.9 GB with diarization (6.9 GB without;
+   `eval/README.md`, "A real finalize, and its peak memory"), and the voice
+   model's session sits at 860 MB for the whole meeting, measured alone, not
+   beside the live pipeline. Measure both on a small machine; the way out
+   today is `[speakers] diarization = false`.
 
-- **A QML property may not be named `onSomething`** — `readonly property color
-  onAccent` is parsed as a signal handler and kills the whole singleton with
-  "Cannot assign a value to a signal".
-- **Screen objects must outlive the engine.** Parent them to the shell and the
-  shell to the `QGuiApplication`; the reverse teardown order re-evaluates every
-  binding against a null object and floods stderr with TypeErrors at exit.
-- **`ComboBox.textRole`/`valueRole` against a Python list of maps** is a
-  silent-`undefined` risk; `Combo.qml` reads the selected entry out of the model
-  by index instead.
+5. **What the ReDimNet2 voice model left** (`eval/README.md`, "Speaker-embedding
+   models in the naming seat" and after). (a) **Energy** per minute of speech:
+   `eval/embedders/energy.sh` with `shipped.py`, background QoS and
+   foreground, on a quiet M4 Max; it decides whether the 120 s speech budget
+   stays (60 s names as well, narrower margin) and whether the smaller B3 is
+   worth its saving. (b) **A solo channel is still embedded at the stop**
+   (`session.py` `_name_solo_channel`): with a stated count of one no
+   diarizer runs, so nothing collects during the meeting. (c) **A
+   fixed-shape path** (GPU, CoreML) would pad or cut spans to a few lengths,
+   changing what a voiceprint is for short clusters; score it only if (a)
+   says the CPU path costs too much.
 
-### Why Qt, and why not the alternatives
+6. **WebGPU as an optional extra for Nemotron — its re-open trigger has
+   fired** ("once the CPU path has shipped in a release": 0.8.0). CPU runs
+   15 s per audio-hour on the M4 Max; on a GPU the fp16 export is faster (x86
+   iGPU: 8.3 vs 14 s per 37.6-min channel). Trap: the `onnxruntime-ep-webgpu`
+   plugin loads a second onnxruntime beside the wheel's on macOS and
+   segfaulted on a second session in one process — re-test that first.
 
-A `textual-serve` + `pywebview` route was costed first — by far the cheapest,
-since every existing screen would work unchanged in a native window — and
-rejected: it renders our TUI inside a browser engine, the wrong side of the
-no-web-UI lock, and its Linux GTK backend needs PyGObject anyway. A second
-route, our own terminal renderer (custom Textual `Driver` → `pyte` → a
-canvas), was rejected for making us the owner of a terminal emulator's bug
-surface (unicode widths, IME, HiDPI, copy/paste) in exchange for no new
-capability.
+7. **livekit re-ask — its trigger has fired** (both channels device-stamped
+   by one helper on every platform, since 2026-08-02). `livekit` (25.6 MB)
+   serves one class, AEC3, in `aec.py`. The idea: run AEC3 inside the helpers
+   so channel pairing never crosses a language boundary and `aec.py`'s
+   timestamp machinery disappears. Judge on all three platforms at once
+   against the shipped ERLE; reasoning in
+   `git log --follow -p PLAN-CAPTURE-HELPER.md`.
 
-Toolkit comparison (2026-07-25, all facts checked against PyPI):
+8. **System-wide mute shortcut (deferred by Daniel 2026-11-16).** One
+   shortcut toggles the microphone. Qt has no global-shortcut API, so one
+   small ctypes module per platform, like `gui/wintray.py`; no dependency or
+   bundle change. macOS: Carbon `RegisterEventHotKey`, fires inside the
+   PySide6 loop on the GUI thread (measured); "no permission prompt" is
+   unproven — check from `Stenograf.app` on a fresh grant (`NSEvent`
+   monitors, `CGEventTap` and pynput all need a privacy grant). Windows:
+   `RegisterHotKey` + `MOD_NOREPEAT` on its own hidden window; report error
+   1409 (combination taken). Wayland: the `GlobalShortcuts` portal over QtDBus
+   (KDE ≥ 5.27, GNOME ≥ 48; a non-Flatpak app must call
+   `org.freedesktop.host.portal.Registry.Register` first — unverified).
+   Default Ctrl+Option+Shift+M / Ctrl+Alt+Shift+M: no meeting app's own mute
+   key, and Shift keeps it off AltGr+M (µ) on German keyboards. Shape:
+   `[shortcuts] mute_microphone` (empty = off), registered only while a
+   meeting records, a notification when the window is hidden.
 
-| | install cost | rendering | licence | verdict |
-|---|---|---|---|---|
-| Qt Quick (PySide6) | ~110 MB (`PySide6-Essentials`) | GPU scene graph | LGPL-3.0 ✓ | **chosen** |
-| Tk 9 + sv-ttk | nominally 0 | CPU | MIT ✓ | runner-up, blocked (below) |
-| Dear PyGui | 3 MB | GPU (ImGui) | MIT ✓ | tooling aesthetic; immediate mode redraws continuously |
-| Slint | 16 MB | GPU | **GPLv3 or commercial** | disqualified — MIT project; also *no stable Python release* (latest `1.17.1b2`) |
-| Toga | small | native widgets | BSD ✓ | disqualified — `toga-gtk` needs `pygobject`+`pycairo` (sdist-only), `toga-winforms` needs pythonnet |
+9. **Repair-only overhang — the one open accuracy idea.** Decode stays the
+   exact current slice; overhang fires only on a detected ≥1.5 s speech hole.
+   It is the salvage from the reverted cut-overlap work, immune to the
+   language-flip sites that killed the always-on version. The VAD threshold
+   0.4 re-attempt is blocked on it (its known cost is more forced mid-speech
+   cuts); a ~0.5 s always-on left overhang is a separate candidate. Any of
+   these re-runs the full battery against a control worktree.
 
-Qt wins on more than looks: **`QSystemTrayIcon` speaks StatusNotifierItem on
-Linux natively**, which deletes the 300–500 lines of hand-rolled D-Bus
-(`StatusNotifierItem` + `com.canonical.dbusmenu` over `jeepney`) that a
-pip-only tray backend would otherwise cost — PyGObject is sdist-only, so
-pystray's Linux backends are unreachable from a wheel-only install. The
-menu-bar/taskbar mode therefore stops being a separate project and becomes a
-mode of the same app. Coverage caveat: KDE/XFCE/Cinnamon/Ubuntu-GNOME have
-SNI, but stock GNOME needs the AppIndicator extension — so the tray stays an
-enhancement, with the desktop launcher as the guaranteed entry point.
+10. **Small known defects in the microphone picker** (found 2026-08-12; the
+    first re-read in the code 2026-11-24, the second not re-checked): a
+    `mic_device` value beginning with `--` reaches the
+    helper's argument parser, which exits 2, and `_ask_helper`
+    (`capture/helper.py`) reports every exit 2 as "the helper is older than
+    stenograf; rebuild it" — wrong cause, wrong remedy for a typo. And the
+    helper's `--devices` answers with the source *id* for an unpinned mic but
+    the *description* for a pinned one, so `capture: mic ← …`, `steno doctor`
+    and the device-lost error mix the two; pick one.
 
-**LGPL, deliberately:** PySide6 is LGPL-3.0 (PyQt6 is GPL and would relicense
-this MIT project). A normal pip dependency satisfies the relinking obligation;
-a future PyInstaller-bundled build would not, and needs real attention.
-
-### Distribution: no Developer ID required
-
-macOS quarantine is applied by the *downloading* program, so a file written
-locally is never assessed by Gatekeeper. `steno setup` exploited this first for
-`Stenograf.command` and now (step 5) for the full `.app` bundle — custom icon,
-Dock presence, menu-bar mode — with no Developer ID, no notarization, not even
-a real signature (ad-hoc suffices). **The $99/yr gates only a *downloadable*
-artifact.**
-
-Consequence, **measured** in step 2 below: TCC grants move off Terminal.app onto
-our bundle. That is better hygiene ("Stenograf would like to access the
-microphone"); `setup` now says so in as many words, because the grant it takes
-for the terminal is not the app's. An ad-hoc bundle's TCC identity is weak in
-one specific, load-bearing way — TCC stores
-**`cdhash` and nothing else** as the requirement, no identifier and no anchor.
-So the bundle must be a thin wrapper that is **byte-identical forever**, and it
-must **spawn** the installed `steno` as a child; a wrapper that `exec`s it loses
-the bundle identity altogether. Windows and Linux need no equivalent trick: a
-locally written `.lnk` carries no Mark-of-the-Web, and Linux signs nothing.
-
-### Prototype results (2026-07-25)
-
-Both toolkits were built against the real launcher information architecture
-(home menu + live meeting screen with committed captions, dim interim tail,
-phase-coloured header) sharing one fake feed, ~860 lines total, in
-`prototypes/gui/` (untracked; `prototypes/gui/README.md` has the full landmine
-list). Qt produced the intended design directly. Tk's *meeting* screen came
-out presentable — colour-tagged `Text`, tab-stop alignment, clean type — but
-its *home* screen renders flat, because `highlightthickness` /
-`highlightbackground` does not reliably draw a 1 px card border on macOS and
-surface-on-background alone is too weak to read as a card; Qt got the same
-look from `radius` + `border.color`.
-
-**The blocker that settled it:** *uv-managed CPython cannot open a Tk window.*
-python-build-standalone ships Tcl/Tk but bakes in the build machine's prefix
-(`/tools/deps/lib/tcl9.0`), so `import tkinter` succeeds and `tkinter.Tk()`
-dies with "Cannot find a usable init.tcl". Homebrew's `python3` fails
-differently (no `_tkinter`; separate formula), as do the distros that split out
-`python3-tk`. Since `uv tool install` *is* the distribution channel, Tk's whole
-advantage — free and already present — is false as stated. It is recoverable
-(set `TCL_LIBRARY`/`TK_LIBRARY` from `sys.base_prefix` before importing
-tkinter) but that is a startup hack shipped forever, with a different failure
-per platform and per Python source. Qt needed no equivalent.
-
-**PySide landmines paid for in the spike:** `qmlRegisterSingletonInstance()`
-breaks the `ApplicationWindow` root outright — every QML-declared child is then
-rejected from `contentData` ("Cannot assign QQmlConnections_QML_6 … expected
-QObject"); `setContextProperty()` works but resolves late, so each
-`Component`'s first binding pass reads `null` and logs a TypeError. **Use
-`engine.setInitialProperties({...})`** — set before component completion, every
-binding correct on the first pass, zero warnings. `QQuickWindow.grabWindow()`
-screenshots the app with no Screen Recording permission, which makes UI
-regression tests possible in CI (`screencapture` from inside the app instead
-*blocks* on the TCC prompt).
-
-### Rules the port inherits
-
-1. The GUI stays a thin client of the library — the same rule the CLI
-   follows: screens gather inputs and call library entry points; logic a
-   screen needs that the library lacks goes into the library.
-2. Slow work goes to a worker thread with signals — the Qt equivalent of
-   `@work(thread=True)`. Blocking the GUI thread freezes rendering.
-3. Notes generation still goes through the existing entry point on the thread
-   that imported `mlx_lm`. A Qt worker thread naively re-importing it dies
-   with "no Stream(gpu, 0)".
-4. **The redraw budget carries over, but it cannot reach Qt's floor.** The TUI's
-   `TEXTUAL_FPS` pin and `animation_level = "none"` become "bind the view to
-   model updates, no idle animations": a QML `Timer { running: true }`, a
-   spinner, or an easing transition on every caption holds the compositor awake
-   for the whole meeting, against a live pipeline tuned to ~0.6 W. The app keeps
-   exactly one 1 Hz timer (`gui/meeting.py`, the meeting clock).
-
-   That discipline is necessary but **not sufficient, and step 1 measured why**:
-   a *visible, unoccluded* Qt Quick window with scene-graph content is woken at
-   the display's refresh rate — ~120/s on the Liquid Retina XDR panel — whatever
-   the QML does. The lever that actually works is **occlusion**, and it is ~100×
-   rather than ~2×: covered by another window the same app drops to ~1 wakeup/s.
-   So the realistic in-meeting cost is the occluded case (the window normally
-   sits behind the video-call window), and a tray-only mode idles at the floor
-   permanently — a power argument for step 6 in its own right.
-5. The notes screen stays a dumb file picker, never a meeting list with
-   metadata — that would be the meeting browser the product philosophy forbids.
-
-### Sequencing
-
-Each step shipped working; step 1's watt remainder is deferred and is the
-one thing still open in this phase.
-
-1. **Half done 2026-07-25; the watt half deliberately deferred.** The
-   per-process half is measured and the app is clean: on the idle home screen
-   `steno --gui` is indistinguishable from a 40-line standalone replica of
-   `Home.qml`'s structure with no Python object behind it — both ~120 wakeups/s,
-   ~2.0 CPU ms/s, **GPU 0.00 ms/s**, Energy Impact ~0.16. The wakeups are
-   therefore not our timers, not the `Behavior`/`ColorAnimation` pairs and not
-   the `app` bridge; they are the display-refresh floor described in rule 4
-   above, and `QSG_RENDER_LOOP=basic` does not remove them.
-
-   Two measurement traps, both paid for: an **empty `ApplicationWindow` is not a
-   valid control** — with no scene graph it never exercises the render loop, so
-   comparing against it makes Qt's floor look like our own bug; and `sample`
-   showing all six threads parked does **not** mean nothing wakes the process,
-   because each wake is ~17 µs and invisible at 1 ms sampling. Use
-   `powermetrics --samplers tasks` (per-process wakeups survive a busy machine;
-   absolute watts do not).
-
-   **Deferred:** the absolute watt delta against the pipeline's ~0.6 W. It needs
-   a quiet machine — Spotlight/SeaDrive indexing had the noise floor at
-   446–795 mW, 350 mW peak-to-peak, which is the order of the quantity being
-   measured — and the wakeups' true cost is masked meanwhile, since "Pkg idle"
-   wakeups read ~0 while `mds_stores` keeps the package out of idle anyway. Not
-   a blocker for anything below; pick it up on an idle machine, on battery,
-   several minutes per arm, app-open vs app-closed interleaved.
-2. **Done 2026-07-25 — passed.** A locally written, ad-hoc-signed
-   `Stenograf.app` was granted mic + system audio, then
-   `uv tool install --reinstall stenograf` replaced the venv, the python symlink
-   and stenocap itself (helper cdhash `d431bc81…` → `f8246bfc…`, a harsher
-   change than a version upgrade makes); the app relaunched with a mic frame, no
-   prompt, no new TCC row and an untouched grant. Evidence read straight out of
-   `~/Library/Application Support/com.apple.TCC/TCC.db`. Two findings step 5
-   must honour, both learned the hard way:
-
-   - **The main executable may not be a script, and may not `exec`.** A
-     `#!/bin/sh` wrapper that execs python makes the process launchd started
-     *become* the interpreter — a Mach-O outside the bundle — so TCC drops the
-     bundle identity and path-keys the grant to the shared uv interpreter
-     (`client_type=1`, and the prompt is titled "python3.13"). That is worse
-     than the status quo: every uv-managed tool shares that interpreter, and a
-     `uv python` upgrade moves the path and re-prompts. A compiled wrapper that
-     **spawns** `steno` as a child and stays alive as its parent gets
-     `client=dev.stenograf.app, client_type=0` for both
-     `kTCCServiceMicrophone` and `kTCCServiceAudioCapture` — children inherit
-     the responsible process, so stenocap's request is attributed to the app.
-     stenocap's own signature is never a TCC client, which is why rebuilding it
-     has never re-prompted.
-   - **The stored requirement is `cdhash H"…"` alone** (decode with
-     `csreq -r <blob> -t`). The grant survives upgrades precisely because the
-     pinned identity lives entirely inside the bundle while the venv is outside
-     it — and by the same token *any* change to the bundle silently revokes it.
-3. **Done** — `stenograf/gui/` + shell + home, opt-in behind `steno --gui`.
-4. **Done** — meeting screen (live captions on a worker thread), transcribe,
-   notes, settings, doctor. Native file dialogs replace the TUI's tree pickers;
-   the notes picker stays a folder picker, never a meeting list.
-5. **Done 2026-07-25.** `steno setup` installs `~/Applications/Stenograf.app`
-   (with the `gui` extra; without it the Desktop `.command` stays, since an
-   `.app` cannot host a TUI). Sources in `native/appbundle/`, the built and
-   signed bundle committed at `src/stenograf/assets/Stenograf.app` and shipped
-   in the wheel — `shortcut.py` only ever copies it, and
-   `tests/test_shortcut.py` pins a sha256 over the tree so a casual rebuild
-   fails CI. Built as step 2 demanded: a universal Mach-O stub that
-   `posix_spawn`s `steno --gui` and waits on it, an icon (`icon.svg` →
-   `.icns` + the `icon.png` Qt now uses for its window/Dock/taskbar tile), and
-   the launch target outside the bundle at `~/Library/Application
-   Support/stenograf/launch-target` — one argv element per line, falling back
-   to `~/.local/bin/steno --gui`, which is why the CLI must keep accepting
-   `--gui` forever. That path is `data_dir()`'s macOS default rather than the
-   `~/.config` this plan first named, but with `$STENOGRAF_DATA` deliberately
-   *not* honoured: launchd gives the stub no environment, so both ends have to
-   agree on one fixed path.
-
-   Everything the stub does beyond spawning exists because a Dock launch has
-   nowhere to complain to: the child's output is teed to
-   `~/Library/Logs/Stenograf.log`, a missing target or a non-zero exit raises a
-   `CFUserNotification` alert, signals are forwarded so logout doesn't orphan
-   the window, and `PATH` is widened past launchd's bare four entries. The
-   signal handler restores the default disposition once the child is gone —
-   without that the stub survives SIGTERM while an alert is up, which cost a
-   rebuild to find. Verified end to end on this machine: the wheel round-trips
-   the bundle byte-identically with its signature intact, the copy in
-   `~/Applications` still satisfies `codesign --verify --strict`, and capture
-   started from the app wrote the grant this whole design is for —
-   `kTCCServiceMicrophone` and `kTCCServiceAudioCapture` against
-   `dev.stenograf.app`, `client_type=0`, requirement `cdhash H"1651c78f…" or
-   cdhash H"b0516786…"`, i.e. **both slices of the universal binary**, so the
-   grant even survives an Intel↔Apple-Silicon migration. No `python3.13` row
-   appeared. The step-2 test bundle's grant was replaced rather than migrated,
-   which is the freeze rule demonstrated from the other side.
-6. **Done 2026-07-25.** `stenograf/gui/tray.py`: a `QSystemTrayIcon` carrying
-   the app icon's two commas without their tile (`assets/tray.svg`, re-inked at
-   runtime — a macOS template image when idle, red while recording, amber while
-   finishing), a menu that can open the window, start, stop, open the meetings
-   folder and quit, and `steno --gui --tray` to start with no window at all.
-   Where `isSystemTrayAvailable()` is false — stock GNOME without the
-   AppIndicator extension — `install()` returns `None` and nothing below
-   happens: the window is the app and closing it quits, exactly as before.
-
-   Two behaviour changes ride along, both worth more than the icon. **Closing
-   the window hides it and a running meeting carries on**, which is what makes
-   rule 4's occlusion lever reachable — and **quitting mid-meeting now waits for
-   the finalize** instead of relying on the after-the-loop `join_meetings`,
-   because with no window in front of it Quit becomes the normal way a meeting
-   ends rather than an accident. The menu bar says so while it waits, and a
-   second Quit abandons it (the checkpoint survives; a wait with no way out is
-   the worse bug).
-
-   The feared plist coupling never existed (measured in step 5,
-   `native/appbundle/README.md`): LaunchServices moves the bundle's registration
-   onto the spawned Qt child, and the child flips its own activation policy —
-   `setActivationPolicy(accessory)` via `objc_msgSend`, since AppKit is already
-   loaded and one selector does not justify pyobjc. Measured through the real
-   bundle on 2026-07-25, and the two findings that shaped the code:
-
-   - **A second `open` on an accessory app starts no second instance** —
-     LaunchServices still tracks it — but AppKit's default reopen handling has
-     no window to order front, so the gesture does nothing. It arrives as
-     `QEvent::ApplicationActivate`, which is now what restores the window.
-   - **The launch activation looks identical**, and obeying it would put a
-     window on screen in `--tray` mode. The first one is therefore ignored,
-     which is also why `LSUIElement` stays rejected: it additionally stops
-     `open` from bringing the window forward at all.
-
-   Landmine paid for: **`QSystemTrayIcon` needs a `QApplication`.** It is a
-   QtWidgets class and its menu is a real QWidget; under the `QGuiApplication` a
-   pure Qt Quick app would use, the process dies on `qFatal` before any Python
-   exception can be raised. `run()` and the test fixture now build a
-   `QApplication`.
-
-   **Not measured:** the wakeup claim itself. Step 1 showed a visible window at
-   the ~120/s display floor and an occluded one at ~1/s, and a hidden window
-   should be at least as good, but the tray-mode number was not taken — it
-   belongs with step 1's deferred watt half, on the same quiet machine.
-7. **Done 2026-07-30 — shipped in four commits, each CI-green.** PySide6
-   into `dependencies` (`gui = []` stays an empty extra so old install
-   commands resolve), the double-gated dispatch (`_interactive_terminal()` +
-   the new `_display_available()` seam), `src/stenograf/ui/` deleted,
-   `steno setup`'s terminal-launcher arms collapsed with the retirement calls
-   kept, docs and the `verify` skill rewritten. The decision record is
-   `git log --follow -p PLAN-GUI-DEFAULT.md`; the observation gates were run
-   the same day and are green (top of this section). `--gui` keeps
-   working forever (`cli/__init__.py`): the frozen stub compiles it in as the
-   fallback argv, and that stub cannot change without revoking every macOS
-   user's microphone grant.
+11. **Ollama's response budget on the longest answer.** The reduce step of a
+    long meeting is the longest output the notes produce and was never
+    measured against the `num_predict` limit `notes/ollama.py` now sends.
 
 ---
 
-## Notes and presets — both built 2026-07-30, the presets UI 2026-07-31; what is open is gates
+## Gates
 
-`PLAN-NOTES-MARKDOWN.md` and `PLAN-MEETING-PRESETS.md` were deleted with this
-section; their design records, adversarial-review findings and rejected
-alternatives are in `git log --follow -p <file>`. Read the notes plan before
-touching `notes/` — in particular the four jobs the deleted JSON schema was
-doing (structure, sanitizing, truncation detection, refusal detection) and
-which replacement covers each, because three of the four are non-obvious.
+Real hardware or Daniel's observation, no code. "Open" means never run.
 
-**Notes are markdown now: the template is the schema** (`d5963dd`). Headings
-are matched verbatim against the template actually used, zero matches is a hard
-fail, missing or empty sections are warnings that travel on
-`NotesProvenance.warnings`, and truncation is read off the backend's own
-completion signal (`finish_reason` / `done_reason`) rather than a text
-heuristic. `.notes.json` is no longer written. **The two Ollama gates ran 2026-08-12 on the
-CachyOS box; both are green and Gate 0 cost a real fix. Gate A's read is the one
-thing still open:**
+| Feature | Platform | What to observe | Status |
+|---|---|---|---|
+| GUI power, watt half | macOS, quiet machine | Absolute watt delta, app open vs closed, against the pipeline's ~0.6 W; also wakeups/s with the window hidden in tray mode | Deferred since 2026-07-25 (needs an idle machine) |
+| Bare `steno` over SSH | macOS | Prints help, opens no window (the display heuristic's bet) | Optional; needs Remote Login enabled |
+| Notes equivalence (Gate A) | any | Daniel reads the before/after note pairs in `gate-a/` (gitignored, real meetings) | Captured; read pending |
+| Meeting presets in use | this Mac | Are any `[meetings.*]` sections written after weeks of use? If not, reconsider the preset layer, not the picker | Open since 2026-07-31 |
+| Windows echo cancellation | Windows (GPD) | Helper's ERLE ≥ 13.7 dB with 0 leaked lines (the deleted lag constant's score); double-talk; why 13.7 vs macOS 37.6 dB | Owed since 2026-08-02 |
+| DirectML fails loudly | Windows (GPD) | A healthy `[asr] provider = "dml"` run transcribes; `STENOGRAF_ASR_PROVIDER=cuda` on the DirectML build exits with a clean error naming `[asr] provider = "cpu"` | Unrecorded, overdue (due "before the next release" 2026-08-02) |
+| `.lnk`-only launcher | Windows (GPD) | `steno setup` lands both `Stenograf.lnk` links (Start Menu, Desktop) and both start the app | Unrecorded, overdue (same) |
+| Shared room mic | any | First real hybrid meetings: people merged into one speaker, crosstalk phantoms, a profile naming the wrong person | Open since 2026-11-15 |
+| Finish card | macOS | A real meeting with a wrong name match corrected on the card | Open since 2026-11-16 |
+| Mute G1 | macOS | During a call: mute mic, say a sentinel phrase, unmute. Phrase absent from transcript, notes and `audio.opus`; span shown; speech right after unmuting kept | Open |
+| Mute G2 | macOS | Mute during model loading on a cold start: the backlog case on the real helper | Open |
+| Mute G3 | macOS | System audio muted while speakers play: no remote line leaks into the mic channel | Open |
+| Mute G4 | Windows, Linux | G1 on each, plus the mute clock's offset (pipe latency ~30–40 ms on macOS) | Open |
+| Mic picker G1 | macOS | Two inputs; pick the non-default; speech into it alone is in the transcript | Open |
+| Mic picker G2 | macOS | Unplug the pinned device mid-meeting: "retrying", no switch to the built-in mic; re-plug resumes | Open |
+| Mic picker G3 | macOS | Connect AirPods while pinned: capture stays on the pinned input (switching speakers↔monitor already passed, 2026-08-12) | Partly measured |
+| Mic picker G4 | Windows | Pin works; preflight names it; an absent ID fails before model load | Open |
+| Mic picker G5, G5r | Linux | Pin honoured on pipewire-pulse; system channel still follows the default sink; a removed pinned device never becomes another mic | Measured green 2026-08-12 (CachyOS) |
+| Mic picker G6 | any | Dual-clock echo run: mic on USB, system audio built-in, ≥ 15 min, ERLE over time | Open |
+| Mic picker G7 | macOS | A pinned virtual device (BlackHole, Teams Audio) logs the invalid-host-time warning | Open |
+| Device-ID stability (M2) | all | IDs unchanged after a reboot and after re-plugging a USB mic into another port | macOS static IDs: proven by construction. Linux reboot: measured green 2026-08-12; re-plug, macOS UUID IDs, Windows: open |
+| Mic pin on classic PulseAudio | Linux | `DONT_MOVE`, device removal and the 5 s watchdog on real PulseAudio (CI only live-captures there, unpinned) | Open |
+| Update, macOS | macOS | Update from the app in `~/Applications`: first meeting needs no new mic prompt; no alert when the old app exits; same with the bundle moved | Open |
+| Update, Windows | Windows | No console window; tray keeps its place | Measured green 2026-11-20 |
+| Update, Windows extras | Windows | A pinned taskbar icon still starts the app; installer's `--force` retry and `install.yml`'s step | Open (no pinned item existed) |
+| Update, Linux | Linux desktop | Menu entry still starts the app; restarted window carries its icon | Open |
+| Update, broken releases | all, real machines | A release failing its self-check, one crashing at start, one whose install is killed: each ends in the old version with the failure line; after the third with the updater killed too, the install command repairs | Crash-at-start covered in CI; the rest open |
+| Update lock on network home | Linux | Shared/exclusive lock behaves as locally | Open (no such machine) |
 
-- **Gate 0 — the Ollama probe. MEASURED 2026-08-12** (Ollama 0.32.9, qwen3:8b,
-  CPU). All three questions answered, and two of the three answers were defects
-  — both fixed in `notes/ollama.py`, whose docstrings carry the numbers.
-  **The char ceiling was a fiction.** With no `options.num_ctx` the server's
-  4096 default silently keeps the *tail*: a marker planted at the prompt's head
-  became invisible to the model above ~4 000 tokens, and `prompt_eval_count`
-  pinned at 2050 however much more was sent (26 957 tokens evaluated whole once
-  `num_ctx` was raised). **`done_reason` is present but never `"length"`**
-  unless a `num_predict` is set — the server context-shifts instead, and a
-  512-token context happily produced 1260 tokens reading `"stop"`, so the
-  truncation check that depends on this signal was dead code until the fix sent
-  an explicit limit. **Reasoning arrives in `message.thinking`**, content clean,
-  no `<think>` tag: Ollama never needed `strip_reasoning()` (which stays for the
-  backends that do). Nothing here is attributable to `format=` — the old path
-  sent no `num_ctx` either.
+Recipes and traps:
 
-  The fix deviates from this bullet's "derive `num_ctx` from `max_input_chars`",
-  and the literal version would not have worked: Ollama **clamps** an oversized
-  `num_ctx` instead of refusing it, which reinstates the same truncation
-  silently. It is sized per request and bounded by the model's own ceiling read
-  from `/api/show`, with anything larger refused before a token is spent. The
-  costs it buys — KV cache per token, CPU prefill rate, and the input ceiling
-  those two force — are the constants in `notes/ollama.py`, with their
-  measurements. **Reading a whole meeting is now the slow part**, which is the
-  standing consequence to remember: it is minutes per meeting-hour on a
-  CPU-only box, where the truncated version was seconds and wrong.
-  Re-open trigger: the reduce step of a long meeting is the longest answer this
-  system produces and the only one never measured against the response budget.
-- **Gate A — equivalence on real meetings. Captured; Daniel's read pending.**
-  Before/after pairs on the same transcripts live in `gate-a/` (gitignored,
-  real meeting content). `small-claude` and `mid-claude` succeeded on both
-  paths, all headings matched, zero warnings. **mlx has no before-note to
-  read** — the JSON path failed 2 of 2 attempts on the small meeting ("missing
-  a usable 'title'", from the pinned `4fe5c76` worktree; mechanism not
-  investigated, the path is deleted) where the markdown path succeeded first
-  try. n=2 against n=1, so the direction is the claim, not the size: the
-  shipped macOS default could not produce notes for that real meeting on the
-  old path and can on the new one.
-- **Gate B — template adherence on Ollama. MEASURED 2026-08-12 — green, and the
-  attribution is settled.** Both arms ran on one transcript, a 37.5-minute
-  AMI ES2003c pass (public corpus, so the comparison is reproducible and no real
-  meeting content is involved): `4fe5c76` with `format=` in a worktree, then
-  HEAD without it. Both produced a note, so **removing `format=` broke nothing**,
-  and "this path never worked" is refuted outright. The unconstrained path is
-  also the better one — 4/4 template headings against 3/4, 2056 chars against
-  773, and named owners where the schema path rendered a literal `**null**`.
-  Two limits on what this clears. The meeting is 3953 prompt tokens, just under
-  the 4096 the probe found, so this arm never entered the truncation regime that
-  Gate 0 found and fixed — it tests the template, not the ceiling. And the old
-  arm's 3/4 is not a defect: an empty `## Decisions` is the section the markdown
-  path deliberately emits and the schema path omitted (below).
-  **It does not block the macOS default; it blocks declaring the Ollama path
-  healthy** — which is worth remembering before a release, since Ollama is the
-  notes default on both non-macOS platforms. With Gate 0's fix in, a re-run
-  keeps 4/4 headings and reaches content from the meeting's first half.
-
-Accepted regressions, decided rather than discovered later, and all of them
-release-notes material: `.notes.json` is gone; **owner-grouped action items are
-gone** (the vault note shows action items as the model wrote them); the vault
-note gains Highlights and inline `[h:mm:ss]` timestamps it used to strip; and a
-decision-free meeting now gains an empty `## Decisions` section, since a
-template makes the model emit every heading — the per-section emptiness warning
-is that one's trace.
-
-**Meeting presets shipped too** (`b00ef0b`, after `4fe5c76`'s per-run
-baseline): `[meetings.<name>]` sections, the sparse overlay with the `""`
-off-marker, `--preset` on `start`/`transcribe`/`notes`, per-preset `template` +
-`instructions` + `[vocab]` (which reaches TurboBias, so a transcript recorded
-under a preset is not reproducible without it), `steno presets`, `cwd` +
-`STENOGRAF_MEETING_DIR`/`STENOGRAF_OUTPUT_HOME` on the command backend, and
-per-preset doctor checks that resolve each `argv[0]` under the effective PATH.
-Three things stayed open:
-
-- ~~**The UI half.**~~ **Built 2026-07-31, ahead of the evidence question
-  below** — Daniel asked for the picker directly. "Meeting type" is the first
-  control in the Qt setup form (hidden entirely when settings.toml defines no
-  `[meetings.*]`, so a machine without presets sees the form it always had),
-  each entry carrying the one-line summary `steno presets` prints —
-  `MeetingPreset.summary()` is now the single source both render. The Settings
-  screen got the same picker: it re-renders the read-only report under
-  `settings_report(preset=…)`, which is `steno settings show --preset NAME`'s
-  library seam. Both reports **attribute** rows now — a key the preset set reads
-  `([meetings.NAME])`, one it switched off with `""` reads
-  `([meetings.NAME] switched it off)`, and an env var that beats a preset key
-  says so — because the overlay is sparse, so reading the section tells you what
-  it sets but not what wins. Vocabulary gets a sentence rather than a row: it
-  merges, so there is no single effective value to print.
-- **The evidence question is now moot for the picker but still open for the
-  layer.** The per-run flags (`--notes-backend`, `--notes-model`,
-  `--instructions`) were the baseline the preset layer had to beat on real use;
-  persistence, per-kind `[vocab]` and a GUI picker are the three things that
-  baseline structurally cannot do. The picker exists ahead of that verdict, so
-  what real use decides now is whether presets *get written at all* — if
-  `[meetings.*]` sections stay empty on this machine after a few weeks, the
-  layer is the thing to reconsider, not the control.
-- **One known asymmetry, documented in `resolve_meeting_request`'s docstring —
-  and now user-visible, which it was not when it was accepted:** a user picking
-  a meeting type whose summary reads "notes via mlx" gets a different backend if
-  `STENOGRAF_NOTES_BACKEND` is set. Still judged not worth an override channel
-  through `MeetingRequest` (the var is a developer escape hatch, and the
-  Settings screen's report names it as beating the preset), but the reason it
-  was cheap has changed. The mechanism: `flow.MeetingRun` calls
-  `create_backend(None, …)`, so the env var wins inside `default_backend_name`,
-  while the CLI passes the preset's backend explicitly and holds
-  flag > preset > env.
-
-Two designs from those plans are **rejected and should not be re-opened**: a
-directory of preset *files* (a shared checkout is arbitrary code execution —
-`[notes] command` argv runs unattended after every meeting, and `git pull` must
-never change which commands run, triggered by recording a meeting; if sharing
-becomes real it returns as a directory loaded *without* executable keys unless
-settings.toml allowlists them), and any **preset-name stamp in the
-`MeetingProfile`** (profiles serialize into every transcript and must record
-resolved values, not machine-local late-bound references — regenerating notes
-for an old meeting takes `--preset` explicitly).
-
----
-
-## Platform work still open
-
-**Windows — the capture helper shipped 2026-08-02; one AEC-quality run is what
-is left.** `native/stenocap/` (Rust, WASAPI, device-stamped) replaced the
-in-process `soundcard` streams, and `FAR_END_LAG_S` went with them — the
-capture-helper plan, closed and deleted 2026-08-02 with the Linux half built
-(`git log --follow -p PLAN-CAPTURE-HELPER.md`). A status icon the shell files
-under Stenograf rather than under `pythonw.exe` landed 2026-08-01
-(`gui/wintray.py`; the design notes are in CLAUDE.md, the GUID is permanent).
-The rest of this section is the history that produced both.
-
-**The pre-helper state — closed 2026-07-26 except for one optional AEC run.**
-`PLAN-WINDOWS.md` was deleted on 2026-07-27 with five of its six items green;
-`git log --follow -p PLAN-WINDOWS.md` holds the evidence. Shipped: a real `.lnk`
-launcher (Start Menu + Desktop) with a multi-size `.ico`, written through
-`IShellLink` COM in `winlink.py`, and the
-`SetCurrentProcessExplicitAppUserModelID` call that makes the taskbar recognize
-its own window — together they are why a finish notification arrives as a toast
-titled *Stenograf* instead of *pythonw.exe*. Measured green on the GPD notebook
-(Radeon 890M, Win 11 26200): the desktop app on a real session (tray, toast,
-taskbar identity, 125/150/200 % scale, close-during-meeting, and the named-pipe
-single instance including the crashed-instance case no other platform
-exercises), the TUI by eye in Windows Terminal, and DirectML on the AMD tier —
-byte-identical to CPU, with the speed win landing at 1.3–1.5× on an iGPU against
-6.6× on a discrete card.
-
-**W4 found a real bug and fixed it.** With the speakers at 90 % instead of 40 %
-(the volume knob, not the driver's audio enhancements, is what establishes an
-echo path) 80 seconds was enough: 2.6 dB ERLE and two lines of far-end speech
-attributed to the local speaker, against macOS's 37.6 dB. The cause was not the
-canceller but the timestamps it pairs channels by — WASAPI's loopback tap is the
-longer transport and both channels are stamped on arrival, so AEC3 was handed a
-reference labelled ~60 ms *after* its own echo, and its delay estimator only
-searches backwards. `CaptureProvider.far_end_lag_s` now carries the per-provider
-correction (`capture.windows.FAR_END_LAG_S = 0.15`, 2.5× measured, because the
-error is one-sided): **13.7 dB ERLE, 0 leaked lines** on a re-run of the same
-script.
-
-**W4's remainder is now the capture helper's acceptance test, and it is the one
-Windows thing still open.** Its alignment half was superseded and then settled:
-the helper shipped 2026-08-02 and deleted the constant rather than tuning it.
-But **nothing has yet scored the helper against what it replaced** — 13.7 dB
-ERLE with zero leaked lines, `eval/README.md` — because this desk is on
-headphones, so there is no echo path and `eval/aec_alignment.py` correctly
-refuses to grade one. So the run below stopped being optional: it is what turns
-"the timeline is right" (measured, and end-to-end meetings work) into "the
-canceller is at least as good as before". It also still carries the two
-questions device timestamps never touched: double-talk, which nothing on this
-machine has covered, and the residual gap to macOS (13.7 dB against 37.6 dB —
-chassis, driver processing, or headroom). It is one command —
-`uv run python eval/aec_rig.py far-only --seconds 1800 --volume 90`, **plain
-`uv run`, never `--group eval`** (that group cannot resolve on Windows: `mlx`
-has no `win_amd64` wheel) — plus `eval/aec_alignment.py` on the dump. It is half
-an hour of speech out loud, so it wants an empty room, and the rig pins an
-en-US SAPI voice because the system default is German.
-
-**DirectML fail-loudly (2026-08-02) — verify on the real Windows box before the
-next release.** An explicit `[asr] provider = "dml"` that can't deliver now
-raises `BackendUnavailableError` with the canary's reason instead of silently
-running on CPU; the fallback branch and the `provider_fallback`/`active_provider`
-plumbing are deleted. To confirm on the GPD notebook: a healthy `dml` run still
-loads and transcribes, and a forced failure (`STENOGRAF_ASR_PROVIDER=cuda`
-against the DirectML build) exits with the clean error naming
-`[asr] provider = "cpu"`.
-
-**`.lnk`-only launcher (2026-08-02) — verify on the real Windows box before the
-next release.** `steno setup` now writes only the two `Stenograf.lnk` shell
-links (Start Menu + Desktop); the batch-file fallback is deleted, and a COM
-refusal is a clear setup error instead. To confirm on the GPD notebook:
-`steno setup` still lands both links and they launch the app.
-
-**Linux — the same root cause, closed by construction 2026-08-02.** The
-never-measured Linux echo-cancellation risk (`parec`, one subprocess per
-channel, both arrival-stamped by `SessionClock`) ended the way the
-capture-helper plan prescribed: the Rust helper grew a PulseAudio-protocol
-backend (`native/stenocap/src/pulse.rs`) that stamps both taps
-`CLOCK_MONOTONIC − server latency` on one clock, `parec` and `SessionClock`
-left with it, and **no arrival-stamped transport exists on any platform now**
-(`far_end_lag_s` is deleted outright, not zeroed — `EchoCanceller` keeps the
-parameter only as `eval/aec_alignment.py`'s verification knob). Measured on
-PipeWire 1.6 the day it shipped: stamp error against a sample-count line holds
-a bounded ±10 ms band over 35 s, a played tone lands at its wall-clock instant,
-and a real live meeting through the helper transcribed word-perfectly. Real
-PulseAudio is exercised by ci.yml's `capture-linux` job. The wheel matrix grew
-the low-floor `manylinux_2_28` capture wheel so Ubuntu 22.04 / Debian 12 /
-RHEL 9 keep live capture instead of silently falling to the pure wheel. What
-was *not* run on Linux is an ERLE-scored AEC session (this machine's desk has
-no speaker echo path either); the alignment premise it would confirm is the
-one now guaranteed by construction, so it rides along as a nice-to-have with
-the Windows gate above, not as its own gate.
-
-**Capture fold stage (b) — macOS-gated (queued 2026-08-02).** Stage (a) folded
-`capture/macos.py` and `capture/linux.py` into `capture/helper.py`; the one
-platform difference left is the stop gesture (`_stop_signal`: SIGINT for the
-Swift helper, stdin-EOF for the Rust one). Stage (b): teach the Swift helper to
-exit on stdin EOF (mirroring the Rust helper's stdin watcher in
-`native/stenocap/src/main.rs`), then delete `_stop_signal` and
-`_request_exit`'s signal arm — one stop gesture everywhere. Legal (the helper
-binary is not under the frozen app bundle), but it recompiles and re-signs a
-signed binary, so it waits for a real macOS session and a live-capture check
-afterwards.
-
-**The desktop app on Linux — measured, fixed and closed 2026-07-25.** The app
-ran on a real session (KDE Plasma 6.7.3, Wayland, 150 % scale) including a live
-meeting captured through PipeWire from the GUI; seven problems were found and
-fixed the same day — the single-instance claim (now a `QLocalServer` in
-`gui/app.py`, unconditional on **every** platform), the localised documents dir
-(resolved from `user-dirs.dirs`, no legacy branch), the desktop entry, the
-doubled window title, the X11 `WM_CLASS`, the window default, and *Open
-Stenograf* greyed for a merely **buried** window (`isVisible()` means mapped,
-not looked at — it now keys off focus, as does the "Meeting finished"
-notification the same predicate had been suppressing). `PLAN-LINUX.md` carried
-the evidence, the decisions and the container ladder for the desktops it has
-never run on, and was deleted on 2026-07-26 with nothing open:
-`git log --follow -p PLAN-LINUX.md`.
-
----
-
-## Diarization: Nemotron 3 — shipped 2026-11-15, four things left
-
-NVIDIA Nemotron 3 Diarization is the one diarizer; the owned loop, stenodiar
-and the manylinux_2_39 wheel are deleted. The migration record is
-`git log --follow -p PLAN-NEMOTRON.md`; the evidence is `eval/README.md`, "The
-estimate path, and Nemotron 3 Diarization as the one diarizer" and the
-sections under it. Not released yet — that is the next version bump + tag,
-once CI is green on all three platforms for the push that carries the
-deletion, and a `workflow_dispatch` dry run of `release.yml` has built and
-smoked the single manylinux_2_28 wheel.
-
-1. **Watch the first real hybrid meetings on a shared room mic.** Held-out
-   AMI, the user's own one-to-one calls and two-remote-voices dialogues are
-   measured; what no free reference covers is several people on one room
-   microphone, the hybrid case that is common and diarization-critical. Look
-   for people merged into one speaker, crosstalk phantoms, and a profile
-   naming the wrong person. A labelled room recording, if one ever exists,
-   replaces this with a number.
-2. **WebGPU, as an optional extra.** CPU runs 15 s per audio-hour on the M4
-   Max (fp32, onnxruntime 1.32). On a GPU fp16 is the faster export (x86
-   iGPU: 8.3 vs 14 s per 37.6-min channel), so a GPU path would fetch it
-   beside the CPU's fp32. The `onnxruntime-ep-webgpu` plugin loads a second onnxruntime copy
-   beside the wheel's on macOS and segfaulted on a second session in one
-   process; revisit once the CPU path has shipped in a release.
-3. **Privacy: stop holding the whole meeting in memory (deferred
-   2026-11-16, Daniel's call).** Today `SessionStore` keeps every channel's
-   full audio in RAM until the stop (~115 MB/hour/channel, never on disk),
-   because the stop-time diarization, the voiceprints and the no-live-reuse
-   ASR fallback all read it. The motivation is privacy — the voice should
-   exist as briefly as possible — not memory. The route is Nemotron's
-   streaming mode during the meeting, with three questions to answer first:
-   (a) attribution and count accuracy of the streaming mode on the held-out
-   AMI set against the offline 97.8 % (`eval/README.md`); (b) voiceprints
-   accumulated per speaker during the meeting instead of over the full
-   audio at the end — done 2026-11-18 for diarized channels (item 4); (c) the meeting's power budget (~0.6 W live) with the
-   diarizer running alongside capture — for the offline chunk loop, which
-   runs during the meeting since 2026-11-17, that is 0.014 W for two
-   channels (`eval/README.md`, "The chunk loop runs during the meeting");
-   the store still keeps the audio, which the voiceprints and the fallbacks
-   read. The fallback paths (live pass off or failed) would still need
-   audio or would lose speaker separation. The
-   "Who spoke?" voice samples are already only a few seconds per speaker,
-   so they survive this change if collected during the meeting instead.
-
-4. **ReDimNet2-B6 names speakers (built 2026-11-18) — what it left.**
-   Evidence and every number: `eval/README.md`, "Speaker-embedding models in
-   the naming seat" and the three sections after it.
-   (a) **Hosted 2026-11-19** as the one asset of the GitHub release
-   `models-1` (not a `v*` tag, so the publish workflow ignores it; its notes
-   carry the origin and the licence). `eval/embedders/export_redimnet.py`
-   rebuilds the file from the publishers' checkpoint.
-   (b) **Energy** per minute of speech, unmeasured:
-   `eval/embedders/energy.sh` with `shipped.py` at background QoS and
-   foreground, on a quiet M4 Max. It decides whether the 120 s budget stays
-   (60 s names as well, with a narrower margin) and whether B3 on the large
-   training set — 82.4 against 85.7, not separable — is worth its saving.
-   (c) **Memory during a meeting.** The embedding session settles at 860 MB
-   while it collects and is held until the meeting ends; measured alone, not
-   beside the live pipeline, and not on an 8–16 GB machine.
-   (d) **Licence.** The weights are CC BY-NC-SA 4.0 by the maintainers'
-   statement (IDRnD/ReDimNet #24) — non-commercial. The VoxCeleb2-only
-   checkpoint ties statistically (83.3 %) if that ever matters.
-   (e) **A solo channel is still embedded at the stop**: with a stated count
-   of one no diarizer runs, so nothing collects during the meeting. Same
-   rule, bounded by the same 120 s.
-   (f) **A fixed-shape path** (GPU, CoreML) would need spans cut or padded to
-   a few lengths, which changes what a voiceprint is for the short clusters
-   the model was chosen for; unscored, and only worth scoring if (b) says the
-   CPU path costs too much.
-
-Out of scope: streaming diarization in live captions — Nemotron has an online
-mode, but live captions carry no speaker labels.
-
-Measured for the record (`eval/README.md`, "A real finalize, and its peak
-memory"): diarizing a 1 h 45 min meeting raised the finalize's peak memory
-from 6.9 to 11.2 GB on the M4 Max; since the stop releases the ASR before it
-diarizes, 7.9 GB. Diarization is on by default since 2026-11-20, so every
-user pays it: an 8–16 GB machine is the unmeasured case, and now the common
-one (`[speakers] diarization = false` is the way out).
+- **GUI watt half:** on battery, several minutes per arm, app-open and
+  app-closed interleaved; Spotlight/SeaDrive indexing put the noise floor at
+  446–795 mW, the size of the quantity measured. Use `powermetrics --samplers
+  tasks` for per-process wakeups (`sudo -n` works). An empty
+  `ApplicationWindow` is not a valid control (no scene graph, so it never
+  exercises the render loop), and `sample` at 1 ms cannot see ~17 µs wakes.
+- **Windows echo run:** `uv run python eval/aec_rig.py far-only --seconds 1800
+  --volume 90`, then `eval/aec_alignment.py` on the dump. Plain `uv run`,
+  never `--group eval` (mlx has no win_amd64 wheel). Half an hour of speech
+  aloud, so an empty room; the rig pins an en-US SAPI voice because the system
+  default is German; 40 % volume puts no echo into the mic. Read the Windows
+  observation recipe in `git log --follow -p PLAN-WINDOWS.md` (last section)
+  first. A Linux ERLE run is a nice-to-have alongside, not its own gate.
+- **Mic picker G6:** the primary signal is the framer's gap-correction
+  complaints in the helper's stderr — drift is corrected in one step
+  (`native/stenocap/src/frame.rs`), which AEC3 cannot follow and a one-shot
+  ERLE check cannot see. The Linux null-sink rig carries no timestamp claim.
+- **M2:** `steno devices` lists IDs; the Linux harness is
+  `~/.local/share/steno-m2/` on the CachyOS notebook (`snapshot.sh LABEL`,
+  then `diff`). NFC/NFD name matching is untested anywhere.
+- **Update, macOS:** also look at a release that dies at start through the
+  launcher: the stub shows its own alert and stays alive, so the rollback's
+  second `open` may only bring that alert forward (inferred, not observed).
+  Never try an update against the machine's own install.
 
 ---
 
 ## Deferred and declined
 
-Kept here so future sessions don't re-open them.
+Kept so future sessions do not re-open them. Each says why, and what would
+re-open it.
 
-- **Challenger ASR models — declined 2026-07-27.** The recurring "the
-  leaderboard has a new leader" question (most recently Cohere Transcribe
-  03-2026) is closed, and `PLAN-ASR-CHALLENGER.md` was deleted with it
-  (`git log --follow -p PLAN-ASR-CHALLENGER.md` for the candidate analysis and
-  the adjudication design). Two reasons, and neither is about that model.
-  **The contract:** `asr/base.py:13` makes word-level timestamps mandatory —
-  speaker assignment intersects them with diarization turns — so a
-  timestamp-free model can only ever be a finalize-only second pass with a merge
-  layer, on top of Parakeet, at roughly double the finalize cost. **The prior:**
-  every model that has beaten Parakeet on a read-speech benchmark has lost to it
-  on our meeting audio. Voxtral Small 24B led by a *wider* paper margin than
-  Cohere's and lost 32:38 head-to-head; Canary-1B-v2 lost every pairing ~1:2
-  (Phase 0, 161 blind adjudication sites, de+en). Parakeet holds the default on
-  being ~10× faster and 5× smaller at Whisper-large-v3-equal quality.
-  **What would reopen it:** a leaderboard leader that already emits word
-  timestamps — that one is not a challenger at all, it is a `BackendSpec` in
-  `asr/registry.py`, which is what the seam exists for. A model without them
-  does not get evaluated again.
-- **Hand-labelled RTTM references — declined.** Without them DER, word
-  attribution, the 0.5 re-ID threshold and far-field speaker-count
-  over-splitting (a small group measured as 8) stay unmeasured. The scorer is
-  built and tested; only labels are missing, and labelling was ruled out.
-  The AMI/ICSI harness (`eval/ami.py`, 2026-08-02, from the deleted
-  diarization plan's step 0) sidesteps the ruling-out rather
-  than reversing it: AMI/ICSI are CC-BY-4.0 *with per-speaker headset
-  channels*, so references in our exact two-channel topology are built from
-  public corpora — labelling our own audio stays ruled out.
-- **The diarization + speaker re-ID program — closed 2026-08-09, every
-  candidate measured.** `PLAN-DIARIZATION.md` deleted
-  (`git log --follow -p PLAN-DIARIZATION.md` for the step record); evidence
-  is in `eval/README.md`'s corpus-harness sections, the research record in
-  `eval/diarization-sota-2026.md`. What it shipped and still ships:
-  overlap-clean embeddings, the solo-channel bypass with
-  `Diarizer.channel_embedding` for 1:1 profiles, profile store v2 +
-  rename-once enrollment, threshold 0.56. Its owned ward+gated-fold loop
-  was production until Nemotron 3 replaced it on 2026-11-15, and with no
-  clustering stage left, the heavy clustering fallback it kept scoped
-  (two-covariance PLDA + VBx, `eval/diarization-loop-spec.md` §3) is closed
-  rather than deferred.
-  Declined with numbers, and what would reopen each:
-  - **DiariZen meeting-base (2026-08-09):** loses the fair k+1+production-fold
-    frame on loops (+1.3 mean / +1.2 median paired ΔDER, wins 4/20, sign
-    p≈0.012, attribution −1.1) and the near-field duos (+2.0/+1.3, 3/20);
-    its own hyperparameters swept and exonerated. The ONNX-export program
-    never opens. Trigger: the meeting mix shifts toward many-speaker rooms —
-    it won all four ICSI k=4–8 loops while their k=2 duos flipped back — and
-    re-opening now means beating Nemotron 3, not the loop it lost to.
-  - **Embedding upgrade (2026-08-07; naming seat re-measured 2026-11-18):**
-    ERes2NetV2-zh and ResNet34-LM both regressed clustering (6.6/7.6 pts
-    attribution) and *collapsed* the short-turn axis (FAR0 thresholds
-    0.82/0.88 vs 0.605); English ERes2NetV2 was never released. In the
-    naming seat, ERes2Net-large (68.8 vs 71.1 % short-cluster naming,
-    interval spanning zero, domain-drifting scores) and TitaNet-L (64.1 %,
-    collapses headset-to-room) lose; w2v-BERT 2.0 SV beats base but trails
-    ReDimNet2 (`eval/README.md`). No trigger. ReDimNet2 won and ships;
-    what it left is item 4 of the Nemotron section.
-  - **Automatic profile updates (2026-08-07, reaffirmed post-ward):**
-    ungateable wrong updates above every implementable bar while the oracle
-    ties no-update everywhere; growth stays user-confirmed. Re-run
-    `eval/auto_update.py` as part of any future diarization change's gate
-    (likewise `eval/threshold_pick.py`).
-  - **Sortformer** — superseded: its successor Nemotron 3 removes two of
-    the three reasons (8 speakers, a working ONNX/CPU path) and is the
-    shipped diarizer; **joint/LLM SA-ASR** (trigger: a permissive,
-    CPU-practical joint model beating the modular cascade on meeting
-    benchmarks with real non-oracle diarization); **TS-VAD** (trigger: an
-    Apache/MIT ONNX implementation, or Personal-VAD-class open weights —
-    nomo-pvad, Apache-2.0, examined 2026-11-15 and not pursued: one pass per
-    enrolled profile, PyTorch only, no published benchmark, degrades on
-    far-field and Opus audio);
-    **AS-Norm** (degraded the strongest open-set models; trigger: an
-    unsatisfying threshold curve, and QMF-style duration-aware calibration
-    goes first); **EEND-TA** (watch — no code or weights; trigger: a
-    release); **pyannote.audio as a dependency** (opt-out telemetry, ORT
-    dropped, paid-SDK pull — weights keep getting extracted, the package
-    never imports here).
-- **Custom GPU kernels and second inference engines for diarization —
-  declined 2026-11-13.** A hand-written WGSL/wgpu backend, IREE, Burn and
-  ncnn were each measured on the ResNet34 embedder; ORT's WebGPU plugin
-  reaches a cross-vendor GPU on the engine already shipped with no kernel
-  code, so none of them earns its maintenance (numbers in `eval/README.md`,
-  the Nemotron 3 section). Triton is not a route: no Vulkan/D3D12 backend,
-  so it misses the integrated GPUs most users have.
-- **Repair-only overhang — the one open accuracy idea.** Default decode stays
-  the exact current slice; overhang fires only on a detected ≥1.5 s speech
-  hole. It is the salvage from the reverted cut-overlap work, structurally
-  immune to the language-flip sites that killed the always-on version. The
-  **VAD threshold 0.4 re-attempt is blocked on it** (its known cost is more
-  forced mid-speech cuts, unrepaired since the revert); a ~0.5 s always-on left
-  slice overhang stands as a separate candidate. Any of these re-runs the full
-  battery against a control worktree.
+**Speech recognition and accuracy**
+
+- **Challenger ASR models — declined 2026-07-27.** Word timestamps are
+  mandatory (`asr/base.py`; speaker assignment needs them), and every
+  leaderboard leader so far lost to Parakeet on our meeting audio (Voxtral
+  Small 24B 32:38, Canary-1B-v2 ~1:2, blind, de+en). Re-open: a leader that
+  emits word timestamps — a `BackendSpec` in `asr/registry.py`
+  (`git log --follow -p PLAN-ASR-CHALLENGER.md`).
 - **Never move VAD window bounds.** Both bound-moving fixes were tried and
   reverted; only the decode slice may change. A detector swap moves every
-  bound and is judged on what it buys against that churn: Silero v6 passed
-  2026-11-19 on speakerphone calls (`eval/README.md`, "Speech detector").
-- **livekit — re-ask deferred from the capture-helper plan, and its trigger
-  has now fired.** 25.6 MB installed for one class (`rtc.AudioProcessingModule`,
-  AEC3, imported in exactly one place — `aec.py`). It was never a
-  remove-the-wrapper candidate on its own: it discards nothing and costs no
-  correctness, and replacing it risks a canceller that measures 37.6 dB on
-  macOS. The trigger was the helper holding both channels with device
-  timestamps on every platform — true since 2026-08-02. Running AEC3 *inside*
-  the helper (Rust bindings to the same WebRTC APM) would mean channel pairing
-  never crosses a language boundary: `aec.py`'s timestamp machinery would stop
-  existing rather than get a better input. Revisit on all three platforms at
-  once, against the shipped ERLE numbers; the full reasoning is in the deleted
-  plan (`git log --follow -p PLAN-CAPTURE-HELPER.md`).
-- **A cancel button for an in-flight notes call.** Quitting the app no longer
-  waits one out (`5a6b902`: `shutdown()` abandons it, the transcript is already
-  persisted at `finalized`, and `steno notes --last` regenerates), but actually
-  *interrupting* a blocking `subprocess.run` / mlx generate needs the Popen
-  restructure priced in the deleted presets plan. Deferred, not declined.
-- **On-device notes backends.** Windows and Linux CPU stay Ollama-default; the
-  in-process fallback, if ever needed, is llama-cpp-python with off-PyPI
-  wheels. onnxruntime-genai-directml was evaluated and rejected (DX12-GPU-only
-  on the EOL DirectML EP).
-- **Packaged signed installers / any downloadable artifact.** Needs the $99
-  Developer ID plus notarization; revisit only if non-terminal users ask to
-  double-click an installer.
-- **Lower-priority, independent:** greedy re-ID → Hungarian assignment;
-  SRT/VTT dropping text not covered by `words` (latent — Parakeet emits
+  bound and is judged on what it buys against that churn (Silero v6 passed
+  2026-11-19, `eval/README.md`, "Speech detector").
+- **Lower priority, independent:** greedy re-ID → Hungarian assignment;
+  SRT/VTT dropping text not covered by `words` (latent: Parakeet emits
   full-or-none); meeting-mode auto-detect; hybrid cross-channel dedup;
-  acoustic first-segment LID for the live pass; re-running the winning biasing
-  config over the full test set.
+  acoustic first-segment language ID for the live pass; re-running the
+  winning biasing config over the full test set.
+
+**Diarization and speaker naming** (read `eval/diarization-sota-2026.md` and
+`eval/README.md`'s corpus-harness and Nemotron sections first)
+
+- **Hand-labelled references of our own audio — declined.** The AMI/ICSI
+  harness (`eval/ami.py`) builds them from public corpora in our two-channel
+  topology; the 0.62 naming threshold on our own audio stays unmeasured.
+- **The owned diarization loop — closed 2026-08-09, replaced by Nemotron 3
+  2026-11-15;** its PLDA + VBx fallback is closed with it
+  (`git log --follow -p PLAN-DIARIZATION.md`).
+- **DiariZen meeting-base (2026-08-09):** lost on the fair frame (+1.3 mean
+  paired ΔDER, wins 4/20, sign p≈0.012). Re-open: the meeting mix shifts to
+  many-speaker rooms (it won all four ICSI k=4–8 loops) — and it must now
+  beat Nemotron 3.
+- **Other embedding models (2026-08-07, naming seat 2026-11-18):**
+  ERes2NetV2-zh and ResNet34-LM regressed; ERes2Net-large, TitaNet-L and
+  w2v-BERT 2.0 SV trail ReDimNet2 (`eval/README.md`). No trigger.
+- **Automatic profile updates:** ungateable wrong updates while the oracle
+  ties no-update; growth stays user-confirmed. Re-run `eval/auto_update.py`
+  and `eval/threshold_pick.py` in any future diarization change's gate.
+- **Sortformer** (superseded by Nemotron 3); **joint/LLM SA-ASR** (re-open: a
+  permissive, CPU-practical joint model beating the cascade); **TS-VAD**
+  (re-open: an Apache/MIT ONNX implementation — nomo-pvad examined
+  2026-11-15, not pursued); **AS-Norm** (degraded the strongest models);
+  **EEND-TA** (re-open: a release); **pyannote.audio as a dependency**
+  (opt-out telemetry, paid-SDK pull; weights may be extracted).
+- **Custom GPU kernels and second inference engines — declined 2026-11-13**
+  (WGSL/wgpu, IREE, Burn, ncnn measured; ORT's WebGPU plugin reaches a GPU on
+  the engine already shipped; Triton has no Vulkan/D3D12 backend).
+- **Speaker labels in live captions:** out of scope; captions are
+  channel-coarse by design.
+
+**Notes and presets**
+
+- **A directory of preset *files* — rejected.** `[notes] command` runs
+  unattended after every meeting, so a shared checkout is arbitrary code
+  execution, and `git pull` must never change which commands run. If sharing
+  becomes real: a directory loaded *without* executable keys unless
+  settings.toml allowlists them.
+- **A preset-name stamp in `MeetingProfile` — rejected.** Profiles serialize
+  into every transcript and must record resolved values, not machine-local
+  references; regenerating old notes takes `--preset` explicitly.
+- **An override channel so a preset's backend beats `STENOGRAF_NOTES_BACKEND`
+  in the app — not worth it.** The variable is a developer escape hatch and
+  the Settings report names it (`resolve_meeting_request`'s docstring).
+- **Owner-grouped action items and `.notes.json` — removed deliberately** with
+  the markdown notes (the template is the schema); history in
+  `git log --follow -p PLAN-NOTES-MARKDOWN.md`.
+- **A cancel button for an in-flight notes call — deferred:** interrupting a
+  blocking `subprocess.run` / mlx generate needs a Popen restructure.
+- **In-process notes on Windows/Linux:** Ollama stays the default; the
+  fallback, if ever needed, is llama-cpp-python (off-PyPI wheels).
+  onnxruntime-genai-directml rejected (DX12-only, EOL DirectML EP).
+
+**Capture, mute and microphone choice**
+
+- **Muting by stopping capture, or before the echo canceller — rejected.**
+  Restarting capture is the fragile operation here; muting the system channel
+  upstream would take away the canceller's reference (`session.MuteSwitch`).
+- **Retroactive cut ("drop the last 30 s")** — its own design (immutable
+  store chunks, committed live words). **CLI mute control** — when asked.
+  **Mute remembered between meetings** — never (silently loses a meeting).
+  **"Speaking while muted" hint** — VAD power every muted second; deferred
+  until a forgotten mute is reported.
+- **System-audio device selection, per-preset `mic_device`, mid-meeting
+  device switching** — out of scope. **A standing pin that falls back to the
+  default** — rejected: silent fallback is the bug the picker exists to
+  prevent; a missing pinned device is fatal with the remedy named.
+- **The GUI remembering the picked microphone — deferred.** If wanted, a
+  GUI-owned `ui-state.json` in `data_dir()` is the cheap path (no
+  settings.toml writes); decide its precedence against the settings pin and
+  the CLI flag first.
+- **The device preflight on macOS's unpinned path — deferred.** Enumeration is
+  TCC-clean (measured 2026-08-12), so it is purely one extra subprocess per
+  start; measure that against the start budget, then it is a one-liner.
+
+**Updates and distribution**
+
+- **Silent updates, updating `uv`, a user-facing "go back a version", a
+  signature scheme beyond PyPI's HTTPS + uv's checksums** — declined.
+  **`steno update`** — only if wanted.
+- **Accepted holes in the updater:** a kill or power cut mid-swap leaves the
+  install broken until the install command is re-run (it repairs with
+  `--force`); closing that needs a self-repairing launcher, and the macOS one
+  is frozen. An app slower than 45 s to reach Python is rolled back while
+  starting (raise `NEVER_STARTED_S` if seen). An install with recorded uv
+  options (a package mirror writes `find-links` into the receipt) gets the
+  notice, never the button. uvx/pipx installs get a true but vague message.
+- **Packaged signed installers / any downloadable artifact:** needs the $99
+  Developer ID and notarization (locally written bundles need neither), and a
+  PyInstaller build would owe PySide6's LGPL relinking. Re-open only if
+  non-terminal users ask for a double-click installer.
+- **GUI toolkits other than Qt Quick (2026-07-25):** `textual-serve` +
+  pywebview (a browser engine — the wrong side of the no-web-UI lock); our own
+  terminal renderer (owning a terminal emulator's bug surface); Tk (uv's
+  python-build-standalone cannot open a Tk window: "Cannot find a usable
+  init.tcl"); Slint (GPLv3, no stable Python release); Toga (sdist-only GTK
+  deps); Dear PyGui (redraws continuously); PyQt6 (GPL would relicense the
+  project). **`LSUIElement` in the bundle** stays rejected: it stops `open`
+  from bringing the window forward.

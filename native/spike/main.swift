@@ -1,4 +1,4 @@
-// tap-spike: Phase 1 capture spike (PLAN.md §2 "Deployment & distribution").
+// tap-spike: the first Core Audio process-tap capture spike.
 //
 // Verifies, with a free ad-hoc-signed CLI binary launched from a terminal:
 //   1. `tap` — AudioHardwareCreateProcessTap (macOS 14.4+) fires the

@@ -1,8 +1,8 @@
 """Is the far-end reference aligned with the echo it caused -- and by how much off?
 
-The tool that found the Windows bug, kept because the same defect is possible on
-any platform that stamps its two channels on *arrival*: ``SessionClock`` gives
-each channel its own transport latency as a constant offset, and
+The tool that found the Windows bug, kept because the same defect returns the
+moment any transport stamps its two channels on *arrival*: each channel then
+carries its own transport latency as a constant offset, and
 ``EchoCanceller`` pairs the channels by timestamp. When the tap's path is the
 slower one, AEC3 is handed a reference that arrives *after* its own echo, and
 since it aligns the near end against far-end **history** only, it cancels
@@ -13,7 +13,8 @@ transcribed as the local speaker.
         --out probe-meeting        # ...speech over the speakers, with pauses...
     uv run python eval/aec_alignment.py probe
 
-It answers two questions and prints the constant to ship:
+It answers two questions and prints the correction that would fix the dump
+(every capture path today declares none, so anything but ~0 is a regression):
 
 1. **Where the echo sits.** The dump's WAVs share the capture clock's t=0, so a
    negative mic-vs-reference lag is the pathological case -- physically the mic
@@ -22,9 +23,9 @@ It answers two questions and prints the constant to ship:
    :class:`~stenograf.aec.EchoCanceller` -- the shipped code path, fed the dump's
    own timestamps -- so the recommendation is measured rather than reasoned.
 
-Run it on any platform whose capture provider opens one transport per channel
-(Windows' WASAPI pair, Linux's two ``parec`` processes). macOS is exempt by
-construction: its helper anchors both channels to one clock.
+Every platform's ``stenocap`` helper now stamps both channels on one device
+clock, so the expected answer everywhere is "no correction"; run it after any
+change to a capture transport to confirm that stays true.
 
 Everything printed is ASCII on purpose -- see ``eval/aec_echo_present.py``.
 """

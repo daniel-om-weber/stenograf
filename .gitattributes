@@ -1,4 +1,4 @@
-# The app bundle's bytes ARE the microphone grant (PLAN.md Phase 8 step 5): TCC
+# The app bundle's bytes ARE the microphone grant (native/appbundle/README.md): TCC
 # pins the app to the cdhash of these exact files, so any end-of-line or
 # encoding conversion on a checkout would silently revoke it for that user.
 src/stenograf/assets/Stenograf.app/** binary

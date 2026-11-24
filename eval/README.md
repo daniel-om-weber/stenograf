@@ -107,7 +107,7 @@ test). Results in `out/context-ab.md`:
    Splicing the previous window across the gap is weaker (15:6 / 21:17) — the
    seam costs accuracy, so the fix should extend windows into *contiguous*
    preceding audio (silence included) and drop the pre-span words, NOT splice
-   distant speech. That changes only the decode step (pipeline `_decode` +
+   distant speech. That changes only the decode step (`pipeline.decode_channel` +
    `WindowedLiveDecoder._decode_window`, in lockstep for the reuse guarantee)
    — window spans and pack_windows stay untouched.
 2. **VAD-drop check** — the 74 pivot-only spans decoded by Parakeet with no
@@ -121,7 +121,7 @@ test). Results in `out/context-ab.md`:
 
 **Shipped fix (2026-07-19): context-carry decode, and nothing else.**
 Windows under 8 s decode with up to 15 s of contiguous left context
-(`vad.context_start`, mirrored by `pipeline._decode` and
+(`vad.context_start`, mirrored by `pipeline.decode_channel` and
 `WindowedLiveDecoder._decode_window`; window bounds untouched).
 Verification: byte-identity + full suite green, `live.py` at
 **0.0 % WER** vs finalize (reuse guarantee intact), `context_ab.py` re-run
@@ -196,10 +196,13 @@ German windows re-rolling into English. Reverted whole for simplicity;
 `windows.py` and `context_ab.py` (experiment 3, the jitter probe) went
 back with it to the pre-change versions matching the restored pipeline.
 
+## Diarization scoring
+
 Measures the *diarizer*, not the ASR: **DER** (Diarization Error Rate) and
 **word attribution** (of the finalized words, the fraction placed on the right
-speaker). Nothing speaker-centric — re-ID threshold tuning, clustering/embedding
-upgrades — is measurable without this, so it is the gating prerequisite.
+speaker). This first path scores private recordings against hand-labelled
+references; the corpus harness below measures the same two numbers on
+AMI/ICSI without any hand labels.
 
 References are **hand-labelled** speaker turns in NIST RTTM. The audio is a mono
 downmix of every speaker (`extract.py`'s `-ac 1`), so one RTTM per segment labels
@@ -208,8 +211,7 @@ all distinct voices in it.
 ```sh
 # 1. Seed a draft from the current diarizer to correct while listening (much
 #    faster than labelling boundaries from scratch). Pass the real speaker count
-#    you remember — unconstrained estimation over-clusters badly (de-1 → 13
-#    speakers), which is exactly the problem this measures.
+#    you remember; it caps the diarizer's own estimate.
 uv run eval/diarize.py --bootstrap --segments de-1,de-2,en-1 --num-speakers 3
 #    → eval/refs/<id>.draft.rttm  (each line: SPEAKER <id> 1 <onset> <dur> <NA> <NA> <spk> <NA> <NA>)
 
@@ -240,7 +242,9 @@ gitignored (private content).
 > `collapse_probe`, `nemotron_collapse`, `diarizen_arm` — live in git history
 > (`git log --diff-filter=D -- eval/<name>.py`). `diarize.py`, `solo_arms.py`
 > and `split_recovery.py` now run Nemotron, so their published numbers
-> describe the diarizers they ran then, not a rerun today.
+> describe the diarizers they ran then, not a rerun today. The plan files
+> cited below — `PLAN-DIARIZATION.md` and `PLAN-DIARIZATION-SPEED.md` — were
+> deleted when their work closed; read them with `git log --follow -p <file>`.
 
 The `PLAN-DIARIZATION.md` step-0 harness sidesteps hand-labelling: `ami.py`
 downloads per-speaker headset audio for five recurring groups — AMI ES2003,
@@ -629,7 +633,8 @@ was never released (3D-Speaker #208), leaving the Chinese-200k V2
 (`v2zh`) — a language-domain change measured, not assumed — and WeSpeaker
 ResNet34-LM (`resnet34lm`, dim 256, pyannote-3's own embedding).
 
-The table in `PLAN-DIARIZATION.md` step 3 has the verdict: both regress loop
+The table in `PLAN-DIARIZATION.md` step 3 (now in git history:
+`git log --follow -p PLAN-DIARIZATION.md`) has the verdict: both regress loop
 DER by ~6–7 pts (18.0 % → 23.8/24.8 %) and word attribution by ~7 pts
 (89.7 % → 83.1/82.1 %), and the short-turn axis the step existed to fix
 collapses — 3 s DIR@FAR0 79.2 % → 10.6 % (v2zh) / 0.0 % (resnet34lm), 2 s
@@ -639,7 +644,7 @@ both candidates' cosine distributions compress upward on our meeting domain
 short-cluster known scores fall below them. v2zh's one win — full-duration
 DIR 91.5 % vs 88.7 % — is real but pays 5.8 DER points and the short-turn
 collapse for it. Declined; ERes2Net-base stays. The recorded leads (EN
-eres2net-large self-export, ReDimNet2) carry their triggers in the plan.
+eres2net-large self-export, ReDimNet2) carried their triggers in that plan.
 
 #### The known-count partitioner and the fold are one decision (2026-08-07)
 
@@ -894,8 +899,8 @@ n=1 meeting, one model, one language, a 33 KB transcript, and the run sent
 no `think` field, so qwen3 ran at the server default rather than a pinned
 thinking mode. Ollama on this box is genuinely CPU-only (the package ships
 only `libggml-cpu-*.so`). The notes output was clean and template-complete,
-which is incidental evidence for `PLAN.md`'s unrun Ollama gates, not a
-substitute for running them.
+which was incidental evidence for the Ollama gates; those ran on their own on
+2026-08-12.
 
 **The online worker's gates, measured without writing one.** `OwnDiarizer`'s
 real stages are trickle-paced one 10 s window per second of wall clock —
@@ -948,8 +953,11 @@ outside the 11–21 % repeat spread.
 #### Owning the embedder's front end: the config, and how to check one (2026-08-11)
 
 The shared-trunk route needs to feed the embedding model ourselves, which
-needs our own fbank to match sherpa's. `eval/fbank_parity.py` gates that, and
-passes with room: embeddings reach **worst 1−cos = 3.0e-11** (float32 front
+needs our own fbank to match sherpa's. `eval/fbank_parity.py` gated that for
+the ERes2Net embedder of the time, and passed with room. (It does not run
+against today's voice model: ReDimNet2-B6 carries its own front end in the
+graph, and sherpa's extractor refuses the file for lack of a `model_type`
+entry — measured 2026-11-24.) Embeddings reached **worst 1−cos = 3.0e-11** (float32 front
 end 1.3e-8) against a 1e-4 bar, over 0.5/1/4/10/30 s clips and over
 production's real pair-slice shapes — 10–40 pieces of ~272 samples each, an
 order of magnitude shorter and more fragmented than contiguous speech.
@@ -1144,7 +1152,9 @@ Box: Ryzen AI 9 HX 370 (4 Zen 5 + 8 Zen 5c, 24 threads), Radeon 890M iGPU
 (RDNA 3.5, Mesa RADV Vulkan, no ROCm), Linux, mains, `balanced` profile.
 Single runs unless a repeat is given — the 11–21 % repeat spread of the
 2026-08-11 x86 datapoint applies. The held-out comparison reproduces with
-`eval/heldout.py` (fetch, production's arms, scoring) and
+`eval/heldout.py` (fetch, scoring, and the `library` arm that runs the shipped
+Nemotron port; its `known` and `estimate` arms ran the deleted diarizers and
+went with them in 353bd89) and
 `eval/nemotron_arm.py` (the Nemotron arm and its parity check against the
 PyTorch reference); the other measurements' scripts were throwaway, so their
 decision-relevant numbers are all here.
@@ -1254,8 +1264,9 @@ reference speech, not an ASR word run. (The x86 known-count arm stopped short of
 macOS run below.) The literature cuts the other way at k=2 — the strongest hybrid (DiariZen
 large, CC-BY-NC) beats Nemotron there on a provisional third-party benchmark
 (7.29 vs 10.31 DER; NVIDIA's own card shows Sortformer v2.1 ahead on 2-speaker
-CALLHOME, 5.68 vs 5.98) — so non-AMI 2-speaker audio is the open gate
-(`PLAN.md`). The architecture for cross-meeting names is settled practice
+CALLHOME, 5.68 vs 5.98) — so non-AMI 2-speaker audio needed its own
+measurement: the user's own calls, below (`owncalls.py`). What stays open in
+`PLAN.md` is the shared room mic. The architecture for cross-meeting names is settled practice
 either way: diarize, embed each speaker with a separate voiceprint model, match
 a profile store (pyannoteAI identification, NVIDIA's cascaded pipeline,
 AssemblyAI's TitaNet recipe); no released model does both jobs, and
@@ -1807,7 +1818,8 @@ brackets are the paired 95 % interval against ERes2Net-base:
 - On the user's calls, a map that never heard German or a phone codec: 97.6 %
   named at 2 s with 1.2 % strangers named, against 93.5 % / 4.7 % for the old
   model (about eleven partners).
-- Translated entries need their own threshold. At the shipped 0.621 they name
+- Translated entries need their own threshold. At 0.621 (the 1 %-stranger
+  point, shipped rounded to 0.62) they name
   nobody wrongly but far fewer people (calls at 2 s: 42 % against 83 %).
   Their 1 %-stranger point barely moves between headset, room mic and phone
   (spread 0.021, against 0.145 for either model), so one fixed value should
@@ -2165,7 +2177,8 @@ dump triple, and `rig.json`. Keep volume, lid angle, and source clip fixed
 across runs you compare. Measured 2026-07-10 (MacBook speakers, volume 63):
 AEC on → 37.6 dB ERLE, −65 dBFS residual, AECMOS echo 4.73, **0 leaked lines
 before any text backstop**; AEC off → −27 dBFS raw echo, AECMOS echo 1.49.
-(`aec_rig.py` itself is macOS-only — it drives `afplay`.)
+(`aec_rig.py` drives macOS through `afplay` and Windows through
+`aec_windows.py`; Linux is not wired up.)
 
 ### Before any of it: is there an echo path?
 
@@ -2201,29 +2214,33 @@ these two rows are what it has to beat.
 
 `eval/aec_alignment.py` is that whole diagnosis in one command — it measures the
 lag, replays the dump through the **real** `EchoCanceller` at a sweep of
-corrections, and prints the `far_end_lag_s` to ship:
+corrections, and prints the `far_end_lag_s` correction that would fix it:
 
 ```sh
 uv run python eval/aec_alignment.py probe            # measure + sweep
 uv run python eval/aec_alignment.py probe --no-sweep # measure only
 ```
 
-It compares what it measures against what the capturing provider already
-declares, so a fixed machine reads PASS. No transport is arrival-stamped any
+It compares what it measures against a declared correction — zero, since no
+capture path declares one any more (`--declared` scores a dump from an older
+build) — so a healthy machine reads PASS. No transport is arrival-stamped any
 more: the Linux backend joined the Rust helper in 2026-08 (`parec` left with
 it), so all three platforms anchor both channels to one OS clock, and this
 instrument's job is to *verify* that a dump needs no correction rather than to
-recommend one. Every AEC ERLE number on record is still from macOS.
+recommend one. Every AEC ERLE number on record is from macOS or from the
+deleted Windows transport above; none is from the capture helper on Windows or
+Linux yet.
 
-Two notes for whoever measures this next:
+Three notes for whoever measures this next:
 
 - The dump records frames as the provider stamped them, so `lpb.wav` still
   trails `mic.wav` *after* the fix — the correction lives in the canceller, not in
   the timeline the dump is written on. Judge the fix by ERLE and by leaked lines,
   not by re-measuring the dump's own alignment.
-- **The lag is re-rolled at every meeting start**, since each channel anchors on
-  its own first frame and the two pump threads open independently: the two runs
-  above measured 60 ms and 10–25 ms, minutes apart on one machine. So one dump is
+- **On the arrival-stamped Windows transport the lag was re-rolled at every
+  meeting start**, since each channel anchored on its own first frame and the
+  two pump threads opened independently: the two runs above measured 60 ms and
+  10–25 ms, minutes apart on one machine. So one dump is
   one sample — fit a constant to it and the next meeting can be dead. It is also
   why per-quarter lag figures come with their correlation and no drift verdict:
   over 20 s the estimate is noisy enough to invent a 250 ms shift, and a quarter
@@ -2489,7 +2506,6 @@ of 199. Whether x86 CPUs show the same fp16 step is not measured.
 
 - ~~Canary-1B-v2 runtime~~ — resolved, see above: no accelerated runtime with
   word timestamps exists; NeMo-on-MPS reference backend wired up instead.
-- **speakrs diarization sanity check** on the same audio (not wired up yet).
 
 ## Metrics
 

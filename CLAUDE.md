@@ -11,20 +11,19 @@ run, transcribe, notes, settings report) and `captions.py` (live-caption line
 rules). Logic a screen needs that the library lacks goes into the library —
 never into one front-end, or the Qt app and the CLI drift.
 
-`PLAN.md` holds **only unbuilt work** — Phase 8 closed 2026-07-30 (all seven
-steps shipped; the app is the default UI, installed as
-`~/Applications/Stenograf.app` by `steno setup`, and lives in the menu bar).
-What remains there: step 1's watt half (deferred to a quiet machine), the
-step-7 observation gates still to run on this Mac, the open platform items,
-what the Nemotron switch left (the room-mic watch, WebGPU, the release
-preconditions) and the declined list. Step 5's bundle is FROZEN: its bytes are every user's
+`PLAN.md` holds **only unbuilt work**, in three parts: open work (code or
+measurement still owed), one checklist of gates that need real hardware or
+Daniel's observation, and the deferred-and-declined list that stops rejected
+ideas from being re-proposed. The Qt app is the default UI, installed as
+`~/Applications/Stenograf.app` by `steno setup`, and lives in the menu bar.
+That app bundle is FROZEN: its bytes are every user's
 microphone grant, so read `native/appbundle/README.md` before touching
 anything under it or under `src/stenograf/assets/` — new sibling files there
 are fine, the `.app` tree is not. Everything
 shipped, including the architecture and model-choice research, the AEC design
-and the code-cleanup backlog, was pruned on 2026-07-25 and lives in git
-history (`git log --follow -p PLAN.md`, and the deleted `PLAN-AEC.md` /
-`PLAN-CLEANUP.md`).
+and the code-cleanup backlog, was pruned on 2026-07-25 and again on
+2026-11-24, and lives in git history (`git log --follow -p PLAN.md`, and the
+deleted `PLAN-AEC.md` / `PLAN-CLEANUP.md`).
 **The capture helper is whole (2026-08-02): every platform streams
 device-stamped audio from a `stenocap` helper, and no arrival-stamped
 transport exists.** Arrival-stamped audio was the root cause behind both the
@@ -37,7 +36,9 @@ PipeWire through pipewire-pulse) speaking the frame format
 platforms share (the per-platform provider modules folded into it 2026-08-02;
 only `capture/windows.py` remains, for the consent store and the loopback
 suffix); `soundcard`, `parec`, `FAR_END_LAG_S`, `SessionClock` and
-`far_end_lag_s` itself are all deleted. The wheel matrix carries it: macOS
+`CaptureProvider.far_end_lag_s` are all deleted (`EchoCanceller` keeps a
+`far_end_lag_s` parameter, default 0, only as `eval/aec_alignment.py`'s
+verification knob). The wheel matrix carries it: macOS
 arm64, win_amd64 and **one manylinux_2_28 Linux wheel**, so Ubuntu 22.04 /
 Debian 12 / RHEL 9 keep live capture (the manylinux_2_39 wheel existed only for
 the diarization helper's glibc floor and went with it, 2026-11-15).
@@ -83,17 +84,19 @@ that file**, fetched from uv's cache and run by the *old* app on a bare
 interpreter. So its command line, its request file and its result file are a
 contract with every release already installed — read `_updater.py`'s module
 docstring before touching it: fields may be added with defaults, nothing may be
-renamed or removed, and it must stay standard-library-only. `PLAN-UPDATE.md`
-holds the design, the uv measurements behind it (`eval/update_mechanics.sh`
-re-runs them) and what is still open; `scripts/update_e2e.py` runs a whole
+renamed or removed, and it must stay standard-library-only. The design and
+the uv measurements behind it are in `git log --follow -p PLAN-UPDATE.md`
+(`eval/update_mechanics.sh` re-runs the measurements); the release job that
+updates the last *published* release, and the real-machine gates, are still
+open in PLAN.md. `scripts/update_e2e.py` runs a whole
 update and a rollback on a real uv in a throwaway home and gates every
 release. Never try an update against the machine's own install: the updater
 rewrites the launcher files in the home directory.
 
-**Nine side-plans closed and were deleted; their evidence is in git history,
+**Twelve more side-plans closed and were deleted; their evidence is in git history,
 and none of it should be re-derived from scratch.** `PLAN-LINUX.md`
 (2026-07-26): evidence, decisions and the container ladder. `PLAN-WINDOWS.md`
-(2026-07-27): five of six items green — the `.lnk` launcher, the
+(2026-07-26): five of six items green — the `.lnk` launcher, the
 AppUserModelID, the app on a real session, the TUI in Windows Terminal, DirectML
 on the AMD tier — plus the AEC bug it found (the loopback tap's arrival stamps
 run ~60 ms behind the mic's, AEC3 only searches backwards, so
@@ -104,7 +107,7 @@ a real Windows desktop session (screenshot DPI, SAPI voice selection,
 German-locale traps, driving the TUI without a pty) — read it before observing
 anything there. Its one leftover, the AEC-quality run, is in PLAN.md and now
 gates the helper rather than nothing.
-`PLAN-ASR-CHALLENGER.md` (2026-07-27): the recurring "leaderboard has a new
+`PLAN-ASR-CHALLENGER.md` (2026-07-26): the recurring "leaderboard has a new
 leader" question is **declined**, not gated — see PLAN.md's declined list before
 evaluating any ASR model. `PLAN-NOTES-MARKDOWN.md` and
 `PLAN-MEETING-PRESETS.md` (both 2026-07-30, both built): notes are markdown
@@ -115,16 +118,26 @@ against a template that *is* the schema, and a meeting kind is a
 history before touching `notes/` — the deleted JSON schema was quietly doing
 four jobs (structure, sanitizing, truncation detection, refusal detection) and
 which replacement covers each is not guessable from the code. Their leftovers —
-two Ollama gates that need a non-macOS box and Gate A's read — are in PLAN.md.
+Gate A's read and whether presets get written at all — are PLAN.md gates (the
+two Ollama gates ran green on 2026-08-12).
 `PLAN-DIARIZATION.md` (2026-08-09, all five steps measured): the AMI/ICSI
 harness, the owned ward+gated-fold loop (production until 2026-11-15),
-profile store v2 + rename-once enrollment, the 0.56 threshold — and DiariZen
+profile store v2 + rename-once enrollment, the 0.56 threshold (0.62 since the
+voice model changed) — and DiariZen
 meeting-base declined at the fair k+1+fold boundary (`eval/README.md`).
 `PLAN-DIARIZATION-SPEED.md` (closed 2026-11-15 with the loop it was speeding
-up; its surviving facts are in PLAN.md) and `PLAN-NEMOTRON.md` (2026-11-15,
-all six steps: the migration above, step by step with its gates).
+up; its one surviving fact, the timing spread on the x86 handheld, is in
+`eval/README.md`), `PLAN-NEMOTRON.md` (2026-11-15, all six steps: the
+migration above, step by step with its gates), and four closed 2026-11-24
+with their features built and only gates left (now in PLAN.md):
+`PLAN-FINISH.md` (the finish card), `PLAN-MUTE.md` (muting either source),
+`PLAN-MIC-DEVICE.md` (choosing the microphone) and `PLAN-UPDATE.md` (the
+self-updater, above).
 Retrieve any of them with `git log --follow -p <file>`. Measured evidence for the shipped defaults is in
-`eval/README.md`; design rationale lives in the code's own docstrings. Use the
+`eval/README.md`; design rationale lives in the code's own docstrings. Who
+else does what stenograf does, what is still unique, and competitor features
+worth considering (none planned) are in `eval/competitors-2026.md` (2026-11-24;
+re-check it against its own triggers before citing it). Use the
 `verify` skill to run/observe the tool without live capture hardware.
 
 ## Product philosophy (LOCKED — don't re-litigate)
@@ -132,7 +145,8 @@ Retrieve any of them with `git log --follow -p <file>`. Measured evidence for th
 The tool ends at **transcript + notes in a visible folder**
 (`~/Documents/Meetings`). No meeting management, browsing, playback, index,
 or web UI — ever. Obsidian/Finder/audio players do that; the filesystem is
-the index. One exception, Daniel's (2026-11-16): the "Who spoke?" panel plays
+the index. One exception, Daniel's (2026-11-16): the finish card's speaker
+rows (formerly the "Who spoke?" panel) play
 a few seconds of each speaker's voice so a stranger can be recognised by ear —
 samples cut at the stop, held in memory only, dropped when the screen is left
 (`playback.py`). That is identification, not meeting playback; it does not
@@ -180,7 +194,7 @@ and headless/SSH use is the line-oriented CLI (`steno start` streams plain
 captions; `--plain` is a hidden accepted no-op). The observation gates are
 green (Daniel ran the three launch gestures the same day). The decision
 record and review findings: `git log --follow -p PLAN-GUI-DEFAULT.md`. The
-shipped flip has not been released yet — release = version bump + tag.
+flip shipped in 0.5.0.
 
 **`--gui` must keep working forever** (`cli/__init__.py`): `Stenograf.app`'s
 launcher stub is the frozen binary holding every macOS user's microphone
@@ -192,8 +206,9 @@ both dispatch gates by design.
 - **Notes backends per platform** (researched 2026-07-10): macOS = mlx-lm,
   pinned to the 0.29 line (0.30+ requires transformers>=5 which is
   import-broken, and Voxtral needs 4.x); generation must stay bound to the
-  thread that imported `mlx_lm` (guarded in code). **Linux CPU fallback =
-  llama-cpp-python — its wheels are OFF-PyPI** (extra index URL required);
+  thread that imported `mlx_lm` (guarded in code). **A Linux CPU fallback,
+  if ever built, = llama-cpp-python — its wheels are OFF-PyPI** (extra index
+  URL required; not built — `notes/` has mlx, ollama and command backends);
   Ollama stays the default when a GPU box is available. **Windows (decided
   2026-07-12): Ollama-default, no in-process backend unless Ollama proves
   insufficient — then llama-cpp-python CPU GGUF (Phi-4-mini), same off-PyPI

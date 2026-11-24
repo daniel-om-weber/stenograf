@@ -1,10 +1,10 @@
 # Stenograf.app — the frozen launcher bundle
 
-The macOS desktop launcher `steno setup` installs into `~/Applications`
-(Phase 8 step 5). Sources live here; the built product is committed at
+The macOS desktop launcher `steno setup` installs into `~/Applications`.
+Sources live here; the built product is committed at
 `src/stenograf/assets/Stenograf.app` and ships inside the wheel, which is the
-opposite of how `helper/` and `stenocap/` work — and the reason is the whole
-design.
+opposite of how the capture helpers in `stenocap-macos/` and `stenocap/` work
+(built per machine, never committed) — and the reason is the whole design.
 
 ## Why it is frozen
 
@@ -29,8 +29,8 @@ Three consequences, all load-bearing:
   the stub falls back to `~/.local/bin/steno --gui`, which is why the CLI has to
   keep accepting `--gui` forever.
 - **Adding the icon later would have re-prompted everyone**, so the layout was
-  frozen complete — icon included, and with the Info.plist keys the menu-bar
-  mode needs (see below) — before any user was asked for permission.
+  frozen complete — icon included — before any user was asked for permission.
+  The menu-bar mode turned out to need no Info.plist key at all (see below).
 
 The bundle has been rebuilt exactly once since, on 2026-07-25, to replace the
 icon. That was legitimate only because `git tag --contains` showed the bundle's
@@ -101,7 +101,8 @@ freeze rule from the other direction, since nothing migrates an old grant.
 - **The child owns its activation policy at runtime.**
   `setActivationPolicy(accessory)` flips the record from `Foreground` to
   `UIElement` live, so **the menu-bar mode needs no Info.plist key** — the
-  coupling the plan feared does not exist, and `gui/tray.py` does exactly this.
+  feared coupling between tray mode and the frozen plist does not exist, and
+  `gui/tray.py` does exactly this.
   `LSUIElement` was tried and rejected: it also stops `open` from bringing the
   window forward, so the app opened behind whatever was in front.
 - A second `open` re-activates the running instance instead of starting a

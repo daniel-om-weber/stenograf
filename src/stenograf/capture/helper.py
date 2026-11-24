@@ -435,7 +435,10 @@ class HelperCaptureProvider(CaptureProvider):
         Read at the pipe, not where frames are consumed: at a meeting's start the
         consumer is seconds behind while the models load. Short of the truth by
         the pipe's latency (~30–40 ms, measured 2026-11-16), which errs toward
-        muting a little early."""
+        muting a little early. Not ``time.monotonic()`` since :meth:`start`: on
+        a cold start the helper's own t=0 came 1.8 s after ``start`` returned
+        (macOS, 2026-11-16), and that clock would leave as long after a mute
+        press unmuted."""
         latest = self._latest
         if latest is None:
             return 0.0 if self._queue is not None else None
