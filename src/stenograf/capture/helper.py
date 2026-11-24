@@ -211,8 +211,20 @@ def query_devices(channels: set[Channel], *, mic_device: str | None = None) -> d
 
 
 def _mic_device_argv(mic_device: str | None) -> list[str]:
-    """The pin as argv, or nothing at all when the OS default is wanted."""
-    return ["--mic-device", mic_device] if mic_device else []
+    """The pin as argv, or nothing at all when the OS default is wanted.
+
+    Every helper refuses a value starting with ``--`` as a flag swallowed by
+    ``--mic-device``, so such a selection (a typo, a pasted flag) is refused
+    here, where the error can name the setting rather than the helper's argv.
+    """
+    if not mic_device:
+        return []
+    if mic_device.startswith("--"):
+        raise CaptureUnavailableError(
+            f'the selected microphone "{mic_device}" cannot be a device — names and ids '
+            "never start with \"--\"; run `steno devices` to list the connected ones"
+        )
+    return ["--mic-device", mic_device]
 
 
 def _ask_helper(argv: list[str], fallback: str) -> bytes:
@@ -237,15 +249,28 @@ def _ask_helper(argv: list[str], fallback: str) -> bytes:
             "the capture helper's device query timed out — sound server hung?"
         ) from exc
     if result.returncode == 2:
-        # The helper's usage exit, which it also gives for a flag it does not
-        # know: a dev checkout whose binary predates this Python.
-        raise CaptureUnavailableError(
-            f"the capture helper does not understand `{' '.join(argv)}` — it is older than "
-            "this version of stenograf; rebuild it (native/README.md) or reinstall"
-        )
+        # The helper's usage exit. Only "unknown argument" means a binary that
+        # predates this Python (a dev checkout); anything else is the helper
+        # refusing a value, and its own reason is the one to show.
+        reason = _usage_complaint(result.stderr)
+        if reason is None or reason.startswith("unknown argument"):
+            raise CaptureUnavailableError(
+                f"the capture helper does not understand `{' '.join(argv)}` — it is older than "
+                "this version of stenograf; rebuild it (native/README.md) or reinstall"
+            )
+        raise CaptureUnavailableError(f"the capture helper refused its arguments: {reason}")
     if result.returncode != 0:
         raise CaptureUnavailableError(_helper_complaint(result.stderr, fallback))
     return result.stdout
+
+
+def _usage_complaint(stderr: bytes) -> str | None:
+    """The reason a helper gave for its usage exit: the line before its usage."""
+    for line in stderr.decode("utf-8", errors="replace").splitlines():
+        text = line.strip().removeprefix("stenocap:").strip()
+        if text and not text.startswith("usage:"):
+            return text
+    return None
 
 
 def _helper_complaint(stderr: bytes, fallback: str | None = None) -> str:

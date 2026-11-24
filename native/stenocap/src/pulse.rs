@@ -311,6 +311,24 @@ fn sources(conn: &mut Connection) -> Result<Vec<InputDevice>, String> {
     Ok(devices)
 }
 
+/// A source's description, or its id when the server gives none.
+///
+/// Monitors are sources too, so this names the system channel as well.
+fn source_description(conn: &mut Connection, id: &str) -> Result<String, String> {
+    let found: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let slot = Rc::clone(&found);
+    let op = conn.context.introspect().get_source_info_by_name(id, move |result| {
+        if let ListResult::Item(info) = result {
+            *slot.borrow_mut() = info.description.as_ref().map(|d| d.to_string());
+        }
+    });
+    while op.get_state() == OperationState::Running {
+        iterate(&mut conn.mainloop)?;
+    }
+    let described = found.borrow_mut().take();
+    Ok(described.unwrap_or_else(|| id.to_string()))
+}
+
 /// Every microphone this machine could record from, for the picker.
 pub fn list_inputs() -> Result<Vec<InputDevice>, String> {
     let mut conn = connect("stenograf")?;
@@ -328,10 +346,13 @@ fn mic_source(conn: &mut Connection, pin: Option<&str>) -> Result<(String, Strin
 }
 
 /// What each channel would record from right now, for the CLI's preflight.
+///
+/// Every channel is named by its description, as the picker and the macOS and
+/// Windows helpers name devices: the CLI's `capture: mic ← …` line and `steno
+/// doctor` print these to a person.
 pub fn device_names(taps: &[Tap], mic_device: Option<&str>) -> Result<Vec<(Tap, String)>, String> {
     let mut conn = connect("stenograf")?;
-    // A pinned mic is validated against the source list (and named by its
-    // human description, the way the picker named it); an unpinned one is
+    // A pinned mic is validated against the source list; an unpinned one is
     // whatever the server currently calls its default.
     let pinned = match mic_device {
         Some(pin) if taps.contains(&Tap::Mic) => Some(mic_source(&mut conn, Some(pin))?.1),
@@ -344,15 +365,18 @@ pub fn device_names(taps: &[Tap], mic_device: Option<&str>) -> Result<Vec<(Tap, 
         let name = match tap {
             Tap::Mic => match &pinned {
                 Some(name) => name.clone(),
-                None => source
-                    .clone()
-                    .ok_or("no default microphone is configured — check sound settings")?,
+                None => {
+                    let id = source
+                        .clone()
+                        .ok_or("no default microphone is configured — check sound settings")?;
+                    source_description(&mut conn, &id)?
+                }
             },
             Tap::System => {
                 let sink = sink
                     .clone()
                     .ok_or("no default output device is configured — check sound settings")?;
-                format!("{sink}.monitor")
+                source_description(&mut conn, &format!("{sink}.monitor"))?
             }
         };
         names.push((tap, name));
@@ -379,12 +403,14 @@ pub fn pump(
     // Resolved before the stream exists: a pin that names nothing present must
     // fail with its own reason here, not as a stream that goes Failed ten
     // seconds later with the server's generic complaint.
-    let device = match tap {
+    // `shown` is what messages call the device: the pin's description, the
+    // way every other message and platform names a microphone.
+    let (device, shown) = match tap {
         Tap::Mic => match mic_source(&mut conn, mic_device) {
-            Ok((id, _)) => id,
+            Ok(found) => found,
             Err(why) => return Some(why),
         },
-        Tap::System => Tap::System.device().to_string(),
+        Tap::System => (Tap::System.device().to_string(), Tap::System.device().to_string()),
     };
     let spec = Spec { format: Format::S16le, channels: 1, rate: SAMPLE_RATE };
     debug_assert!(spec.is_valid());
@@ -414,7 +440,7 @@ pub fn pump(
         flags |= StreamFlagSet::DONT_MOVE;
     }
     if let Err(err) = stream.connect_record(Some(&device), Some(&attr), flags) {
-        return Some(open_failure(tap, &device, &err.to_string().unwrap_or_default()));
+        return Some(open_failure(tap, &shown, &err.to_string().unwrap_or_default()));
     }
 
     // Ready, then timing: stamps derive from the server's latency accounting,
@@ -430,7 +456,7 @@ pub fn pump(
             return None;
         }
         if setup_deadline < std::time::Instant::now() {
-            return Some(open_failure(tap, &device, "timed out waiting for the stream to start"));
+            return Some(open_failure(tap, &shown, "timed out waiting for the stream to start"));
         }
         if let Err(why) = iterate(&mut conn.mainloop) {
             return Some(why);
@@ -439,7 +465,7 @@ pub fn pump(
             StreamState::Ready => {}
             StreamState::Failed | StreamState::Terminated => {
                 let why = conn.context.errno().to_string().unwrap_or_default();
-                return Some(open_failure(tap, &device, &why));
+                return Some(open_failure(tap, &shown, &why));
             }
             _ => continue,
         }
@@ -521,7 +547,7 @@ pub fn pump(
         // into account before the silence is held against the device.
         if pinned && liveness.lost(Instant::now()) {
             break Some(format!(
-                "the selected microphone ({device}) stopped delivering audio for \
+                "the selected microphone ({shown}) stopped delivering audio for \
                  {}s — reconnect it and start again, or pass `--mic-device default` \
                  to follow the system default",
                 DEVICE_LOST.as_secs()

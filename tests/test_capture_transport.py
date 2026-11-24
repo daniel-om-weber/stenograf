@@ -479,3 +479,45 @@ class TestMicDevice:
         monkeypatch.setattr(helper.subprocess, "run", lambda *a, **kw: Old())
         with pytest.raises(CaptureUnavailableError, match="older than this version"):
             list_input_devices()
+
+    def test_a_refused_value_is_not_blamed_on_an_old_helper(self, monkeypatch):
+        # The same exit code, but the helper understood the flag and refused
+        # what came with it: "rebuild the helper" would be the wrong remedy.
+        import stenograf.capture.helper as helper
+        from stenograf.capture.helper import list_input_devices
+
+        monkeypatch.setattr(helper, "find_helper", lambda: "stenocap")
+
+        class Refused:
+            returncode = 2
+            stdout = b""
+            stderr = (
+                b"stenocap: --mic-device needs a device id or name\n"
+                b"stenocap: usage: stenocap [--mic] [--system] [--mic-device ID]\n"
+            )
+
+        monkeypatch.setattr(helper.subprocess, "run", lambda *a, **kw: Refused())
+        with pytest.raises(CaptureUnavailableError) as raised:
+            list_input_devices()
+        assert str(raised.value) == (
+            "the capture helper refused its arguments: --mic-device needs a device id or name"
+        )
+
+    def test_a_selection_that_looks_like_a_flag_is_refused_before_the_helper(
+        self, monkeypatch
+    ):
+        # Every helper would refuse it with its usage exit; the user should
+        # read about their setting and `steno devices`, not about argv.
+        import stenograf.capture.helper as helper
+        from stenograf.capture.helper import query_devices
+
+        monkeypatch.setattr(helper, "find_helper", lambda: "stenocap")
+        ran = []
+        monkeypatch.setattr(helper.subprocess, "run", lambda *a, **kw: ran.append(a))
+        with pytest.raises(CaptureUnavailableError, match="steno devices") as raised:
+            query_devices({Channel.MIC}, mic_device="--usb-mic")
+        assert '"--usb-mic"' in str(raised.value)
+        assert not ran, "the helper must not be asked"
+
+        with pytest.raises(CaptureUnavailableError, match="steno devices"):
+            StdinEofTransport(command=["stenocap"], mic_device="--usb-mic").start({Channel.MIC})

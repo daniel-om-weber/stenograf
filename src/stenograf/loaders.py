@@ -332,8 +332,8 @@ def _base_provider(
     if sys.platform.startswith("linux"):
         from stenograf.capture.helper import HelperCaptureProvider, query_devices
 
-        # The undecorated preflight: a monitor's name already says what it is
-        # (``….monitor``), so nothing is appended the way Windows adds
+        # The undecorated preflight: a monitor's description already says what
+        # it is ("Monitor of …"), so nothing is appended the way Windows adds
         # "(loopback)".
         return _native_provider(
             HelperCaptureProvider, query_devices, plans, announce, on_log, mic_device

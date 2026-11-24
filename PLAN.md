@@ -96,19 +96,9 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    cuts); a ~0.5 s always-on left overhang is a separate candidate. Any of
    these re-runs the full battery against a control worktree.
 
-9. **Small known defects in the microphone picker** (found 2026-08-12; the
-    first re-read in the code 2026-11-24, the second not re-checked): a
-    `mic_device` value beginning with `--` reaches the
-    helper's argument parser, which exits 2, and `_ask_helper`
-    (`capture/helper.py`) reports every exit 2 as "the helper is older than
-    stenograf; rebuild it" — wrong cause, wrong remedy for a typo. And the
-    helper's `--devices` answers with the source *id* for an unpinned mic but
-    the *description* for a pinned one, so `capture: mic ← …`, `steno doctor`
-    and the device-lost error mix the two; pick one.
-
-10. **Ollama's response budget on the longest answer.** The reduce step of a
-    long meeting is the longest output the notes produce and was never
-    measured against the `num_predict` limit `notes/ollama.py` now sends.
+9. **Ollama's response budget on the longest answer.** The reduce step of a
+   long meeting is the longest output the notes produce and was never
+   measured against the `num_predict` limit `notes/ollama.py` now sends.
 
 ---
 
