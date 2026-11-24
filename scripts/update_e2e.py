@@ -1,6 +1,7 @@
 """The self-update, end to end, on a real uv — without touching anyone's install.
 
     python scripts/update_e2e.py --wheel dist/stenograf-<version>-<tags>.whl
+    python scripts/update_e2e.py --wheel dist/stenograf-<version>-<tags>.whl --from-published
 
 Takes ONE built wheel and makes three releases of it by rewriting the version:
 ``old``, ``new``, and ``broken`` (identical, except that its app exits at
@@ -12,6 +13,15 @@ start). Then, inside a throwaway home directory:
    with nothing left parked;
 3. does the same toward ``broken`` — and expects ``new`` back, started again,
    its launchers as they were, and ``broken`` remembered as failed.
+
+That proves the wheel updates from *itself*. A user's update is two releases
+talking: the installed one's ``update.py`` writes the request and the new
+one's ``_updater.py`` reads it (the contract in ``_updater.py``'s docstring),
+so a release that breaks the contract passes the run above on both sides at
+once. ``--from-published`` therefore starts from the newest release on PyPI
+instead of ``old``: it installs that, updates it toward ``broken`` (the new
+updater must put the *published* install back, and the published app must
+start and record the failure), then toward ``new``.
 
 What stands in for PyPI: the release list is a local file
 (``STENOGRAF_UPDATE_URL``) and the three wheels are offered to uv through a
@@ -71,7 +81,7 @@ main()
 """
 
 DRIVER = """
-import sys
+import hashlib, sys
 from stenograf import update
 
 wanted, app = sys.argv[1], sys.argv[2]
@@ -81,6 +91,7 @@ offer = update.offer()
 if offer is None or not offer.installable or offer.version != wanted:
     sys.exit(f"expected an installable offer of {wanted}, got {offer}")
 folder = update.prepare(offer.version)
+print("updater sha256", hashlib.sha256((folder / "updater.py").read_bytes()).hexdigest())
 update.hand_over(
     offer.version,
     folder,
@@ -90,6 +101,10 @@ update.hand_over(
 )
 print("handed over", offer.version)
 """
+"""What the app's Update button does (``gui/updates.py``). With
+``--from-published`` this runs on the *published* release, so it may call only
+what every release still being updated from has: when a later release changes
+one of these functions, keep the old call here beside the new one."""
 
 FACTS = """
 import json
@@ -283,11 +298,15 @@ class Sandbox:
     def leftovers(self) -> list[str]:
         return sorted(path.name for path in self.work.iterdir() if "stenograf-" in path.name)
 
-    def update_to(self, version: str) -> None:
+    def update_to(self, version: str, wheel: Path) -> None:
+        """Hand over to ``version``, whose updater must be ``wheel``'s."""
         done = self.run(DRIVER, version, APP, check=False)
         sys.stdout.write(done.stdout)
         if done.returncode != 0:
             raise SystemExit(f"the hand-over failed:\n{done.stdout}\n{done.stderr}")
+        with zipfile.ZipFile(wheel) as archive:
+            built = hashlib.sha256(archive.read("stenograf/_updater.py")).hexdigest()
+        assert f"updater sha256 {built}" in done.stdout, "the updater handed to is not this wheel's"
 
     def wait(self, what: str, condition, seconds: float) -> None:
         deadline = time.monotonic() + seconds
@@ -313,6 +332,11 @@ def main() -> int:
     parser.add_argument("--work", type=Path, help="an empty or missing folder to work in")
     parser.add_argument("--model-cache", type=Path, help="reuse these model files")
     parser.add_argument("--keep", action="store_true", help="leave the work folder behind")
+    parser.add_argument(
+        "--from-published",
+        action="store_true",
+        help="start from the newest release on PyPI instead of a copy of the wheel",
+    )
     args = parser.parse_args()
 
     uv = shutil.which("uv")
@@ -324,11 +348,16 @@ def main() -> int:
     box = Sandbox(work, uv, args.model_cache)
     began = time.monotonic()
     try:
-        check(box, args.wheel.resolve())
+        (check_published if args.from_published else check)(box, args.wheel.resolve())
     except BaseException:
         log = next(work.rglob("updater.log"), None)
         if log is not None:
             print(f"--- {log} ---\n{log.read_text(encoding='utf-8', errors='replace')}")
+        elif next(work.rglob("request.json"), None) is not None:
+            # Seen 2026-11-24 with a renamed request field: apply() reads the
+            # request before it opens its log, so a broken contract dies silently.
+            print("--- no updater.log: the updater died before opening it, most likely")
+            print("    reading request.json, so check _updater.py's contract ---")
         prepare_log = next(work.rglob("prepare.log"), None)
         if prepare_log is not None:
             tail = prepare_log.read_text(encoding="utf-8", errors="replace")[-3000:]
@@ -367,7 +396,7 @@ def check(box: Sandbox, wheel: Path) -> None:
     shutil.move(new, box.wheels)
     publish(box.listing, [OLD, NEW])
     say(f"updating {OLD} -> {NEW}")
-    box.update_to(NEW)
+    box.update_to(NEW, wheel)
     box.wait("the new app to report its start", lambda: "pending" not in state_of(work_dir), 600)
     box.wait("the previous version to be removed", lambda: not box.leftovers(), 60)
     box.wait("the app to exit", box.app_gone, LINGER_S + 60)
@@ -384,7 +413,7 @@ def check(box: Sandbox, wheel: Path) -> None:
     shutil.move(broken, box.wheels)
     publish(box.listing, [OLD, NEW, BROKEN])
     say(f"updating {NEW} -> {BROKEN}, which exits at start")
-    box.update_to(BROKEN)
+    box.update_to(BROKEN, wheel)
     box.wait(
         "the previous version to come back and report the failure",
         lambda: BROKEN in (state_of(work_dir).get("failed") or ())
@@ -401,6 +430,70 @@ def check(box: Sandbox, wheel: Path) -> None:
     assert facts["offer"] is None, "a version that failed here is offered again unasked"
     assert facts["offer_if_asked"] == BROKEN, facts
     say(f"rolled back to {NEW}, started again, {BROKEN} remembered as failed")
+
+
+def check_published(box: Sandbox, wheel: Path) -> None:
+    # The broken release is the lower number: a failed version that is also
+    # the newest hides every offer, so the good update could not follow it.
+    broken_version, new_version = f"90.{_RUN}.1", f"90.{_RUN}.2"
+    broken = reversion(wheel, broken_version, box.staging, broken=True)
+    new = reversion(wheel, new_version, box.staging)
+
+    say("installing the newest release on PyPI the way install.sh does")
+    box.install()  # find-links is empty here, so this is PyPI's newest
+    box.forget_test_source()
+    old = box.version()
+    assert not old.startswith("90."), f"installed {old}, not a published release"
+    say(f"installed {old} from PyPI")
+    publish(box.listing, [old])
+    facts = box.facts()
+    assert facts["kind"] == "standard", f"not a standard install: {facts['kind']}"
+    assert facts["offer"] is None, facts
+    work_dir = Path(facts["work"])
+    if sys.platform != "win32":
+        box.run("from stenograf.shortcut import install_shortcut; install_shortcut()")
+    launchers = {path: Path(path).read_bytes() for path in box.facts()["launchers"]}
+    if sys.platform != "win32":
+        assert launchers, "setup wrote no launcher to refresh"
+
+    # -- the new updater puts the published install back ---------------------
+    shutil.move(broken, box.wheels)
+    publish(box.listing, [old, broken_version])
+    say(f"updating {old} -> {broken_version}, which exits at start")
+    box.update_to(broken_version, wheel)
+    box.wait(
+        f"{old} to come back and report the failure",
+        lambda: (
+            broken_version in (state_of(work_dir).get("failed") or ())
+            and "pending" not in state_of(work_dir)
+        ),
+        600,
+    )
+    box.wait("the failed version to be removed", lambda: not box.leftovers(), 60)
+    box.wait("the app to exit", box.app_gone, LINGER_S + 60)
+    assert box.version() == old, f"not rolled back: {box.version()}"
+    for path, before in launchers.items():
+        assert Path(path).read_bytes() == before, f"{path} was not put back"
+    facts = box.facts()
+    assert facts["offer"] is None, "a version that failed here is offered again unasked"
+    say(f"rolled back to {old}, started again, {broken_version} remembered as failed")
+
+    # -- and updates it ------------------------------------------------------
+    shutil.move(new, box.wheels)
+    publish(box.listing, [old, broken_version, new_version])
+    say(f"updating {old} -> {new_version}")
+    box.update_to(new_version, wheel)
+    box.wait("the new app to report its start", lambda: "pending" not in state_of(work_dir), 600)
+    box.wait("the previous version to be removed", lambda: not box.leftovers(), 60)
+    box.wait("the app to exit", box.app_gone, LINGER_S + 60)
+    assert box.version() == new_version, box.version()
+    assert (box.bin_dir / ("steno.exe" if os.name == "nt" else "steno")).exists()
+    box.forget_test_source()
+    box.same_code(wheel)
+    facts = box.facts()
+    assert facts["kind"] == "standard", "the updated install can no longer update itself"
+    assert facts["offer"] is None, facts
+    say(f"{old} updated itself to this wheel ({new_version}), started, nothing parked")
 
 
 if __name__ == "__main__":

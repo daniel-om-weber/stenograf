@@ -308,8 +308,15 @@ jobs:
   # what stands in for PyPI and for the user). A release that cannot be updated
   # *to* strands nobody; one that cannot update *from* strands every install it
   # reaches, and the only repair is asking each user to run the installer. So
-  # these gate the publish.
+  # these gate the publish. Each runs twice: from a copy of this wheel, and
+  # from the newest release on PyPI — the update real users run, where the
+  # installed release writes the request and this wheel's updater reads it.
+  # The first alone passes a release that breaks that contract on both sides.
   update-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        start: [self, published]
     needs: build-macos
     runs-on: macos-15
     timeout-minutes: 30
@@ -320,9 +327,13 @@ jobs:
         with:
           name: dist-macos
           path: dist
-      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*.whl
+      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*.whl ${{ matrix.start == 'published' && '--from-published' || '' }}
 
   update-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        start: [self, published]
     needs: build-linux-x86_64
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -338,9 +349,13 @@ jobs:
       # the helper cannot start, and the updater's self-check rightly refuses
       # the release ("capture helper does not run here").
       - run: sudo apt-get install -y libegl1 libpulse0
-      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*manylinux_2_28_x86_64.whl
+      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*manylinux_2_28_x86_64.whl ${{ matrix.start == 'published' && '--from-published' || '' }}
 
   update-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        start: [self, published]
     needs: build-windows
     runs-on: windows-latest
     timeout-minutes: 30
@@ -354,7 +369,7 @@ jobs:
         with:
           name: dist-windows
           path: dist
-      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*win_amd64.whl
+      - run: uv run --no-project --python 3.13 python scripts/update_e2e.py --wheel dist/stenograf-*win_amd64.whl ${{ matrix.start == 'published' && '--from-published' || '' }}
 
   publish:
     # build-pure is listed explicitly: no smoke leg installs the pure wheel any

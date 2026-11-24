@@ -86,11 +86,12 @@ contract with every release already installed — read `_updater.py`'s module
 docstring before touching it: fields may be added with defaults, nothing may be
 renamed or removed, and it must stay standard-library-only. The design and
 the uv measurements behind it are in `git log --follow -p PLAN-UPDATE.md`
-(`eval/update_mechanics.sh` re-runs the measurements); the release job that
-updates the last *published* release, and the real-machine gates, are still
-open in PLAN.md. `scripts/update_e2e.py` runs a whole
+(`eval/update_mechanics.sh` re-runs the measurements); the real-machine
+gates are still open in PLAN.md. `scripts/update_e2e.py` runs a whole
 update and a rollback on a real uv in a throwaway home and gates every
-release. Never try an update against the machine's own install: the updater
+release twice per platform: from a copy of the fresh wheel, and
+(`--from-published`) from the newest release on PyPI, the only run that
+catches a broken contract. Never try an update against the machine's own install: the updater
 rewrites the launcher files in the home directory.
 
 **Twelve more side-plans closed and were deleted; their evidence is in git history,

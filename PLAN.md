@@ -18,24 +18,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
 
 ## Open work
 
-1. **Release gate: the last *published* release updates itself to the fresh
-   build — overdue.** `release.yml`'s `update-macos`/`-linux`/`-windows` run
-   `scripts/update_e2e.py`, which re-versions the fresh wheel into
-   old/new/broken: it proves the fresh build updates from *itself*. Real users
-   run the *installed* release's `update.py` driving the *new* release's
-   `_updater.py`, so a release that breaks that contract (`_updater.py`'s
-   module docstring) passes today's jobs and strands every install. Due with
-   the first release after 0.8.0; 0.8.1 shipped without it. How: install the
-   last PyPI release the way `install.sh` does, offer the fresh wheel through
-   the script's `find-links` + `STENOGRAF_UPDATE_URL`, drive the update,
-   expect the fresh version running; add the jobs to `publish.needs` on all
-   three platforms. Traps: an exact pin or `--exclude-newer` sticks in uv's
-   receipt and makes the install "pinned" (no button) — `forget_test_source()`
-   already rewrites the receipt; the `DRIVER` snippet runs on the *old*
-   install, so it may only call what that release has. Falsify it: rename a
-   request field in a scratch build and watch the job fail.
-
-2. **One stop gesture for the capture helpers (macOS-gated).** The last
+1. **One stop gesture for the capture helpers (macOS-gated).** The last
    per-platform difference in `capture/helper.py` is `_stop_signal`: SIGINT
    for the Swift helper, stdin EOF for the Rust one. Teach
    `native/stenocap-macos/main.swift` to exit on stdin EOF (mirror the stdin
@@ -44,7 +27,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    bundle, so this is allowed, but it recompiles and re-signs a signed binary:
    do it in a real macOS session and finish with a live-capture meeting.
 
-3. **Stop holding the whole meeting audio in RAM (deferred 2026-11-16,
+2. **Stop holding the whole meeting audio in RAM (deferred 2026-11-16,
    Daniel's call).** `SessionStore` (`session.py`) keeps every channel's
    audio until the stop (~115 MB/hour/channel, never on disk). The motive is
    privacy — the voice should exist as briefly as possible. Already done:
@@ -54,7 +37,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    or failed) do without audio — they would lose speaker separation. The
    finish card's voice samples survive if cut during the meeting.
 
-4. **Memory on 8–16 GB machines — unmeasured, and now the common case.**
+3. **Memory on 8–16 GB machines — unmeasured, and now the common case.**
    Diarization is on by default since 0.8.1. On the M4 Max a 1 h 45 min
    meeting's finalize peaks at 7.9 GB with diarization (6.9 GB without;
    `eval/README.md`, "A real finalize, and its peak memory"), and the voice
@@ -62,7 +45,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    beside the live pipeline. Measure both on a small machine; the way out
    today is `[speakers] diarization = false`.
 
-5. **What the ReDimNet2 voice model left** (`eval/README.md`, "Speaker-embedding
+4. **What the ReDimNet2 voice model left** (`eval/README.md`, "Speaker-embedding
    models in the naming seat" and after). (a) **Energy** per minute of speech:
    `eval/embedders/energy.sh` with `shipped.py`, background QoS and
    foreground, on a quiet M4 Max; it decides whether the 120 s speech budget
@@ -74,14 +57,14 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    changing what a voiceprint is for short clusters; score it only if (a)
    says the CPU path costs too much.
 
-6. **WebGPU as an optional extra for Nemotron — its re-open trigger has
+5. **WebGPU as an optional extra for Nemotron — its re-open trigger has
    fired** ("once the CPU path has shipped in a release": 0.8.0). CPU runs
    15 s per audio-hour on the M4 Max; on a GPU the fp16 export is faster (x86
    iGPU: 8.3 vs 14 s per 37.6-min channel). Trap: the `onnxruntime-ep-webgpu`
    plugin loads a second onnxruntime beside the wheel's on macOS and
    segfaulted on a second session in one process — re-test that first.
 
-7. **livekit re-ask — its trigger has fired** (both channels device-stamped
+6. **livekit re-ask — its trigger has fired** (both channels device-stamped
    by one helper on every platform, since 2026-08-02). `livekit` (25.6 MB)
    serves one class, AEC3, in `aec.py`. The idea: run AEC3 inside the helpers
    so channel pairing never crosses a language boundary and `aec.py`'s
@@ -89,7 +72,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    against the shipped ERLE; reasoning in
    `git log --follow -p PLAN-CAPTURE-HELPER.md`.
 
-8. **System-wide mute shortcut (deferred by Daniel 2026-11-16).** One
+7. **System-wide mute shortcut (deferred by Daniel 2026-11-16).** One
    shortcut toggles the microphone. Qt has no global-shortcut API, so one
    small ctypes module per platform, like `gui/wintray.py`; no dependency or
    bundle change. macOS: Carbon `RegisterEventHotKey`, fires inside the
@@ -105,7 +88,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    `[shortcuts] mute_microphone` (empty = off), registered only while a
    meeting records, a notification when the window is hidden.
 
-9. **Repair-only overhang — the one open accuracy idea.** Decode stays the
+8. **Repair-only overhang — the one open accuracy idea.** Decode stays the
    exact current slice; overhang fires only on a detected ≥1.5 s speech hole.
    It is the salvage from the reverted cut-overlap work, immune to the
    language-flip sites that killed the always-on version. The VAD threshold
@@ -113,7 +96,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
    cuts); a ~0.5 s always-on left overhang is a separate candidate. Any of
    these re-runs the full battery against a control worktree.
 
-10. **Small known defects in the microphone picker** (found 2026-08-12; the
+9. **Small known defects in the microphone picker** (found 2026-08-12; the
     first re-read in the code 2026-11-24, the second not re-checked): a
     `mic_device` value beginning with `--` reaches the
     helper's argument parser, which exits 2, and `_ask_helper`
@@ -123,7 +106,7 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
     the *description* for a pinned one, so `capture: mic ← …`, `steno doctor`
     and the device-lost error mix the two; pick one.
 
-11. **Ollama's response budget on the longest answer.** The reduce step of a
+10. **Ollama's response budget on the longest answer.** The reduce step of a
     long meeting is the longest output the notes produce and was never
     measured against the `num_predict` limit `notes/ollama.py` now sends.
 
