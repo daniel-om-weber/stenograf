@@ -1265,8 +1265,8 @@ macOS run below.) The literature cuts the other way at k=2 — the strongest hyb
 large, CC-BY-NC) beats Nemotron there on a provisional third-party benchmark
 (7.29 vs 10.31 DER; NVIDIA's own card shows Sortformer v2.1 ahead on 2-speaker
 CALLHOME, 5.68 vs 5.98) — so non-AMI 2-speaker audio needed its own
-measurement: the user's own calls, below (`owncalls.py`). What stays open in
-`PLAN.md` is the shared room mic. The architecture for cross-meeting names is settled practice
+measurement: the user's own calls, below (`owncalls.py`). What was never observed
+(`DECISIONS.md`) is the shared room mic. The architecture for cross-meeting names is settled practice
 either way: diarize, embed each speaker with a separate voiceprint model, match
 a profile store (pyannoteAI identification, NVIDIA's cascaded pipeline,
 AssemblyAI's TitaNet recipe); no released model does both jobs, and

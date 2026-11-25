@@ -23,7 +23,7 @@
 
 Measured 2026-11-12 – 11-15 (x86 + Radeon 890M) and recorded in
 `eval/README.md`, "The estimate path, and Nemotron 3 Diarization as the one
-diarizer"; the open gates are in `PLAN.md`. This script reproduces that
+diarizer"; what was never observed is in `DECISIONS.md`. This script reproduces that
 measurement: it writes per-channel speaker turns (and the raw probabilities the
 count-cap score needs) for the channels `eval/heldout.py fetch` built, and
 `eval/heldout.py score` scores them next to production's arms.

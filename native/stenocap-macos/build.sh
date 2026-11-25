@@ -2,7 +2,7 @@
 # Build + ad-hoc sign the stenocap capture helper. The __info_plist section
 # embeds the TCC usage descriptions — without it the system-audio and mic
 # prompts never appear. Ad-hoc signing (codesign -s -) is all that's needed;
-# no Apple Developer account (PLAN.md's history: git log --follow -p PLAN.md).
+# no Apple Developer account (DECISIONS.md's history: git log --follow -p DECISIONS.md).
 set -e
 cd "$(dirname "$0")"
 

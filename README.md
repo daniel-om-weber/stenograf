@@ -601,7 +601,8 @@ app (`stenograf/gui/`). Neither holds pipeline logic — the workflows they
 drive live in `stenograf/flow.py`, so a behaviour change lands in both at
 once.
 
-See [PLAN.md](PLAN.md) for the remaining roadmap;
+See [DECISIONS.md](DECISIONS.md) for ideas decided against and features
+never verified on real hardware;
 `native/README.md` for the capture helper and its wire protocol; `eval/README.md`
 for the model-evaluation and AEC-scoring harnesses.
 

@@ -42,8 +42,8 @@ copy quickly.
 **Caveat on point 3:** it is built (every channel is diarized, and re-ID
 relabels diarized speakers on any channel — `pipeline.py`), but it is the one
 case no reference recording covers. Watching the first real hybrid meetings on
-a shared room mic is still owed (`PLAN.md`, Diarization section). Until that
-has happened, market it as a design, not as a measured result.
+a shared room mic has not happened yet (`DECISIONS.md`, never verified on
+real hardware). Until it has, market it as a design, not as a measured result.
 
 **Closest competitors, in order:**
 
@@ -207,7 +207,7 @@ them, not as candidates:
 
 Ideas taken from competitors that fit the philosophy. **None is planned** —
 this is a menu, not a backlog. Effort is a rough guess, not a price. Items
-already on `PLAN.md`'s deferred list are cross-referenced there rather than
+already on `DECISIONS.md`'s deferred list are cross-referenced there rather than
 re-argued here.
 
 | Idea | Seen in | Fit | Rough effort | Notes |
@@ -215,19 +215,19 @@ re-argued here.
 | **YAML front matter in `transcript.md`** (date, title, duration, language, speakers, meeting type) | tapeback, MimicScribe/pasrom Obsidian export | Good — makes every meeting folder Obsidian/Dataview-queryable without any index of our own | Small | Half exists: `[notes.export]` already writes a self-contained Obsidian note *with* front matter, but only for meetings that got notes. `transcript.md` itself (`Transcript.to_markdown`) starts straight with the first line |
 | **Rename a voice → relabel earlier meetings too** | Mac Note Taker, OpenWhispr | Good — files stay the index; a CLI/finish-card action rewrites the label in older transcripts that carry that voice | Medium | Today `steno profiles assign` corrects one meeting; later meetings pick the name up, earlier ones keep `Remote-1`. Needs per-meeting embeddings kept with the transcript (check what `transcript.json` already holds) |
 | **Mark a moment during the meeting** (hotkey or menu-bar item that drops a marker; the notes prompt is told to cover marked spots) | MimicScribe bookmarks | Strong — cheap, local, improves notes | Small–medium | Depends on the system-wide shortcut deferred in `PLAN-MUTE.md`; the menu-bar item works without it |
-| **Meeting auto-detect / prompt to start when Zoom/Teams/Meet begins, auto-stop when it ends** | MimicScribe, pasrom, MacWhisper, OpenWhispr, Superwhisper, Meetily Pro | Good | Medium per platform | Already on `PLAN.md`'s deferred list ("meeting-mode auto-detect") |
+| **Meeting auto-detect / prompt to start when Zoom/Teams/Meet begins, auto-stop when it ends** | MimicScribe, pasrom, MacWhisper, OpenWhispr, Superwhisper, Meetily Pro | Good | Medium per platform | Already on `DECISIONS.md`'s deferred list ("meeting-mode auto-detect") |
 | **Calendar: meeting title and attendee names from the local calendar** (EventKit on macOS), fed to the title field and the finish card's name suggestions | OpenWhispr, Mac Note Taker, Jamie, Biscotti | Good if read-only and local | Medium on Windows/Linux; **blocked on macOS as things stand** | Calendar access on macOS needs a usage-description key in `Info.plist`, and the frozen bundle's Info.plist is sealed into the cdhash that holds every user's microphone grant (`native/appbundle/README.md`). Adding the key means rebuilding the bundle and every macOS user granting the microphone again. Only worth it if bundled with other reasons to rebuild |
 | **"Is this X?" confirm band** for voices just below the match threshold | OpenWhispr (0.55–0.70) | Good | Small | The finish card already shows an unknown voice as "Who is this?" and offers known names as you type (0.8.1); this would pre-fill the closest near-miss name as a suggestion. Check how often near-misses occur before building |
 | **Consent helper**: a ready-to-paste chat line ("This meeting is transcribed locally; no audio is recorded") or a start-form reminder | Notion (consent announcement) | Strong — turns the no-audio design into something the user can say out loud | Small | Pure UX; directly supports the main selling point |
 | **Network transparency statement / log**: say exactly which requests stenograf ever makes (daily PyPI check, model downloads) | MimicScribe "Network Log" | Good | Small as documentation; medium as a UI log | A README section may be enough |
 | **Post-meeting hook**: run a user command with the meeting folder path when it is written (move to a vault, sync, notify) | Meetily Pro (webhooks/CLI) | Good — Unix-style, no integrations to maintain | Small | Replaces most "integration" requests |
 | **More languages** — Parakeet v3 covers 25 European languages | MimicScribe (25), cloud tools (30–100+) | Possible | Medium–large: per-language notes prompts, glossary handling, eval | The German depth is a selling point; breadth risks diluting it. Only if users ask |
-| **Signed one-click installer** | All paid Mac apps | Good for non-terminal users | Large ($99/yr Developer ID + notarization) | Already on `PLAN.md`'s deferred list ("Packaged signed installers") |
+| **Signed one-click installer** | All paid Mac apps | Good for non-terminal users | Large ($99/yr Developer ID + notarization) | Already on `DECISIONS.md`'s deferred list ("Packaged signed installers") |
 | **Multiple voiceprint centroids per person** (different rooms/mics) | MimicScribe | Maybe | Medium | stenograf already matches a profile by the *median* of its entries' scores, which covers some of this. Evaluate on the harness before building |
 | **Screen-share snapshots in the transcript** (repeats skipped, faces blurred) | MimicScribe | Questionable — needs screen-recording permission and puts images in the folder | Large | Probably not; listed for completeness |
 
 Previously declined and **not** to be re-opened from this research without
-the trigger named in `PLAN.md`: automatic profile updates (MimicScribe's
+the trigger named in `DECISIONS.md`: automatic profile updates (MimicScribe's
 "profiles grow with each meeting" is exactly that), joint speaker-attributed
 ASR, ASR challenger models.
 

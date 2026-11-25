@@ -5,7 +5,7 @@ which Nemotron 3 Diarization trained on, so its numbers flatter that model.
 AMI's evaluation split — IS1009, ES2004, TS3003, sessions a–d — is the clean
 comparison: 12 meetings, 36 channels in the harness topology (mic, loop, duo).
 Results and caveats: `eval/README.md`, "The estimate path, and Nemotron 3
-Diarization as the one diarizer"; open gates: `PLAN.md`.
+Diarization as the one diarizer"; never observed: `DECISIONS.md`.
 
 The channels are built with `ami.py`'s own download/mixing/reference functions
 but deliberately NOT added to ``ami.AMI_GROUPS``: ES2004/TS3003 have not had the

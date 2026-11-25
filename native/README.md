@@ -190,8 +190,8 @@ finds it the same three ways: next to its sources in the checkout, a packaged
 environment override.
 
 The macOS build compiles + ad-hoc signs `stenocap-macos/stenocap` (swiftc; no
-Apple Developer account needed — PLAN.md's history, `git log --follow -p
-PLAN.md`). TCC usage
+Apple Developer account needed — DECISIONS.md's history, `git log --follow -p
+DECISIONS.md`). TCC usage
 strings are embedded from `stenocap-macos/Info.plist`; on first run the terminal
 is granted mic + system-audio permission once. The Windows and Linux builds are
 plain `cargo build --release --locked`, and sign nothing.

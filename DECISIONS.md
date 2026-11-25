@@ -1,13 +1,16 @@
-# stenograf — open work, gates, and what was declined
+# stenograf — decisions, and what was never verified
 
-This file holds three things only: **open work** (needs code or a measurement),
-**gates** (needs real hardware or Daniel's eyes, no code), and **deferred and
-declined** ideas, kept so they are not re-proposed. Everything shipped is in
-git history: this file's own (`git log --follow -p PLAN.md` — the GUI build,
-notes and presets, the Windows and Linux platform work, the diarization
-program, all pruned 2026-11-24) and the deleted plan files, each retrievable
-with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
-`PLAN-GUI-DEFAULT.md`, `PLAN-LINUX.md`, `PLAN-WINDOWS.md`,
+**No features are planned (2026-11-25).** Work starts from a reported problem
+or a new idea of Daniel's, not from a backlog. This file keeps two things so
+nobody has to work them out again: ideas that were decided against or set
+aside, each with its reason and what would re-open it, and shipped features
+that were never observed on real hardware.
+
+Everything built is in git history: this file's own (it was `PLAN.md` until
+2026-11-25; `git log --follow -p DECISIONS.md` holds the full designs, traps and
+measurements behind every entry below) and the deleted side-plans, each
+retrievable with `git log --follow -p <file>`: `PLAN-AEC.md`,
+`PLAN-CLEANUP.md`, `PLAN-GUI-DEFAULT.md`, `PLAN-LINUX.md`, `PLAN-WINDOWS.md`,
 `PLAN-ASR-CHALLENGER.md`, `PLAN-NOTES-MARKDOWN.md`, `PLAN-MEETING-PRESETS.md`,
 `PLAN-CAPTURE-HELPER.md`, `PLAN-DIARIZATION.md`, `PLAN-DIARIZATION-SPEED.md`,
 `PLAN-NEMOTRON.md`, `PLAN-FINISH.md`, `PLAN-MUTE.md`, `PLAN-MIC-DEVICE.md` and
@@ -16,95 +19,54 @@ with `git log --follow -p <file>`: `PLAN-AEC.md`, `PLAN-CLEANUP.md`,
 
 ---
 
-## Open work
+## Set aside 2026-11-25 (Daniel)
 
-1. **One stop gesture for the capture helpers (macOS-gated).** The last
-   per-platform difference in `capture/helper.py` is `_stop_signal`: SIGINT
-   for the Swift helper, stdin EOF for the Rust one. Teach
-   `native/stenocap-macos/main.swift` to exit on stdin EOF (mirror the stdin
-   watcher in `native/stenocap/src/main.rs`), then delete `_stop_signal` and
-   the signal arm of `_request_exit`. The helper is not inside the frozen app
-   bundle, so this is allowed, but it recompiles and re-signs a signed binary:
-   do it in a real macOS session and finish with a live-capture meeting.
+Open work until that day. The working notes for each are in this file's
+history.
 
-2. **Stop holding the whole meeting audio in RAM (deferred 2026-11-16,
-   Daniel's call).** `SessionStore` (`session.py`) keeps every channel's
-   audio until the stop (~115 MB/hour/channel, never on disk). The motive is
-   privacy — the voice should exist as briefly as possible. Already done:
-   diarization and voiceprint collection run during the meeting. Still to
-   answer: Nemotron's streaming-mode accuracy on held-out AMI against the
-   offline 97.8 % (`eval/README.md`), and what the fallbacks (live pass off
-   or failed) do without audio — they would lose speaker separation. The
-   finish card's voice samples survive if cut during the meeting.
-
-3. **Memory on 8–16 GB machines — unmeasured, and now the common case.**
-   Diarization is on by default since 0.8.1. On the M4 Max a 1 h 45 min
-   meeting's finalize peaks at 7.9 GB with diarization (6.9 GB without;
-   `eval/README.md`, "A real finalize, and its peak memory"), and the voice
-   model's session sits at 860 MB for the whole meeting, measured alone, not
-   beside the live pipeline. Measure both on a small machine; the way out
-   today is `[speakers] diarization = false`.
-
-4. **What the ReDimNet2 voice model left** (`eval/README.md`, "Speaker-embedding
-   models in the naming seat" and after). (a) **Energy** per minute of speech:
-   `eval/embedders/energy.sh` with `shipped.py`, background QoS and
-   foreground, on a quiet M4 Max; it decides whether the 120 s speech budget
-   stays (60 s names as well, narrower margin) and whether the smaller B3 is
-   worth its saving. (b) **A solo channel is still embedded at the stop**
-   (`session.py` `_name_solo_channel`): with a stated count of one no
-   diarizer runs, so nothing collects during the meeting. (c) **A
-   fixed-shape path** (GPU, CoreML) would pad or cut spans to a few lengths,
-   changing what a voiceprint is for short clusters; score it only if (a)
-   says the CPU path costs too much.
-
-5. **WebGPU as an optional extra for Nemotron — its re-open trigger has
-   fired** ("once the CPU path has shipped in a release": 0.8.0). CPU runs
-   15 s per audio-hour on the M4 Max; on a GPU the fp16 export is faster (x86
-   iGPU: 8.3 vs 14 s per 37.6-min channel). Trap: the `onnxruntime-ep-webgpu`
-   plugin loads a second onnxruntime beside the wheel's on macOS and
-   segfaulted on a second session in one process — re-test that first.
-
-6. **livekit re-ask — its trigger has fired** (both channels device-stamped
-   by one helper on every platform, since 2026-08-02). `livekit` (25.6 MB)
-   serves one class, AEC3, in `aec.py`. The idea: run AEC3 inside the helpers
-   so channel pairing never crosses a language boundary and `aec.py`'s
-   timestamp machinery disappears. Judge on all three platforms at once
-   against the shipped ERLE; reasoning in
-   `git log --follow -p PLAN-CAPTURE-HELPER.md`.
-
-7. **System-wide mute shortcut (deferred by Daniel 2026-11-16).** One
-   shortcut toggles the microphone. Qt has no global-shortcut API, so one
-   small ctypes module per platform, like `gui/wintray.py`; no dependency or
-   bundle change. macOS: Carbon `RegisterEventHotKey`, fires inside the
-   PySide6 loop on the GUI thread (measured); "no permission prompt" is
-   unproven — check from `Stenograf.app` on a fresh grant (`NSEvent`
-   monitors, `CGEventTap` and pynput all need a privacy grant). Windows:
-   `RegisterHotKey` + `MOD_NOREPEAT` on its own hidden window; report error
-   1409 (combination taken). Wayland: the `GlobalShortcuts` portal over QtDBus
-   (KDE ≥ 5.27, GNOME ≥ 48; a non-Flatpak app must call
-   `org.freedesktop.host.portal.Registry.Register` first — unverified).
-   Default Ctrl+Option+Shift+M / Ctrl+Alt+Shift+M: no meeting app's own mute
-   key, and Shift keeps it off AltGr+M (µ) on German keyboards. Shape:
-   `[shortcuts] mute_microphone` (empty = off), registered only while a
-   meeting records, a notification when the window is hidden.
-
-8. **Repair-only overhang — the one open accuracy idea.** Decode stays the
-   exact current slice; overhang fires only on a detected ≥1.5 s speech hole.
-   It is the salvage from the reverted cut-overlap work, immune to the
-   language-flip sites that killed the always-on version. The VAD threshold
-   0.4 re-attempt is blocked on it (its known cost is more forced mid-speech
-   cuts); a ~0.5 s always-on left overhang is a separate candidate. Any of
-   these re-runs the full battery against a control worktree.
-
-9. **Ollama's response budget on the longest answer.** The reduce step of a
-   long meeting is the longest output the notes produce and was never
-   measured against the `num_predict` limit `notes/ollama.py` now sends.
+- **Memory on 8–16 GB machines — until someone reports trouble.** On the M4
+  Max a 1 h 45 min meeting's finalize peaks at 7.9 GB with diarization (6.9 GB
+  without), and the voice model's session holds 860 MB for the whole meeting
+  (`eval/README.md`, "A real finalize, and its peak memory"). The way out
+  today is `[speakers] diarization = false`.
+- **Ollama's output limit on the longest notes answer — until someone reports
+  trouble.** A long meeting's reduce step was never measured against the
+  `num_predict` limit `notes/ollama.py` sends. Hitting it fails loudly
+  (`done_reason == "length"`), never as quietly cut notes.
+- **Nemotron on the GPU (ORT's WebGPU plugin) — only if speed becomes a
+  problem.** The CPU path runs 15 s per audio-hour on the M4 Max. First thing
+  to re-test: on macOS the plugin loads a second onnxruntime beside the
+  wheel's and segfaulted on a second session in one process.
+- **Not holding the whole meeting's audio in RAM — perhaps later.** The motive
+  is privacy (`SessionStore` keeps ~115 MB/hour/channel until the stop). Still
+  unanswered: Nemotron's streaming-mode accuracy on held-out AMI against the
+  offline 97.8 %, and what the fallbacks would do without audio.
+- **A system-wide shortcut to start a meeting — perhaps later** (when a call
+  comes in). The per-platform research for a mute shortcut carries over:
+  Carbon `RegisterEventHotKey` on macOS, `RegisterHotKey` on Windows, the
+  `GlobalShortcuts` portal on Wayland, each a small ctypes module.
+- **A system-wide mute shortcut — declined.**
+- **Echo cancellation inside the capture helpers, dropping `livekit` —
+  declined:** the current path works.
+- **Repair-only overhang (decode overhang only across a detected speech hole)
+  — declined.** The VAD threshold 0.4 re-attempt, which waited on it, goes with
+  it.
+- **One stop gesture for both capture helpers — dropped.** Internal tidying
+  only (`_stop_signal` in `capture/helper.py`: SIGINT for the Swift helper,
+  stdin EOF for the Rust one) that costs a re-sign of the macOS helper; worth
+  doing only if that helper is rebuilt for another reason.
+- **The voice model's leftovers — dropped unless battery drain is reported:**
+  energy per minute of speech (would decide the 120 s speech budget), a solo
+  channel still embedded at the stop, a fixed-shape GPU/CoreML path.
 
 ---
 
-## Gates
+## Never verified on real hardware
 
-Real hardware or Daniel's observation, no code. "Open" means never run.
+Shipped features nobody has yet observed on the machine they are for, and two
+observations only Daniel can make. Not a to-do list: where to look first when a
+problem is reported, and how to check one if it ever comes to that. "Open"
+means never run.
 
 | Feature | Platform | What to observe | Status |
 |---|---|---|---|
@@ -166,10 +128,9 @@ Recipes and traps:
 
 ---
 
-## Deferred and declined
+## Declined and deferred earlier
 
-Kept so future sessions do not re-open them. Each says why, and what would
-re-open it.
+Each says why, and what would re-open it.
 
 **Speech recognition and accuracy**
 

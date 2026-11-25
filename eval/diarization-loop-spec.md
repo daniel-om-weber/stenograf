@@ -7,7 +7,7 @@
 > model. "Our current baseline", "our own default" and similar wording mean
 > August 2026; its `src/stenograf/diarization/sherpa.py` line citations point
 > to a deleted file, and the cached `pyannote-segmentation-3-0.onnx` the
-> measurements read is no longer downloaded. Kept because `PLAN.md` and
+> measurements read is no longer downloaded. Kept because `DECISIONS.md` and
 > `eval/README.md` cite its measurements.
 
 Citations: sherpa-onnx at commit `f737aebe7ca86b1fb029b2b62ce655080994c47d` (master, 2026-08-06),

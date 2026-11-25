@@ -11,10 +11,12 @@ run, transcribe, notes, settings report) and `captions.py` (live-caption line
 rules). Logic a screen needs that the library lacks goes into the library —
 never into one front-end, or the Qt app and the CLI drift.
 
-`PLAN.md` holds **only unbuilt work**, in three parts: open work (code or
-measurement still owed), one checklist of gates that need real hardware or
-Daniel's observation, and the deferred-and-declined list that stops rejected
-ideas from being re-proposed. The Qt app is the default UI, installed as
+**No features are planned (Daniel, 2026-11-25).** There is no backlog: work
+starts from a reported problem or a new idea of Daniel's — do not propose
+items from history as next steps. `DECISIONS.md` holds what was decided
+against or set aside, each with its reason and its re-open trigger (read it
+before proposing anything), and the shipped features never observed on real
+hardware (where to look first when a problem is reported). The Qt app is the default UI, installed as
 `~/Applications/Stenograf.app` by `steno setup`, and lives in the menu bar.
 That app bundle is FROZEN: its bytes are every user's
 microphone grant, so read `native/appbundle/README.md` before touching
@@ -22,7 +24,8 @@ anything under it or under `src/stenograf/assets/` — new sibling files there
 are fine, the `.app` tree is not. Everything
 shipped, including the architecture and model-choice research, the AEC design
 and the code-cleanup backlog, was pruned on 2026-07-25 and again on
-2026-11-24, and lives in git history (`git log --follow -p PLAN.md`, and the
+2026-11-24, and lives in git history (`git log --follow -p DECISIONS.md` —
+the file was `PLAN.md` until 2026-11-25 — and the
 deleted `PLAN-AEC.md` / `PLAN-CLEANUP.md`).
 **The capture helper is whole (2026-08-02): every platform streams
 device-stamped audio from a `stenocap` helper, and no arrival-stamped
@@ -48,10 +51,10 @@ touching capture, `aec.py`, or `hatch_build.py` on any platform**: vendoring
 or monkeypatching soundcard and PortAudio are rejected with reasons, win_arm64
 was struck on measurement (five base dependencies ship no wheel for it), and
 the dependency-hygiene test its not-candidates table applies is not guessable
-from code. Still owed, in PLAN.md: the AEC-quality run scoring the Windows
-helper against the deleted constant's 13.7 dB (needs speakers in an empty
-room), and the livekit re-ask whose trigger — the helper everywhere — has now
-fired. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
+from code. Never run, listed in DECISIONS.md: the AEC-quality run scoring the
+Windows helper against the deleted constant's 13.7 dB (needs speakers in an
+empty room); moving echo cancellation into the helpers to drop `livekit` was
+declined 2026-11-25. `eval/wasapi_timestamps.py` is the original evidence and re-runs in
 twelve seconds.
 
 **Nemotron 3 is the one diarizer (2026-11-15).** NVIDIA Nemotron 3
@@ -65,15 +68,15 @@ ReDimNet2-B6 since 2026-11-18, matched at 0.62 — `voiceprints.DEFAULT_THRESHOL
 matches by the *median* of its entries' scores, and `steno profiles assign`
 refuses a voice below the threshold unless `--force`d. The migration plan
 closed and was deleted (`git log --follow -p PLAN-NEMOTRON.md`); what it left —
-watching the first real hybrid meetings on a shared room mic, WebGPU as an
-optional extra — is in PLAN.md. Before touching `diarization/`,
+the first real hybrid meetings on a shared room mic, never observed, and the
+GPU path, set aside — is in DECISIONS.md. Before touching `diarization/`,
 `voiceprints.py`, `eval/der.py`, or evaluating any diarization or
 speaker-embedding model, read `eval/diarization-sota-2026.md` (the research
 record) and `eval/README.md`'s corpus-harness and Nemotron sections (every
 shipped default's numbers, and every declined candidate's); the declined list —
 joint SA-ASR, TS-VAD, AS-Norm-by-default, pyannote.audio-as-dependency,
 DiariZen meeting-base, both embedding-upgrade candidates, automatic profile
-updates, custom GPU kernels — lives in PLAN.md with measured reasons and
+updates, custom GPU kernels — lives in DECISIONS.md with measured reasons and
 re-open triggers.
 
 **The app updates itself (built 2026-11-19; Windows measured and switched on
@@ -87,7 +90,7 @@ docstring before touching it: fields may be added with defaults, nothing may be
 renamed or removed, and it must stay standard-library-only. The design and
 the uv measurements behind it are in `git log --follow -p PLAN-UPDATE.md`
 (`eval/update_mechanics.sh` re-runs the measurements); the real-machine
-gates are still open in PLAN.md. `scripts/update_e2e.py` runs a whole
+checks never run are listed in DECISIONS.md. `scripts/update_e2e.py` runs a whole
 update and a rollback on a real uv in a throwaway home and gates every
 release twice per platform: from a copy of the fresh wheel, and
 (`--from-published`) from the newest release on PyPI, the only run that
@@ -106,10 +109,10 @@ lines → none; that constant is gone since the capture helper, and 13.7 dB is n
 the number the helper must beat). Its last section is the observation recipe for
 a real Windows desktop session (screenshot DPI, SAPI voice selection,
 German-locale traps, driving the TUI without a pty) — read it before observing
-anything there. Its one leftover, the AEC-quality run, is in PLAN.md and now
-gates the helper rather than nothing.
+anything there. Its one leftover, the AEC-quality run, is listed in
+DECISIONS.md as never run.
 `PLAN-ASR-CHALLENGER.md` (2026-07-26): the recurring "leaderboard has a new
-leader" question is **declined**, not gated — see PLAN.md's declined list before
+leader" question is **declined**, not gated — see DECISIONS.md's declined list before
 evaluating any ASR model. `PLAN-NOTES-MARKDOWN.md` and
 `PLAN-MEETING-PRESETS.md` (both 2026-07-30, both built): notes are markdown
 against a template that *is* the schema, and a meeting kind is a
@@ -119,7 +122,7 @@ against a template that *is* the schema, and a meeting kind is a
 history before touching `notes/` — the deleted JSON schema was quietly doing
 four jobs (structure, sanitizing, truncation detection, refusal detection) and
 which replacement covers each is not guessable from the code. Their leftovers —
-Gate A's read and whether presets get written at all — are PLAN.md gates (the
+Gate A's read and whether presets get written at all — are in DECISIONS.md (the
 two Ollama gates ran green on 2026-08-12).
 `PLAN-DIARIZATION.md` (2026-08-09, all five steps measured): the AMI/ICSI
 harness, the owned ward+gated-fold loop (production until 2026-11-15),
@@ -130,7 +133,7 @@ meeting-base declined at the fair k+1+fold boundary (`eval/README.md`).
 up; its one surviving fact, the timing spread on the x86 handheld, is in
 `eval/README.md`), `PLAN-NEMOTRON.md` (2026-11-15, all six steps: the
 migration above, step by step with its gates), and four closed 2026-11-24
-with their features built and only gates left (now in PLAN.md):
+with their features built and only gates left (now in DECISIONS.md):
 `PLAN-FINISH.md` (the finish card), `PLAN-MUTE.md` (muting either source),
 `PLAN-MIC-DEVICE.md` (choosing the microphone) and `PLAN-UPDATE.md` (the
 self-updater, above).
@@ -182,7 +185,7 @@ open the door to a player.
 4. Never describe what a file used to contain. Tombstones only where they
    stop a revert, in the present tense.
 5. A fact lives at exactly ONE address — code, `eval/README.md`, or
-   `PLAN.md`. Link, don't copy.
+   `DECISIONS.md`. Link, don't copy.
 6. Module-docstring length is bounded by the cost of the mistake it prevents.
 
 ## Phase 8 step 7 SHIPPED and OBSERVED 2026-07-30 — the GUI is the default UI

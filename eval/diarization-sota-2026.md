@@ -10,7 +10,7 @@
 > §7) were overturned: the shipped diarizer is Sortformer's end-to-end
 > successor, counts speakers itself and takes a stated count only as a cap,
 > and the shared-trunk speedup §1.5 and §7 call a live candidate died with
-> the loop it was meant to speed up. What stands today is `PLAN.md`'s
+> the loop it was meant to speed up. What stands today is `DECISIONS.md`'s
 > deferred-and-declined list and `eval/README.md`. The plan files cited
 > below are deleted; read them with `git log --follow -p <file>`.
 
@@ -496,9 +496,9 @@ as a product mode. No vendor publishes DER/cpWER for meeting naming.
 | Enrollment from meeting audio + rename-once online enrollment | §4 | biggest single re-ID win (−52.7 % speaker error); gate updates |
 | ERes2Net-base collapses on short turns; V2 fixes it | §2.1 | embedding upgrade candidate (CAM++ stays rejected) |
 | DiariZen meeting-base (MIT) is the only shippable model clearly above baseline | §1.1 | candidate, gated on measurement + ONNX export work |
-| Stride 3 + per-chunk embedding ≈ 8.5× speedup at ≈0 cost | §1.5 | stride costs naming purity on our stack (declined, PLAN.md); per-chunk = SDBench's shared-trunk method = a live candidate (PLAN-DIARIZATION-SPEED step 5 L1, DER 0.255→0.257 prior) — only the per-window reading adds work here (§1.5 disambiguation) |
+| Stride 3 + per-chunk embedding ≈ 8.5× speedup at ≈0 cost | §1.5 | stride costs naming purity on our stack (declined, DECISIONS.md); per-chunk = SDBench's shared-trunk method = a live candidate (PLAN-DIARIZATION-SPEED step 5 L1, DER 0.255→0.257 prior) — only the per-window reading adds work here (§1.5 disambiguation) |
 | AMI/ICSI CC-BY-4.0 with headset channels | §6 | labelled eval in our exact topology without hand-labelling |
 
 The implementation sequence lived in `PLAN-DIARIZATION.md` (closed
 2026-08-09; every step's verdict is in `eval/README.md`, the surviving
-declined list with re-open triggers in `PLAN.md`).
+declined list with re-open triggers in `DECISIONS.md`).
