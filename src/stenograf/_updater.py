@@ -931,11 +931,11 @@ def _fetch_missing_models() -> None:
 def _fetch_speech_model() -> None:
     """Download the speech model the next meeting will load, without loading it.
 
-    The ONNX model lives in stenograf's own cache folder, keyed by its
-    revision, so a release that moves or re-pins it would otherwise cost the
-    first meeting after the update a ~2.5 GB download. That download now
-    happens here instead, while the update line says "Preparing…", with no
-    progress of its own; an unchanged model costs nothing."""
+    Either backend's model is pinned to a revision, so a release that moves
+    the pin would otherwise cost the first meeting after the update a ~2.5 GB
+    download. That download now happens here instead, while the update line
+    says "Preparing…", with no progress of its own; an unchanged model costs
+    nothing."""
     from stenograf.asr import default_backend_name
     from stenograf.settings import SettingsError, load_settings
 
@@ -949,13 +949,9 @@ def _fetch_speech_model() -> None:
 
         parakeet_onnx.model_dir()
     elif name == "parakeet":
-        from huggingface_hub import hf_hub_download
-
         from stenograf.asr import parakeet
 
-        if parakeet._cached_snapshot(parakeet.MODEL_ID) is None:
-            for filename in ("config.json", "model.safetensors"):
-                hf_hub_download(parakeet.MODEL_ID, filename)
+        parakeet.model_dir()
 
 
 def post_install() -> int:

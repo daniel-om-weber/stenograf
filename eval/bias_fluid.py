@@ -186,7 +186,8 @@ def transcribe(cli: Path, work: Path, uttids: list[str], *, arm: str, jobs: int)
 
 
 def ours(name: str, limit: int, seed: int) -> dict[str, str] | None:
-    path = OUR_HYPS / f"parakeet.{name}.{limit}s{seed}.tsv"
+    # FluidAudio runs Parakeet-v3, so the like-for-like arm of ours is v3 too.
+    path = OUR_HYPS / f"parakeet.parakeet-tdt-0.6b-v3.{name}.{limit}s{seed}.tsv"
     return bias_score.read_hyps(path) if path.exists() else None
 
 

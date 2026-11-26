@@ -136,6 +136,25 @@ class _FakeHub:
         return str(local_dir)
 
 
+def test_the_pinned_export_loads_under_onnx_asrs_name_for_its_architecture(monkeypatch):
+    # The repo id is ours to show; onnx-asr picks the model class by its own
+    # name for the architecture and would not know the repo.
+    named: list = []
+
+    def load_model(model_id, path=None, *, quantization=None, providers=None, sess_options=None):
+        named.append((model_id, path))
+        return _FakeModel()
+
+    monkeypatch.setitem(sys.modules, "onnx_asr", types.SimpleNamespace(load_model=load_model))
+    monkeypatch.setattr(parakeet_onnx, "model_dir", lambda quantization=None: Path("/models"))
+    ParakeetOnnxBackend().load()
+    ParakeetOnnxBackend("nemo-parakeet-tdt-0.6b-v2").load()
+    assert named == [
+        ("nemo-parakeet-tdt-0.6b-v3", Path("/models")),
+        ("nemo-parakeet-tdt-0.6b-v2", None),
+    ]
+
+
 def test_model_dir_downloads_plain_files_once(monkeypatch, tmp_path):
     monkeypatch.setenv("STENOGRAF_CACHE", str(tmp_path))
     hub = _FakeHub()

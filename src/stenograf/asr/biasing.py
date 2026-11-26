@@ -276,7 +276,7 @@ def _flatten(root: _Node, vocab_size: int, unk_score: float) -> list[_State]:
 def surface_forms(term: str) -> list[str]:
     """The spellings of ``term`` worth boosting.
 
-    Boosting is token-level and Parakeet-v3 is case-sensitive, so "grafana" and
+    Boosting is token-level and Parakeet is case-sensitive, so "grafana" and
     "Grafana" are different token paths and only the spelling we put in the tree
     is rewarded. German capitalizes nouns and *any* word can start a sentence, so
     an all-lowercase term also needs its capitalized form. A term that already

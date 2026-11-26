@@ -1,16 +1,15 @@
-"""Parakeet-TDT-0.6B-v3 via onnx-asr — the cross-platform CPU backend.
-The *same* model the MLX backend runs, fp32 ONNX export, so
+"""Parakeet Ultra via onnx-asr — the cross-platform CPU backend.
+The *same* weights the MLX backend runs, fp32 ONNX export, so
 transcripts stay comparable across platforms.
 
 onnx-asr won over sherpa-onnx on *accuracy*, not
-timestamps: sherpa-onnx does decode Parakeet-v3 with real
-per-token timestamps, but its only published v3 export is int8, and int8
-costs real accuracy — measured 2026-07-11 on the eval WAVs, cross-WER
-against MLX grew from 2.0–6.8 % (fp32) to 5.8–20.8 % (int8), German worst.
-fp32 on CPU was no slower (~36–44× realtime, all cores). onnx-asr is the
-plan's designated fallback (small MIT dep, isolated ONNX Runtime, leaves the
-sherpa pin — the VAD — untouched); ``quantization="int8"`` remains available
-for RAM-constrained boxes.
+timestamps: sherpa-onnx does decode Parakeet with real
+per-token timestamps, but its only published export was int8, and int8
+costs real accuracy — measured 2026-07-11 on the eval WAVs with
+Parakeet-v3, cross-WER against MLX grew from 2.0–6.8 % (fp32) to
+5.8–20.8 % (int8), German worst. fp32 on CPU was no slower (~36–44×
+realtime, all cores). onnx-asr is a small MIT dep with an isolated ONNX
+Runtime that leaves the sherpa pin — the VAD — untouched.
 
 onnx-asr returns per-token *start* timestamps but no durations, so token
 ends are approximated as the next token's start, capped at TDT's own
@@ -35,12 +34,18 @@ from stenograf.audio import SAMPLE_RATE, to_float32
 from stenograf.config import Language
 from stenograf.cpu import ThreadPlan, confined, live_plan, session_options
 
-MODEL_ID = "nemo-parakeet-tdt-0.6b-v3"
+MODEL_ID = "VoiceVibe/parakeet-ultra-nounk-onnx"
+_REVISION = "ed66bdeef2ec0086cbf96fa8b046c1a2ea59998d"
+"""A third party's export of Moondream's Parakeet Ultra in onnx-asr's layout,
+pinned because nothing but the revision ties it to what was checked: the graph
+is byte-identical to ``istupakov/parakeet-tdt-0.6b-v3-onnx``'s and every weight
+is ``moondream/parakeet-ultra``'s (the 48 conv+norm tensors folded, equal to
+2e-7), except the ``<unk>`` output bias, lowered by 10 000 exactly as in the
+MLX conversion (``parakeet.REVISION``). Re-run ``eval/asr_weights.py`` before
+moving the pin. Only fp32 is published."""
 
-_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"
-_REVISION = "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce"
-"""The export :data:`MODEL_ID` names, pinned so the files below are exactly the
-ones onnx-asr loads."""
+_ONNX_ASR_TYPE = "nemo-parakeet-tdt-0.6b-v3"
+"""What onnx-asr calls the architecture; Ultra is v3 with other weights."""
 
 
 def model_dir(quantization: str | None = None) -> Path:
@@ -59,7 +64,7 @@ def model_dir(quantization: str | None = None) -> Path:
     from stenograf.paths import cache_dir
 
     variant = quantization or "fp32"
-    target = cache_dir() / f"parakeet-tdt-0.6b-v3-onnx-{_REVISION[:12]}"
+    target = cache_dir() / f"parakeet-ultra-onnx-{_REVISION[:12]}"
     marker = target / f".complete-{variant}"
     if marker.exists():
         return target
@@ -67,7 +72,7 @@ def model_dir(quantization: str | None = None) -> Path:
 
     suffix = f".{quantization}" if quantization else ""
     snapshot_download(
-        _REPO,
+        MODEL_ID,
         revision=_REVISION,
         local_dir=target,
         allow_patterns=[
@@ -162,10 +167,10 @@ class ParakeetOnnxBackend(ASRBackend):
     def _load_with(self, providers: list[str], options: Any = None):
         import onnx_asr
 
-        path = model_dir(self._quantization) if self.model_id == MODEL_ID else None
+        pinned = self.model_id == MODEL_ID
         model = onnx_asr.load_model(
-            self.model_id,
-            path,
+            _ONNX_ASR_TYPE if pinned else self.model_id,
+            model_dir(self._quantization) if pinned else None,
             quantization=self._quantization,
             providers=providers,
             sess_options=options,
@@ -191,7 +196,7 @@ class ParakeetOnnxBackend(ASRBackend):
         asr._decoding = _biased_decoding(asr, tree, self._boost)
 
     def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:
-        # Parakeet v3 is multilingual with no language switch; ``language``
+        # Parakeet is multilingual with no language switch; ``language``
         # is intentionally unused (may be None until LID runs over the text).
         if self._model is None:
             self.load()
@@ -220,7 +225,7 @@ def _biased_decoding(asr: Any, tree: BoostingTree, alpha: float):
 
     blank = asr._blank_idx
     # The boost vector spans the non-blank vocabulary, so blank has to be the last
-    # index for `logits[:blank]` to mean "every label". It is, for Parakeet-v3.
+    # index for `logits[:blank]` to mean "every label". It is, for Parakeet.
     assert blank == asr._vocab_size - 1
 
     def decoding(

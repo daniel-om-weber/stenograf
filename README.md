@@ -609,7 +609,14 @@ for the model-evaluation and AEC-scoring harnesses.
 ## License
 
 [MIT](LICENSE). The models are not part of the package: `steno setup`
-downloads them on first run, each under its own licence. The diarizer,
+downloads them on first run, each under its own licence. The speech
+recognizer is [Parakeet Ultra](https://huggingface.co/moondream/parakeet-ultra)
+by Moondream, a post-trained version of NVIDIA's
+[Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3),
+both under CC BY 4.0; stenograf loads VoiceVibe's conversions of it
+([MLX](https://huggingface.co/VoiceVibe/parakeet-ultra-nounk-mlx),
+[ONNX](https://huggingface.co/VoiceVibe/parakeet-ultra-nounk-onnx)), which
+change one number so the model never writes its unknown-character token. The diarizer,
 [NVIDIA Nemotron 3 Diarization](https://huggingface.co/onnx-community/Nemotron-3-Diarization-ONNX),
 is under OpenMDW-1.1. The voice model that names speakers is
 [ReDimNet2-B6](https://github.com/PalabraAI/redimnet2) by PalabraAI, converted

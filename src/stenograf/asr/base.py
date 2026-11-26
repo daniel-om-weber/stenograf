@@ -2,7 +2,7 @@
 
 Backends wrap one model + runtime combination. Implementations:
 
-- ``parakeet`` — Parakeet-TDT-0.6B-v3 via parakeet-mlx (default for both
+- ``parakeet`` — Parakeet Ultra via parakeet-mlx (default for both
   finalize and live pass on macOS; Canary-1B-v2 was dropped — no Apple Silicon
   runtime with word timestamps)
 - ``parakeet-onnx`` — the same model, fp32 ONNX via onnx-asr on CPU (the

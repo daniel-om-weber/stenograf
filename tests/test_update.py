@@ -854,24 +854,16 @@ def test_preparing_fetches_the_onnx_speech_model_files(monkeypatch, no_small_mod
 def test_preparing_fetches_the_mlx_speech_model_files_and_never_loads_them(
     monkeypatch, no_small_models
 ):
-    import huggingface_hub
-
     from stenograf.asr import parakeet
 
     fetched = []
     monkeypatch.setenv("STENOGRAF_ASR_BACKEND", "parakeet")
-    monkeypatch.setattr(parakeet, "_cached_snapshot", lambda model_id: None)
-    monkeypatch.setattr(
-        huggingface_hub, "hf_hub_download", lambda repo, name: fetched.append((repo, name))
-    )
+    monkeypatch.setattr(parakeet, "model_dir", lambda: fetched.append("model") or "m")
     monkeypatch.setattr(
         parakeet.ParakeetMLXBackend, "load", lambda self: pytest.fail("loaded the weights")
     )
     _updater._fetch_missing_models()
-    assert fetched == [
-        (parakeet.MODEL_ID, "config.json"),
-        (parakeet.MODEL_ID, "model.safetensors"),
-    ]
+    assert fetched == ["model"]
 
 
 def test_preparing_without_a_stderr_still_downloads_and_never_fails(monkeypatch, no_small_models):

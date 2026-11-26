@@ -224,7 +224,7 @@ def _recase(token: str, core: str, term: _Term) -> str:
     what makes ``greifswald`` → ``Greifswald`` a fix rather than a preference.
 
     An all-lowercase term says nothing about case, so it must not overwrite the
-    model's. Parakeet-v3 is case-sensitive and capitalizes German nouns and
+    model's. Parakeet is case-sensitive and capitalizes German nouns and
     sentence-initial words correctly; imposing ``kubernetes`` on a sentence that
     starts with it would be this layer inventing an error out of a spelling the user
     never intended to assert. ``asr.biasing.surface_forms`` reaches the same

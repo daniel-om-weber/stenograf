@@ -47,7 +47,7 @@ def test_unknown_backend_raises():
 def test_backend_model_id_is_importable_without_the_runtime():
     # The module import is MLX-free (heavy runtime lives in the methods), so doctor
     # can show the model id without pulling MLX.
-    assert backend_model_id(get_spec("parakeet")) == "mlx-community/parakeet-tdt-0.6b-v3"
+    assert backend_model_id(get_spec("parakeet")) == "VoiceVibe/parakeet-ultra-nounk-mlx"
 
 
 def test_default_backend_name_precedence(monkeypatch):

@@ -18,17 +18,16 @@ from typing import Any
 
 from stenograf.asr.base import Word
 
-TOKENIZER_REPO = "mlx-community/parakeet-tdt-0.6b-v3"
 TOKENIZER_FILE = "tokenizer.model"
-"""Where Parakeet's SentencePiece model comes from.
+"""Parakeet's SentencePiece model, read from the MLX backend's pinned repo.
 
-The two backends load the *same* Parakeet-v3 weights from different repos, and
-their vocabularies are byte-identical index for index (8192 pieces; onnx-asr
+The two backends load the *same* weights from different repos, and their
+vocabularies are byte-identical index for index (8192 pieces; onnx-asr
 appends ``<blk>`` as 8192, which is exactly parakeet-mlx's ``blank == len(vocab)``
 convention) — so one encoder is correct for both. Only the MLX repo publishes the
 SentencePiece model itself; onnx-asr's ships a bare ``vocab.txt`` with no merge
 information, from which the model's own segmentation cannot be reconstructed.
-Hence both backends read the tokenizer from here. It is a ~300 kB file and needs
+Hence both backends read the tokenizer from there. It is a ~300 kB file and needs
 no MLX, so this costs the ONNX platforms nothing but the download."""
 
 
@@ -67,7 +66,10 @@ def load_encoder() -> Callable[[str], list[list[int]]]:
     import sentencepiece
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(TOKENIZER_REPO, TOKENIZER_FILE)
+    # Imported here: parakeet imports this module.
+    from stenograf.asr import parakeet
+
+    path = hf_hub_download(parakeet.MODEL_ID, TOKENIZER_FILE, revision=parakeet.REVISION)
     # sentencepiece is SWIG-generated: the model_file kwarg and the snake_case
     # encode alias are injected at runtime, so static analysis can't see them.
     sp = sentencepiece.SentencePieceProcessor(model_file=path)  # pyright: ignore[reportCallIssue]

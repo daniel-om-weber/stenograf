@@ -362,8 +362,11 @@ def decode(
     The seed is part of the key, not decoration: it chooses *which* utterances the
     subsample holds, so two seeds at the same ``--limit`` would otherwise collide on
     one filename and the second run would silently score the first run's audio.
+    So is the model: a backend whose default moves to other weights would be
+    scored on the old weights' transcripts.
     """
-    path = HYP_DIR / tier / f"{backend.name}.{config.tag}.{len(audio)}s{seed}.tsv"
+    model = (backend.model_id or backend.name).rsplit("/", 1)[-1]
+    path = HYP_DIR / tier / f"{backend.name}.{model}.{config.tag}.{len(audio)}s{seed}.tsv"
     if path.exists() and not force:
         cached = bias_score.read_hyps(path)
         if set(cached) == set(audio):

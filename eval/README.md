@@ -1,6 +1,8 @@
 # Phase 0 — model evaluation harness
 
 **Result (2026-07-06): Parakeet-TDT-0.6B-v3 is the default for finalize + live.**
+Since 2026-11-26 it runs with Parakeet Ultra's weights ("Parakeet Ultra"
+below); this study chose the architecture and the runtime.
 Blind adjudication of 161 disagreement sites: Parakeet tied Whisper 42:42,
 Voxtral lost to both, Canary lost every pairing ~1:2.
 raw judgments in out/adjudication-results-2026-07-06.json (gitignored).
@@ -60,6 +62,88 @@ uv run --group eval eval/score.py     # → eval/out/report.md
 
 Target coverage: ~10 min hand-corrected reference per language (German +
 English), including one in-room far-field sample.
+
+## Parakeet Ultra (2026-11-26)
+
+**Parakeet Ultra replaced Parakeet-v3 on both backends.** Ultra is Moondream's
+post-training of v3 (2026-09; same architecture, tokenizer and size, CC BY 4.0),
+published with word error rates measured in Moondream's own runtime. `asr_ab.py`
+measures the two in ours, on identical audio, against human references:
+
+| set | words | v3 | Ultra | Ultra − v3 [95 %] |
+|---|---|---|---|---|
+| AMI test meetings, English, 12 speakers — fair | 56 346 | 10.12 | 9.26 | −0.86 [−1.83, −0.12] |
+| the same, strict | | 10.67 | 10.14 | −0.53 [−1.58, +0.30] |
+| FLEURS German, read, 862 clips — strict | 18 338 | 6.93 | 6.25 | −0.68 [−0.99, −0.39] |
+
+```sh
+uv run --group eval eval/asr_ab.py decode v3 --model mlx-community/parakeet-tdt-0.6b-v3
+uv run --group eval eval/asr_ab.py decode ultra
+uv run --group eval eval/asr_ab.py score v3 ultra       # 9 min of decoding in all
+```
+
+- **Where the gain is.** By window length on AMI (fair): 0–2 s 36.75 → 31.01,
+  2–10 s 9.56 → 8.42, 10–100 s 6.14 → 6.24 [−0.19, +0.35]. Short utterances
+  improve; long stretches, which is most of what the finalize path decodes on
+  a continuous channel, are equal. By series: IS1009 −2.81, TS3003 −0.31,
+  ES2004 +0.17 — one foursome of three carries most of it, 10 of 12 speakers
+  improve.
+- **Strict against fair is a spelling convention.** Ultra writes "DVD" and
+  "12" where v3 writes "D V D" and "twelve", and AMI's references spell. The
+  transcripts change accordingly, mostly in English: digit tokens on the own
+  English segments 84 → 106, on the German ones 101 → 101.
+- **Daniel's own recordings** (finalize path, 25 206 words, no references):
+  the two differ in 914 places, word count −0.5 %, neither writes another
+  script or the other language. Where Whisper large-v3 wrote exactly one of
+  the two versions it was Ultra's 359 times and v3's 135 (German segments
+  104 : 55) — triage, not a score: Whisper taught v3, which tilts this toward
+  v3, and whether Ultra was trained on Whisper labels is not published.
+  `de-1` against its hand reference (931 words, drafted from Whisper):
+  10.20 → 9.24. German meeting audio has no ground truth; the judgment by ear
+  is in DECISIONS.md.
+- **Word timings are unchanged.** Of 23 663 words both models wrote, 99.0 %
+  start within one 80 ms frame of each other; mean shift +2 ms.
+- **`<unk>`.** The original writes its unknown token for characters the
+  tokenizer cannot spell (`R<unk>D`, `40<unk>`): 8 of 862 FLEURS clips, 2 of
+  4925 AMI windows, v3 none. The pinned conversions suppress it
+  (`parakeet.REVISION`); the table above is theirs, and identical to the
+  original's to 0.01.
+- **Short fragments in another script.** On AMI, Ultra wrote Cyrillic or
+  Greek in 12 of 4925 windows to v3's 3, all on fragments of a word or two;
+  none on FLEURS or the own recordings.
+- **Not the front end.** parakeet-mlx computes the spectrogram magnitude as
+  |re| + |im|; with the true magnitude v3 scores 10.15 and Ultra 9.24 (AMI,
+  fair), so neither model is held back by it.
+- **The runtimes agree.** FLEURS German on the ONNX backend: 6.31 against
+  MLX's 6.25 (+0.07 [−0.08, +0.21]). Speed is v3's (87× against 91× realtime
+  on the AMI windows, MLX).
+- **The weights are Moondream's.** No conversion for either runtime comes
+  from Moondream; `asr_weights.py` compares the pinned third-party files with
+  the original tensor by tensor (`uv run --group eval --with onnx
+  eval/asr_weights.py`): bit-identical, the 48 folded conv+norm tensors of
+  the ONNX export equal to rounding, one number changed for `<unk>`.
+- **An update leaves v3's 2.5 GB behind**: in the Hub cache on macOS, which
+  other tools share, and as `parakeet-tdt-0.6b-v3-onnx-*` in stenograf's cache
+  elsewhere. Nothing deletes them — a rolled-back update loads them again.
+
+**Glossary boosting was calibrated on v3 and pulls Ultra less** (`bias.py`,
+pinned 500-utterance subsamples, N=100; B = the rare words on the list, U = all
+other words, false insertions in brackets):
+
+| | v3 off | v3 boost 1 | Ultra off | Ultra boost 1 | Ultra 1.5 | Ultra 2 |
+|---|---|---|---|---|---|---|
+| English B-WER | 12.73 | 8.28 (2) | 12.82 | 9.59 (0) | 9.07 (0) | 8.37 (0) |
+| English U-WER | 1.03 | 1.03 | 1.01 | 0.98 | 0.98 | 0.99 |
+| German B-WER | 16.73 | 12.22 (3) | 15.97 | 12.22 (2) | 10.93 (3) | 10.24 (6) |
+| German U-WER | 4.66 | 4.51 | 3.95 | 3.84 | 3.84 | 3.86 |
+
+At the shipped `boost = 1` German rare words are where v3 left them and every
+other German word is better; in English, boosting recovers a quarter fewer rare
+words than it did on v3. A higher boost closes that gap here, and Ultra takes it
+far better than v3 did — v3 at 2.0 was rejected on this benchmark for U-WER
++6.7 % and 27 false insertions ("What `--post` found", below). The default did
+not move: it is a tuning decision of its own, and the false-insertion run on
+meeting audio (`--tier distractor`) has not been made on Ultra.
 
 ## Short-utterance / window-length study (2026-07-19)
 

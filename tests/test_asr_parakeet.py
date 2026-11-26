@@ -11,6 +11,7 @@ import pytest
 mx = pytest.importorskip("mlx.core")
 parakeet_mlx = pytest.importorskip("parakeet_mlx")
 
+from stenograf.asr import parakeet  # noqa: E402
 from stenograf.asr.parakeet import ParakeetMLXBackend  # noqa: E402
 
 
@@ -30,6 +31,7 @@ def test_load_materializes_weights_for_cross_thread_use(monkeypatch):
     # weights concrete on the load thread; if this eval is dropped, the live pass
     # breaks on real hardware while every mocked test stays green — hence this.
     fake = _FakeModel()
+    monkeypatch.setattr(parakeet, "model_dir", lambda: "/models")
     monkeypatch.setattr(parakeet_mlx, "from_pretrained", lambda model_id: fake)
     evaled: list[tuple] = []
     monkeypatch.setattr(mx, "eval", lambda *args: evaled.append(args))
@@ -69,17 +71,22 @@ def test_load_prefers_the_complete_local_snapshot(monkeypatch, tmp_path):
 
     assert loaded == [str(tmp_path)]
     assert [f for _, f, _ in resolved] == ["config.json", "model.safetensors"]
-    assert all(kw == {"local_files_only": True} for _, _, kw in resolved)
+    pinned = {"revision": parakeet.REVISION, "local_files_only": True}
+    assert all(kw == pinned for _, _, kw in resolved)
 
 
-def test_load_falls_back_online_when_cache_is_incomplete(monkeypatch, tmp_path):
+def test_load_downloads_the_pinned_revision_when_cache_is_incomplete(monkeypatch, tmp_path):
     # First run or an interrupted download: local resolution raises, and load()
-    # must pass the repo id through so from_pretrained downloads normally.
+    # must fetch the pinned files itself — handed the repo id, from_pretrained
+    # would take whatever the repo's main branch holds that day.
     import huggingface_hub
+
+    online: list[tuple] = []
 
     def fake_hf_hub_download(repo_id, filename, **kwargs):
         if kwargs.get("local_files_only"):
             raise huggingface_hub.errors.LocalEntryNotFoundError("not cached")
+        online.append((repo_id, filename, kwargs))
         return str(tmp_path / filename)
 
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
@@ -92,7 +99,34 @@ def test_load_falls_back_online_when_cache_is_incomplete(monkeypatch, tmp_path):
     monkeypatch.setattr(parakeet_mlx, "from_pretrained", fake_from_pretrained)
     monkeypatch.setattr(mx, "eval", lambda *args: None)
 
-    backend = ParakeetMLXBackend()
-    backend.load()
+    ParakeetMLXBackend().load()
 
-    assert loaded == [backend.model_id]
+    assert loaded == [str(tmp_path)]
+    assert online == [
+        (parakeet.MODEL_ID, "config.json", {"revision": parakeet.REVISION}),
+        (parakeet.MODEL_ID, "model.safetensors", {"revision": parakeet.REVISION}),
+    ]
+
+
+def test_another_model_id_is_loaded_as_given(monkeypatch):
+    # A local directory or another repo: no pin applies, and a directory is not
+    # a repo id the Hub could resolve.
+    import huggingface_hub
+
+    def fake_hf_hub_download(repo_id, filename, **kwargs):
+        assert kwargs == {"revision": None, "local_files_only": True}
+        raise huggingface_hub.errors.LocalEntryNotFoundError("not cached")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_hf_hub_download)
+    loaded: list[str] = []
+
+    def fake_from_pretrained(model_id):
+        loaded.append(model_id)
+        return _FakeModel()
+
+    monkeypatch.setattr(parakeet_mlx, "from_pretrained", fake_from_pretrained)
+    monkeypatch.setattr(mx, "eval", lambda *args: None)
+
+    ParakeetMLXBackend("/some/model/dir").load()
+
+    assert loaded == ["/some/model/dir"]

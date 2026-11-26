@@ -1,5 +1,10 @@
-"""Parakeet-TDT-0.6B-v3 via parakeet-mlx — the committed default backend
-(native word timestamps; no hallucination on silence).
+"""Parakeet Ultra via parakeet-mlx — the committed default backend (native
+word timestamps; no hallucination on silence).
+
+Parakeet Ultra is Moondream's post-training of NVIDIA's Parakeet-TDT-0.6B-v3:
+the same architecture and tokenizer, so nothing here but :data:`MODEL_ID`
+knows which of the two it runs. It replaced v3 on measured word error rates
+(2026-11-26, ``eval/README.md``, "Parakeet Ultra").
 
 Audio is passed as in-memory arrays (never temp files): parakeet-mlx's own
 ``transcribe(path)`` is just load → logmel → generate, so we call the last
@@ -22,7 +27,18 @@ from stenograf.asr.tokens import load_encoder, merge_tokens
 from stenograf.audio import to_float32
 from stenograf.config import Language
 
-MODEL_ID = "mlx-community/parakeet-tdt-0.6b-v3"
+MODEL_ID = "VoiceVibe/parakeet-ultra-nounk-mlx"
+REVISION = "5cf5c42dba946cdbc30b478411cb6508c4e535fa"
+"""Moondream publishes Parakeet Ultra for its own runtime only; this is a
+third party's conversion to parakeet-mlx's layout, pinned because nothing but
+the revision ties it to what was checked: every tensor is bit-identical to
+``moondream/parakeet-ultra`` except one number, the ``<unk>`` output bias,
+lowered by 10 000 so the token is never emitted (the original writes it for
+``&``, ``+`` and the like, measured 8 of 862 German clips). Re-run
+``eval/asr_weights.py`` before moving the pin."""
+
+_FILES = ("config.json", "model.safetensors")
+"""What ``parakeet_mlx.from_pretrained`` reads from a model directory."""
 
 CACHE_LIMIT_BYTES = 2 << 30
 """Cap on MLX's Metal buffer cache while this backend is loaded.
@@ -36,6 +52,10 @@ buffers count against unified memory, not RSS). One window's working set is
 ~1-2 GB, so 2 GB keeps same-shape reuse while excess buffers are freed."""
 
 
+def _revision(model_id: str) -> str | None:
+    return REVISION if model_id == MODEL_ID else None
+
+
 def _cached_snapshot(model_id: str) -> str | None:
     """Directory of the fully downloaded HF snapshot, or ``None`` to go online.
 
@@ -47,19 +67,28 @@ def _cached_snapshot(model_id: str) -> str | None:
     network and raises on files that were never (or only partially)
     downloaded, so a hit means the load is safe fully offline and a miss —
     first run, interrupted download — falls back to the online path.
-
-    The two filenames mirror what ``parakeet_mlx.from_pretrained`` reads; if
-    a parakeet_mlx upgrade ever needs more files, this misses and the online
-    path stays correct.
     """
     from huggingface_hub import hf_hub_download
 
     try:
-        config = hf_hub_download(model_id, "config.json", local_files_only=True)
-        hf_hub_download(model_id, "model.safetensors", local_files_only=True)
+        paths = [
+            hf_hub_download(model_id, name, revision=_revision(model_id), local_files_only=True)
+            for name in _FILES
+        ]
     except Exception:
         return None
-    return str(Path(config).parent)
+    return str(Path(paths[0]).parent)
+
+
+def model_dir() -> str:
+    """The pinned model's files in the Hub cache, downloaded when missing."""
+    from huggingface_hub import hf_hub_download
+
+    cached = _cached_snapshot(MODEL_ID)
+    if cached is not None:
+        return cached
+    paths = [hf_hub_download(MODEL_ID, name, revision=REVISION) for name in _FILES]
+    return str(Path(paths[0]).parent)
 
 
 def _biased_decode_greedy(model: Any, tree: BoostingTree, alpha: float, mx: ModuleType):
@@ -202,9 +231,13 @@ class ParakeetMLXBackend(ASRBackend):
         self._mx = mx
         self._get_logmel = get_logmel
 
-        # Load from the local cache when it's complete (no network, no Hub
-        # warning); from_pretrained treats a directory path like a repo id.
-        self._model = from_pretrained(_cached_snapshot(self.model_id) or self.model_id)
+        # from_pretrained treats a directory path like a repo id, and given a
+        # repo id it would fetch whatever `main` holds today.
+        if self.model_id == MODEL_ID:
+            source = model_dir()
+        else:
+            source = _cached_snapshot(self.model_id) or self.model_id
+        self._model = from_pretrained(source)
         # Bound the Metal buffer cache (see CACHE_LIMIT_BYTES): without a limit
         # a long batch pass accumulates tens of GB of dead buffers and swaps
         # the machine. Process-global, which is fine — this is the process's
@@ -233,7 +266,7 @@ class ParakeetMLXBackend(ASRBackend):
                 model.decode_greedy = _biased_decode_greedy(model, tree, self._boost, mx)
 
     def transcribe(self, samples: np.ndarray, language: Language | None) -> list[Segment]:
-        # Parakeet v3 is multilingual with no language switch; ``language``
+        # Parakeet is multilingual with no language switch; ``language``
         # is intentionally unused (may be None until LID runs over the text).
         if self._model is None:
             self.load()

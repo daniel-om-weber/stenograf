@@ -80,6 +80,8 @@ means never run.
 | Shared room mic | any | First real hybrid meetings: people merged into one speaker, crosstalk phantoms, a profile naming the wrong person | Open since 2026-11-15 |
 | Finish card | macOS | A real meeting with a wrong name match corrected on the card | Open since 2026-11-16 |
 | Two-voice split | any | First real meetings where a speaker is split: the halves right by ear on the finish card, no single voice split, the stop's extra seconds (7.5 s measured on a stored meeting) | Open since 2026-11-26 |
+| Parakeet Ultra by ear | this Mac | First real German meetings on Ultra: the names and jargon the glossary used to fix, numbers and acronyms now written as "12" and "DVD", no other language appearing on short interjections | Open since 2026-11-26 |
+| Parakeet Ultra off macOS | Windows, Linux | The ONNX export on real hardware: a first meeting transcribes; DirectML still word for word the CPU's (measured on v3 only) | Open since 2026-11-26 |
 | Mute G1 | macOS | During a call: mute mic, say a sentinel phrase, unmute. Phrase absent from transcript, notes and `audio.opus`; span shown; speech right after unmuting kept | Open |
 | Mute G2 | macOS | Mute during model loading on a cold start: the backlog case on the real helper | Open |
 | Mute G3 | macOS | System audio muted while speakers play: no remote line leaks into the mic channel | Open |
@@ -140,7 +142,10 @@ Each says why, and what would re-open it.
   leaderboard leader so far lost to Parakeet on our meeting audio (Voxtral
   Small 24B 32:38, Canary-1B-v2 ~1:2, blind, de+en). Re-open: a leader that
   emits word timestamps — a `BackendSpec` in `asr/registry.py`
-  (`git log --follow -p PLAN-ASR-CHALLENGER.md`).
+  (`git log --follow -p PLAN-ASR-CHALLENGER.md`). Parakeet Ultra was no
+  challenger in this sense — Parakeet-v3's architecture, tokenizer and
+  timestamps with other weights — and replaced v3 on measured word error
+  rates (2026-11-26, `eval/README.md`, "Parakeet Ultra").
 - **Never move VAD window bounds.** Both bound-moving fixes were tried and
   reverted; only the decode slice may change. A detector swap moves every
   bound and is judged on what it buys against that churn (Silero v6 passed
