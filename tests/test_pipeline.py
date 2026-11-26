@@ -583,3 +583,70 @@ class TestOnEmbeddings:
             "Speaker 1",
             "Speaker 2",
         }
+
+
+class SplittingDiarizer(EmbeddingDiarizer):
+    """Splits S0 into S0 and S1 on whatever segments it is shown."""
+
+    def __init__(self, turns, embeddings, halves_voices):
+        super().__init__(turns, embeddings)
+        self.halves_voices = halves_voices
+        self.seen_segments = None
+
+    def split_speakers(self, samples, turns, segments, num_speakers=None):
+        from stenograf.diarization.base import SpeakerSplit
+
+        self.seen_segments = list(segments)
+        moved = ["S1" if who == "S0" else who for who, _, _ in segments]
+        relabelled = [SpeakerTurn("S1", t.start, t.end) for t in turns]
+        return SpeakerSplit(moved, relabelled, {"S1": "S0"}, dict(self.halves_voices))
+
+
+class TestFinalizeChannelSplit:
+    def test_a_split_speaker_is_named_and_kept_on_its_own_voice(self):
+        old, half_a, half_b = (np.array(v, np.float32) for v in ([1, 0], [0.6, 0.8], [0, 1]))
+        diarizer = SplittingDiarizer(
+            [turn("S0", 0.0, 2.0)], {"S0": old}, {"S0": half_a, "S1": half_b}
+        )
+        reid = MappingReID({"S1": "Annett"})
+        voices: dict = {}
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=None,
+            reid=reid,
+            on_embeddings=voices.update,
+        )
+        assert diarizer.seen_segments == [("S0", 0.1, 0.5)]  # the entries, not the turns
+        assert [e.speaker for e in entries] == ["Annett"]
+        # Naming saw the halves' voices, never the merged one.
+        assert set(reid.seen) == {"S0", "S1"}
+        assert np.array_equal(reid.seen["S0"], half_a)
+        assert set(voices) == {"Annett"} and np.array_equal(voices["Annett"], half_b)
+
+    def test_split_halves_without_voices_are_left_unnamed(self):
+        diarizer = SplittingDiarizer([turn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0])}, {})
+        reid = MappingReID({"S0": "Daniel", "S1": "Annett"})
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=None,
+            reid=reid,
+        )
+        assert [e.speaker for e in entries] == ["S1"]
+        assert reid.seen == {}  # the merged voice is never offered for naming
+
+    def test_no_split_leaves_everything_as_diarized(self):
+        diarizer = EmbeddingDiarizer([turn("S0", 0.0, 2.0)], {"S0": np.array([1.0, 0.0])})
+        entries = finalize_channel(
+            np.zeros(SAMPLE_RATE * 2, dtype=np.float32),
+            asr=FakeASR(),
+            language=None,
+            diarizer=diarizer,
+            num_speakers=None,
+        )
+        assert [e.speaker for e in entries] == ["S0"]

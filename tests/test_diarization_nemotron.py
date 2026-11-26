@@ -20,7 +20,7 @@ from stenograf import assets
 from stenograf.config import MAX_SPEAKERS
 from stenograf.diarization import nemotron
 from stenograf.diarization.base import SpeakerTurn
-from stenograf.diarization.embedding import VoiceEmbedder
+from stenograf.diarization.embedding import VoiceEmbedder, cluster_embeddings
 from stenograf.diarization.nemotron import (
     HOP,
     NUM_MELS,
@@ -34,6 +34,7 @@ from stenograf.diarization.nemotron import (
     speaker_probabilities,
     turns_from_probs,
 )
+from stenograf.diarization.split import SplitResult, to_span, voice_crop, voice_crops
 
 FIXTURE = Path(__file__).parent / "data" / "nemotron_logmel.npz"
 
@@ -429,6 +430,195 @@ def test_recomputed_stream_embeds_from_the_start(fake_models, monkeypatch):
     stream._loop.broken = True  # pyright: ignore[reportOptionalMemberAccess]
     assert _same_voices(stream.resumed().diarize_with_embeddings(audio), want)
     assert stream.take_voices() is None
+
+
+def _long_voices() -> np.ndarray:
+    """30 s the fake session hears as two slots taking 2.5 s turns."""
+    rng = np.random.default_rng(4)
+    return np.concatenate(
+        [(rng.standard_normal(40000) * (30.0, 1e-3)[k % 2]).astype(np.float32) for k in range(12)]
+    )
+
+
+def _long_crops(audio: np.ndarray) -> set:
+    turns = turns_from_probs(speaker_probabilities(_FakeSession(_CONFIG), _CONFIG, audio))
+    return {voice_crop(to_span(t.start, t.end)) for t in turns if t.end - t.start >= 2.0}
+
+
+def _forced_split(seen: list):
+    """Stands in for the two-voice check: asks for every speaker's turn
+    voices, keeps them, and splits S0's later entries off as S2."""
+
+    def check(turns, segments, audio, *, voices, rerun, num_speakers=None):
+        by_label: dict[str, list] = {}
+        for t in turns:
+            by_label.setdefault(t.speaker, []).append(t)
+        seen.append({label: voices(voice_crops(own)) for label, own in by_label.items()})
+        own = [i for i, (who, _, _) in enumerate(segments) if who == "S0"]
+        late = set(own[len(own) // 2 :])
+        speakers = ["S2" if i in late else who for i, (who, _, _) in enumerate(segments)]
+        moved = {(segments[i][1], segments[i][2]) for i in late}
+        out = [SpeakerTurn("S2", t.start, t.end) if (t.start, t.end) in moved else t for t in turns]
+        return SplitResult(speakers, out, {"S2": "S0"}, [])
+
+    return check
+
+
+def test_stream_embeds_each_long_turn_as_it_finishes(fake_models):
+    make, _ = fake_models
+    audio = _long_voices()
+    d = make()
+    stream = d.stream()
+    _feed(stream, audio, len(audio) - 16000)
+    got = dict(stream._turn_voices)
+    crops = _long_crops(audio)
+    assert got and set(got) <= crops
+    assert len(got) >= len(crops) - 3  # only turns open at the last step, or after it, wait
+    for (lo, hi), vector in got.items():
+        assert np.array_equal(vector, d.embedder.embed(audio[lo:hi]))
+
+
+def test_streamed_split_matches_one_pass_and_embeds_little_at_the_stop(fake_models, monkeypatch):
+    make, _ = fake_models
+    seen: list = []
+    monkeypatch.setattr(nemotron, "split_two_voice_speakers", _forced_split(seen))
+    audio = _long_voices()
+    one = make()
+    found = one.diarize_with_embeddings(audio)
+    segments = [(t.speaker, t.start, t.end) for t in found.turns]
+    want = one.split_speakers(audio, found.turns, segments)
+    assert want is not None and want.halves == {"S2": "S0"}
+    halves = cluster_embeddings(
+        want.turns, audio, one.embedder.embed, rule=one.embedder.rule, only={"S0", "S2"}
+    )
+    assert set(want.embeddings) == {"S0", "S2"}
+    for label in want.embeddings:
+        assert np.array_equal(want.embeddings[label], halves[label])
+
+    d = make()
+    stream = d.stream()
+    _feed(stream, audio, len(audio) - 16000)
+    resumed = stream.resumed()
+    assert resumed.diarize_with_embeddings(audio).turns == found.turns
+    missing = _long_crops(audio) - set(stream._turn_voices)
+    assert len(missing) <= 3
+    got = resumed.split_speakers(audio, found.turns, segments)
+    assert got is not None
+    assert (got.speakers, got.turns, got.halves) == (want.speakers, want.turns, want.halves)
+    for label in want.embeddings:
+        assert np.array_equal(got.embeddings[label], want.embeddings[label])
+    offline_voices, streamed_voices = seen
+    for label in offline_voices:
+        for a, b in zip(offline_voices[label], streamed_voices[label], strict=True):
+            assert np.array_equal(a, b)
+
+
+def test_turn_embeddings_failing_mid_meeting_are_made_at_the_stop(fake_models, monkeypatch):
+    make, _ = fake_models
+    seen: list = []
+    monkeypatch.setattr(nemotron, "split_two_voice_speakers", _forced_split(seen))
+    audio = _long_voices()
+    one = make()
+    found = one.diarize_with_embeddings(audio)
+    segments = [(t.speaker, t.start, t.end) for t in found.turns]
+    want = one.split_speakers(audio, found.turns, segments)
+    d = make()
+    stream = d.stream()
+    d.embedder.fail = True
+    assert _feed(stream, audio, len(audio) - 16000) > 0  # the steps went on
+    assert stream._turn_voices_failed and not stream._turn_voices
+    d.embedder.fail = False
+    resumed = stream.resumed()
+    resumed.diarize_with_embeddings(audio)
+    got = resumed.split_speakers(audio, found.turns, segments)
+    assert got is not None and want is not None and got.speakers == want.speakers
+    for a, b in zip(seen[0]["S0"], seen[1]["S0"], strict=True):
+        assert np.array_equal(a, b)
+
+
+class _LoudnessEmbedder(_Embedder):
+    """Hears two voices: loud and quiet, as the fake session does."""
+
+    def embed(self, audio, run_options=None):
+        if self.fail:
+            raise RuntimeError("voice model failed")
+        if len(audio) == 0:
+            return None
+        self.calls += 1
+        loud = float(np.sqrt(np.mean(audio**2))) > 1.0
+        v = np.array([1.0, 0.0, 0.0] if loud else [0.0, 1.0, 0.0], np.float32)
+        v[2] = 1e-3 * (self.calls % 7)
+        return v / np.linalg.norm(v)
+
+
+def _merged_speaker():
+    """One speaker, S0, whose first fifteen 4 s turns are loud and last
+    fifteen quiet, with one transcript entry per turn."""
+    rng = np.random.default_rng(9)
+    audio = np.zeros(150 * 16000, np.float32)
+    turns = []
+    for i in range(30):
+        lo = i * 5 * 16000
+        audio[lo : lo + 4 * 16000] = rng.standard_normal(4 * 16000) * (30.0 if i < 15 else 1e-3)
+        turns.append(SpeakerTurn("S0", i * 5.0, i * 5.0 + 4.0))
+    return audio, turns, [(t.speaker, t.start, t.end) for t in turns]
+
+
+def _splitting(make):
+    d = make()
+    d.embedder = _LoudnessEmbedder()
+    return d
+
+
+def test_the_rerun_on_the_entries_splits_a_merged_speaker(fake_models):
+    make, sessions = fake_models
+    audio, turns, segments = _merged_speaker()
+    d = _splitting(make)
+    got = d.split_speakers(audio, turns, segments)
+    assert got is not None and got.halves == {"S1": "S0"}
+    assert sessions.runs["offline"] > 0  # the rerun ran on the diarizer
+    assert got.speakers == ["S0"] * 15 + ["S1"] * 15
+    assert [t.speaker for t in got.turns] == ["S0"] * 15 + ["S1"] * 15
+    assert set(got.embeddings) == {"S0", "S1"}
+    assert not np.allclose(got.embeddings["S0"], got.embeddings["S1"])
+
+
+def test_halves_whose_voices_fail_stay_split_and_unnamed(fake_models, monkeypatch):
+    make, _ = fake_models
+    audio, turns, segments = _merged_speaker()
+    d = _splitting(make)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("voice model failed")
+
+    monkeypatch.setattr(nemotron, "cluster_embeddings", fail)
+    got = d.split_speakers(audio, turns, segments)
+    assert got is not None and got.halves == {"S1": "S0"} and got.embeddings == {}
+    assert isinstance(d.take_voice_failure(), RuntimeError)
+
+
+def test_a_voice_model_that_already_failed_is_not_retried_by_the_check(fake_models):
+    make, sessions = fake_models
+    audio, turns, segments = _merged_speaker()
+    d = _splitting(make)
+    d._voice_failure = RuntimeError("no voice model")
+    assert d.split_speakers(audio, turns, segments) is None
+    assert d.embedder.calls == 0 and "offline" not in sessions.runs
+
+
+def test_a_failing_two_voice_check_keeps_the_speakers_as_found(fake_models, monkeypatch):
+    make, _ = fake_models
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("check failed")
+
+    monkeypatch.setattr(nemotron, "split_two_voice_speakers", fail)
+    audio = _long_voices()
+    d = make()
+    found = d.diarize_with_embeddings(audio)
+    segments = [(t.speaker, t.start, t.end) for t in found.turns]
+    assert d.split_speakers(audio, found.turns, segments) is None
+    assert d.take_voice_failure() is None
 
 
 def test_a_failing_voice_model_keeps_the_turns_and_reports_once(fake_models):

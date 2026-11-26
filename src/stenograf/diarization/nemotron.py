@@ -41,9 +41,16 @@ from stenograf.diarization.base import (
     DiarizationStream,
     Diarizer,
     Reader,
+    SpeakerSplit,
     SpeakerTurn,
 )
-from stenograf.diarization.embedding import VoiceCollector, VoiceEmbedder
+from stenograf.diarization.embedding import VoiceCollector, VoiceEmbedder, cluster_embeddings
+from stenograf.diarization.split import (
+    VOICE_TURN,
+    Span,
+    split_two_voice_speakers,
+    voice_crop,
+)
 from stenograf.log import logger
 
 N_FFT = 512
@@ -674,6 +681,72 @@ class NemotronDiarizer(Diarizer):
             raw.setdefault(int(turn.speaker[1:]), []).append((span[0] * HOP, span[1] * HOP))
         return collector.finish(raw, read, embedder.embed, pool=embedder.pool())
 
+    def split_speakers(
+        self,
+        samples: np.ndarray,
+        turns: list[SpeakerTurn],
+        segments: list[tuple[str, float, float]],
+        num_speakers: int | None = None,
+    ) -> SpeakerSplit | None:
+        return self._split(samples, turns, segments, num_speakers, {})
+
+    def _split(
+        self,
+        samples: np.ndarray,
+        turns: list[SpeakerTurn],
+        segments: list[tuple[str, float, float]],
+        num_speakers: int | None,
+        embedded: dict[Span, np.ndarray],
+    ) -> SpeakerSplit | None:
+        """The two-voice check (:mod:`~stenograf.diarization.split`), its turn
+        embeddings looked up in ``embedded`` (a stream's) before any is run.
+        A check that fails keeps the speakers as found; a voice model that
+        fails on the halves leaves them split but unnamed, and is kept for
+        :meth:`take_voice_failure`."""
+        if self._voice_failure is not None:  # the check would only retry a failing model
+            return None
+        audio = to_float32(samples)
+        embedder = self.embedder
+
+        def voices(crops: list[Span]) -> list[np.ndarray | None]:
+            missing = [c for c in crops if c not in embedded]
+            pool = embedder.pool()
+            mapper = pool.map if pool is not None else map
+            pieces = [audio[a:b] for a, b in missing]
+            found = dict(zip(missing, mapper(embedder.embed, pieces), strict=True))
+            return [embedded[c] if c in embedded else found[c] for c in crops]
+
+        def rerun(joined: np.ndarray) -> np.ndarray:
+            session, config = self._models.offline()
+            return speaker_probabilities(session, config, joined)
+
+        try:
+            result = split_two_voice_speakers(
+                turns, segments, audio, voices=voices, rerun=rerun, num_speakers=num_speakers
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed check keeps the speakers as found
+            logger.warning("two-voice check failed (%s); speakers kept as found", exc)
+            return None
+        if not result.halves:
+            return None
+        # The voices the stream collected for a split speaker are one voice
+        # over both people; each half embeds from its own turns instead.
+        touched = set(result.halves) | set(result.halves.values())
+        try:
+            halves = cluster_embeddings(
+                result.turns,
+                audio,
+                embedder.embed,
+                pool=embedder.pool(),
+                rule=embedder.rule,
+                only=touched,
+            )
+        except Exception as exc:  # noqa: BLE001 — naming is lost, the split must not be
+            logger.warning("voice embedding failed (%s); split speakers kept, not named", exc)
+            self._voice_failure = exc
+            halves = {}
+        return SpeakerSplit(result.speakers, result.turns, result.halves, halves)
+
     def take_voice_failure(self) -> Exception | None:
         failure, self._voice_failure = self._voice_failure, None
         return failure
@@ -708,7 +781,12 @@ class NemotronStream(DiarizationStream):
     Each step's speech goes to a :class:`VoiceCollector` in the same wake-up,
     so the speakers' voiceprints are mostly built when the meeting stops. An
     embedding that fails or is abandoned costs only itself: the collector
-    keeps what it had, the steps go on, and the stop embeds the rest."""
+    keeps what it had, the steps go on, and the stop embeds the rest.
+
+    Every turn of at least two seconds is embedded as it finishes, too, for
+    the two-voice check's voice split (:mod:`~stenograf.diarization.split`):
+    at the stop that check is a lookup, and the stop embeds only the turns
+    that finished last or that a failure skipped."""
 
     def __init__(self, diarizer: NemotronDiarizer) -> None:
         self._diarizer = diarizer
@@ -719,6 +797,12 @@ class NemotronStream(DiarizationStream):
         self._voices: VoiceCollector | None = None
         self._voiced_steps = 0  # steps of the loop the collector has consumed
         self._voices_failed = False
+        self._turn_voices: dict[Span, np.ndarray] = {}
+        self._turn_crops: list[Span] = []  # finished turns' crops still to embed
+        self._scanned_steps = 0
+        self._scanned_frames = 0
+        self._open_turns: dict[int, int] = {}  # slot → first frame of its running turn
+        self._turn_voices_failed = False
         config = self._models.config(fetch=False)
         self._loop = ChunkLoop(config) if config is not None else None
         if self._loop is not None:
@@ -743,7 +827,59 @@ class NemotronStream(DiarizationStream):
         ran = self._loop.advance(self._session, read, num_samples, limit, self._run_options)
         if ran:
             self._collect_voices(read)
+            self._embed_turns(read)
         return ran
+
+    def _embed_turns(self, read: Reader) -> None:
+        loop, embedder = self._loop, self._diarizer.embedder
+        if loop is None or self._voices is None or self._turn_voices_failed:
+            return
+        rows = loop.probabilities(self._scanned_steps) > 0.5
+        self._scanned_steps = loop.steps
+        self._turn_crops += [voice_crop(span) for span in self._finished_turns(rows)]
+        try:
+            while self._turn_crops:
+                lo, hi = self._turn_crops[0]
+                vector = embedder.embed(read(lo, hi), run_options=self._run_options)
+                if vector is not None:
+                    self._turn_voices[(lo, hi)] = vector
+                self._turn_crops.pop(0)
+        except Exception:  # noqa: BLE001 — the stop embeds what is missing
+            self._turn_voices_failed = not self._interrupted
+
+    def _finished_turns(self, active: np.ndarray) -> list[Span]:
+        """The turns of at least two seconds that ended within the next rows
+        ``active``: :func:`turns_from_probs`'s turns, found as they finish."""
+        base = self._scanned_frames
+        end = base + len(active)
+        width = active.shape[1] if active.ndim == 2 else 0
+        out: list[Span] = []
+        for slot in range(width):
+            edges = np.diff(np.concatenate([[0], active[:, slot].astype(np.int8), [0]]))
+            starts = (np.nonzero(edges == 1)[0] + base).tolist()
+            ends = (np.nonzero(edges == -1)[0] + base).tolist()
+            if slot in self._open_turns:
+                first = self._open_turns.pop(slot)
+                if starts and starts[0] == base:
+                    starts[0] = first
+                else:
+                    starts.insert(0, first)
+                    ends.insert(0, base)
+            if ends and ends[-1] == end:  # may still go on
+                self._open_turns[slot] = starts.pop()
+                ends.pop()
+            out += [
+                (first * HOP, last * HOP)
+                for first, last in zip(starts, ends, strict=True)
+                if (last - first) * HOP >= VOICE_TURN
+            ]
+        self._scanned_frames = end
+        return out
+
+    def take_turn_voices(self) -> dict[Span, np.ndarray]:
+        """The turn embeddings collected so far, by crop."""
+        voices, self._turn_voices = self._turn_voices, {}
+        return voices
 
     def _collect_voices(self, read: Reader) -> None:
         loop, voices = self._loop, self._voices
@@ -816,6 +952,15 @@ class _ResumedNemotron(NemotronDiarizer):
 
     def probabilities(self, samples: np.ndarray) -> np.ndarray:
         return self._stream.finish(to_float32(samples))
+
+    def split_speakers(
+        self,
+        samples: np.ndarray,
+        turns: list[SpeakerTurn],
+        segments: list[tuple[str, float, float]],
+        num_speakers: int | None = None,
+    ) -> SpeakerSplit | None:
+        return self._split(samples, turns, segments, num_speakers, self._stream.take_turn_voices())
 
     def diarize_with_embeddings(
         self, samples: np.ndarray, num_speakers: int | None = None

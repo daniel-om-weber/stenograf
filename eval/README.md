@@ -2091,6 +2091,75 @@ the two; the battery fuel gauge reports in ~420 mWh steps, too coarse to
 arbitrate at this run length. Untested on Windows: another power mode, and
 the real app's window states.
 
+#### Two people in one speaker: the two-voice check (2026-11-26)
+
+`eval/two_voice.py`; the check is `diarization/split.py`. On a meeting of
+2026-11-25 the user phoned two people in turn on the room mic (a phone on
+speaker) and Nemotron gave both callers one slot all meeting: two slots in
+total, the user and "the caller".
+
+**The failure reproduces at scale.** `two_voice.py harness` builds four
+channels per AMI/ICSI meeting (28 meetings): one headset, the other headsets
+mixed, all of them mixed, and the near headset clean with the others through a
+rough speakerphone path (300–3400 Hz, −6 dB, a 150 ms noise tail). A label
+counts as merged when a second reference speaker holds ≥ 15 % of its
+single-speaker time (10 % and 20 % give the same picture). On the speakerphone
+channels Nemotron under-counted 12 of 28 and merged 20 labels, 19 of them two
+far-end voices; on the 84 clean channels it merged 1 of 223 labels.
+
+| per label with ≥ 60 s | speakerphone: merges caught / false | clean: false (of 223) |
+|---|---|---|
+| voice split on turns (≥ 10 of up to 60 turns ≥ 2 s, middle 6 s; centroid cosine < 0.7, smaller half ≥ 15 %) | 18 of 20 / 5 | 9 |
+| rerun on turns (Nemotron on the label's turns alone; second slot ≥ 15 %) | 14 of 20 / 4 | 14 |
+| both | 13 of 20 / 1 | 7 (all 67–131 s labels, 5 in ICSI's many-speaker meetings) |
+
+Splitting the "both" labels by the rerun's assignment lifted the speakerphone
+channels' attribution from 88.4 to 90.8 % (9 channels better by up to 20
+points, 1 worse by 7.5) and moved one clean channel by −0.7 (a throwaway run
+of the same day; the harness above keeps the detector counts only). All
+thresholds were fixed before this harness ran.
+
+**On real meetings the rerun must hear the entries, not the turns.** The
+corpus has no transcript, so the harness reran turns; the user's meeting did
+not survive that. Its merged slot's rerun gave the second voice 3.5 % on
+Nemotron's turns (346 turns, about 2 s each) and 30 % on the transcript's
+entries (120, about 7 s each), with the entries' frames sending 92 % of them
+to the right caller against 75 % on turns. Joining turns across gaps of 0.5 /
+1 / 2 / 5 s gave 11.5 / 17 / 7 / 44 % at 58–77 % right — no gap rescues turns.
+The voice split runs on turns either way (it fired there: cosine 0.511,
+smaller half 0.233).
+
+A blind listening test (2026-11-26) on speakers of the user's archive that a
+voice split on entries had flagged: of 15 answered, 10 were two people, 4 one
+person, 1 no voice; both controls (that meeting's caller, and a single known
+voice) were heard right. `two_voice.py cases` reruns those speakers both
+ways: with the rerun on turns the two checks split 5 of the 11 "two people"
+answers, with the rerun on entries 6 — that meeting among them — and neither
+split any of the 6 "one person" or "no voice" answers (two answers map to one
+Nemotron slot today and count twice). Seventeen answers: a lead, not a rate.
+
+**As shipped**, on that meeting through `finalize_channel` with its words
+reused (`two_voice.py meeting`): the callers split into 649 s with 0.2 % of
+its time in one caller's sections and 243 s with 85 % — and the streamed stop
+gives the same entries and voiceprints as one pass, bit for bit, as it does
+on a 105-minute call nobody splits. M4 Max, embedder warm:
+
+| | the stop, split off | split on |
+|---|---|---|
+| 105-min channel, one speaker, nothing flagged | 0.45 s | 0.60 s |
+| 31-min channel, the merged caller split | 0.44 s | 7.5 s (rerun 3.75 s, the halves' voiceprints 2.7 s) |
+
+The per-turn embeddings the stream makes while recording (`two_voice.py
+energy`, background QoS, the 31-min channel, two runs each): 33.7 / 34.5 J per
+audio-hour without, 79.1 / 75.8 with — about 43 J per busy channel-hour on
+the efficiency cores (0.1 J on the P-cores), against the live pipeline's
+~0.6 W (2 160 J per hour). 244 crops; the stream ran 452–484 s for 31 minutes
+of audio, so it keeps up. The kernel's energy model, not powermetrics.
+
+Not measured: how often the voice split fires on turns in real meetings (the
+archive flags were on entries) and so how many stops pay the rerun; real
+watts; Windows and Linux.
+
 ## Speech detector: Silero v6 (2026-11-19)
 
 **Why it changed.** A phone on speakerphone next to the Mac reaches only the

@@ -79,6 +79,7 @@ means never run.
 | `.lnk`-only launcher | Windows (GPD) | `steno setup` lands both `Stenograf.lnk` links (Start Menu, Desktop) and both start the app | Unrecorded, overdue (same) |
 | Shared room mic | any | First real hybrid meetings: people merged into one speaker, crosstalk phantoms, a profile naming the wrong person | Open since 2026-11-15 |
 | Finish card | macOS | A real meeting with a wrong name match corrected on the card | Open since 2026-11-16 |
+| Two-voice split | any | First real meetings where a speaker is split: the halves right by ear on the finish card, no single voice split, the stop's extra seconds (7.5 s measured on a stored meeting) | Open since 2026-11-26 |
 | Mute G1 | macOS | During a call: mute mic, say a sentinel phrase, unmute. Phrase absent from transcript, notes and `audio.opus`; span shown; speech right after unmuting kept | Open |
 | Mute G2 | macOS | Mute during model loading on a cold start: the backlog case on the real helper | Open |
 | Mute G3 | macOS | System audio muted while speakers play: no remote line leaks into the mic channel | Open |

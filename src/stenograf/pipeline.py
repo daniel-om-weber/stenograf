@@ -220,8 +220,23 @@ def _attribute(
     # 2026-11-15, `eval/README.md`).
     result = diarizer.diarize_with_embeddings(samples, num_speakers)
     turns, embeddings = result.turns, result.embeddings
-    names = reid.resolve(embeddings) if reid is not None else {}
     entries = merge_words_turns(words, turns)
+    # A speaker who is two people is judged on the entries: their sentences,
+    # not the diarizer's few-second turns, are what separates the voices
+    # (diarization/split.py). Before naming, so each half is named on its own.
+    split = diarizer.split_speakers(
+        samples, turns, [(e.speaker, e.start, e.end) for e in entries], num_speakers
+    )
+    if split is not None:
+        entries = [
+            e if speaker == e.speaker else replace(e, speaker=speaker)
+            for e, speaker in zip(entries, split.speakers, strict=True)
+        ]
+        turns = split.turns
+        touched = set(split.halves) | set(split.halves.values())
+        embeddings = {k: v for k, v in embeddings.items() if k not in touched}
+        embeddings |= split.embeddings
+    names = reid.resolve(embeddings) if reid is not None else {}
     if names:
         entries = [
             replace(e, speaker=names[e.speaker]) if e.speaker in names else e for e in entries

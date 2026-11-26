@@ -15,7 +15,7 @@ import copy
 import math
 import os
 import threading
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Collection, Hashable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -359,6 +359,7 @@ def cluster_embeddings(
     *,
     pool: ThreadPoolExecutor | None = None,
     rule: VoiceRule | None = None,
+    only: Collection[str] | None = None,
 ) -> dict[str, np.ndarray]:
     """A duration-weighted mean voice embedding per cluster of ``turns``.
 
@@ -367,7 +368,8 @@ def cluster_embeddings(
     turns): spans where a *different* cluster is active too are excluded,
     then :func:`_preferred` picks, ``rule`` cuts, and the L2-normalized span
     embeddings are averaged by duration and re-normalized. A cluster with no
-    embeddable audio is omitted."""
+    embeddable audio is omitted, and so is every cluster outside ``only``
+    (whose turns still count as overlap)."""
     audio = to_float32(samples)
     by_cluster: dict[str, list[SpeakerTurn]] = {}
     for turn in turns:
@@ -377,6 +379,8 @@ def cluster_embeddings(
     sums = _Sums(rule or VoiceRule())
     jobs: list[tuple[Hashable, Span]] = []
     for speaker, cluster_turns in by_cluster.items():
+        if only is not None and speaker not in only:
+            continue
         raw = sorted((t.start, t.end) for t in cluster_turns)
         clean, rough = (
             [(int(s * SAMPLE_RATE), int(e * SAMPLE_RATE)) for s, e in spans]

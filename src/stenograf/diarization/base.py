@@ -37,6 +37,22 @@ class DiarizationResult:
     embeddings: dict[str, np.ndarray]
 
 
+@dataclass(frozen=True)
+class SpeakerSplit:
+    """A speaker the diarizer found who turned out to be two people, split.
+
+    ``speakers`` gives each segment handed to :meth:`Diarizer.split_speakers`
+    its label after the split; ``turns`` are the turns relabelled to match;
+    ``halves`` maps each new label to the one it came from; ``embeddings``
+    holds the voice of every label in ``halves`` (keys and values) under the
+    same rule as :class:`DiarizationResult`'s, and replaces their old ones."""
+
+    speakers: list[str]
+    turns: list[SpeakerTurn]
+    halves: dict[str, str]
+    embeddings: dict[str, np.ndarray]
+
+
 Reader = Callable[[int, int], np.ndarray]
 """``read(lo, hi)``: samples ``[lo, hi)`` of one channel as float32 16 kHz."""
 
@@ -95,6 +111,18 @@ class Diarizer(ABC):
         what a test double that only needs turns wants; the real diarizer
         overrides it with :class:`~stenograf.diarization.embedding.VoiceEmbedder`."""
         return DiarizationResult(self.diarize(samples, num_speakers), {})
+
+    def split_speakers(
+        self,
+        samples: np.ndarray,
+        turns: list[SpeakerTurn],
+        segments: list[tuple[str, float, float]],
+        num_speakers: int | None = None,
+    ) -> SpeakerSplit | None:
+        """Split any of ``turns``' speakers who is two people, judged on the
+        transcript's ``segments`` (``(speaker, start, end)`` under the turns'
+        labels); ``None`` when nobody splits. The default never splits."""
+        return None
 
     def take_voice_failure(self) -> Exception | None:
         """Why the last :meth:`diarize_with_embeddings` came back with turns
