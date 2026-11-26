@@ -1,5 +1,9 @@
 # stenograf
 
+**Website:** [daniel-om-weber.github.io/stenograf](https://daniel-om-weber.github.io/stenograf/) —
+what it does and how to install it, in English and German. This README is the
+full reference.
+
 Accuracy-first, fully local meeting transcription for **German** and **English**
 (one language per meeting), with speaker labels. Audio is processed entirely
 **in memory** — no audio lands on disk unless you explicitly opt into keeping
