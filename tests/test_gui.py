@@ -1667,6 +1667,8 @@ class TestOneMeetingAfterAnother:
         first.join(10)
         pump(lambda: True)
         assert meeting.state["phase"] == "rec"
+        # No audio is written by default, so the badge must not say "recording".
+        assert meeting.state["phaseLabel"] == "LIVE"
         assert meeting.state["active"] is True
         assert meeting.state["canStop"] is True
         assert meeting.state["status"] != "notes written"

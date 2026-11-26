@@ -97,8 +97,10 @@ class Phase(StrEnum):
 
     @property
     def label(self) -> str:
-        """The header badge text (the value, shouted)."""
-        return self.name
+        """The header badge text. Capture reads LIVE, not REC: no audio is
+        written unless the user opts in, and a badge that says "recording"
+        tells them the opposite."""
+        return "LIVE" if self is Phase.REC else self.name
 
 
 class MeetingScreen(Screen):
