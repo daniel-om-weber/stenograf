@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="de">
+<head>
+<!-- This page exists twice: here in German and in ../index.html in English.
+     A text change goes into both. Styles and script are shared (../site.css, ../site.js). -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stenograf · Meetings lokal mitschreiben</title>
+<meta name="description" content="Stenograf schreibt deine Meetings auf deinem eigenen Rechner mit: wer was gesagt hat, auf Deutsch oder Englisch, mit Notizen. Kein Audio wird gespeichert, nichts wird hochgeladen. Kostenlos für macOS, Windows und Linux.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Stenograf">
+<meta property="og:description" content="Deine Meetings, mitgeschrieben. Ohne Tonaufnahme, ohne Cloud.">
+<meta property="og:url" content="https://daniel-om-weber.github.io/stenograf/de/">
+<meta property="og:image" content="https://daniel-om-weber.github.io/stenograf/icon.png">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../icon.png">
+<link rel="alternate" hreflang="en" href="https://daniel-om-weber.github.io/stenograf/">
+<link rel="alternate" hreflang="de" href="https://daniel-om-weber.github.io/stenograf/de/">
+<link rel="alternate" hreflang="x-default" href="https://daniel-om-weber.github.io/stenograf/">
+<script>document.documentElement.className = matchMedia("(prefers-reduced-motion: reduce)").matches ? "js" : "js anim";</script>
+<link rel="stylesheet" href="../site.css">
+</head>
+<body>
+
+<!-- The two commas of the app icon. Geometry is copied from
+     native/appbundle/icon.svg; if the marks change there, change them here. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 45 480 390">
+    <g transform="translate(119.05,326.3) rotate(180)" fill="#4cc9f0">
+      <circle r="104"/><path d="M 74.9 52.0 C 106.1 149.8, 81.1 235.0, -6.2 276.6 C 27.0 193.4, 31.2 120.6, -31.2 91.5 Z"/>
+    </g>
+    <g transform="translate(363.05,326.3) rotate(180)" fill="#8b7bf0">
+      <circle r="104"/><path d="M 74.9 52.0 C 106.1 149.8, 81.1 235.0, -6.2 276.6 C 27.0 193.4, 31.2 120.6, -31.2 91.5 Z"/>
+    </g>
+  </symbol>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Stenograf, Seitenanfang">
+      <span class="tile"><svg viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg></span>stenograf
+    </a>
+    <nav aria-label="Seite">
+      <a href="#meeting">So geht's</a>
+      <a href="#files">Ergebnis</a>
+      <a href="#questions">Fragen</a>
+      <a href="#terminal">Terminal</a>
+      <a href="https://github.com/daniel-om-weber/stenograf">GitHub</a>
+    </nav>
+    <div class="langs" role="group" aria-label="Sprache">
+      <a href="../?lang=en" hreflang="en" lang="en" data-lang="en" title="English" aria-label="English"><svg class="flag" viewBox="0 0 60 30" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><clipPath id="uk-a"><path d="M30,15h30v15zv15h-30zh-30v-15zv-15h30z"/></clipPath><path d="M0,0v30h60v-30z" fill="#012169"/><path d="M0,0 60,30M60,0 0,30" stroke="#fff" stroke-width="6"/><path d="M0,0 60,30M60,0 0,30" clip-path="url(#uk-a)" stroke="#c8102e" stroke-width="4"/><path d="M30,0v30M0,15h60" stroke="#fff" stroke-width="10"/><path d="M30,0v30M0,15h60" stroke="#c8102e" stroke-width="6"/></svg><span class="code">EN</span></a>
+      <span class="on" aria-current="true" title="Deutsch"><svg class="flag" viewBox="0 0 5 3" preserveAspectRatio="none" aria-hidden="true"><path d="M0 0h5v1H0z" fill="#000"/><path d="M0 1h5v1H0z" fill="#d00"/><path d="M0 2h5v1H0z" fill="#ffce00"/></svg><span class="code">DE</span></span>
+    </div>
+    <a class="btn small" href="#install">Installieren</a>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <svg class="quote" viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg>
+      <h1>Deine Meetings, mitgeschrieben. <span>Ohne Tonaufnahme, ohne Cloud.</span></h1>
+      <p class="lede">Stenograf schreibt dein Meeting direkt auf deinem Rechner mit und hält fest, wer was gesagt hat, auf Deutsch oder Englisch. Wenn du stoppst, liegt das Transkript in deinem Dokumente-Ordner, auf Wunsch mit Notizen. Audio wird nur gespeichert, wenn du es ausdrücklich einschaltest.</p>
+      <div class="cta">
+        <a class="btn" href="#install">Stenograf installieren</a>
+        <a class="more" href="#meeting">So läuft ein Meeting ab</a>
+      </div>
+      <p class="meta">Kostenlos und Open Source. Für macOS, Windows und Linux.</p>
+    </div>
+
+    <div class="hero-demo">
+      <figure class="app" id="demo" data-state="live" aria-label="Illustration des Stenograf-Fensters während eines Meetings">
+        <div class="app-title"><span class="tile"><svg viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg></span>Stenograf</div>
+        <div class="app-head">
+          <span class="phase"><span class="dot"></span><span id="demo-phase">LIVE</span></span>
+          <span class="clock" id="demo-clock">12:36</span>
+          <span class="chips"><span class="chip mic"><b>You</b></span><span class="chip remote"><b>Remote</b></span></span>
+        </div>
+        <ol class="caps">
+          <li data-final="Anna"><span class="who remote">Remote</span><time>12:02</time><p>Können wir den Pilotstart auf die Woche vom Neunten verschieben? Die Klinik braucht die zusätzlichen Tage.</p></li>
+          <li data-final="Jonas"><span class="who mic">You</span><time>12:09</time><p>Der Neunte passt für uns. Den Donnerstagstermin für die Schulung würde ich aber gern behalten.</p></li>
+          <li data-final="Anna"><span class="who remote">Remote</span><time>12:17</time><p>Donnerstag ist in Ordnung. Ich schicke heute allen den überarbeiteten Plan.</p></li>
+          <li data-final="Remote-2" data-late><span class="who remote">Remote</span><time>12:24</time><p>Eine Frage von meiner Seite: Wer gibt die Budgetänderung frei?</p></li>
+          <li data-final="Jonas" data-late><span class="who mic">You</span><time>12:31</time><p>Das mache ich. Schick sie rüber, bis Freitag hast du sie zurück.</p></li>
+        </ol>
+        <div class="app-foot">
+          <span class="abtn primary when-live">Stop &amp; finalize</span>
+          <span class="path when-done">~/Documents/Meetings/meeting-20261126-093000-pilotplanung</span>
+          <span class="abtn when-done">Copy transcript</span>
+        </div>
+      </figure>
+      <div class="demo-bar">
+        <div class="seg" role="group" aria-label="Fenster zeigen">
+          <button type="button" data-state="live" aria-pressed="true">Während ihr sprecht</button>
+          <button type="button" data-state="done" aria-pressed="false">Nach dem Stoppen</button>
+        </div>
+        <p class="demo-note" id="demo-note" data-live="Die Live-Mitschrift unterscheidet deine Seite und die Gegenseite. Gezeichnete Illustration, erfundenes Gespräch." data-done="Stimmen, die du schon benannt hast, werden erkannt. Eine neue bleibt Remote-2, bis du ihr einen Namen gibst.">Die Live-Mitschrift unterscheidet deine Seite und die Gegenseite. Gezeichnete Illustration, erfundenes Gespräch.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section band" id="why">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">warum</p>
+      <div class="body">
+        <h2>Für Meetings, die du keinem Cloud-Dienst anvertrauen würdest.</h2>
+        <p class="intro">Stenograf läuft vollständig auf deinem Rechner, behält keine Tonaufnahme, unterscheidet alle, die sprechen, ist im Deutschen so zu Hause wie im Englischen, funktioniert auf Mac, Windows und Linux und ist kostenlos. Einzeln gibt es das auch anderswo, zusammen kaum.</p>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="g reason">
+        <p class="label">privat</p>
+        <div class="body">
+          <h3>Nichts wird hochgeladen, kein Ton wird aufgezeichnet.</h3>
+          <p>Spracherkennung und Sprechertrennung laufen auf deinem eigenen Rechner. Das Audio liegt nur im Arbeitsspeicher, solange das Meeting läuft, und ist danach weg. Es gibt also keine Tonaufnahme, die man aufbewahren, weitergeben oder löschen müsste. Willst du das Audio behalten, schaltest du das selbst ein.</p>
+        </div>
+        <figure class="spec">
+          <div class="sheet folder">
+            <p class="where">Dokumente / Meetings / meeting-20261126-093000-pilotplanung</p>
+            <ul>
+              <li><code>transcript.md</code><span>wer was wann gesagt hat</span></li>
+              <li><code>transcript.txt</code><span>nur der Text</span></li>
+              <li><code>transcript.json</code><span>dasselbe für andere Programme</span></li>
+              <li><code>transcript.notes.md</code><span>die Notizen, falls gewünscht</span></li>
+              <li><code>voiceprints.json</code><span>wie jede Stimme klingt, als Zahlen</span></li>
+            </ul>
+          </div>
+          <figcaption>Alles, was von einem Meeting bleibt. Eine Audiodatei ist nicht dabei, und ohne <em>Tell speakers apart</em> auch keine Stimmprofile.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">sprecher</p>
+        <div class="body">
+          <h3>Stenograf weiß, wer was gesagt hat.</h3>
+          <p>Dein Mikrofon und der Ton des Calls werden getrennt erfasst, deshalb werden deine Seite und die Gegenseite nie verwechselt. Es ist darauf ausgelegt, mehrere Personen zu unterscheiden, die sich im Besprechungsraum ein Mikrofon teilen, und ebenso mehrere Personen im Call. Gib einer Stimme einmal einen Namen, und Stenograf erkennt sie in späteren Meetings wieder.</p>
+        </div>
+        <figure class="spec">
+          <div class="app card" aria-label="Illustration der Sprecherliste nach einem Meeting">
+            <p class="card-h">Speakers</p>
+            <ul class="voices">
+              <li><span class="av remote">A</span><span class="nm"><b>Anna</b><i>Können wir den Pilotstart auf die Woche vom Neunten verschieben?</i></span><span class="dur">6:40</span><span class="play"></span></li>
+              <li><span class="av mic">J</span><span class="nm"><b>Jonas</b><i>Den Donnerstagstermin für die Schulung würde ich gern behalten.</i></span><span class="dur">4:52</span><span class="play"></span></li>
+              <li><span class="av remote">?</span><span class="nm"><span class="field">Who is this?</span></span><span class="dur">1:15</span><span class="play"></span></li>
+            </ul>
+          </div>
+          <figcaption>Nach dem Meeting kannst du von jeder Stimme ein paar Sekunden anhören und eintragen, wer es war.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">jeder call</p>
+        <div class="body">
+          <h3>Funktioniert mit jeder Konferenz-App und auch ganz ohne.</h3>
+          <p>Stenograf nutzt zwei Tonquellen: dein Mikrofon und alles, was dein Rechner abspielt. Das deckt einen Call in Zoom, Teams, Meet oder im Browser ab und genauso ein Meeting, bei dem alle an einem Tisch sitzen. Kein Bot tritt dem Call bei, und die Gegenseite muss nichts installieren. Laptop-Lautsprecher sind kein Problem: Das Echo der Stimmen von der Gegenseite wird herausgefiltert, bevor etwas aufgeschrieben wird.</p>
+        </div>
+        <figure class="spec">
+          <div class="app card" aria-label="Illustration der beiden Tonquellen">
+            <ul class="sources">
+              <li><span class="chip mic"><b>You</b></span><span>Dein Mikrofon: du und alle, die mit dir im Raum sind.</span></li>
+              <li><span class="chip remote"><b>Remote</b></span><span>Der Ton deines Rechners: alle im Call.</span></li>
+            </ul>
+          </div>
+          <figcaption>Die beiden Quellen, wie die App sie zeigt. Ein Klick während des Meetings schaltet eine stumm.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">sprache</p>
+        <div class="body">
+          <h3>Deutsch und Englisch, mit deinen Namen und Fachbegriffen.</h3>
+          <p>Jedes Meeting wird auf Deutsch oder auf Englisch mitgeschrieben. Trägst du die Namen und Fachbegriffe, die bei euch vorkommen, in den Einstellungen ein, schreibt Stenograf sie so wie du.</p>
+        </div>
+        <figure class="spec">
+          <div class="sheet lines" lang="en">
+            <p><b class="r">Mira</b> <span class="ts">[3:12]</span>: The medical engineering group needs the approval by Thursday.</p>
+            <p><b class="m">Jonas</b> <span class="ts">[3:18]</span>: Then we bring the safety review forward to Tuesday.</p>
+          </div>
+          <figcaption>Zwei Zeilen, wie sie in einem englischen Transkript stehen würden.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">kostenlos</p>
+        <div class="body">
+          <h3>Kostenlos, ohne Einschränkungen.</h3>
+          <p>Stenograf ist Open Source. Es gibt kein Konto, kein Abo und kein Minutenlimit, und keine Funktion steckt hinter einem Bezahltarif. Es leistet dasselbe auf dem Mac, unter Windows und unter Linux.</p>
+        </div>
+        <figure class="spec">
+          <div class="sheet folder oses">
+            <ul>
+              <li><code>macOS</code><span>Apple Silicon, ab Version 14.4</span></li>
+              <li><code>Windows</code><span>10 oder 11 auf einem x64-PC</span></li>
+              <li><code>Linux</code><span>x86_64 mit PipeWire oder PulseAudio</span></li>
+            </ul>
+          </div>
+          <figcaption>Mitschrift, Sprechererkennung und Transkript laufen auf allen drei Systemen. Für Notizen braucht es unter Windows und Linux Ollama.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="meeting">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">so geht's</p>
+      <h2>Ein Meeting, vom Start bis zum Ordner.</h2>
+    </div>
+
+    <div class="g">
+      <span></span>
+      <ol class="steps">
+        <li><span class="n">Schritt 1</span><h3>Stenograf öffnen und <em>Start meeting</em> wählen.</h3><p>Du findest es wie jede andere App: über Spotlight oder das Dock am Mac, im Startmenü unter Windows, im Anwendungsmenü unter Linux. Die Voreinstellungen passen in der Regel. Wenn du magst, schaltest du Notizen ein oder gibst an, wie viele Personen im Raum sind.</p></li>
+        <li><span class="n">Schritt 2</span><h3>Das Meeting abhalten.</h3><p>Sag zu Beginn, dass das Meeting mitgeschrieben wird, so wie du es bei einem Protokoll auch tun würdest. Die Mitschrift erscheint, während gesprochen wird. Das Fenster kannst du schließen: Stenograf bleibt in der Menüleiste (unter Windows und Linux im Infobereich), das Symbol wird rot, solange es zuhört, und über sein Menü lassen sich dein Mikrofon oder der Call stummschalten.</p></li>
+        <li><span class="n">Schritt 3</span><h3><em>Stop &amp; finalize</em> wählen.</h3><p>Aus der Live-Mitschrift wird das fertige Transkript: Der Wortlaut bleibt, und jede Zeile bekommt ihre Sprecherin oder ihren Sprecher. Danach fragt Stenograf ab, was noch offen ist: ein Titel für das Meeting, wem welche Stimme gehört und ob Notizen geschrieben werden sollen. Dort lässt sich das Meeting auch verwerfen.</p></li>
+        <li><span class="n">Schritt 4</span><h3>Den Ordner öffnen.</h3><p>Jedes Meeting bekommt einen eigenen, nach Datum benannten Ordner unter <code>Meetings</code> in deinem Dokumente-Ordner. Eine Bibliothek, die man pflegen müsste, gibt es nicht: Die Dateien lassen sich lesen, verschieben und löschen wie alle anderen.</p></li>
+      </ol>
+    </div>
+
+    <div class="g aside">
+      <span></span>
+      <p><strong>Du hast schon eine Aufnahme?</strong> Wähle auf dem Startbildschirm <em>Transcribe a recording</em> und dann die Audio- oder Videodatei. Du bekommst dasselbe Transkript, mit Sprechern.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section band" id="files">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">ergebnis</p>
+      <div class="body">
+        <h2>Transkript und Notizen, als einfache Dateien.</h2>
+        <div class="files">
+          <ul class="points">
+            <li><b>Das Transkript</b> nennt zu jeder Zeile, wer gesprochen hat und wann. Es ist gewöhnliches Markdown und lässt sich in jedem Texteditor und in Werkzeugen wie Obsidian öffnen.</li>
+            <li><b>Die Notizen</b> fassen das Meeting zusammen: was besprochen wurde, die Entscheidungen, die Aufgaben mit Verantwortlichen, die wichtigsten Aussagen und die offenen Fragen. Die Gliederung gibt eine Vorlage vor. Die mitgelieferte hat englische Überschriften, eine eigene deutsche ist schnell geschrieben.</li>
+            <li><b>Weitere Formate</b> lassen sich in den Einstellungen einschalten: Untertiteldateien (SRT, VTT) und eine zusammengefasste Notiz pro Meeting in einem Ordner deiner Wahl.</li>
+            <li>Am Mac schreibt die Notizen ein Modell, das in Stenograf selbst läuft. Unter Windows und Linux braucht es dafür <a href="https://ollama.com">Ollama</a>, ein kostenloses Programm, das solche Modelle auf deinem Rechner ausführt.</li>
+          </ul>
+
+          <div class="doc-col">
+          <div class="sheet doc">
+            <div class="tabs" role="tablist" aria-label="Beispieldateien">
+              <button type="button" role="tab" id="tab-t" aria-controls="doc-t" aria-selected="true">transcript.md</button>
+              <button type="button" role="tab" id="tab-n" aria-controls="doc-n" aria-selected="false">transcript.notes.md</button>
+            </div>
+            <div id="doc-t" role="tabpanel" aria-labelledby="tab-t">
+              <p class="nojs-name">transcript.md</p>
+              <div class="lines">
+                <p><b class="r">Anna</b> <span class="ts">[12:02]</span>: Können wir den Pilotstart auf die Woche vom Neunten verschieben? Die Klinik braucht die zusätzlichen Tage.</p>
+                <p><b class="m">Jonas</b> <span class="ts">[12:09]</span>: Der Neunte passt für uns. Den Donnerstagstermin für die Schulung würde ich aber gern behalten.</p>
+                <p><b class="r">Anna</b> <span class="ts">[12:17]</span>: Donnerstag ist in Ordnung. Ich schicke heute allen den überarbeiteten Plan.</p>
+                <p><b class="r">Remote-2</b> <span class="ts">[12:24]</span>: Eine Frage von meiner Seite: Wer gibt die Budgetänderung frei?</p>
+                <p><b class="m">Jonas</b> <span class="ts">[12:31]</span>: Das mache ich. Schick sie rüber, bis Freitag hast du sie zurück.</p>
+              </div>
+            </div>
+            <div id="doc-n" role="tabpanel" aria-labelledby="tab-n">
+              <p class="nojs-name">transcript.notes.md</p>
+              <div class="note-doc">
+                <h4>Pilotstart auf die Woche vom Neunten verschoben</h4>
+                <p>Der Pilot startet eine Woche später, damit die Klinik Zeit zur Vorbereitung hat. Der Schulungstermin am Donnerstag bleibt. Der spätere Start ändert das Budget, und die Änderung muss noch freigegeben werden.</p>
+                <h5>Entscheidungen</h5>
+                <ul><li>Der Pilot startet in der Woche vom Neunten.</li><li>Die Schulung bleibt am Donnerstag.</li></ul>
+                <h5>Aufgaben</h5>
+                <ul>
+                  <li class="todo">Überarbeiteten Plan an alle schicken — <b>Anna</b> (bis heute) <span class="ts">[12:17]</span></li>
+                  <li class="todo">Budgetänderung freigeben — <b>Jonas</b> (bis Freitag) <span class="ts">[12:31]</span></li>
+                </ul>
+                <h5>Wichtige Aussagen</h5>
+                <ul><li><b>Anna</b>: Die Klinik braucht die zusätzlichen Tage.</li></ul>
+                <h5>Offene Fragen</h5>
+                <ul><li>Verschiebt der spätere Start auch den Termin der Auswertung?</li></ul>
+                <p class="by">Generated by stenograf notes — mlx, single-shot.</p>
+              </div>
+            </div>
+          </div>
+          <p class="cap">Beispieldateien eines erfundenen Meetings. Die Notizen zeigen eine eigene deutsche Vorlage; die mitgelieferte hat englische Überschriften.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="install">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">installation</p>
+      <div class="body">
+        <h2>Eine Zeile einfügen. Danach ist es eine App wie jede andere.</h2>
+        <p class="intro">Das Installationsprogramm richtet alles ein, was Stenograf braucht, lädt einmalig die Sprachmodelle herunter und legt Stenograf bei deinen Apps ab. Wähle dein System:</p>
+
+        <div class="install">
+          <div class="tabs" role="tablist" aria-label="Betriebssystem" data-os>
+            <button type="button" role="tab" id="tab-mac" data-os="macos" aria-controls="os-mac" aria-selected="true">macOS</button>
+            <button type="button" role="tab" id="tab-win" data-os="windows" aria-controls="os-win" aria-selected="false">Windows</button>
+            <button type="button" role="tab" id="tab-lin" data-os="linux" aria-controls="os-lin" aria-selected="false">Linux</button>
+          </div>
+
+          <div class="os" id="os-mac" role="tabpanel" aria-labelledby="tab-mac">
+            <h3>macOS</h3>
+            <p class="needs">Braucht einen Mac mit Apple Silicon (M1 oder neuer) und macOS 14.4 oder neuer.</p>
+            <ol class="todo-list">
+              <li><div><strong>Terminal</strong> öffnen: <kbd>⌘ Leertaste</kbd> drücken, <em>Terminal</em> tippen, <kbd>Return</kbd> drücken.</div></li>
+              <li><div>Diese Zeile einfügen und <kbd>Return</kbd> drücken:
+                <div class="cmd"><pre><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh</code></pre><button type="button" class="copy" data-copy="cmd-mac" data-copied="Kopiert" data-selected="Markiert">Kopieren</button></div></div></li>
+              <li><div>Die Berechtigungsanfragen erlauben, wenn sie erscheinen. Stenograf braucht dein Mikrofon und den Ton deines Rechners.</div></li>
+              <li><div><strong>Stenograf</strong> über Spotlight oder das Dock öffnen.</div></li>
+            </ol>
+          </div>
+
+          <div class="os" id="os-win" role="tabpanel" aria-labelledby="tab-win">
+            <h3>Windows</h3>
+            <p class="needs">Braucht Windows 10 oder 11 auf einem gewöhnlichen PC (x64). Windows auf ARM wird nicht unterstützt.</p>
+            <ol class="todo-list">
+              <li><div><strong>PowerShell</strong> öffnen: die <kbd>Windows</kbd>-Taste drücken, <em>PowerShell</em> tippen, <kbd>Enter</kbd> drücken.</div></li>
+              <li><div>Diese Zeile einfügen und <kbd>Enter</kbd> drücken:
+                <div class="cmd"><pre><code id="cmd-win">powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.ps1 | iex"</code></pre><button type="button" class="copy" data-copy="cmd-win" data-copied="Kopiert" data-selected="Markiert">Kopieren</button></div></div></li>
+              <li><div>Windows fragt von sich aus nie nach dem Mikrofon. Meldet die Einrichtung, dass es ausgeschaltet ist, schalte es unter <strong>Einstellungen › Datenschutz und Sicherheit › Mikrofon</strong> ein.</div></li>
+              <li><div><strong>Stenograf</strong> über das Startmenü öffnen.</div></li>
+            </ol>
+            <p class="fine">Für Notizen muss unter Windows <a href="https://ollama.com">Ollama</a> installiert sein und laufen. Das Transkript funktioniert auch ohne.</p>
+          </div>
+
+          <div class="os" id="os-lin" role="tabpanel" aria-labelledby="tab-lin">
+            <h3>Linux</h3>
+            <p class="needs">Braucht ein 64-Bit-System mit Intel- oder AMD-Prozessor (x86_64), PipeWire oder PulseAudio und glibc 2.34 oder neuer.</p>
+            <ol class="todo-list">
+              <li><div>Ein Terminal öffnen.</div></li>
+              <li><div>Diese Zeile einfügen und <kbd>Enter</kbd> drücken:
+                <div class="cmd"><pre><code id="cmd-lin">curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh</code></pre><button type="button" class="copy" data-copy="cmd-lin" data-copied="Kopiert" data-selected="Markiert">Kopieren</button></div></div></li>
+              <li><div><strong>Stenograf</strong> über das Anwendungsmenü öffnen.</div></li>
+            </ol>
+            <p class="fine">Für Notizen muss unter Linux <a href="https://ollama.com">Ollama</a> installiert sein und laufen. Das Transkript funktioniert auch ohne.</p>
+          </div>
+
+          <p class="fine">Die Zeile lädt das Installationsskript aus dem GitHub-Repository von Stenograf und führt es aus. Es legt drei Dinge in deinem Benutzerkonto ab, ohne nach einem Administrator-Passwort zu fragen: uv (ein kleines Werkzeug, das Python-Programme verwaltet), Stenograf selbst und die Sprachmodelle. Du kannst es vorher lesen: <a href="https://github.com/daniel-om-weber/stenograf/blob/main/install.sh">install.sh</a> für macOS und Linux, <a href="https://github.com/daniel-om-weber/stenograf/blob/main/install.ps1">install.ps1</a> für Windows. Spätere Updates kommen direkt in der App.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section band" id="questions">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">fragen</p>
+      <div class="body">
+        <h2>Vor der Installation.</h2>
+        <div class="qa">
+          <details>
+            <summary>Verlässt irgendetwas meinen Rechner?</summary>
+            <p>Nichts von deinen Meetings. Stenograf geht für zwei Dinge online: Es lädt seine Modelle herunter (bei der Einrichtung, am Mac das Notizen-Modell beim ersten Mal, wenn du Notizen willst), und einmal am Tag prüft es, ob es eine neuere Version gibt. Diese Abfrage verrät dem Server nur, welche Version du hast, und lässt sich in den Einstellungen abschalten. Auch die Notizen entstehen auf deinem Rechner, es sei denn, du bindest selbst ein anderes Notizen-Programm an.</p>
+          </details>
+          <details>
+            <summary>Was wird über Stimmen gespeichert?</summary>
+            <p>Zu jeder Person ein Stimmprofil: Zahlen, die beschreiben, wie die Stimme klingt, kein Audio. Es liegt im Ordner des Meetings. Stimmen, denen du einen Namen gibst, kommen zusätzlich in eine Stimmbibliothek auf deinem Rechner, damit spätere Meetings sie wiedererkennen. Nichts davon wird hochgeladen. Schaltest du <em>Tell speakers apart</em> aus, werden keine Stimmprofile gespeichert.</p>
+          </details>
+          <details>
+            <summary>Was kostet es?</summary>
+            <p>Nichts. Stenograf ist Open Source unter der MIT-Lizenz. Die Modelle, die es herunterlädt, haben eigene Lizenzen, die im <a href="https://github.com/daniel-om-weber/stenograf#license">README stehen</a>.</p>
+          </details>
+          <details>
+            <summary>Brauche ich Kopfhörer?</summary>
+            <p>Nein. Wenn die Stimmen der Gegenseite aus deinen Lautsprechern kommen und dein Mikrofon erreichen, entfernt Stenograf dieses Echo. So wird niemand doppelt mitgeschrieben.</p>
+          </details>
+          <details>
+            <summary>Welche Sprachen versteht es?</summary>
+            <p>Deutsch und Englisch, eine Sprache pro Meeting. Für diese beiden ist Stenograf gebaut und getestet. Das Sprachmodell dahinter versteht auch andere europäische Sprachen, ein Meeting auf Französisch oder Spanisch wird also ebenfalls mitgeschrieben. An echten Meetings getestet hat das aber noch niemand.</p>
+          </details>
+          <details>
+            <summary>Ist die App auf Deutsch?</summary>
+            <p>Noch nicht. Die Oberfläche der App ist englisch, deshalb stehen die Namen der Schaltflächen auf dieser Seite im Original. Transkript und Notizen entstehen in der Sprache des Meetings.</p>
+          </details>
+          <details>
+            <summary>Kann ich das Audio trotzdem behalten?</summary>
+            <p>Ja. Schalte vor dem Start <em>Keep the audio recording</em> ein, dann liegt im Meeting-Ordner zusätzlich eine Audiodatei. Ohne diesen Schalter wird kein Audio gespeichert.</p>
+          </details>
+          <details>
+            <summary>Wie funktionieren Updates?</summary>
+            <p>Gibt es eine neue Version, erscheint unten auf dem Startbildschirm der App ein Hinweis. Ein Klick auf <em>Update</em> lädt sie herunter, während du weiterarbeitest, danach startet die App neu. Während eines Meetings passiert das nie. Startet die neue Version nicht, wird die vorherige wiederhergestellt.</p>
+          </details>
+          <details>
+            <summary>Etwas funktioniert nicht. Was nun?</summary>
+            <p>Öffne <em>Check setup</em> auf dem Startbildschirm. Es prüft die Modelle, die Berechtigungen und deine Audiogeräte und sagt, was fehlt. Hilft das nicht, <a href="https://github.com/daniel-om-weber/stenograf/issues">melde das Problem auf GitHub</a>.</p>
+          </details>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="terminal">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">terminal</p>
+      <div class="body">
+        <h2>Alles geht auch als Befehl.</h2>
+        <p class="intro">Die App ist nur ein Weg. Dasselbe Programm läuft im Terminal, in einem Skript oder über SSH, und damit ist es auch ein Werkzeug für KI-Agenten.</p>
+        <div class="files">
+          <ul class="points">
+            <li><b>Ausführen.</b> <code>steno start</code> gibt die Mitschrift Zeile für Zeile aus und schreibt das Transkript, sobald du stoppst. <code>steno transcribe</code> macht dasselbe für eine Aufnahme.</li>
+            <li><b>Lesen.</b> Ein Meeting ist ein Ordner mit Markdown- und JSON-Dateien. Ein Skript oder ein Agent liest sie direkt, ohne Datenbank und ohne Dienst dazwischen.</li>
+            <li><b>Eigene KI für die Notizen.</b> Der Notizen-Schritt kann jedes Kommandozeilenprogramm aufrufen, das einen Prompt entgegennimmt und Markdown zurückgibt. Es läuft im Ordner des Meetings, sodass ein Agent den Kontext nachschlagen kann, auf den deine Anweisungen verweisen. Was du anbindest, entscheidet, wohin das Transkript geht: Ein Programm auf deinem Rechner behält es dort, ein Cloud-Dienst nicht.</li>
+            <li>Alle Befehle und Einstellungen stehen im <a href="https://github.com/daniel-om-weber/stenograf#usage">README</a> (englisch).</li>
+          </ul>
+          <div class="term-col">
+            <div class="app card term" aria-label="Beispielbefehle"><pre><span class="c"># ein Meeting: Mitschrift erscheint hier, Transkript und Notizen beim Stoppen</span>
+<span class="p">$</span> steno start --notes
+
+<span class="c"># eine vorhandene Aufnahme, Ausgabe ins Terminal</span>
+<span class="p">$</span> steno transcribe interview.mov --print
+
+<span class="c"># Notizen für das neueste Meeting</span>
+<span class="p">$</span> steno notes --last</pre></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <a class="brand" href="#top"><span class="tile"><svg viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg></span>stenograf</a>
+    <nav aria-label="Projekt">
+      <a href="https://github.com/daniel-om-weber/stenograf">Quellcode auf GitHub</a>
+      <a href="https://github.com/daniel-om-weber/stenograf#readme">Vollständige Dokumentation (englisch)</a>
+      <a href="https://pypi.org/project/stenograf/">PyPI</a>
+      <a href="https://github.com/daniel-om-weber/stenograf/blob/main/LICENSE">MIT-Lizenz</a>
+    </nav>
+    <p>Entwickelt von <a href="https://github.com/daniel-om-weber">Daniel Weber</a>. Kontakt: <a href="mailto:daniel.om.weber@gmail.com">daniel.om.weber@gmail.com</a>. Diese Seite lädt keine Schriften, Skripte oder Tracker von anderen Servern.</p>
+  </div>
+</footer>
+
+<script src="../site.js" onerror="document.documentElement.className=''"></script>
+</body>
+</html>

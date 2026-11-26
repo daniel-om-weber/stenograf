@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- This page exists twice: here in English and in de/index.html in German.
+     A text change goes into both. Styles and script are shared (site.css, site.js). -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stenograf · Local meeting transcription</title>
+<meta name="description" content="Stenograf writes down your meetings on your own computer: who said what, in German or English, with notes. No audio is saved and nothing is uploaded. Free for macOS, Windows and Linux.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Stenograf">
+<meta property="og:description" content="Your meetings, written down. No audio recording, no cloud.">
+<meta property="og:url" content="https://daniel-om-weber.github.io/stenograf/">
+<meta property="og:image" content="https://daniel-om-weber.github.io/stenograf/icon.png">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="alternate" hreflang="en" href="https://daniel-om-weber.github.io/stenograf/">
+<link rel="alternate" hreflang="de" href="https://daniel-om-weber.github.io/stenograf/de/">
+<link rel="alternate" hreflang="x-default" href="https://daniel-om-weber.github.io/stenograf/">
+<script>
+// A browser set to German gets the German page. An explicit choice made with
+// the language link is remembered and always wins over the browser setting.
+(function () {
+  var choice = null;
+  try { choice = localStorage.getItem("lang"); } catch (e) {}
+  if (/[?&]lang=en\b/.test(location.search)) { try { localStorage.setItem("lang", "en"); } catch (e) {} choice = "en"; }
+  var first = (navigator.languages && navigator.languages[0]) || navigator.language || "";
+  if (choice === "de" || (!choice && /^de\b/i.test(first))) location.replace("de/" + location.hash);
+})();
+document.documentElement.className = matchMedia("(prefers-reduced-motion: reduce)").matches ? "js" : "js anim";
+</script>
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<!-- The two commas of the app icon. Geometry is copied from
+     native/appbundle/icon.svg; if the marks change there, change them here. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="mark" viewBox="0 45 480 390">
+    <g transform="translate(119.05,326.3) rotate(180)" fill="#4cc9f0">
+      <circle r="104"/><path d="M 74.9 52.0 C 106.1 149.8, 81.1 235.0, -6.2 276.6 C 27.0 193.4, 31.2 120.6, -31.2 91.5 Z"/>
+    </g>
+    <g transform="translate(363.05,326.3) rotate(180)" fill="#8b7bf0">
+      <circle r="104"/><path d="M 74.9 52.0 C 106.1 149.8, 81.1 235.0, -6.2 276.6 C 27.0 193.4, 31.2 120.6, -31.2 91.5 Z"/>
+    </g>
+  </symbol>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Stenograf, top of page">
+      <span class="tile"><svg viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg></span>stenograf
+    </a>
+    <nav aria-label="Page">
+      <a href="#meeting">How it works</a>
+      <a href="#files">What you get</a>
+      <a href="#questions">Questions</a>
+      <a href="#terminal">Terminal</a>
+      <a href="https://github.com/daniel-om-weber/stenograf">GitHub</a>
+    </nav>
+    <div class="langs" role="group" aria-label="Language">
+      <span class="on" aria-current="true" title="English"><svg class="flag" viewBox="0 0 60 30" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><clipPath id="uk-a"><path d="M30,15h30v15zv15h-30zh-30v-15zv-15h30z"/></clipPath><path d="M0,0v30h60v-30z" fill="#012169"/><path d="M0,0 60,30M60,0 0,30" stroke="#fff" stroke-width="6"/><path d="M0,0 60,30M60,0 0,30" clip-path="url(#uk-a)" stroke="#c8102e" stroke-width="4"/><path d="M30,0v30M0,15h60" stroke="#fff" stroke-width="10"/><path d="M30,0v30M0,15h60" stroke="#c8102e" stroke-width="6"/></svg><span class="code">EN</span></span>
+      <a href="de/" hreflang="de" lang="de" data-lang="de" title="Deutsch" aria-label="Deutsch"><svg class="flag" viewBox="0 0 5 3" preserveAspectRatio="none" aria-hidden="true"><path d="M0 0h5v1H0z" fill="#000"/><path d="M0 1h5v1H0z" fill="#d00"/><path d="M0 2h5v1H0z" fill="#ffce00"/></svg><span class="code">DE</span></a>
+    </div>
+    <a class="btn small" href="#install">Install</a>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <svg class="quote" viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg>
+      <h1>Your meetings, written down. <span>No audio recording, no cloud.</span></h1>
+      <p class="lede">Stenograf listens to a meeting on your own computer and writes down who said what, in German or English. When you stop, the transcript lands in your Documents folder, with notes if you asked for them. No audio is saved unless you ask for it.</p>
+      <div class="cta">
+        <a class="btn" href="#install">Install Stenograf</a>
+        <a class="more" href="#meeting">See how a meeting goes</a>
+      </div>
+      <p class="meta">Free and open source. For macOS, Windows and Linux.</p>
+    </div>
+
+    <div class="hero-demo">
+      <figure class="app" id="demo" data-state="live" aria-label="Illustration of the Stenograf window during a meeting">
+        <div class="app-title"><span class="tile"><svg viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg></span>Stenograf</div>
+        <div class="app-head">
+          <span class="phase"><span class="dot"></span><span id="demo-phase">LIVE</span></span>
+          <span class="clock" id="demo-clock">12:36</span>
+          <span class="chips"><span class="chip mic"><b>You</b></span><span class="chip remote"><b>Remote</b></span></span>
+        </div>
+        <ol class="caps">
+          <li data-final="Anna"><span class="who remote">Remote</span><time>12:02</time><p>Can we move the pilot to the week of the ninth? The clinic needs the extra days.</p></li>
+          <li data-final="Jonas"><span class="who mic">You</span><time>12:09</time><p>The ninth works for us. I'd rather keep the Thursday slot for the training, though.</p></li>
+          <li data-final="Anna"><span class="who remote">Remote</span><time>12:17</time><p>Thursday is fine. I'll send the revised plan to everyone today.</p></li>
+          <li data-final="Remote-2" data-late><span class="who remote">Remote</span><time>12:24</time><p>One question from my side: who signs off on the budget change?</p></li>
+          <li data-final="Jonas" data-late><span class="who mic">You</span><time>12:31</time><p>That's me. Send it over and you'll have it back by Friday.</p></li>
+        </ol>
+        <div class="app-foot">
+          <span class="abtn primary when-live">Stop &amp; finalize</span>
+          <span class="path when-done">~/Documents/Meetings/meeting-20261126-093000-pilot-planning</span>
+          <span class="abtn when-done">Copy transcript</span>
+        </div>
+      </figure>
+      <div class="demo-bar">
+        <div class="seg" role="group" aria-label="Show the window">
+          <button type="button" data-state="live" aria-pressed="true">While you talk</button>
+          <button type="button" data-state="done" aria-pressed="false">After you stop</button>
+        </div>
+        <p class="demo-note" id="demo-note" data-live="Live captions mark your side and the remote side. Drawn illustration, invented conversation." data-done="Voices you have named are recognised. A new one stays Remote-2 until you name it.">Live captions mark your side and the remote side. Drawn illustration, invented conversation.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section band" id="why">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">why</p>
+      <div class="body">
+        <h2>Built for meetings you would not hand to a cloud service.</h2>
+        <p class="intro">Stenograf runs entirely on your computer, keeps no audio recording, tells apart everyone who speaks, is as much at home in German as in English, works on Mac, Windows and Linux, and is free. Each of these exists elsewhere. Together they are hard to find.</p>
+      </div>
+    </div>
+
+    <div class="stack">
+      <div class="g reason">
+        <p class="label">private</p>
+        <div class="body">
+          <h3>Nothing is uploaded, and no audio is recorded.</h3>
+          <p>Speech recognition and speaker separation run on your own computer. The audio is held in memory while the meeting runs and is gone when it ends, so there is no audio recording to store, share or delete. Keeping the audio is a switch you turn on yourself.</p>
+        </div>
+        <figure class="spec">
+          <div class="sheet folder">
+            <p class="where">Documents / Meetings / meeting-20261126-093000-pilot-planning</p>
+            <ul>
+              <li><code>transcript.md</code><span>who said what, and when</span></li>
+              <li><code>transcript.txt</code><span>the words alone</span></li>
+              <li><code>transcript.json</code><span>the same, for other programs</span></li>
+              <li><code>transcript.notes.md</code><span>the notes, if you asked for them</span></li>
+              <li><code>voiceprints.json</code><span>how each voice sounds, as numbers</span></li>
+            </ul>
+          </div>
+          <figcaption>Everything a meeting leaves behind. There is no audio file, and with <em>Tell speakers apart</em> switched off, no voiceprints either.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">speakers</p>
+        <div class="body">
+          <h3>It knows who said what.</h3>
+          <p>Your microphone and the sound of the call are captured separately, so your side and the remote side are never confused. It is built to tell apart people who share one microphone around a meeting-room table, and likewise several people on the call. Name a voice once and Stenograf recognises it in later meetings.</p>
+        </div>
+        <figure class="spec">
+          <div class="app card" aria-label="Illustration of the speaker list shown after a meeting">
+            <p class="card-h">Speakers</p>
+            <ul class="voices">
+              <li><span class="av remote">A</span><span class="nm"><b>Anna</b><i>Can we move the pilot to the week of the ninth?</i></span><span class="dur">6:40</span><span class="play"></span></li>
+              <li><span class="av mic">J</span><span class="nm"><b>Jonas</b><i>I'd rather keep the Thursday slot for the training.</i></span><span class="dur">4:52</span><span class="play"></span></li>
+              <li><span class="av remote">?</span><span class="nm"><span class="field">Who is this?</span></span><span class="dur">1:15</span><span class="play"></span></li>
+            </ul>
+          </div>
+          <figcaption>After a meeting you can play a few seconds of each voice and type who it was.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">any call</p>
+        <div class="body">
+          <h3>It works with every call app, and with none.</h3>
+          <p>Stenograf listens to two things: your microphone and whatever your computer is playing. That covers a call in Zoom, Teams, Meet or a browser, and equally a meeting where everyone sits around one table. No bot joins the call and the other side installs nothing. Laptop speakers are fine, because the echo of the remote voices is removed before anything is written down.</p>
+        </div>
+        <figure class="spec">
+          <div class="app card" aria-label="Illustration of the two audio sources">
+            <ul class="sources">
+              <li><span class="chip mic"><b>You</b></span><span>Your microphone: you, and anyone in the room with you.</span></li>
+              <li><span class="chip remote"><b>Remote</b></span><span>Your computer's sound: everyone on the call.</span></li>
+            </ul>
+          </div>
+          <figcaption>The two sources as the app shows them. Click one during a meeting to mute it.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">language</p>
+        <div class="body">
+          <h3>German and English, with your names and terms.</h3>
+          <p>Each meeting is transcribed in German or in English. A list of the names and technical terms you use, kept in the settings, makes Stenograf spell them the way you do.</p>
+        </div>
+        <figure class="spec">
+          <div class="sheet lines" lang="de">
+            <p><b class="r">Mira</b> <span class="ts">[3:12]</span>: Die Medizintechnikgruppe braucht die Freigabe bis Donnerstag.</p>
+            <p><b class="m">Jonas</b> <span class="ts">[3:18]</span>: Dann ziehen wir die Sicherheitsprüfung auf Dienstag vor.</p>
+          </div>
+          <figcaption>Two lines as they would appear in a German transcript.</figcaption>
+        </figure>
+      </div>
+
+      <div class="g reason">
+        <p class="label">free</p>
+        <div class="body">
+          <h3>Free, with nothing held back.</h3>
+          <p>Stenograf is open source. There is no account, no subscription and no limit on minutes, and no feature waits behind a paid plan. It does the same job on a Mac, on Windows and on Linux.</p>
+        </div>
+        <figure class="spec">
+          <div class="sheet folder oses">
+            <ul>
+              <li><code>macOS</code><span>Apple Silicon, version 14.4 or newer</span></li>
+              <li><code>Windows</code><span>10 or 11 on an x64 PC</span></li>
+              <li><code>Linux</code><span>x86_64 with PipeWire or PulseAudio</span></li>
+            </ul>
+          </div>
+          <figcaption>Capture, captions, speakers and transcript work on all three. Notes need Ollama on Windows and Linux.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="meeting">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">how it works</p>
+      <h2>A meeting, from start to folder.</h2>
+    </div>
+
+    <div class="g">
+      <span></span>
+      <ol class="steps">
+        <li><span class="n">Step 1</span><h3>Open Stenograf and choose Start meeting.</h3><p>You find it like any other app: Spotlight or the Dock on a Mac, the Start menu on Windows, the application menu on Linux. The start form works as it is. If you like, switch on notes or say how many people are in the room.</p></li>
+        <li><span class="n">Step 2</span><h3>Hold your meeting.</h3><p>Say at the start that the meeting is being written down, as you would if someone were taking minutes. Captions appear while people talk. You can close the window: Stenograf stays in the menu bar (the system tray on Windows and Linux), its icon turns red while it listens, and its menu can mute your microphone or the call.</p></li>
+        <li><span class="n">Step 3</span><h3>Choose Stop &amp; finalize.</h3><p>The captions become the finished transcript: their words are kept, and every line gets its speaker. One card then asks what is left to decide: a title for the meeting, who the voices were, and whether to write notes. You can also discard the meeting there.</p></li>
+        <li><span class="n">Step 4</span><h3>Open the folder.</h3><p>Each meeting gets its own folder, named by date, inside <code>Meetings</code> in your Documents folder. There is no library to manage: read, move or delete the files as you would any others.</p></li>
+      </ol>
+    </div>
+
+    <div class="g aside">
+      <span></span>
+      <p><strong>Already have a recording?</strong> Choose <em>Transcribe a recording</em> on the home screen and pick the audio or video file. You get the same transcript, speakers included.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section band" id="files">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">what you get</p>
+      <div class="body">
+        <h2>A transcript and notes, as plain files.</h2>
+        <div class="files">
+          <ul class="points">
+            <li><b>The transcript</b> names the speaker and the time for every line. It is ordinary Markdown, so it opens in any text editor and in tools such as Obsidian.</li>
+            <li><b>The notes</b> sum up the meeting: what was discussed, the decisions, the action items with their owners, the statements worth keeping and the open questions. You can give them your own layout.</li>
+            <li><b>Other formats</b> are a setting away: subtitle files (SRT, VTT), and one combined note per meeting written into a folder of your choice.</li>
+            <li>On a Mac the notes are written by a model running inside Stenograf. On Windows and Linux they need <a href="https://ollama.com">Ollama</a>, a free program that runs such models on your computer.</li>
+          </ul>
+
+          <div class="doc-col">
+          <div class="sheet doc">
+            <div class="tabs" role="tablist" aria-label="Example files">
+              <button type="button" role="tab" id="tab-t" aria-controls="doc-t" aria-selected="true">transcript.md</button>
+              <button type="button" role="tab" id="tab-n" aria-controls="doc-n" aria-selected="false">transcript.notes.md</button>
+            </div>
+            <div id="doc-t" role="tabpanel" aria-labelledby="tab-t">
+              <p class="nojs-name">transcript.md</p>
+              <div class="lines">
+                <p><b class="r">Anna</b> <span class="ts">[12:02]</span>: Can we move the pilot to the week of the ninth? The clinic needs the extra days.</p>
+                <p><b class="m">Jonas</b> <span class="ts">[12:09]</span>: The ninth works for us. I'd rather keep the Thursday slot for the training, though.</p>
+                <p><b class="r">Anna</b> <span class="ts">[12:17]</span>: Thursday is fine. I'll send the revised plan to everyone today.</p>
+                <p><b class="r">Remote-2</b> <span class="ts">[12:24]</span>: One question from my side: who signs off on the budget change?</p>
+                <p><b class="m">Jonas</b> <span class="ts">[12:31]</span>: That's me. Send it over and you'll have it back by Friday.</p>
+              </div>
+            </div>
+            <div id="doc-n" role="tabpanel" aria-labelledby="tab-n">
+              <p class="nojs-name">transcript.notes.md</p>
+              <div class="note-doc">
+                <h4>Pilot moved to the week of the ninth</h4>
+                <p>The pilot starts one week later so the clinic has time to prepare. The Thursday training slot stays as it is. The later start changes the budget, and the change still needs a signature.</p>
+                <h5>Decisions</h5>
+                <ul><li>The pilot starts in the week of the ninth.</li><li>The training stays on Thursday.</li></ul>
+                <h5>Action items</h5>
+                <ul>
+                  <li class="todo">Send the revised plan to everyone — <b>Anna</b> (due today) <span class="ts">[12:17]</span></li>
+                  <li class="todo">Sign off on the budget change — <b>Jonas</b> (due Friday) <span class="ts">[12:31]</span></li>
+                </ul>
+                <h5>Highlights</h5>
+                <ul><li><b>Anna</b>: The clinic needs the extra days.</li></ul>
+                <h5>Open questions</h5>
+                <ul><li>Does the later start move the evaluation date as well?</li></ul>
+                <p class="by">Generated by stenograf notes — mlx, single-shot.</p>
+              </div>
+            </div>
+          </div>
+          <p class="cap">Example files from an invented meeting.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="install">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">install</p>
+      <div class="body">
+        <h2>Paste one line. After that it is an app like any other.</h2>
+        <p class="intro">The installer sets up everything Stenograf needs, downloads the speech models once, and adds Stenograf to your apps. Pick your system:</p>
+
+        <div class="install">
+          <div class="tabs" role="tablist" aria-label="Operating system" data-os>
+            <button type="button" role="tab" id="tab-mac" data-os="macos" aria-controls="os-mac" aria-selected="true">macOS</button>
+            <button type="button" role="tab" id="tab-win" data-os="windows" aria-controls="os-win" aria-selected="false">Windows</button>
+            <button type="button" role="tab" id="tab-lin" data-os="linux" aria-controls="os-lin" aria-selected="false">Linux</button>
+          </div>
+
+          <div class="os" id="os-mac" role="tabpanel" aria-labelledby="tab-mac">
+            <h3>macOS</h3>
+            <p class="needs">Needs a Mac with Apple Silicon (M1 or newer) and macOS 14.4 or newer.</p>
+            <ol class="todo-list">
+              <li><div>Open <strong>Terminal</strong>: press <kbd>⌘ Space</kbd>, type <em>Terminal</em>, press <kbd>Return</kbd>.</div></li>
+              <li><div>Paste this line and press <kbd>Return</kbd>:
+                <div class="cmd"><pre><code id="cmd-mac">curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh</code></pre><button type="button" class="copy" data-copy="cmd-mac" data-copied="Copied" data-selected="Selected">Copy</button></div></div></li>
+              <li><div>Allow the permission requests when they appear. Stenograf needs your microphone and your computer's sound.</div></li>
+              <li><div>Open <strong>Stenograf</strong> from Spotlight or the Dock.</div></li>
+            </ol>
+          </div>
+
+          <div class="os" id="os-win" role="tabpanel" aria-labelledby="tab-win">
+            <h3>Windows</h3>
+            <p class="needs">Needs Windows 10 or 11 on an ordinary (x64) PC. Windows on ARM is not supported.</p>
+            <ol class="todo-list">
+              <li><div>Open <strong>PowerShell</strong>: press the <kbd>Windows</kbd> key, type <em>PowerShell</em>, press <kbd>Enter</kbd>.</div></li>
+              <li><div>Paste this line and press <kbd>Enter</kbd>:
+                <div class="cmd"><pre><code id="cmd-win">powershell -NoProfile -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.ps1 | iex"</code></pre><button type="button" class="copy" data-copy="cmd-win" data-copied="Copied" data-selected="Selected">Copy</button></div></div></li>
+              <li><div>Windows never asks about the microphone by itself. If setup tells you it is off, switch it on under <strong>Settings › Privacy &amp; security › Microphone</strong>.</div></li>
+              <li><div>Open <strong>Stenograf</strong> from the Start menu.</div></li>
+            </ol>
+            <p class="fine">Meeting notes on Windows need <a href="https://ollama.com">Ollama</a> installed and running. The transcript works without it.</p>
+          </div>
+
+          <div class="os" id="os-lin" role="tabpanel" aria-labelledby="tab-lin">
+            <h3>Linux</h3>
+            <p class="needs">Needs a 64-bit Intel or AMD system (x86_64) with PipeWire or PulseAudio, and glibc 2.34 or newer.</p>
+            <ol class="todo-list">
+              <li><div>Open a terminal.</div></li>
+              <li><div>Paste this line and press <kbd>Enter</kbd>:
+                <div class="cmd"><pre><code id="cmd-lin">curl -fsSL https://raw.githubusercontent.com/daniel-om-weber/stenograf/main/install.sh | sh</code></pre><button type="button" class="copy" data-copy="cmd-lin" data-copied="Copied" data-selected="Selected">Copy</button></div></div></li>
+              <li><div>Open <strong>Stenograf</strong> from your application menu.</div></li>
+            </ol>
+            <p class="fine">Meeting notes on Linux need <a href="https://ollama.com">Ollama</a> installed and running. The transcript works without it.</p>
+          </div>
+
+          <p class="fine">The line downloads Stenograf's installer from its GitHub repository and runs it. The installer puts three things into your user account, without asking for an administrator password: uv (a small tool that manages Python programs), Stenograf itself, and the speech models. You can read it first: <a href="https://github.com/daniel-om-weber/stenograf/blob/main/install.sh">install.sh</a> for macOS and Linux, <a href="https://github.com/daniel-om-weber/stenograf/blob/main/install.ps1">install.ps1</a> for Windows. Later updates arrive inside the app.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section band" id="questions">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">questions</p>
+      <div class="body">
+        <h2>Before you install.</h2>
+        <div class="qa">
+          <details>
+            <summary>Does anything leave my computer?</summary>
+            <p>Nothing about your meetings does. Stenograf goes online for two things: it downloads its models (during setup, and on a Mac the notes model the first time you ask for notes), and once a day it checks whether a newer version exists. That check tells the server only which version you have, and it can be switched off in the settings. The notes are written on your computer too, unless you connect a different notes program yourself.</p>
+          </details>
+          <details>
+            <summary>What does it keep about voices?</summary>
+            <p>For each speaker, a voiceprint: numbers that describe how the voice sounds, not audio. It sits in the meeting's folder. Voices you name are also kept in a voice library on your computer, so that later meetings recognise them. None of it is uploaded. Switch off <em>Tell speakers apart</em> and no voiceprints are kept.</p>
+          </details>
+          <details>
+            <summary>What does it cost?</summary>
+            <p>Nothing. Stenograf is open source under the MIT licence. The models it downloads come under their own licences, which the <a href="https://github.com/daniel-om-weber/stenograf#license">README lists</a>.</p>
+          </details>
+          <details>
+            <summary>Do I need headphones?</summary>
+            <p>No. When remote voices come out of your speakers and reach your microphone, Stenograf removes that echo, so nobody is written down twice.</p>
+          </details>
+          <details>
+            <summary>Which languages does it understand?</summary>
+            <p>German and English, one language per meeting. Those are the two Stenograf is built and tested for. The speech model behind it also understands other European languages, so a meeting in French or Spanish is written down as well, but nobody has tested that on real meetings yet.</p>
+          </details>
+          <details>
+            <summary>Can I keep the audio after all?</summary>
+            <p>Yes. Switch on <em>Keep the audio recording</em> before you start, and the meeting folder also gets an audio file. Without that switch no audio is written.</p>
+          </details>
+          <details>
+            <summary>How do updates work?</summary>
+            <p>When a new version is out, a line appears at the foot of the app's home screen. Click <em>Update</em>: the new version is downloaded while you keep working, and the app restarts into it. This never happens during a meeting. If the new version does not start, the previous one is put back.</p>
+          </details>
+          <details>
+            <summary>Something does not work. What now?</summary>
+            <p>Open <em>Check setup</em> on the home screen. It tests the models, the permissions and your audio devices and says what is missing. If that does not help, <a href="https://github.com/daniel-om-weber/stenograf/issues">report the problem on GitHub</a>.</p>
+          </details>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="terminal">
+  <div class="wrap">
+    <div class="g">
+      <p class="label">terminal</p>
+      <div class="body">
+        <h2>Everything is also a command.</h2>
+        <p class="intro">The app is one way in. The same program runs in a terminal, in a script or over SSH, which also makes it a tool an AI agent can use.</p>
+        <div class="files">
+          <ul class="points">
+            <li><b>Run it.</b> <code>steno start</code> prints the captions line by line and writes the transcript when you stop it. <code>steno transcribe</code> does the same for a recording.</li>
+            <li><b>Read it.</b> A meeting is a folder of Markdown and JSON files. A script or an agent reads them directly, with no database and no service in between.</li>
+            <li><b>Bring your own AI for the notes.</b> The notes step can call any command-line program that takes a prompt and returns Markdown. It runs inside the meeting's folder, so an agent can look up the context your instructions point to. What you connect decides where the transcript goes: a program on your computer keeps it there, a cloud service does not.</li>
+            <li>All commands and settings are in the <a href="https://github.com/daniel-om-weber/stenograf#usage">README</a>.</li>
+          </ul>
+          <div class="term-col">
+            <div class="app card term" aria-label="Example commands"><pre><span class="c"># a meeting: captions appear here, transcript and notes when you stop</span>
+<span class="p">$</span> steno start --notes
+
+<span class="c"># a recording you already have, printed to the terminal</span>
+<span class="p">$</span> steno transcribe interview.mov --print
+
+<span class="c"># notes for the newest meeting</span>
+<span class="p">$</span> steno notes --last</pre></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <a class="brand" href="#top"><span class="tile"><svg viewBox="0 45 480 390" aria-hidden="true"><use href="#mark"/></svg></span>stenograf</a>
+    <nav aria-label="Project">
+      <a href="https://github.com/daniel-om-weber/stenograf">Source on GitHub</a>
+      <a href="https://github.com/daniel-om-weber/stenograf#readme">Full documentation</a>
+      <a href="https://pypi.org/project/stenograf/">PyPI</a>
+      <a href="https://github.com/daniel-om-weber/stenograf/blob/main/LICENSE">MIT licence</a>
+    </nav>
+    <p>Made by <a href="https://github.com/daniel-om-weber">Daniel Weber</a>. Contact: <a href="mailto:daniel.om.weber@gmail.com">daniel.om.weber@gmail.com</a>. This page loads no fonts, scripts or trackers from other servers.</p>
+  </div>
+</footer>
+
+<script src="site.js" onerror="document.documentElement.className=''"></script>
+</body>
+</html>
