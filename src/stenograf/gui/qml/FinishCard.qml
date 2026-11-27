@@ -1,6 +1,7 @@
 // The finish card: what a meeting needs once it is over — a title (which names
-// its folder), who spoke, whether and how to write notes, and the files —
-// in one card with icons where headings would be. Done applies it all and the
+// its folder), who spoke, whether and how to write notes, the files, and any
+// trouble with the audio recording — in one card with icons where headings
+// would be. Done applies it all and the
 // notes start; the run waits for it (or for the timeout, or for the screen
 // being left, which keep the choices as the start form made them).
 import QtQuick
@@ -145,6 +146,32 @@ Rectangle {
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
                     }
+                }
+            }
+
+            // Trouble with the audio recording. Here and not in the footer:
+            // the next status line overwrites the footer at once.
+            RowLayout {
+                visible: card.st.recordingNote.length > 0
+                spacing: 8
+                Layout.leftMargin: 8
+                Layout.fillWidth: true
+
+                Icon {
+                    name: "alert-circle"
+                    color: card.st.recordingFailed ? Theme.bad : Theme.busy
+                    size: 14
+                    Layout.alignment: Qt.AlignTop
+                    Layout.topMargin: 1
+                }
+
+                Text {
+                    text: card.st.recordingNote
+                    color: card.st.recordingFailed ? Theme.bad : Theme.busy
+                    font.pixelSize: Theme.textSmall
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                    Accessible.name: "Audio recording: " + card.st.recordingNote
                 }
             }
 

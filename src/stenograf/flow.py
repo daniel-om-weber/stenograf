@@ -335,6 +335,9 @@ class MeetingRun:
         """Held while names are applied and while the notes step ends, so a
         name lands either in the queue the notes drain or in the notes file
         they wrote — never between the two."""
+        self.recording_note: RecordingNote | None = None
+        """Trouble with the audio recording, for the finish card; set once the
+        recording is closed, before the card is offered."""
         self.voice_clips: dict[str, list[np.ndarray]] = {}
         """Each speaker's voice samples (``MeetingResult.voice_clips``), under
         the labels the transcript shows as names are given; in memory only,
@@ -566,7 +569,8 @@ class MeetingRun:
             finally:
                 if tee is not None:
                     tee.close()  # flush + finalize the recording even on a dying run
-                    view.status(_recording_status(tee))
+                    line, self.recording_note = _recording_report(tee)
+                    view.status(line)
             self.result = result
             if self._clips_dropped:
                 result.voice_clips.clear()
@@ -593,10 +597,15 @@ class MeetingRun:
                 # A front-end that asks always gets the finish card — it can
                 # retitle the meeting and switch the notes on — unless every
                 # voice was recognised and the settings say not to ask then.
-                ask = self.ask_names and not (
-                    settings.speakers.names_panel_skip_if_recognised
-                    and bool(speakers)
-                    and all(s.recognised for s in speakers)
+                # Trouble with the recording opens it all the same: the card
+                # is the one place in the app that keeps saying so.
+                ask = self.ask_names and (
+                    self.recording_note is not None
+                    or not (
+                        settings.speakers.names_panel_skip_if_recognised
+                        and bool(speakers)
+                        and all(s.recognised for s in speakers)
+                    )
                 )
                 # Settled already: the screen that would ask was left, and a
                 # card offered now would open on a page nobody is on.
@@ -871,37 +880,57 @@ def _report_lost_reference(result: MeetingResult, view: LiveView) -> None:
     )
 
 
-def _recording_status(tee: AudioTee) -> str:
-    """The one line saying where a closed recording is.
+@dataclass(frozen=True)
+class RecordingNote:
+    """What went wrong with a meeting's audio recording, or was repaired in it."""
+
+    text: str
+    failed: bool
+    """The recording is incomplete or lost, not merely repaired."""
+
+
+def _recording_report(tee: AudioTee) -> tuple[str, RecordingNote | None]:
+    """The status line saying where a closed recording is, and the note a
+    front-end keeps on screen when something went wrong or was repaired.
 
     Every file that holds audio is named, even after a failure, or the user
     never learns where the meeting went; the name the user asked for is named
-    only while it still holds the recording."""
+    only while it still holds the recording. The status line alone is not
+    enough: the next status overwrites it within milliseconds in the app
+    (measured 2026-11-27), and a failure nobody sees is the silent loss all
+    over again."""
     saved = tee.saved
     if tee.error is not None:
         if saved:
             where = ", ".join(p.name for p in saved)
-            return f"audio recording FAILED ({tee.error}) — what was recorded is in {where}"
-        return f"audio recording FAILED: {tee.error}"
-    # Usually a sync client; say so, or the user never learns their folder is
-    # fighting the recording.
-    restored = (
-        " — another program (a sync client?) took the file away during the "
-        "meeting, so it was written back"
-        if tee.restored
-        else ""
-    )
+            line = f"audio recording FAILED ({tee.error}) — what was recorded is in {where}"
+        else:
+            line = f"audio recording FAILED: {tee.error}"
+        return line, RecordingNote(line, failed=True)
+    problems = []
     if tee.fallback_path is not None and tee.path in saved:
-        return (
-            f"recorded audio: {tee.path} — the Opus encoder died mid-meeting; "
-            f"the remainder is in {tee.fallback_path.name}{restored}"
+        shown = tee.path
+        problems.append(
+            f"the Opus encoder died mid-meeting; the remainder is in {tee.fallback_path.name}"
         )
-    if tee.fallback_path is not None:
-        return (
-            f"recorded audio: {tee.fallback_path} — the Opus encoder failed, "
-            f"so this recording is a WAV{restored}"
+    elif tee.fallback_path is not None:
+        shown = tee.fallback_path
+        problems.append("the Opus encoder failed, so this recording is a WAV")
+    else:
+        shown = tee.path
+    if tee.restored:
+        # Usually a sync client; say so, or the user never learns their
+        # folder is fighting the recording.
+        problems.append(
+            "another program (a sync client?) took the file away during the "
+            "meeting, so it was written back"
         )
-    return f"recorded audio: {tee.path}{restored}"
+    if not problems:
+        return f"recorded audio: {shown}", None
+    said = "; ".join(problems)
+    return f"recorded audio: {shown} — {said}", RecordingNote(
+        f"{shown.name}: {said}", failed=False
+    )
 
 
 @dataclass(frozen=True)

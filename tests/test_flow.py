@@ -871,8 +871,9 @@ class TestMicDeviceResolution:
         assert resolve_mic_device(None, self._settings(None)) is None
 
 
-class TestRecordingStatus:
-    """The stop line about the recording names where the audio really is."""
+class TestRecordingReport:
+    """The stop line about the recording names where the audio really is, and
+    anything that went wrong becomes a note the finish card keeps."""
 
     @staticmethod
     def _tee(tmp_path, *, saved, error=None, restored=False, fallback=False) -> Any:
@@ -886,32 +887,43 @@ class TestRecordingStatus:
             restored=restored,
         )
 
-    def test_a_healthy_recording(self, tmp_path):
+    def test_a_healthy_recording_has_no_note(self, tmp_path):
         tee = self._tee(tmp_path, saved=[tmp_path / "audio.opus"])
-        assert flow._recording_status(tee) == f"recorded audio: {tmp_path / 'audio.opus'}"
+        line, note = flow._recording_report(tee)
+        assert line == f"recorded audio: {tmp_path / 'audio.opus'}"
+        assert note is None
 
-    def test_a_write_back_is_announced(self, tmp_path):
+    def test_a_write_back_is_announced_and_kept(self, tmp_path):
         tee = self._tee(tmp_path, saved=[tmp_path / "audio.opus"], restored=True)
-        assert "written back" in flow._recording_status(tee)
+        line, note = flow._recording_report(tee)
+        assert "written back" in line
+        assert note is not None and not note.failed
+        assert note.text.startswith("audio.opus: ") and "written back" in note.text
 
     def test_a_failed_write_back_names_the_stranded_copy_not_the_stand_in(self, tmp_path):
         stranded = tmp_path / "audio.opus.x1y2.restore"
         tee = self._tee(tmp_path, saved=[stranded], error="could not be written back")
-        line = flow._recording_status(tee)
+        line, note = flow._recording_report(tee)
         assert line.startswith("audio recording FAILED")
         assert line.endswith(f"in {stranded.name}")
+        assert note is not None and note.failed and note.text == line
 
     def test_a_lost_recording_names_no_file(self, tmp_path):
         tee = self._tee(tmp_path, saved=[], error="the recording is lost")
-        assert flow._recording_status(tee) == "audio recording FAILED: the recording is lost"
+        line, _note = flow._recording_report(tee)
+        assert line == "audio recording FAILED: the recording is lost"
 
     def test_a_wav_only_recording(self, tmp_path):
         # The target name may still exist (another program's file) — only
         # ``saved`` decides whether it holds part of this recording.
         tee = self._tee(tmp_path, saved=[tmp_path / "audio.opus.wav"], fallback=True)
-        assert "this recording is a WAV" in flow._recording_status(tee)
+        line, note = flow._recording_report(tee)
+        assert "this recording is a WAV" in line
+        assert note is not None and note.text.startswith("audio.opus.wav: ")
 
     def test_an_encoder_death_mid_meeting(self, tmp_path):
         both = [tmp_path / "audio.opus", tmp_path / "audio.opus.wav"]
-        tee = self._tee(tmp_path, saved=both, fallback=True)
-        assert "the remainder is in audio.opus.wav" in flow._recording_status(tee)
+        tee = self._tee(tmp_path, saved=both, fallback=True, restored=True)
+        line, note = flow._recording_report(tee)
+        assert "the remainder is in audio.opus.wav" in line
+        assert note is not None and "written back" in note.text  # both problems said

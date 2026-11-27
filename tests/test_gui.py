@@ -965,6 +965,84 @@ class TestMeetingScreen:
         pump(lambda: meeting.state["phase"] == "done" and not meeting.running)
         assert calls == [], "an abandoned run must not start its notes step"
 
+    def _recorded_meeting(self, monkeypatch, tmp_path):
+        """A paced mic-only meeting that keeps its audio, so a test can act on
+        ``audio.opus`` while it is written. Returns the output home."""
+        import conftest
+
+        from stenograf import loaders, output
+        from stenograf.capture.base import Channel
+        from stenograf.capture.file import FileCaptureProvider
+
+        home = tmp_path / "meetings"
+        monkeypatch.setattr(output, "default_output_home", lambda: home)
+        mic = tmp_path / "mic.wav"
+        conftest.write_wav(mic, seconds=2.0)
+        monkeypatch.setattr(
+            loaders,
+            "load_backends",
+            lambda **kwargs: (conftest.FakeASR(), conftest.WholeBufferVAD(), None),
+        )
+        monkeypatch.setattr(
+            loaders,
+            "make_provider",
+            lambda replay, plans, **kwargs: FileCaptureProvider({Channel.MIC: mic}, paced=True),
+        )
+        return home
+
+    def _run_to_the_card(self, gui, form) -> dict:
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        with _Warnings() as log:
+            shell.screen("Setup").start(form)
+            pump(lambda: meeting.state["namesOpen"], timeout=20)
+            seen = dict(meeting.state)
+            through_the_card(meeting)
+            meeting.join()
+        assert log.seen == []
+        return seen
+
+    def test_a_healthy_recording_adds_nothing_to_the_card(self, gui, tmp_path, monkeypatch):
+        self._recorded_meeting(monkeypatch, tmp_path)
+        seen = self._run_to_the_card(gui, {**self._mic_only_form(notes=False), "recordAudio": True})
+        assert seen["recordingNote"] == ""
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows cannot take an open file's name away"
+    )
+    def test_a_written_back_recording_is_said_on_the_card(self, gui, tmp_path, monkeypatch):
+        # The footer's status line is overwritten within milliseconds, so the
+        # card is where the user learns a sync client took the file away.
+        home = self._recorded_meeting(monkeypatch, tmp_path)
+        shell, _engine = gui
+        meeting = shell.screen("Meeting")
+        with _Warnings() as log:
+            shell.screen("Setup").start({**self._mic_only_form(notes=False), "recordAudio": True})
+            pump(lambda: bool(list(home.glob("*/audio.opus"))), timeout=20)
+            (audio,) = home.glob("*/audio.opus")
+            stand_in = audio.with_name(".download")
+            stand_in.write_bytes(b"")
+            os.replace(stand_in, audio)
+            pump(lambda: meeting.state["namesOpen"], timeout=20)
+            note, failed = meeting.state["recordingNote"], meeting.state["recordingFailed"]
+            through_the_card(meeting)
+            meeting.join()
+        assert log.seen == []
+        assert "written back" in note and note.startswith("audio.opus")
+        assert failed is False
+        assert audio.stat().st_size > 0
+
+    def test_a_failed_recording_is_said_on_the_card(self, gui, tmp_path, monkeypatch):
+        from stenograf import recording
+
+        self._recorded_meeting(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            recording, "_keep_at", lambda path, file: recording._Kept(None, error="disk gone")
+        )
+        seen = self._run_to_the_card(gui, {**self._mic_only_form(notes=False), "recordAudio": True})
+        assert seen["recordingNote"] == "audio recording FAILED: disk gone"
+        assert seen["recordingFailed"] is True
+
 
 class TestWhoSpoke:
     """The done screen's "who spoke?" panel, and the notes that wait for it."""

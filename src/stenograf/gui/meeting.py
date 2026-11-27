@@ -35,7 +35,8 @@ What the screen shows, and where it comes from:
   meeting: the title (Done renames the folder to carry it), one row per
   nameable speaker (:func:`stenograf.flow.meeting_speakers`; a recognised name
   is a button that opens its field, because a wrong match must be easy to
-  fix), the notes switch, meeting type and context line, and the files. The
+  fix), the notes switch, meeting type and context line, the files, and a
+  line when the audio recording had trouble (:class:`stenograf.flow.RecordingNote`). The
   run's notes wait until Done, and leaving the screen or the
   ``[speakers] names_panel_timeout_s`` countdown settles it with the start
   form's choices: notes stranded behind a screen nobody returns to would be
@@ -180,6 +181,8 @@ class MeetingScreen(Screen):
             namesCountdown=0,
             playing="",
             clipNext={},
+            recordingNote="",
+            recordingFailed=False,
         )
 
     # -- lifecycle ---------------------------------------------------------
@@ -869,6 +872,11 @@ class _RunView(LiveView):
             store_path=run.profile_store, attendee_names=run.request.profile.attendee_names
         )
         rows = _speaker_rows(speakers, _clip_counts(run))
+        note = run.recording_note
+        self.show(
+            recordingNote="" if note is None else note.text,
+            recordingFailed=note is not None and note.failed,
+        )
         self.show(self._screen._offer_names, rows, known, ask)
 
 
