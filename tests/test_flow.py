@@ -5,6 +5,8 @@ they are tested here once, directly, rather than through a screen. The
 screens' own tests then only have to prove they call this correctly.
 """
 
+from typing import Any
+
 import numpy as np
 import pytest
 from conftest import write_settings
@@ -867,3 +869,49 @@ class TestMicDeviceResolution:
         from stenograf.flow import resolve_mic_device
 
         assert resolve_mic_device(None, self._settings(None)) is None
+
+
+class TestRecordingStatus:
+    """The stop line about the recording names where the audio really is."""
+
+    @staticmethod
+    def _tee(tmp_path, *, saved, error=None, restored=False, fallback=False) -> Any:
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            path=tmp_path / "audio.opus",
+            fallback_path=tmp_path / "audio.opus.wav" if fallback else None,
+            saved=saved,
+            error=error,
+            restored=restored,
+        )
+
+    def test_a_healthy_recording(self, tmp_path):
+        tee = self._tee(tmp_path, saved=[tmp_path / "audio.opus"])
+        assert flow._recording_status(tee) == f"recorded audio: {tmp_path / 'audio.opus'}"
+
+    def test_a_write_back_is_announced(self, tmp_path):
+        tee = self._tee(tmp_path, saved=[tmp_path / "audio.opus"], restored=True)
+        assert "written back" in flow._recording_status(tee)
+
+    def test_a_failed_write_back_names_the_stranded_copy_not_the_stand_in(self, tmp_path):
+        stranded = tmp_path / "audio.opus.x1y2.restore"
+        tee = self._tee(tmp_path, saved=[stranded], error="could not be written back")
+        line = flow._recording_status(tee)
+        assert line.startswith("audio recording FAILED")
+        assert line.endswith(f"in {stranded.name}")
+
+    def test_a_lost_recording_names_no_file(self, tmp_path):
+        tee = self._tee(tmp_path, saved=[], error="the recording is lost")
+        assert flow._recording_status(tee) == "audio recording FAILED: the recording is lost"
+
+    def test_a_wav_only_recording(self, tmp_path):
+        # The target name may still exist (another program's file) — only
+        # ``saved`` decides whether it holds part of this recording.
+        tee = self._tee(tmp_path, saved=[tmp_path / "audio.opus.wav"], fallback=True)
+        assert "this recording is a WAV" in flow._recording_status(tee)
+
+    def test_an_encoder_death_mid_meeting(self, tmp_path):
+        both = [tmp_path / "audio.opus", tmp_path / "audio.opus.wav"]
+        tee = self._tee(tmp_path, saved=both, fallback=True)
+        assert "the remainder is in audio.opus.wav" in flow._recording_status(tee)

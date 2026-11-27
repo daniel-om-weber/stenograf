@@ -566,34 +566,7 @@ class MeetingRun:
             finally:
                 if tee is not None:
                     tee.close()  # flush + finalize the recording even on a dying run
-                    if tee.error is not None:
-                        # Even a failed recording may have left decodable audio —
-                        # name every file that survived, or the user never learns
-                        # where the partial meeting went.
-                        saved = [
-                            p
-                            for p in (tee.path, tee.fallback_path)
-                            if p is not None and p.exists()
-                        ]
-                        if saved:
-                            view.status(
-                                f"audio recording FAILED mid-meeting ({tee.error}) — "
-                                "partial audio in " + ", ".join(p.name for p in saved)
-                            )
-                        else:
-                            view.status(f"audio recording FAILED: {tee.error}")
-                    elif tee.fallback_path is not None and tee.path.exists():
-                        view.status(
-                            f"recorded audio: {tee.path} — the Opus encoder died "
-                            f"mid-meeting; the remainder is in {tee.fallback_path.name}"
-                        )
-                    elif tee.fallback_path is not None:
-                        view.status(
-                            f"recorded audio: {tee.fallback_path} — the Opus encoder "
-                            f"failed, so this recording is a WAV"
-                        )
-                    else:
-                        view.status(f"recorded audio: {tee.path}")
+                    view.status(_recording_status(tee))
             self.result = result
             if self._clips_dropped:
                 result.voice_clips.clear()
@@ -896,6 +869,39 @@ def _report_lost_reference(result: MeetingResult, view: LiveView) -> None:
         f"{result.reference_gap_s:.1f}s — the system-audio tap "
         f"stalled or went silent{backstop}"
     )
+
+
+def _recording_status(tee: AudioTee) -> str:
+    """The one line saying where a closed recording is.
+
+    Every file that holds audio is named, even after a failure, or the user
+    never learns where the meeting went; the name the user asked for is named
+    only while it still holds the recording."""
+    saved = tee.saved
+    if tee.error is not None:
+        if saved:
+            where = ", ".join(p.name for p in saved)
+            return f"audio recording FAILED ({tee.error}) — what was recorded is in {where}"
+        return f"audio recording FAILED: {tee.error}"
+    # Usually a sync client; say so, or the user never learns their folder is
+    # fighting the recording.
+    restored = (
+        " — another program (a sync client?) took the file away during the "
+        "meeting, so it was written back"
+        if tee.restored
+        else ""
+    )
+    if tee.fallback_path is not None and tee.path in saved:
+        return (
+            f"recorded audio: {tee.path} — the Opus encoder died mid-meeting; "
+            f"the remainder is in {tee.fallback_path.name}{restored}"
+        )
+    if tee.fallback_path is not None:
+        return (
+            f"recorded audio: {tee.fallback_path} — the Opus encoder failed, "
+            f"so this recording is a WAV{restored}"
+        )
+    return f"recorded audio: {tee.path}{restored}"
 
 
 @dataclass(frozen=True)

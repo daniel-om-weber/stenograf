@@ -78,6 +78,7 @@ means never run.
 | DirectML fails loudly | Windows (GPD) | A healthy `[asr] provider = "dml"` run transcribes; `STENOGRAF_ASR_PROVIDER=cuda` on the DirectML build exits with a clean error naming `[asr] provider = "cpu"` | Unrecorded, overdue (due "before the next release" 2026-08-02) |
 | `.lnk`-only launcher | Windows (GPD) | `steno setup` lands both `Stenograf.lnk` links (Start Menu, Desktop) and both start the app | Unrecorded, overdue (same) |
 | Shared room mic | any | First real hybrid meetings: people merged into one speaker, crosstalk phantoms, a profile naming the wrong person | Open since 2026-11-15 |
+| Recording written back after a sync client took it | macOS with Google Drive mirroring the meeting folder | The stop status names the write-back and `audio.opus` plays to the end; the trigger is not reproducible on demand (one attempt on 2026-11-27 did not fire), and the tests only simulate the rename | Open since 2026-11-27 |
 | Finish card | macOS | A real meeting with a wrong name match corrected on the card | Open since 2026-11-16 |
 | Two-voice split | any | First real meetings where a speaker is split: the halves right by ear on the finish card, no single voice split, the stop's extra seconds (7.5 s measured on a stored meeting) | Open since 2026-11-26 |
 | Parakeet Ultra by ear | this Mac | First real German meetings on Ultra: the names and jargon the glossary used to fix, numbers and acronyms now written as "12" and "DVD", no other language appearing on short interjections | Open since 2026-11-26 |
@@ -227,6 +228,18 @@ Each says why, and what would re-open it.
   GUI-owned `ui-state.json` in `data_dir()` is the cheap path (no
   settings.toml writes); decide its precedence against the settings pin and
   the CLI flag first.
+- **Keeping a recording away from sync clients — declined 2026-11-27
+  (Daniel).** A two-way sync client renamed its own copy over `audio.opus`
+  while it was written and two meetings lost their audio; it also uploads the
+  growing file all meeting long. Stenograf only writes the recording back on
+  close (`recording.py`) — a file deleted on purpose mid-meeting comes back
+  too, Daniel's call, since a deletion cannot be told from a client's; keeping
+  the meeting folder out of the client is the user's to set up. Rejected: recording in a private folder and moving the file in at
+  the end (the file leaves the user's control, and a crash leaves it to the
+  next start to move); complete copies every few minutes (fewer uploads, not
+  none, and up to one interval lost in a crash); naming tricks such as
+  `.nosync` (each client has its own). Re-open if a crash and a sync client
+  together lose a recording, or if users without a sync client lose one.
 - **The device preflight on macOS's unpinned path — deferred.** Enumeration is
   TCC-clean (measured 2026-08-12), so it is purely one extra subprocess per
   start; measure that against the start budget, then it is a one-liner.

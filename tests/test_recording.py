@@ -1,3 +1,5 @@
+import os
+import sys
 import threading
 import time
 import wave
@@ -176,6 +178,213 @@ def test_opus_file_is_readable_after_encoder_kill(tmp_path):
     assert tee.fallback_path is None
     decoded = load_audio(path)
     assert len(decoded) >= 5 * SAMPLE_RATE  # of 10 s fed; the kill eats a tail
+
+
+# Windows refuses to rename over or delete a file another handle holds open,
+# so there the incident cannot happen and the write-back never runs.
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows cannot take an open file's name away"
+)
+
+
+def _sync_client_replaces(path, content: bytes = b"") -> None:
+    """What a two-way sync client did on 2026-11-27: download its own copy of
+    the file to a temporary name and rename it over the one being written."""
+    stand_in = path.with_name(".download")
+    stand_in.write_bytes(content)
+    os.replace(stand_in, path)
+
+
+def _leftovers(folder) -> list[str]:
+    return sorted(p.name for p in folder.iterdir() if p.name.endswith(".restore"))
+
+
+def _ordinary_mode(folder) -> int:
+    """The mode a file created the ordinary way gets under the current umask."""
+    probe = folder / "probe"
+    probe.write_bytes(b"")
+    mode = probe.stat().st_mode & 0o777
+    probe.unlink()
+    return mode
+
+
+@posix_only
+def test_opus_replaced_mid_meeting_is_written_back(tmp_path):
+    path = tmp_path / "audio.opus"
+    tee = AudioTee(path, {Channel.MIC})
+    for i in range(3):
+        tee.add(frame(Channel.MIC, float(i), tone()))
+    _sync_client_replaces(path)
+    for i in range(3, 6):
+        tee.add(frame(Channel.MIC, float(i), tone()))
+    tee.close()
+
+    assert tee.error is None
+    assert tee.restored
+    assert tee.saved == [path]
+    decoded = load_audio(path)
+    assert abs(len(decoded) - 6 * SAMPLE_RATE) < SAMPLE_RATE // 10  # both halves
+    assert _leftovers(tmp_path) == []
+    assert path.stat().st_mode & 0o777 == _ordinary_mode(tmp_path)  # not mkstemp's 0600
+
+
+@posix_only
+def test_opus_removed_mid_meeting_is_written_back(tmp_path):
+    path = tmp_path / "audio.opus"
+    tee = AudioTee(path, {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, tone()))
+    path.unlink()
+    tee.add(frame(Channel.MIC, 1.0, tone()))
+    tee.close()
+
+    assert tee.restored
+    assert abs(len(load_audio(path)) - 2 * SAMPLE_RATE) < SAMPLE_RATE // 10
+
+
+def test_an_untouched_recording_is_left_alone(tmp_path):
+    path = tmp_path / "audio.opus"
+    tee = AudioTee(path, {Channel.MIC})
+    inode = path.stat().st_ino
+    tee.add(frame(Channel.MIC, 0.0, tone()))
+    tee.close()
+
+    assert not tee.restored
+    assert tee.error is None
+    assert path.stat().st_ino == inode
+
+
+@posix_only
+def test_wav_replaced_mid_meeting_is_written_back(tmp_path):
+    path = tmp_path / "rec.wav"
+    tee = AudioTee(path, {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, np.array([1, 2], dtype=np.int16)))
+    _sync_client_replaces(path)
+    tee.add(frame(Channel.MIC, 2 / SAMPLE_RATE, np.array([3, 4], dtype=np.int16)))
+    tee.close()
+
+    assert tee.error is None
+    assert tee.restored
+    assert read_wav(path)[1].tolist() == [1, 2, 3, 4]
+
+
+@posix_only
+def test_a_replaced_wav_continuation_is_written_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(recording.subprocess, "Popen", lambda *a, **k: _DeadEncoder())
+    tee = AudioTee(tmp_path / "audio.opus", {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, np.array([1, 2], dtype=np.int16)))
+    deadline = time.monotonic() + 5
+    while tee.fallback_path is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert tee.fallback_path is not None
+    tee.add(frame(Channel.MIC, 2 / SAMPLE_RATE, np.array([3, 4], dtype=np.int16)))
+    _sync_client_replaces(tee.fallback_path)
+    tee.add(frame(Channel.MIC, 4 / SAMPLE_RATE, np.array([5, 6], dtype=np.int16)))
+    tee.close()
+
+    assert tee.error is None
+    assert tee.restored
+    assert read_wav(tee.fallback_path)[1].tolist() == [3, 4, 5, 6]
+
+
+@posix_only
+def test_a_failed_rename_names_where_the_recording_is(tmp_path, monkeypatch):
+    path = tmp_path / "audio.opus"
+    tee = AudioTee(path, {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, tone()))
+    _sync_client_replaces(path)
+
+    def no_rename(src, dst):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(recording.os, "replace", no_rename)
+    tee.close()
+
+    assert not tee.restored
+    assert tee.error is not None
+    assert "could not be written back" in tee.error
+    [kept] = tee.saved  # the stand-in at ``path`` is not the recording
+    assert kept.name in tee.error
+    assert abs(len(load_audio(kept)) - SAMPLE_RATE) < SAMPLE_RATE // 10
+
+
+@posix_only
+def test_a_failed_copy_leaves_no_junk(tmp_path, monkeypatch):
+    path = tmp_path / "audio.opus"
+    tee = AudioTee(path, {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, tone()))
+    _sync_client_replaces(path)
+
+    def full_disk(src, dst):
+        dst.write(b"partial")
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(recording.shutil, "copyfileobj", full_disk)
+    tee.close()
+
+    assert tee.error is not None
+    assert "lost" in tee.error
+    assert tee.saved == []  # the empty stand-in is not offered as the recording
+    assert _leftovers(tmp_path) == []
+
+
+@posix_only
+def test_a_moved_meeting_folder_is_not_called_a_replacement(tmp_path):
+    folder = tmp_path / "meeting"
+    folder.mkdir()
+    tee = AudioTee(folder / "audio.opus", {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, tone()))
+    folder.rename(tmp_path / "meeting-renamed")
+    tee.add(frame(Channel.MIC, 1.0, tone()))
+    tee.close()
+
+    assert tee.error is not None
+    assert "moved" in tee.error and "replaced" not in tee.error
+    moved = tmp_path / "meeting-renamed" / "audio.opus"
+    assert abs(len(load_audio(moved)) - 2 * SAMPLE_RATE) < SAMPLE_RATE // 10
+
+
+@posix_only
+def test_a_symlinked_target_keeps_its_link(tmp_path):
+    real = tmp_path / "real.opus"
+    link = tmp_path / "audio.opus"
+    link.symlink_to(real)
+    tee = AudioTee(link, {Channel.MIC})
+    tee.add(frame(Channel.MIC, 0.0, tone()))
+    _sync_client_replaces(real)
+    tee.close()
+
+    assert tee.restored
+    assert link.is_symlink()
+    assert abs(len(load_audio(real)) - SAMPLE_RATE) < SAMPLE_RATE // 10
+
+
+def test_missing_ffmpeg_creates_no_target(tmp_path, monkeypatch):
+    def boom() -> str:
+        raise RuntimeError("No ffmpeg exe could be found")
+
+    monkeypatch.setattr(recording, "ffmpeg_exe", boom)
+    path = tmp_path / "audio.opus"
+    tee = AudioTee(path, {Channel.MIC})
+    assert not path.exists()  # not even while the meeting runs
+    tee.close()
+
+
+@posix_only
+def test_an_abandoned_target_never_deletes_another_programs_file(tmp_path, monkeypatch):
+    # The empty target of a failed encoder is deleted on close — but only
+    # while its name is still the tee's.
+    def no_spawn(*args, **kwargs):
+        raise OSError(8, "Exec format error")
+
+    monkeypatch.setattr(recording.subprocess, "Popen", no_spawn)
+    path = tmp_path / "audio.opus"
+    tee = AudioTee(path, {Channel.MIC})
+    _sync_client_replaces(path, b"someone else's file")
+    tee.add(frame(Channel.MIC, 0.0, np.array([1, 2], dtype=np.int16)))
+    tee.close()
+
+    assert path.read_bytes() == b"someone else's file"
+    assert tee.saved == [tmp_path / "audio.opus.wav"]
 
 
 def test_opus_spawn_failure_falls_back_to_wav(tmp_path, monkeypatch):

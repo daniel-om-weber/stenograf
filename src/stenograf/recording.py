@@ -30,19 +30,36 @@ a writer thread; if the encoder cannot be spawned, dies, or stops draining
 (full disk, dead network mount), the tee kills it and degrades to a ``.wav``
 next to the target from that point on, reported via
 :attr:`AudioTee.fallback_path`.
+
+Another program may also take the name away while the file is written. On
+2026-11-27 Google Drive, mirroring a meeting folder, downloaded its copy of
+the still-empty ``audio.opus`` over the one being written, and both of that
+day's meetings went into files that no longer had a name. So the tee opens
+every target itself and hands ffmpeg that open file; on close, a target whose
+name no longer leads to the tee's file is written back from it
+(:attr:`AudioTee.restored`). Windows needs none of this: no other program can
+rename over or delete a file the tee holds open there. What the write-back
+leaves uncovered is in DECISIONS.md.
 """
 
 from __future__ import annotations
 
 import contextlib
+import os
 import queue
+import shutil
+import stat
 import struct
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 import wave
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 
@@ -112,14 +129,97 @@ def read_channels(path: Path | str, channels: list[Channel]) -> dict[Channel, np
     return {ch: np.ascontiguousarray(columns[:, i]) for i, ch in enumerate(channels)}
 
 
+@dataclass(frozen=True)
+class _Kept:
+    """Where a closed sink's file ended up."""
+
+    path: Path | None
+    """The file holding the recording; ``None`` once it is lost or deleted, or
+    moved to a name the tee does not know."""
+    restored: bool = False
+    error: str | None = None
+
+
+def _keep_at(path: Path, file: BinaryIO) -> _Kept:
+    """Make sure ``path`` still leads to the recording in ``file``, writing it
+    back if another program took the name away.
+
+    Call it only once nothing writes to ``file`` any more — it reads from the
+    start. By then the open ``file`` may be the recording's only copy, so the
+    write-back is synced to disk and lands under ``path`` atomically: a reader
+    sees the other program's file or the whole recording, never half of one.
+    Never raises; a failure is the result's ``error``.
+    """
+    if sys.platform == "win32":
+        # Nothing can rename over or delete a file held open here — and the
+        # write-back could not replace a name this handle still holds.
+        return _Kept(path)
+    dest = Path(os.path.realpath(path))  # a symlinked target keeps its link
+    try:
+        file.flush()
+        held = os.fstat(file.fileno())
+        with contextlib.suppress(FileNotFoundError):
+            if os.path.samestat(os.stat(dest), held):
+                return _Kept(path)
+    except OSError as exc:
+        return _Kept(path, error=f"{path.name} could not be checked at the end ({exc})")
+    if held.st_nlink > 0:  # still named somewhere: moved, not replaced
+        what, otherwise = f"{path.name} was moved during the meeting", "it kept its new name"
+    else:
+        what = f"another program replaced or removed {path.name} during the meeting"
+        otherwise = "the recording is lost"
+    try:
+        fd, name = tempfile.mkstemp(prefix=f"{dest.name}.", suffix=".restore", dir=dest.parent)
+    except OSError as exc:
+        return _Kept(None, error=f"{what} and could not be written back ({exc}); {otherwise}")
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            file.seek(0)
+            shutil.copyfileobj(file, out)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(tmp, stat.S_IMODE(held.st_mode))  # not mkstemp's owner-only mode
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        return _Kept(None, error=f"{what} and could not be written back ({exc}); {otherwise}")
+    try:
+        os.replace(tmp, dest)
+    except OSError as exc:
+        return _Kept(
+            tmp,
+            error=f"{what} and could not be written back under its name ({exc}); "
+            f"the recording is in {tmp.name}",
+        )
+    return _Kept(path, restored=True)
+
+
 class _WavSink:
     """Interleaved int16 PCM into a RIFF file, header re-patched every write."""
 
     def __init__(self, path: Path, nchannels: int) -> None:
+        self._path = path
         self._nchannels = nchannels
         self._frames = 0  # per-channel PCM frames flushed to disk
-        self._file = path.open("wb")
+        self._kept: _Kept | None = None
+        self._file = path.open("w+b")  # readable, for :func:`_keep_at`
         self._file.write(self._header_bytes())
+
+    @property
+    def restored(self) -> bool:
+        return self._kept is not None and self._kept.restored
+
+    @property
+    def error(self) -> str | None:
+        return None if self._kept is None else self._kept.error
+
+    @property
+    def saved(self) -> list[Path]:
+        """Where the recording is; meaningful once closed."""
+        if self._kept is None:
+            return [self._path]
+        return [] if self._kept.path is None else [self._kept.path]
 
     def write(self, block: bytes) -> None:
         self._file.write(block)
@@ -131,7 +231,12 @@ class _WavSink:
         self._file.flush()
 
     def close(self) -> None:
-        self._file.close()
+        if self._file.closed:
+            return
+        try:
+            self._kept = _keep_at(self._path, self._file)
+        finally:
+            self._file.close()
 
     def _header_bytes(self) -> bytes:
         data_bytes = self._frames * self._nchannels * _BYTES_PER_SAMPLE
@@ -192,17 +297,24 @@ class _OpusSink:
         self._closing = False
         self._drop_bytes = _DROP_SECONDS * SAMPLE_RATE * nchannels * _BYTES_PER_SAMPLE
         self._writer: threading.Thread | None = None
+        self.restored = False
+        """A file was taken away meanwhile and written back on close."""
+        self._file: BinaryIO | None = None
+        self._kept: _Kept | None = None
         try:
             # get_ffmpeg_exe() raises RuntimeError when no binary exists —
             # doctor.py catches the same; here it must degrade, not abort the
-            # meeting.
+            # meeting. Asked first, so a missing binary creates no target.
+            exe = ffmpeg_exe()
+            # ffmpeg writes into this file, not to the path, so the tee still
+            # holds the recording if another program takes the name away.
+            self._file = path.open("w+b")
             self._proc = subprocess.Popen(
                 [
-                    ffmpeg_exe(),
+                    exe,
                     "-hide_banner",
                     "-loglevel",
                     "error",
-                    "-y",
                     "-f",
                     "s16le",
                     "-ar",
@@ -221,11 +333,11 @@ class _OpusSink:
                     "-flush_packets",
                     "1",
                     "-f",
-                    "ogg",  # muxer pinned, not inferred from the target's suffix
-                    str(path),
+                    "ogg",
+                    "pipe:1",
                 ],
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
+                stdout=self._file,
                 stderr=subprocess.DEVNULL,
                 creationflags=no_window(),
             )
@@ -279,14 +391,57 @@ class _OpusSink:
         with self._lock:
             fallback = self._fallback
         if fallback is not None:
-            with contextlib.suppress(OSError):
+            try:
                 fallback.close()
-        if fallback is not None or self.error is not None:
-            # The abandoned target may hold Ogg headers but no audio — delete
-            # it rather than advertise an empty recording.
-            with contextlib.suppress(OSError):
-                if self._path.stat().st_size < 1024:
+            except OSError as exc:
+                self._note_error(f"the wav continuation could not be finished ({exc})")
+            if fallback.error is not None:
+                self._note_error(fallback.error)
+            self.restored = fallback.restored
+        self._finish_target(abandoned=fallback is not None or self.error is not None)
+
+    @property
+    def saved(self) -> list[Path]:
+        """Where the recording is — target first, then any ``.wav``
+        continuation; meaningful once closed."""
+        if self._kept is None:
+            target = [self._path]
+        else:
+            target = [] if self._kept.path is None else [self._kept.path]
+        return target + ([] if self._fallback is None else self._fallback.saved)
+
+    def _finish_target(self, *, abandoned: bool) -> None:
+        """Close the target once ffmpeg is gone: drop it if it holds no audio,
+        else make sure its name still leads to it."""
+        file, self._file = self._file, None
+        if file is None:
+            self._kept = _Kept(None)
+            return
+        drop = False
+        try:
+            held = os.fstat(file.fileno())
+            if abandoned and held.st_size < 1024:
+                # Ogg headers at most, no audio: delete it rather than
+                # advertise an empty recording — unless the name already
+                # belongs to another program's file.
+                with contextlib.suppress(OSError):
+                    drop = os.path.samestat(os.stat(self._path), held)
+                self._kept = _Kept(None)
+                return
+            self._kept = _keep_at(self._path, file)
+            if self._kept.restored:
+                self.restored = True
+            if self._kept.error is not None:
+                self._note_error(self._kept.error)
+        finally:
+            file.close()
+            if drop:  # after the close: Windows refuses to delete an open file
+                with contextlib.suppress(OSError):
                     self._path.unlink()
+
+    def _note_error(self, message: str) -> None:
+        with self._lock:
+            self.error = message if self.error is None else f"{self.error}; {message}"
 
     def _pump(self) -> None:
         proc = self._proc
@@ -368,10 +523,22 @@ class AudioTee:
 
     @property
     def error(self) -> str | None:
-        """Why the recording stopped mid-meeting, if it did."""
+        """Why the recording failed, mid-meeting or on close, if it did."""
         if self._error is not None:
             return self._error
-        return self._sink.error if isinstance(self._sink, _OpusSink) else None
+        return self._sink.error
+
+    @property
+    def restored(self) -> bool:
+        """Another program took a file away while it was written, and
+        :meth:`close` wrote it back."""
+        return self._sink.restored
+
+    @property
+    def saved(self) -> list[Path]:
+        """The existing files that hold this recording, after :meth:`close` —
+        possibly none, possibly a name other than :attr:`path`."""
+        return [p for p in self._sink.saved if p.exists()]
 
     def add(self, frame: AudioFrame) -> None:
         """Buffer a frame and flush whatever is now aligned across channels."""
