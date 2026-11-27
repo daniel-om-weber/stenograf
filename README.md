@@ -347,7 +347,12 @@ Audio is stored only when you ask for it — `--record-audio` for one run,
 skips it once), or the app's "Keep the audio recording" switch. It is Ogg Opus
 (measured ~34 MB per hour for a stereo mic+system meeting, ~6–14 MB mono); pass
 `--record-audio PATH.wav` for raw PCM instead. Without it a meeting folder
-holds no audio.
+holds no audio. If the folder is inside one that a sync client watches
+(iCloud Drive, Google Drive, OneDrive, Dropbox), that client uploads
+`audio.opus` again and again while it grows. Leave the meeting folder out of
+the client, or set `[output] dir` to a folder it does not watch. Should a
+client take the file away mid-meeting, stenograf writes it back when the
+meeting stops and says so.
 
 `voiceprints.json` holds one voice embedding per speaker — numbers derived from
 the voice, not audio. It is what lets you name a voice after the meeting
